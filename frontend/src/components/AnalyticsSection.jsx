@@ -249,27 +249,50 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
 
   // ── Build product color map & stats from exposures ────────────
   const exposureStats = useMemo(() => {
-    const uniqueProducts = [...new Set(exposures.map((e) => e.product_name))];
+    // Build Product_N → Excel product name mapping (use original order, not sorted)
+    const productNameMap = {};
+    const origItems = excelProducts?.originalItems || excelProducts?.items;
+    if (origItems && excelProducts?.nameKey) {
+      for (let i = 0; i < origItems.length; i++) {
+        const excelName = origItems[i][excelProducts.nameKey];
+        if (excelName) {
+          productNameMap[`Product_${i}`] = String(excelName);
+        }
+      }
+    }
+
+    // Resolve product name: replace Product_N with Excel name if available
+    const resolveName = (name) => {
+      if (!name) return name;
+      // Match Product_0, Product_1, etc.
+      const m = name.match(/^Product_(\d+)$/);
+      if (m && productNameMap[name]) {
+        return productNameMap[name];
+      }
+      return name;
+    };
+
+    const uniqueProducts = [...new Set(exposures.map((e) => resolveName(e.product_name)))];
     const colorMap = {};
     uniqueProducts.forEach((name, idx) => { colorMap[name] = idx; });
 
     // Per-product stats
     const stats = {};
     for (const exp of exposures) {
-      const name = exp.product_name;
+      const name = resolveName(exp.product_name);
       if (!stats[name]) {
         stats[name] = { name, segments: [], totalDuration: 0, count: 0, colorIdx: colorMap[name] };
       }
       const dur = (exp.time_end || 0) - (exp.time_start || 0);
-      stats[name].segments.push(exp);
+      stats[name].segments.push({ ...exp, product_name: name });
       stats[name].totalDuration += dur;
       stats[name].count += 1;
     }
 
     // Sort by total duration descending
     const sorted = Object.values(stats).sort((a, b) => b.totalDuration - a.totalDuration);
-    return { colorMap, uniqueProducts, sorted };
-  }, [exposures]);
+    return { colorMap, uniqueProducts, sorted, resolveName };
+  }, [exposures, excelProducts]);
 
   // ── Aggregate metrics from all phases ──────────────────────────
   const agg = useMemo(() => {
@@ -443,7 +466,7 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
     const orderCountKey = keys.find(k => /注文|成交件数|order|orders|件数/i.test(k));
     const totalProductOrders = orderCountKey ? products.reduce((sum, p) => sum + parseNum(p[orderCountKey]), 0) : null;
 
-    return { items: sortedItems, nameKey, priceKey, quantityKey, revenueKey, categoryKey, displayKeys, top5: sortedItems.slice(0, 5), totalProductGmv, totalProductOrders };
+    return { items: sortedItems, originalItems: products, nameKey, priceKey, quantityKey, revenueKey, categoryKey, displayKeys, top5: sortedItems.slice(0, 5), totalProductGmv, totalProductOrders };
   }, [excelData]);
 
   // ── Match exposure product names with Excel product sales data ─
@@ -525,9 +548,11 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
 
   // ── Filtered exposures based on selected product ──────────────
   const filteredExposures = useMemo(() => {
-    if (!selectedProduct) return exposures;
-    return exposures.filter(e => e.product_name === selectedProduct);
-  }, [exposures, selectedProduct]);
+    const resolve = exposureStats.resolveName || ((n) => n);
+    const resolved = exposures.map(e => ({ ...e, product_name: resolve(e.product_name) }));
+    if (!selectedProduct) return resolved;
+    return resolved.filter(e => e.product_name === selectedProduct);
+  }, [exposures, selectedProduct, exposureStats]);
 
   // ── Handle product click in ranking table ──────────────────────
   const handleProductClick = (productName) => {
@@ -545,11 +570,13 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
     }
   };
 
-  // ── Don't render if no data ────────────────────────────────────
-  if (!agg) return null;
+    // ── Don't render if no data ────────────────────────────────
+  const hasExcelData = !!(trendChart || excelProducts);
+  const hasExposureData = exposures.length > 0;
+  if (!agg && !hasExcelData && !hasExposureData) return null;
 
   // ── Highcharts options (phase-based fallback) ─────────────────
-  const chartOptions = {
+  const chartOptions = agg ? {
     chart: { height: 180, backgroundColor: "transparent", style: { fontFamily: "inherit" } },
     title: { text: null },
     credits: { enabled: false },
@@ -579,10 +606,10 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
     },
     plotOptions: { areaspline: { fillOpacity: 0.15, marker: { enabled: false, radius: 2 }, lineWidth: 2 } },
     series: [
-      { name: "売上（累積）", type: "areaspline", color: "#f97316", data: agg.cumulativeGmv.map((p) => [p.x, p.y]), yAxis: 0 },
-      { name: "視聴者数", type: "areaspline", color: "#3b82f6", data: agg.timeSeriesViewers.map((p) => [p.x, p.y]), yAxis: 1 },
+      { name: "売上（累積）", type: "areaspline", color: "#f97316", data: (agg?.cumulativeGmv || []).map((p) => [p.x, p.y]), yAxis: 0 },
+      { name: "視聴者数", type: "areaspline", color: "#3b82f6", data: (agg?.timeSeriesViewers || []).map((p) => [p.x, p.y]), yAxis: 1 },
     ],
-  };
+  } : null;
 
   // ── Trend chart options (from Excel with real timestamps) ─────
   // Build tooltip formatter that includes active product info with sales data
@@ -604,23 +631,25 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
     }
     // Show active products at this time with sales data
     const currentSec = this.x;
+    const resolve = exposureStats.resolveName || ((n) => n);
     const activeProducts = exposures.filter(e => e.time_start <= currentSec && e.time_end >= currentSec);
     if (activeProducts.length > 0) {
       const seen = new Set();
       const uniqueActive = [];
       for (const ap of activeProducts) {
-        if (!seen.has(ap.product_name)) {
-          seen.add(ap.product_name);
-          uniqueActive.push(ap);
+        const rName = resolve(ap.product_name);
+        if (!seen.has(rName)) {
+          seen.add(rName);
+          uniqueActive.push({ ...ap, product_name: rName });
         }
       }
-      s += `<br/><span style="font-size:10px;color:#6b7280">\uD83D\uDCE6 表示中:</span><br/>`;
+      s += `<br/><span style="font-size:10px;color:#6b7280">📦 表示中:</span><br/>`;
       for (const ap of uniqueActive) {
         const ci = exposureStats.colorMap[ap.product_name] ?? 0;
         const pData = productDataLookup[ap.product_name];
         const gmvStr = pData?.gmv > 0 ? ` <span style="color:#f97316;font-weight:bold">¥${Math.round(pData.gmv).toLocaleString()}</span>` : "";
         const statsStr = pData ? ` <span style="color:#9ca3af">(${pData.count}回/${formatDurationMinutes(pData.totalDuration)})</span>` : "";
-        s += `<span style="color:${getColor(ci)}">\u25CF</span> <span style="font-size:11px">${ap.product_name}</span>${gmvStr}${statsStr}<br/>`;
+        s += `<span style="color:${getColor(ci)}">●</span> <span style="font-size:11px">${ap.product_name}</span>${gmvStr}${statsStr}<br/>`;
       }
     }
     s += `</div>`;
@@ -722,10 +751,11 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
                     </p>
                     <div className="relative w-full h-8 bg-gray-50 rounded-lg overflow-hidden border border-gray-100">
                       {exposures.map((exp, idx) => {
+                        const resolvedName = exposureStats.resolveName ? exposureStats.resolveName(exp.product_name) : exp.product_name;
                         const left = (exp.time_start / videoDuration) * 100;
                         const width = ((exp.time_end - exp.time_start) / videoDuration) * 100;
-                        const ci = exposureStats.colorMap[exp.product_name] ?? 0;
-                        const isFiltered = selectedProduct && exp.product_name !== selectedProduct;
+                        const ci = exposureStats.colorMap[resolvedName] ?? 0;
+                        const isFiltered = selectedProduct && resolvedName !== selectedProduct;
                         if (isFiltered) return null;
                         return (
                           <div key={exp.id || idx}
@@ -737,7 +767,7 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
                               backgroundColor: getColor(ci),
                               opacity: Math.max(0.5, exp.confidence || 0.8),
                             }}
-                            title={`${exp.product_name} (${formatTime(exp.time_start)} - ${formatTime(exp.time_end)}) ▶ クリックで再生`}
+                            title={`${resolvedName} (${formatTime(exp.time_start)} - ${formatTime(exp.time_end)}) ▶ クリックで再生`}
                           />
                         );
                       })}
@@ -768,7 +798,7 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
             )}
 
             {/* ── Phase-based Chart (fallback if no trend data) ── */}
-            {!trendChartOptions && agg.cumulativeGmv.length > 1 && (
+            {!trendChartOptions && chartOptions && agg?.cumulativeGmv?.length > 1 && (
               <div className="rounded-xl bg-white border border-gray-200 p-4 shadow-sm">
                 <HighchartsReact highcharts={Highcharts} options={chartOptions} />
                 {/* Color bar for fallback chart too */}
@@ -776,9 +806,10 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
                   <div className="mt-2 px-1">
                     <div className="relative w-full h-7 bg-gray-100 rounded-lg overflow-hidden">
                       {exposures.map((exp, idx) => {
+                        const resolvedName = exposureStats.resolveName ? exposureStats.resolveName(exp.product_name) : exp.product_name;
                         const left = (exp.time_start / videoDuration) * 100;
                         const width = ((exp.time_end - exp.time_start) / videoDuration) * 100;
-                        const ci = exposureStats.colorMap[exp.product_name] ?? 0;
+                        const ci = exposureStats.colorMap[resolvedName] ?? 0;
                         return (
                           <div key={exp.id || idx}
                             className="absolute top-0 h-full rounded-sm"
@@ -954,6 +985,7 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
             )}
 
             {/* ── KPI Cards ── */}
+            {(agg || trendChart || excelProducts) && (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               <div className="rounded-xl bg-white border border-gray-200 p-4 shadow-sm">
                 <div className="flex items-center gap-2 text-gray-500 text-xs font-medium mb-1">
@@ -962,8 +994,8 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
                   </svg>
                   売上 (GMV)
                 </div>
-                <div className="text-2xl font-bold text-gray-900">¥{Math.round(trendChart?.excelTotalGmv ?? excelProducts?.totalProductGmv ?? agg.totalGmv).toLocaleString()}</div>
-                <div className="text-xs text-gray-400 mt-1">{(trendChart?.excelTotalOrders ?? excelProducts?.totalProductOrders ?? agg.totalOrders)}件の注文</div>
+                <div className="text-2xl font-bold text-gray-900">¥{Math.round(trendChart?.excelTotalGmv ?? excelProducts?.totalProductGmv ?? agg?.totalGmv ?? 0).toLocaleString()}</div>
+                <div className="text-xs text-gray-400 mt-1">{(trendChart?.excelTotalOrders ?? excelProducts?.totalProductOrders ?? agg?.totalOrders ?? 0)}件の注文</div>
               </div>
               <div className="rounded-xl bg-white border border-gray-200 p-4 shadow-sm">
                 <div className="flex items-center gap-2 text-gray-500 text-xs font-medium mb-1">
@@ -972,9 +1004,10 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
                   </svg>
                   視聴者数
                 </div>
-                <div className="text-2xl font-bold text-gray-900">{(trendChart?.excelMaxViewers ?? agg.totalViewers).toLocaleString()}</div>
+                <div className="text-2xl font-bold text-gray-900">{(trendChart?.excelMaxViewers ?? agg?.totalViewers ?? 0).toLocaleString()}</div>
                 <div className="text-xs text-gray-400 mt-1">ピーク視聴者</div>
               </div>
+              {agg && (
               <div className="rounded-xl bg-white border border-gray-200 p-4 shadow-sm">
                 <div className="flex items-center gap-2 text-gray-500 text-xs font-medium mb-1">
                   <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none" className="text-pink-500">
@@ -985,6 +1018,8 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
                 <div className="text-2xl font-bold text-gray-900">{agg.totalLikes.toLocaleString()}</div>
                 <div className="text-xs text-gray-400 mt-1">コメント {agg.totalComments}</div>
               </div>
+              )}
+              {agg && (
               <div className="rounded-xl bg-white border border-gray-200 p-4 shadow-sm">
                 <div className="flex items-center gap-2 text-gray-500 text-xs font-medium mb-1">
                   <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-green-500">
@@ -995,9 +1030,12 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
                 <div className="text-2xl font-bold text-gray-900">{agg.totalClicks.toLocaleString()}</div>
                 <div className="text-xs text-gray-400 mt-1">CVR {agg.cvr}%</div>
               </div>
+              )}
             </div>
+            )}
 
             {/* ── Sub Metrics ── */}
+            {agg && (
             <div className="grid grid-cols-3 md:grid-cols-6 gap-2">
               {[
                 { label: "GPM", value: `¥${agg.gpm}` },
@@ -1013,6 +1051,7 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
                 </div>
               ))}
             </div>
+            )}
 
             {/* ── Expandable Gantt Chart Detail ── */}
             {exposures.length > 0 && videoDuration > 0 && (
@@ -1103,14 +1142,18 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
                 {exposureListExpanded && (
                   <div className="px-4 pb-4">
                     <div className="flex flex-col gap-2 max-h-96 overflow-y-auto">
-                      {exposures.map((exp, idx) => (
-                        <ExposureRow key={exp.id || idx} exposure={exp}
-                          colorIdx={exposureStats.colorMap[exp.product_name] ?? 0}
-                          onUpdate={handleUpdateExposure} onDelete={handleDeleteExposure}
-                          isEditing={editingId === exp.id} setEditing={setEditingId}
-                          streamStartTime={streamStartTime}
-                        />
-                      ))}
+                      {exposures.map((exp, idx) => {
+                        const resolvedName = exposureStats.resolveName ? exposureStats.resolveName(exp.product_name) : exp.product_name;
+                        const resolvedExp = { ...exp, product_name: resolvedName };
+                        return (
+                          <ExposureRow key={exp.id || idx} exposure={resolvedExp}
+                            colorIdx={exposureStats.colorMap[resolvedName] ?? 0}
+                            onUpdate={handleUpdateExposure} onDelete={handleDeleteExposure}
+                            isEditing={editingId === exp.id} setEditing={setEditingId}
+                            streamStartTime={streamStartTime}
+                          />
+                        );
+                      })}
                     </div>
                     <div className="mt-3">
                       {showAddForm ? (
@@ -1195,7 +1238,7 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
             )}
 
             {/* ── Phase-based Product Breakdown (from csv_metrics) ── */}
-            {agg.products.length > 0 && (
+            {agg?.products?.length > 0 && (
               <div className="rounded-xl bg-white border border-gray-200 shadow-sm">
                 <div onClick={() => setPhaseProductCollapsed((s) => !s)}
                   className="flex items-center justify-between p-4 cursor-pointer hover:bg-gray-50 transition-all duration-200">
