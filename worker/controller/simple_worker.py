@@ -194,6 +194,7 @@ def process_live_monitor_job(payload: dict):
         cmd,
         cwd=REALTIME_DIR,
         env={**os.environ, "PYTHONPATH": f"{REALTIME_DIR}:{BATCH_DIR}"},
+        start_new_session=True,
     )
 
     if result.returncode == 0:
@@ -240,6 +241,7 @@ def process_live_capture_job(payload: dict):
                 env={**os.environ, "PYTHONPATH": f"{REALTIME_DIR}:{BATCH_DIR}"},
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                start_new_session=True,
             )
             print(f"[worker] Live monitor started for @{username} (pid={monitor_proc.pid})")
         except Exception as e:
@@ -261,16 +263,20 @@ def process_live_capture_job(payload: dict):
         cmd,
         cwd=BATCH_DIR,
         env={**os.environ, "PYTHONPATH": BATCH_DIR},
+        start_new_session=True,
     )
 
-    # Stop live monitor when capture ends
+    # Stop live monitor when capture ends — kill entire process group
     if monitor_proc and monitor_proc.poll() is None:
-        print(f"[worker] Stopping live monitor (pid={monitor_proc.pid})")
-        monitor_proc.terminate()
+        print(f"[worker] Stopping live monitor process group (pid={monitor_proc.pid})")
         try:
+            os.killpg(os.getpgid(monitor_proc.pid), signal.SIGTERM)
             monitor_proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            monitor_proc.kill()
+        except (subprocess.TimeoutExpired, ProcessLookupError, OSError):
+            try:
+                os.killpg(os.getpgid(monitor_proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                pass
 
     if result.returncode == 0:
         print(f"[worker] Live capture completed for {video_id}")
@@ -312,21 +318,33 @@ def process_clip_job(payload: dict):
     ]
 
     try:
-        result = subprocess.run(
+        proc = subprocess.Popen(
             cmd,
             cwd=BATCH_DIR,
             env={**os.environ, "PYTHONPATH": BATCH_DIR},
-            timeout=CLIP_PROCESS_TIMEOUT,
+            start_new_session=True,
         )
+        try:
+            proc.wait(timeout=CLIP_PROCESS_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            print(f"[worker] Clip timeout — killing process group (pid={proc.pid})")
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                pass
+            proc.wait()
+            log_error_type(clip_id, "generate_clip", "TIMEOUT_CLIP", f"timeout={CLIP_PROCESS_TIMEOUT}s")
+            return False
 
-        if result.returncode == 0:
+        if proc.returncode == 0:
             print(f"[worker] Clip generation completed for {clip_id}")
             return True
         else:
-            log_error_type(clip_id, "generate_clip", "FFMPEG_FAIL", f"exit_code={result.returncode}")
+            log_error_type(clip_id, "generate_clip", "FFMPEG_FAIL", f"exit_code={proc.returncode}")
             return False
-    except subprocess.TimeoutExpired:
-        log_error_type(clip_id, "generate_clip", "TIMEOUT_CLIP", f"timeout={CLIP_PROCESS_TIMEOUT}s")
+    except Exception as e:
+        exc_name = type(e).__name__
+        log_error_type(clip_id, "generate_clip", "UNKNOWN", f"EXC={exc_name} {e}")
         return False
 
 
@@ -355,32 +373,44 @@ def process_video_job(payload: dict):
     ]
 
     try:
-        result = subprocess.run(
+        proc = subprocess.Popen(
             cmd,
             cwd=BATCH_DIR,
             env={**os.environ, "PYTHONPATH": BATCH_DIR},
-            timeout=VIDEO_PROCESS_TIMEOUT,
+            start_new_session=True,
         )
+        try:
+            proc.wait(timeout=VIDEO_PROCESS_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            print(f"[worker] Video timeout \u2014 killing process group (pid={proc.pid})")
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                pass
+            proc.wait()
+            log_error_type(video_id, "video_analysis", "TIMEOUT_VIDEO", f"timeout={VIDEO_PROCESS_TIMEOUT}s")
+            # Mark as ERROR so it doesn't stay stuck
+            try:
+                sys.path.insert(0, BATCH_DIR)
+                from db_ops import init_db_sync, update_video_status_sync, close_db_sync
+                from video_status import VideoStatus
+                init_db_sync()
+                update_video_status_sync(video_id, VideoStatus.ERROR)
+                close_db_sync()
+                print(f"[worker] Marked timed-out video {video_id} as ERROR")
+            except Exception as db_err:
+                print(f"[worker] Failed to mark timed-out video as ERROR: {db_err}")
+            return False
 
-        if result.returncode == 0:
+        if proc.returncode == 0:
             print(f"[worker] Batch completed successfully for {video_id}")
             return True
         else:
-            log_error_type(video_id, "video_analysis", "SUBPROCESS_FAIL", f"exit_code={result.returncode}")
+            log_error_type(video_id, "video_analysis", "SUBPROCESS_FAIL", f"exit_code={proc.returncode}")
             return False
-    except subprocess.TimeoutExpired:
-        log_error_type(video_id, "video_analysis", "TIMEOUT_VIDEO", f"timeout={VIDEO_PROCESS_TIMEOUT}s")
-        # Mark as ERROR so it doesn't stay stuck
-        try:
-            sys.path.insert(0, BATCH_DIR)
-            from db_ops import init_db_sync, update_video_status_sync, close_db_sync
-            from video_status import VideoStatus
-            init_db_sync()
-            update_video_status_sync(video_id, VideoStatus.ERROR)
-            close_db_sync()
-            print(f"[worker] Marked timed-out video {video_id} as ERROR")
-        except Exception as db_err:
-            print(f"[worker] Failed to mark timed-out video as ERROR: {db_err}")
+    except Exception as e:
+        exc_name = type(e).__name__
+        log_error_type(video_id, "video_analysis", "UNKNOWN", f"EXC={exc_name} {e}")
         return False
 
 
