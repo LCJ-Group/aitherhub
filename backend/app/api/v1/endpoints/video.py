@@ -1684,9 +1684,13 @@ async def rate_phase(
 # =========================================================
 
 ALL_SALES_TAGS = {
+    # Sales psychology tags
     "HOOK", "EMPATHY", "PROBLEM", "EDUCATION", "SOLUTION",
     "DEMONSTRATION", "COMPARISON", "PROOF", "TRUST", "SOCIAL_PROOF",
     "OBJECTION_HANDLING", "URGENCY", "LIMITED_OFFER", "BONUS", "CTA",
+    # Phase behavior tags
+    "CHAT", "PREP", "PHONE_OP", "LONG_GREET",
+    "COMMENT_READ", "SILENCE", "PRICE_SHOW",
 }
 
 

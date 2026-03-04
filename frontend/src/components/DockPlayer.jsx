@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 
 /**
  * DockPlayer – Sales Intelligence Player (方法2: LCJ分析ツール型)
@@ -10,7 +10,7 @@ import { useEffect, useRef, useState, useCallback, useMemo } from "react";
  *   速度表示: 動画上にYouTube型オーバーレイ
  */
 
-// ── Phase Behavior Tag Config (常時展開・1タップ選択) ──────
+// ── Phase Behavior Tag Config (常時展開・1タップ選択・即保存) ──────
 const PHASE_TAG_CONFIG = {
   HOOK: { label: "つかみ", color: "bg-purple-100 text-purple-700 border-purple-300" },
   CHAT: { label: "雑談", color: "bg-pink-100 text-pink-700 border-pink-300" },
@@ -22,7 +22,7 @@ const PHASE_TAG_CONFIG = {
   PRICE_SHOW: { label: "価格提示", color: "bg-red-100 text-red-700 border-red-300" },
 };
 
-// Legacy: keep SALES_TAG_CONFIG for backward compat with AI-generated tags
+// Sales Psychology Tag Config (常時展開・1タップ選択・即保存)
 const SALES_TAG_CONFIG = {
   HOOK: { label: "HOOK", color: "bg-purple-100 text-purple-700 border-purple-300" },
   EMPATHY: { label: "共感", color: "bg-pink-100 text-pink-700 border-pink-300" },
@@ -48,14 +48,15 @@ function formatTime(seconds) {
   return `${mins}:${secs.toString().padStart(2, "0")}`;
 }
 
+// Behavior tags list
 const ALL_PHASE_TAGS = [
   'HOOK', 'CHAT', 'PREP', 'PHONE_OP', 'LONG_GREET',
   'COMMENT_READ', 'SILENCE', 'PRICE_SHOW',
 ];
 
-// Legacy list for backward compat
+// Sales psychology tags list
 const ALL_SALES_TAGS = [
-  'HOOK', 'EMPATHY', 'PROBLEM', 'EDUCATION', 'SOLUTION',
+  'EMPATHY', 'PROBLEM', 'EDUCATION', 'SOLUTION',
   'DEMONSTRATION', 'COMPARISON', 'PROOF', 'TRUST', 'SOCIAL_PROOF',
   'OBJECTION_HANDLING', 'URGENCY', 'LIMITED_OFFER', 'BONUS', 'CTA',
 ];
@@ -71,7 +72,7 @@ const DARK_TAG_COLORS = {
   COMMENT_READ: "bg-green-500/20 text-green-300 border-green-500/30",
   SILENCE: "bg-gray-500/20 text-gray-300 border-gray-500/30",
   PRICE_SHOW: "bg-red-500/20 text-red-300 border-red-500/30",
-  // Legacy sales psychology tags
+  // Sales psychology tags
   EMPATHY: "bg-pink-500/20 text-pink-300 border-pink-500/30",
   PROBLEM: "bg-red-500/20 text-red-300 border-red-500/30",
   EDUCATION: "bg-blue-500/20 text-blue-300 border-blue-500/30",
@@ -128,10 +129,12 @@ export default function DockPlayer({
   const [showSpeedOverlay, setShowSpeedOverlay] = useState(false);
   const speedOverlayTimer = useRef(null);
 
-  // Phase behavior tags: { phaseKey: ['HOOK', 'CHAT', ...] }
+  // Combined tags: { phaseKey: ['HOOK', 'CHAT', 'EMPATHY', ...] }
   const [selectedPhaseTags, setSelectedPhaseTags] = useState({});
   const [phaseTagsSaving, setPhaseTagsSaving] = useState({});
   const [phaseTagsSaved, setPhaseTagsSaved] = useState({});
+  // Debounce timer for auto-save
+  const saveTimerRef = useRef({});
 
   // ── Find current phase based on video currentTime ─────────
   const findPhaseIndex = useCallback(
@@ -157,6 +160,17 @@ export default function DockPlayer({
   }, [currentPhaseIndex, reports1]);
 
   const phaseKey = currentPhase?.phase_index ?? currentPhaseIndex;
+
+  // ── Initialize tags from existing human_sales_tags when phase changes ──
+  useEffect(() => {
+    if (phaseKey < 0 || selectedPhaseTags[phaseKey] !== undefined) return;
+    // Load from existing human_sales_tags or AI tags
+    const existingHuman = humanTags[phaseKey];
+    if (existingHuman && existingHuman.length > 0) {
+      setSelectedPhaseTags(prev => ({ ...prev, [phaseKey]: [...existingHuman] }));
+      setPhaseTagsSaved(prev => ({ ...prev, [phaseKey]: true }));
+    }
+  }, [phaseKey, humanTags]);
 
   // ── Reset on close ────────────────────────────────────────
   useEffect(() => {
@@ -346,35 +360,45 @@ export default function DockPlayer({
     [currentPhaseIndex, reports1, isClipPreview, onPhaseNavigate]
   );
 
-    // ── Phase behavior tag toggle (1-tap select/deselect) ──────
+  // ── Auto-save function (debounced) ──────────────────────────
+  const autoSaveTags = useCallback((pk, newTags) => {
+    // Clear previous debounce timer for this phase
+    if (saveTimerRef.current[pk]) {
+      clearTimeout(saveTimerRef.current[pk]);
+    }
+    // Set saving indicator immediately
+    setPhaseTagsSaving(prev => ({ ...prev, [pk]: true }));
+    setPhaseTagsSaved(prev => ({ ...prev, [pk]: false }));
+
+    // Debounce: save after 500ms of no further changes
+    saveTimerRef.current[pk] = setTimeout(async () => {
+      try {
+        if (onTagConfirm) {
+          await onTagConfirm(pk, newTags);
+        }
+        setPhaseTagsSaved(prev => ({ ...prev, [pk]: true }));
+      } catch (e) {
+        console.error('Failed to auto-save tags:', e);
+      } finally {
+        setPhaseTagsSaving(prev => ({ ...prev, [pk]: false }));
+      }
+    }, 500);
+  }, [onTagConfirm]);
+
+  // ── Tag toggle (1-tap select/deselect → auto-save) ──────────
   const togglePhaseTag = useCallback((pk, tag) => {
     setSelectedPhaseTags(prev => {
       const current = prev[pk] || [];
       const isSelected = current.includes(tag);
+      const newTags = isSelected ? current.filter(t => t !== tag) : [...current, tag];
+      // Trigger auto-save with new tags
+      autoSaveTags(pk, newTags);
       return {
         ...prev,
-        [pk]: isSelected ? current.filter(t => t !== tag) : [...current, tag],
+        [pk]: newTags,
       };
     });
-    // Clear saved state when user changes tags
-    setPhaseTagsSaved(prev => ({ ...prev, [pk]: false }));
-  }, []);
-
-  const savePhaseTag = useCallback(async (pk) => {
-    const tagsToSave = selectedPhaseTags[pk] || [];
-    setPhaseTagsSaving(prev => ({ ...prev, [pk]: true }));
-    try {
-      // Use the existing onTagConfirm to save (reuse backend API)
-      if (onTagConfirm) {
-        await onTagConfirm(pk, tagsToSave);
-      }
-      setPhaseTagsSaved(prev => ({ ...prev, [pk]: true }));
-    } catch (e) {
-      console.error('Failed to save phase tags:', e);
-    } finally {
-      setPhaseTagsSaving(prev => ({ ...prev, [pk]: false }));
-    }
-  }, [selectedPhaseTags, onTagConfirm]);
+  }, [autoSaveTags]);
 
   // ── Buffering handlers ────────────────────────────────
   const handleWaiting = useCallback(() => setIsBuffering(true), []);
@@ -545,7 +569,7 @@ export default function DockPlayer({
                   )}
                 </div>
 
-                {/* Tags */}
+                {/* AI-detected tags (read-only inline display) */}
                 {tags.length > 0 && (
                   <div className="flex flex-wrap gap-1.5">
                     {tags.map((tag) => {
@@ -703,10 +727,10 @@ export default function DockPlayer({
               </div>
             )}
 
-            {/* ── Phase Behavior Tags (常時展開・1タップ選択) ────── */}
+            {/* ── Tags Section: 行動タグ + 販売心理タグ (常時展開・1タップ・即保存) ────── */}
             {phaseKey >= 0 && (
               <div className="rounded-xl bg-white/5 border border-white/10 p-4">
-                <div className="text-[11px] text-white/40 mb-2 font-medium flex items-center gap-1.5">
+                <div className="text-[11px] text-white/40 mb-3 font-medium flex items-center gap-1.5">
                   <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
                     <line x1="7" y1="7" x2="7.01" y2="7" />
@@ -716,70 +740,72 @@ export default function DockPlayer({
                     <div className="w-3 h-3 rounded-full border-2 border-gray-500 border-t-amber-500 animate-spin ml-1" />
                   )}
                   {phaseTagsSaved[phaseKey] && !phaseTagsSaving[phaseKey] && (
-                    <span className="text-green-400 text-[10px] ml-1">保存済</span>
+                    <span className="text-green-400 text-[10px] ml-1 flex items-center gap-0.5">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                      保存済
+                    </span>
                   )}
                 </div>
 
-                {/* Always-visible tag chips — 1 tap to select/deselect */}
-                <div className="flex flex-wrap gap-1.5">
-                  {ALL_PHASE_TAGS.map((tag) => {
-                    const cfg = PHASE_TAG_CONFIG[tag] || { label: tag };
-                    const isSelected = (selectedPhaseTags[phaseKey] || []).includes(tag);
-                    const darkColor = DARK_TAG_COLORS[tag] || "bg-gray-500/20 text-gray-300 border-gray-500/30";
-                    return (
-                      <button
-                        key={tag}
-                        onClick={() => togglePhaseTag(phaseKey, tag)}
-                        className={`inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-semibold border transition-all duration-150 ${
-                          isSelected
-                            ? `${darkColor} ring-1 ring-white/30 shadow-sm`
-                            : "bg-white/5 text-white/30 border-white/10 hover:bg-white/10 hover:text-white/50"
-                        }`}
-                      >
-                        {isSelected && (
-                          <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="mr-1">
-                            <polyline points="20 6 9 17 4 12" />
-                          </svg>
-                        )}
-                        {cfg.label}
-                      </button>
-                    );
-                  })}
+                {/* ── 行動タグ (Behavior Tags) ──────────────── */}
+                <div className="mb-3">
+                  <div className="text-[10px] text-white/25 mb-1.5 uppercase tracking-wider">行動</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {ALL_PHASE_TAGS.map((tag) => {
+                      const cfg = PHASE_TAG_CONFIG[tag] || { label: tag };
+                      const isSelected = (selectedPhaseTags[phaseKey] || []).includes(tag);
+                      const darkColor = DARK_TAG_COLORS[tag] || "bg-gray-500/20 text-gray-300 border-gray-500/30";
+                      return (
+                        <button
+                          key={tag}
+                          onClick={() => togglePhaseTag(phaseKey, tag)}
+                          className={`inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-semibold border transition-all duration-150 ${
+                            isSelected
+                              ? `${darkColor} ring-1 ring-white/30 shadow-sm`
+                              : "bg-white/5 text-white/30 border-white/10 hover:bg-white/10 hover:text-white/50"
+                          }`}
+                        >
+                          {isSelected && (
+                            <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="mr-1">
+                              <polyline points="20 6 9 17 4 12" />
+                            </svg>
+                          )}
+                          {cfg.label}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
 
-                {/* Save button — only shows when tags have been changed */}
-                {(selectedPhaseTags[phaseKey] || []).length > 0 && !phaseTagsSaved[phaseKey] && (
-                  <div className="mt-2">
-                    <button
-                      onClick={() => savePhaseTag(phaseKey)}
-                      disabled={phaseTagsSaving[phaseKey]}
-                      className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-[11px] font-medium bg-green-500/15 text-green-300 border border-green-500/25 hover:bg-green-500/25 transition-colors disabled:opacity-50"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <polyline points="20 6 9 17 4 12" />
-                      </svg>
-                      保存
-                    </button>
+                {/* ── 販売心理タグ (Sales Psychology Tags) ──── */}
+                <div>
+                  <div className="text-[10px] text-white/25 mb-1.5 uppercase tracking-wider">販売心理</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {ALL_SALES_TAGS.map((tag) => {
+                      const cfg = SALES_TAG_CONFIG[tag] || { label: tag };
+                      const isSelected = (selectedPhaseTags[phaseKey] || []).includes(tag);
+                      const darkColor = DARK_TAG_COLORS[tag] || "bg-gray-500/20 text-gray-300 border-gray-500/30";
+                      return (
+                        <button
+                          key={tag}
+                          onClick={() => togglePhaseTag(phaseKey, tag)}
+                          className={`inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-semibold border transition-all duration-150 ${
+                            isSelected
+                              ? `${darkColor} ring-1 ring-white/30 shadow-sm`
+                              : "bg-white/5 text-white/30 border-white/10 hover:bg-white/10 hover:text-white/50"
+                          }`}
+                        >
+                          {isSelected && (
+                            <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="mr-1">
+                              <polyline points="20 6 9 17 4 12" />
+                            </svg>
+                          )}
+                          {cfg.label}
+                        </button>
+                      );
+                    })}
                   </div>
-                )}
-
-                {/* AI-generated sales psychology tags (read-only display) */}
-                {tags.length > 0 && (
-                  <div className="mt-3 pt-3 border-t border-white/5">
-                    <div className="text-[10px] text-white/25 mb-1.5">AI検出タグ</div>
-                    <div className="flex flex-wrap gap-1">
-                      {tags.map((tag) => {
-                        const cfg = SALES_TAG_CONFIG[tag] || { label: tag };
-                        const darkColor = DARK_TAG_COLORS[tag] || "bg-gray-500/20 text-gray-300 border-gray-500/30";
-                        return (
-                          <span key={tag} className={`inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-medium border opacity-60 ${darkColor}`}>
-                            {cfg.label}
-                          </span>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
+                </div>
               </div>
             )}
 
