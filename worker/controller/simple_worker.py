@@ -405,6 +405,14 @@ def process_video_job(payload: dict):
         if proc.returncode == 0:
             print(f"[worker] Batch completed successfully for {video_id}")
             return True
+        elif proc.returncode == 2:
+            # Exit code 2 = ORPHAN_VIDEO: DB record not found (deleted or never created)
+            # This is NOT a retry-able error. Delete message immediately.
+            print(f"[worker] ORPHAN_VIDEO skip: video_id={video_id} not found in DB. "
+                  f"Deleting queue message (no retry).")
+            log_error_type(video_id, "video_analysis", "ORPHAN_VIDEO",
+                           "DB record not found, message will be deleted")
+            return True  # Return True so process_job() deletes the queue message
         else:
             log_error_type(video_id, "video_analysis", "SUBPROCESS_FAIL", f"exit_code={proc.returncode}")
             return False

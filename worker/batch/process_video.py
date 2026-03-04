@@ -468,6 +468,26 @@ def main():
     init_db_sync()
 
     try:
+        # --- PRE-FLIGHT: Check DB record exists BEFORE downloading ---
+        # This prevents wasting bandwidth on orphan videos (deleted after queue enqueue)
+        try:
+            pre_user_id = get_user_id_of_video_sync(video_id)
+        except Exception as db_err:
+            # DB connection error → retry-able (exit code 1)
+            logger.error(
+                "[DB_ERROR] Cannot connect to DB to check video_id=%s: %s", video_id, db_err,
+            )
+            raise  # Will be caught by outer except → exit code 1 → retry
+
+        if pre_user_id is None:
+            # DB query succeeded but video not found → orphan (exit code 2)
+            logger.warning(
+                "[ORPHAN_VIDEO] video_id=%s not found in DB (deleted or never created). "
+                "Skipping download and processing. Message should be deleted.",
+                video_id,
+            )
+            sys.exit(2)  # Special exit code: orphan video, no retry
+
         video_path, video_id = _resolve_inputs(args)
 
         # --- PRE-FLIGHT: Clean old files and check disk space ---
@@ -477,12 +497,7 @@ def main():
         current_status = get_video_status_sync(video_id)
         raw_start_step = status_to_step_index(current_status)
 
-        user_id = get_user_id_of_video_sync(video_id)
-        if user_id is None:
-            logger.error(
-                "[FATAL] Cannot resolve user_id for video_id=%s (video not found or missing owner)", video_id,
-            )
-            raise RuntimeError(f"Cannot resolve user_id for video {video_id}")
+        user_id = pre_user_id  # Already resolved above
 
         # =========================
         # LOAD EXCEL DATA (if clean video)
