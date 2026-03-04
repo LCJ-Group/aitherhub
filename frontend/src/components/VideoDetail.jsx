@@ -787,6 +787,39 @@ export default function VideoDetail({ videoData }) {
                                         CTA {item.cta_score}
                                       </span>
                                     )}
+                                    {item.sales_psychology_tags && item.sales_psychology_tags.length > 0 && (
+                                      <div className="flex flex-wrap gap-0.5">
+                                        {item.sales_psychology_tags.map((tag) => {
+                                          const tagConfig = {
+                                            HOOK: { label: 'HOOK', color: 'bg-purple-100 text-purple-700 border-purple-300' },
+                                            EMPATHY: { label: '共感', color: 'bg-pink-100 text-pink-700 border-pink-300' },
+                                            PROBLEM: { label: '問題', color: 'bg-red-50 text-red-600 border-red-200' },
+                                            EDUCATION: { label: '教育', color: 'bg-blue-100 text-blue-700 border-blue-300' },
+                                            SOLUTION: { label: '解決', color: 'bg-green-100 text-green-700 border-green-300' },
+                                            DEMONSTRATION: { label: 'デモ', color: 'bg-teal-100 text-teal-700 border-teal-300' },
+                                            COMPARISON: { label: '比較', color: 'bg-indigo-100 text-indigo-700 border-indigo-300' },
+                                            PROOF: { label: '証拠', color: 'bg-cyan-100 text-cyan-700 border-cyan-300' },
+                                            TRUST: { label: '信頼', color: 'bg-emerald-100 text-emerald-700 border-emerald-300' },
+                                            SOCIAL_PROOF: { label: '社会証明', color: 'bg-violet-100 text-violet-700 border-violet-300' },
+                                            OBJECTION_HANDLING: { label: '反論処理', color: 'bg-amber-100 text-amber-700 border-amber-300' },
+                                            URGENCY: { label: '緊急', color: 'bg-orange-100 text-orange-700 border-orange-300' },
+                                            LIMITED_OFFER: { label: '限定', color: 'bg-rose-100 text-rose-700 border-rose-300' },
+                                            BONUS: { label: '特典', color: 'bg-lime-100 text-lime-700 border-lime-300' },
+                                            CTA: { label: 'CTA', color: 'bg-red-100 text-red-700 border-red-300' },
+                                          };
+                                          const cfg = tagConfig[tag] || { label: tag, color: 'bg-gray-100 text-gray-600 border-gray-300' };
+                                          return (
+                                            <span
+                                              key={tag}
+                                              className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[8px] font-semibold border ${cfg.color}`}
+                                              title={tag}
+                                            >
+                                              {cfg.label}
+                                            </span>
+                                          );
+                                        })}
+                                      </div>
+                                    )}
                                     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-flame w-4 h-4 text-orange-500"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"></path></svg>
                                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
                                       stroke="currentColor" strokeWidth="1.5"

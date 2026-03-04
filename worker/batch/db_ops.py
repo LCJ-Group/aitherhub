@@ -1555,6 +1555,39 @@ def update_video_phase_cta_score_sync(video_id: str, phase_index: int, cta_score
 
 
 # =========================
+# Sales Psychology Tags (PHASE)
+# =========================
+
+async def update_video_phase_sales_tags(video_id: str, phase_index: int, sales_tags_json: str):
+    """
+    Store sales psychology tags as JSON array text.
+    sales_tags_json should be a JSON string like:
+    '["HOOK", "DEMONSTRATION", "CTA"]'
+    """
+    sql = text("""
+        UPDATE video_phases
+        SET sales_psychology_tags = :sales_tags,
+            updated_at = now()
+        WHERE video_id = :video_id
+          AND phase_index = :phase_index
+    """)
+    async with AsyncSessionLocal() as session:
+        await session.execute(sql, {
+            "video_id": video_id,
+            "phase_index": phase_index,
+            "sales_tags": sales_tags_json,
+        })
+        await session.commit()
+
+
+def update_video_phase_sales_tags_sync(video_id: str, phase_index: int, sales_tags_json: str):
+    loop = get_event_loop()
+    return loop.run_until_complete(
+        update_video_phase_sales_tags(video_id, phase_index, sales_tags_json)
+    )
+
+
+# =========================
 # Audio Features (PHASE)
 # =========================
 

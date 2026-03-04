@@ -729,6 +729,7 @@ async def get_video_detail(
                 vp.sas_expireddate,
                 vp.cta_score,
                 vp.audio_features,
+                vp.sales_psychology_tags,
                 pi.insight
             FROM video_phases vp
             LEFT JOIN phase_insights pi ON pi.video_id = vp.video_id AND pi.phase_index = vp.phase_index
@@ -776,6 +777,7 @@ async def get_video_detail(
                     vp.sas_expireddate,
                     NULL as cta_score,
                     NULL as audio_features,
+                    NULL as sales_psychology_tags,
                     pi.insight
                 FROM video_phases vp
                 LEFT JOIN phase_insights pi ON pi.video_id = vp.video_id AND pi.phase_index = vp.phase_index
@@ -868,6 +870,15 @@ async def get_video_detail(
                 except (json.JSONDecodeError, TypeError):
                     pass
 
+                # Parse sales_psychology_tags JSON text
+                sales_tags_parsed = []
+                try:
+                    raw_tags = getattr(r, 'sales_psychology_tags', None)
+                    if raw_tags:
+                        sales_tags_parsed = json.loads(raw_tags) if isinstance(raw_tags, str) else raw_tags
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
                 report1_items.append({
                     "phase_index": int(r.phase_index),
                     "phase_description": r.phase_description,
@@ -879,6 +890,7 @@ async def get_video_detail(
                     "user_comment": r.user_comment,
                     "cta_score": getattr(r, 'cta_score', None),
                     "audio_features": audio_features_parsed,
+                    "sales_psychology_tags": sales_tags_parsed,
                     "csv_metrics": {
                         "gmv": r.gmv,
                         "order_count": r.order_count,

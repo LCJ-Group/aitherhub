@@ -29,4 +29,6 @@ class Phase(Base, UUIDMixin, TimestampMixin):
     delta_view: Mapped[int | None] = mapped_column(Integer, nullable=True)
     delta_like: Mapped[int | None] = mapped_column(Integer, nullable=True)
     
+    sales_psychology_tags: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

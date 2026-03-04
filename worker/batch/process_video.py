@@ -69,6 +69,7 @@ from db_ops import (
     update_video_phase_csv_metrics_sync,
     update_video_phase_cta_score_sync,
     update_video_phase_audio_features_sync,
+    update_video_phase_sales_tags_sync,
     update_phase_group_sync,
     get_video_structure_group_id_of_video_sync,
     bulk_upsert_group_best_phases_sync,
@@ -1029,6 +1030,24 @@ def main():
                     except Exception as e:
                         logger.warning("[DB][WARN] cta_score save failed phase %s: %s", p["phase_index"], e)
             logger.info("[DB] Saved cta_score for %d/%d phases", cta_count, len(phase_units))
+
+            # --- Sales Psychology Tags persistence ---
+            logger.info("[DB] Persist sales_psychology_tags to video_phases")
+            tags_count = 0
+            for p in phase_units:
+                tags = p.get("sales_tags")
+                if tags and isinstance(tags, list) and len(tags) > 0:
+                    try:
+                        import json as _json
+                        update_video_phase_sales_tags_sync(
+                            video_id=video_id,
+                            phase_index=p["phase_index"],
+                            sales_tags_json=_json.dumps(tags),
+                        )
+                        tags_count += 1
+                    except Exception as e:
+                        logger.warning("[DB][WARN] sales_tags save failed phase %s: %s", p["phase_index"], e)
+            logger.info("[DB] Saved sales_tags for %d/%d phases", tags_count, len(phase_units))
         else:
             logger.info("[SKIP] STEP 6")
 

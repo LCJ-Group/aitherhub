@@ -706,7 +706,7 @@ SYSTEM_PROMPT_PHASE_DESC = """
 2) SPEECH TEXT:
    - そのフェーズ中の配信者の発話内容
 
-タスク：
+タスク1：PHASE DESCRIPTION
 このフェーズでの「売り方の特徴」を分析した
 PHASE DESCRIPTIONを作成してください。
 
@@ -720,7 +720,7 @@ PHASE DESCRIPTIONを作成してください。
 - 商品名、価格、数値、時間、視聴者数は書かない
 - 評価や感想は書かない
 
-追加タスク：
+タスク2：CTA SCORE
 このフェーズに含まれるCTA（購買意欲を煽る発言）の強さを1〜5で評価してください。
 - 1: CTAなし（雑談、挨拶、商品説明のみ）
 - 2: 弱いCTA（「良かったら見てみてね」程度）
@@ -728,10 +728,31 @@ PHASE DESCRIPTIONを作成してください。
 - 4: 強いCTA（「今だけ」「限定」「残りわずか」など緊急性・希少性の演出）
 - 5: 最強CTA（「今すぐカートに入れて」「リンク押して」など直接的な購買指示）
 
+タスク3：SALES PSYCHOLOGY TAGS
+このフェーズの販売心理構造を、以下の15タグから該当するものを全て選んでください。
+複数選択可。該当しないタグは含めないでください。
+
+- HOOK: 注意を引く導入（「これすごいんですよ」「知らない人多いんだけど」など）
+- EMPATHY: 視聴者の悩みや気持ちへの共感（「わかります」「私もそうでした」など）
+- PROBLEM: 問題提起（「髪がパサつく原因は…」「こういう悩みありませんか」など）
+- EDUCATION: 教育・知識提供（「実は髪の毛って…」「これがダメージの原因」など）
+- SOLUTION: 解決策の提示（「だからこの商品が…」「これを使えば…」など）
+- DEMONSTRATION: 実演・デモ（商品を実際に使って見せる、ビフォーアフターなど）
+- COMPARISON: 比較（「普通のトリートメントと違って…」「他の商品だと…」など）
+- PROOF: 証拠・データ提示（「〇〇成分配合」「臨床試験で…」など）
+- TRUST: 信頼構築（「私も毎日使ってます」「〇年使い続けてます」など）
+- SOCIAL_PROOF: 社会的証明（「みんな使ってる」「口コミで話題」「〇万個売れた」など）
+- OBJECTION_HANDLING: 反論処理（「高いと思うかもしれないけど…」「敏感肌でも大丈夫」など）
+- URGENCY: 緊急性（「今だけ」「今日限り」「あと〇分」など）
+- LIMITED_OFFER: 限定感（「残りわずか」「限定〇個」「先着」など）
+- BONUS: 特典・おまけ（「今買うとさらに…」「セットでお得」など）
+- CTA: 購買行動の指示（「カートに入れて」「リンク押して」「今すぐ購入」など）
+
 出力（JSON）：
 {
   "phase_description": "string",
-  "cta_score": 1
+  "cta_score": 1,
+  "sales_tags": ["HOOK", "DEMONSTRATION"]
 }
 """.strip()
 
@@ -810,14 +831,23 @@ PHASE DESCRIPTIONを作成してください。
 
 #     return phase_units
 
+# Valid sales psychology tags (15 types)
+VALID_SALES_TAGS = {
+    "HOOK", "EMPATHY", "PROBLEM", "EDUCATION", "SOLUTION",
+    "DEMONSTRATION", "COMPARISON", "PROOF", "TRUST", "SOCIAL_PROOF",
+    "OBJECTION_HANDLING", "URGENCY", "LIMITED_OFFER", "BONUS", "CTA",
+}
+
+
 def build_phase_descriptions(phase_units, on_progress=None):
     results = {}       # {phase_index: phase_description}
     cta_results = {}    # {phase_index: cta_score}
+    sales_tags_results = {}  # {phase_index: ["HOOK", "DEMONSTRATION", ...]}
     total_tasks = len(phase_units)
     completed_count = [0]  # mutable for closure
 
-    async def _wrapped_task(phase, sem, results, cta_results):
-        await process_one_phase_desc_task(phase, sem, results, cta_results)
+    async def _wrapped_task(phase, sem, results, cta_results, sales_tags_results):
+        await process_one_phase_desc_task(phase, sem, results, cta_results, sales_tags_results)
         completed_count[0] += 1
         if on_progress and total_tasks > 0:
             pct = min(int(completed_count[0] / total_tasks * 100), 100)
@@ -834,6 +864,7 @@ def build_phase_descriptions(phase_units, on_progress=None):
                     sem,
                     results,
                     cta_results,
+                    sales_tags_results,
                 )
             )
 
@@ -853,6 +884,7 @@ def build_phase_descriptions(phase_units, on_progress=None):
     for phase in phase_units:
         phase["phase_description"] = results.get(phase["phase_index"])
         phase["cta_score"] = cta_results.get(phase["phase_index"], 1)
+        phase["sales_tags"] = sales_tags_results.get(phase["phase_index"], [])
 
     return phase_units
 
@@ -932,6 +964,7 @@ async def process_one_phase_desc_task(
     sem,
     results,
     cta_results=None,
+    sales_tags_results=None,
 ):
     data = await gpt_phase_description_async(
         phase.get("image_caption"),
@@ -949,6 +982,17 @@ async def process_one_phase_desc_task(
                 cta_results[phase["phase_index"]] = max(1, min(5, score))
             except (ValueError, TypeError):
                 cta_results[phase["phase_index"]] = 1
+
+        # Extract sales_tags from GPT response
+        if sales_tags_results is not None:
+            raw_tags = data.get("sales_tags", [])
+            if isinstance(raw_tags, list):
+                # Validate: only keep known tags
+                validated = [t for t in raw_tags if isinstance(t, str) and t.upper() in VALID_SALES_TAGS]
+                # Normalize to uppercase
+                sales_tags_results[phase["phase_index"]] = [t.upper() for t in validated]
+            else:
+                sales_tags_results[phase["phase_index"]] = []
     else:
         results[phase["phase_index"]] = (
             "このフェーズでは、配信者が視聴者とやり取りしながら、"
@@ -957,6 +1001,8 @@ async def process_one_phase_desc_task(
         )
         if cta_results is not None:
             cta_results[phase["phase_index"]] = 1
+        if sales_tags_results is not None:
+            sales_tags_results[phase["phase_index"]] = []
 
 
 
