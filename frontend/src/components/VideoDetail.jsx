@@ -1490,6 +1490,16 @@ export default function VideoDetail({ videoData }) {
         onCommentChange={(idx, val) => setRatingComments(prev => ({ ...prev, [idx]: val }))}
         onSaveComment={handleSaveComment}
         onPhaseNavigate={(phase) => handlePhasePreview(phase)}
+        humanTags={humanTags}
+        tagEditState={tagEditState}
+        onTagConfirm={handleTagConfirm}
+        onTagEditStart={handleTagEditStart}
+        onTagToggle={handleTagToggle}
+        onTagSave={handleTagSave}
+        onTagEditCancel={(phaseIndex) => setTagEditState(prev => ({ ...prev, [phaseIndex]: { ...prev[phaseIndex], editing: false } }))}
+        clipStates={clipStates}
+        onClipGenerate={handleClipGeneration}
+        videoData={videoData}
       />
     </div>
   );

@@ -36,6 +36,31 @@ function formatTime(seconds) {
   return `${mins}:${secs.toString().padStart(2, "0")}`;
 }
 
+const ALL_SALES_TAGS = [
+  'HOOK', 'EMPATHY', 'PROBLEM', 'EDUCATION', 'SOLUTION',
+  'DEMONSTRATION', 'COMPARISON', 'PROOF', 'TRUST', 'SOCIAL_PROOF',
+  'OBJECTION_HANDLING', 'URGENCY', 'LIMITED_OFFER', 'BONUS', 'CTA',
+];
+
+// Dark-mode tag colors for DockPlayer
+const DARK_TAG_COLORS = {
+  HOOK: "bg-purple-500/20 text-purple-300 border-purple-500/30",
+  EMPATHY: "bg-pink-500/20 text-pink-300 border-pink-500/30",
+  PROBLEM: "bg-red-500/20 text-red-300 border-red-500/30",
+  EDUCATION: "bg-blue-500/20 text-blue-300 border-blue-500/30",
+  SOLUTION: "bg-green-500/20 text-green-300 border-green-500/30",
+  DEMONSTRATION: "bg-teal-500/20 text-teal-300 border-teal-500/30",
+  COMPARISON: "bg-indigo-500/20 text-indigo-300 border-indigo-500/30",
+  PROOF: "bg-cyan-500/20 text-cyan-300 border-cyan-500/30",
+  TRUST: "bg-emerald-500/20 text-emerald-300 border-emerald-500/30",
+  SOCIAL_PROOF: "bg-violet-500/20 text-violet-300 border-violet-500/30",
+  OBJECTION_HANDLING: "bg-amber-500/20 text-amber-300 border-amber-500/30",
+  URGENCY: "bg-orange-500/20 text-orange-300 border-orange-500/30",
+  LIMITED_OFFER: "bg-rose-500/20 text-rose-300 border-rose-500/30",
+  BONUS: "bg-lime-500/20 text-lime-300 border-lime-500/30",
+  CTA: "bg-red-500/20 text-red-300 border-red-500/30",
+};
+
 export default function DockPlayer({
   open,
   onClose,
@@ -50,6 +75,17 @@ export default function DockPlayer({
   onCommentChange,
   onSaveComment,
   onPhaseNavigate,
+  // New props for tags, clips
+  humanTags = {},
+  tagEditState = {},
+  onTagConfirm,
+  onTagEditStart,
+  onTagToggle,
+  onTagSave,
+  onTagEditCancel,
+  clipStates = {},
+  onClipGenerate,
+  videoData,
 }) {
   const videoRef = useRef(null);
   const hasSetupRef = useRef(false);
@@ -573,6 +609,215 @@ export default function DockPlayer({
                     <span className="text-xs text-white/30">タップで採点</span>
                   )}
                 </div>
+              </div>
+            )}
+
+            {/* ── Comment Input (optional) ──────────────────── */}
+            {phaseKey >= 0 && (
+              <div className="rounded-xl bg-white/5 border border-white/10 p-4">
+                <div className="text-[11px] text-white/40 mb-2 font-medium flex items-center gap-1.5">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                  </svg>
+                  コメント入力
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={ratingComments[phaseKey] || ''}
+                    onChange={(e) => onCommentChange?.(phaseKey, e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') onSaveComment?.(phaseKey); }}
+                    placeholder="この区間へのメモ（任意）"
+                    className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 placeholder-white/25 focus:outline-none focus:border-white/30 focus:ring-1 focus:ring-white/20 transition-colors"
+                  />
+                  <button
+                    onClick={() => onSaveComment?.(phaseKey)}
+                    disabled={!ratingComments[phaseKey]}
+                    className="px-3 py-2 rounded-lg text-xs font-medium bg-white/10 text-white/70 hover:bg-white/20 transition-colors disabled:opacity-30 disabled:cursor-not-allowed flex-shrink-0"
+                  >
+                    保存
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* ── Sales Psychology Tags (Human-in-the-loop) ────── */}
+            {phaseKey >= 0 && tags.length > 0 && (
+              <div className="rounded-xl bg-white/5 border border-white/10 p-4">
+                <div className="text-[11px] text-white/40 mb-2 font-medium flex items-center gap-1.5">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
+                    <line x1="7" y1="7" x2="7.01" y2="7" />
+                  </svg>
+                  販売心理タグ
+                  {tagEditState[phaseKey]?.saved && !tagEditState[phaseKey]?.editing && (
+                    <span className="text-green-400 text-[10px] ml-1">保存済</span>
+                  )}
+                  {tagEditState[phaseKey]?.saving && (
+                    <div className="w-3 h-3 rounded-full border-2 border-gray-500 border-t-amber-500 animate-spin ml-1" />
+                  )}
+                </div>
+
+                {/* View mode: show tags + confirm/edit buttons */}
+                {!tagEditState[phaseKey]?.editing && (
+                  <div className="space-y-2">
+                    <div className="flex flex-wrap gap-1.5">
+                      {(humanTags[phaseKey] || tags).map((tag) => {
+                        const cfg = SALES_TAG_CONFIG[tag] || { label: tag, color: "bg-gray-700 text-gray-300 border-gray-600" };
+                        const darkColor = DARK_TAG_COLORS[tag] || "bg-gray-500/20 text-gray-300 border-gray-500/30";
+                        return (
+                          <span key={tag} className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border ${darkColor}`}>
+                            {cfg.label}
+                          </span>
+                        );
+                      })}
+                    </div>
+                    <div className="flex items-center gap-2 mt-2">
+                      {!tagEditState[phaseKey]?.saved && !humanTags[phaseKey] && (
+                        <button
+                          onClick={() => onTagConfirm?.(phaseKey, tags)}
+                          className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-[11px] font-medium bg-green-500/15 text-green-300 border border-green-500/25 hover:bg-green-500/25 transition-colors"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="20 6 9 17 4 12" />
+                          </svg>
+                          正しい
+                        </button>
+                      )}
+                      <button
+                        onClick={() => onTagEditStart?.(phaseKey, humanTags[phaseKey] || tags)}
+                        className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-[11px] font-medium bg-white/10 text-white/60 border border-white/15 hover:bg-white/20 transition-colors"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                        </svg>
+                        修正
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Edit mode: checkboxes for all 15 tags */}
+                {tagEditState[phaseKey]?.editing && (
+                  <div className="space-y-3">
+                    <div className="flex flex-wrap gap-1.5">
+                      {ALL_SALES_TAGS.map((tag) => {
+                        const cfg = SALES_TAG_CONFIG[tag] || { label: tag };
+                        const isSelected = (humanTags[phaseKey] || []).includes(tag);
+                        const darkColor = DARK_TAG_COLORS[tag] || "bg-gray-500/20 text-gray-300 border-gray-500/30";
+                        return (
+                          <button
+                            key={tag}
+                            onClick={() => onTagToggle?.(phaseKey, tag)}
+                            className={`inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-semibold border transition-all duration-150 ${
+                              isSelected
+                                ? `${darkColor} ring-1 ring-white/30`
+                                : "bg-white/5 text-white/30 border-white/10 hover:bg-white/10 hover:text-white/50"
+                            }`}
+                          >
+                            {isSelected && (
+                              <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="mr-1">
+                                <polyline points="20 6 9 17 4 12" />
+                              </svg>
+                            )}
+                            {cfg.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => onTagSave?.(phaseKey)}
+                        className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-[11px] font-medium bg-green-500/15 text-green-300 border border-green-500/25 hover:bg-green-500/25 transition-colors"
+                      >
+                        保存
+                      </button>
+                      <button
+                        onClick={() => onTagEditCancel?.(phaseKey)}
+                        className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-[11px] font-medium bg-white/10 text-white/50 hover:bg-white/15 transition-colors"
+                      >
+                        キャンセル
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ── Clip Generation Button ────────────────────────── */}
+            {phaseKey >= 0 && currentPhase && (
+              <div className="rounded-xl bg-white/5 border border-white/10 p-4">
+                <div className="text-[11px] text-white/40 mb-2 font-medium flex items-center gap-1.5">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18" />
+                    <line x1="7" y1="2" x2="7" y2="22" />
+                    <line x1="17" y1="2" x2="17" y2="22" />
+                    <line x1="2" y1="12" x2="22" y2="12" />
+                    <line x1="2" y1="7" x2="7" y2="7" />
+                    <line x1="2" y1="17" x2="7" y2="17" />
+                    <line x1="17" y1="7" x2="22" y2="7" />
+                    <line x1="17" y1="17" x2="22" y2="17" />
+                  </svg>
+                  切り抜き生成
+                </div>
+                {(() => {
+                  const clipState = clipStates[phaseKey];
+                  const isClipLoading = clipState?.status === 'requesting' || clipState?.status === 'pending' || clipState?.status === 'processing';
+                  const isClipCompleted = clipState?.status === 'completed' && clipState?.clip_url;
+                  const isClipFailed = clipState?.status === 'failed';
+
+                  if (isClipCompleted) {
+                    return (
+                      <div className="flex items-center gap-2">
+                        <a
+                          href={clipState.clip_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium bg-green-500/15 text-green-300 border border-green-500/25 hover:bg-green-500/25 transition-colors"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                            <polyline points="7 10 12 15 17 10" />
+                            <line x1="12" y1="15" x2="12" y2="3" />
+                          </svg>
+                          ダウンロード
+                        </a>
+                        <span className="text-[10px] text-green-400">生成完了</span>
+                      </div>
+                    );
+                  }
+
+                  if (isClipLoading) {
+                    return (
+                      <div className="flex items-center gap-2">
+                        <div className="w-4 h-4 rounded-full border-2 border-gray-500 border-t-purple-400 animate-spin" />
+                        <span className="text-xs text-white/50">切り抜き生成中...</span>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div className="space-y-2">
+                      <button
+                        onClick={() => onClipGenerate?.(currentPhase, phaseKey)}
+                        className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium bg-purple-500/15 text-purple-300 border border-purple-500/25 hover:bg-purple-500/25 transition-colors"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <polygon points="23 7 16 12 23 17 23 7" />
+                          <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
+                        </svg>
+                        この区間を切り抜き
+                      </button>
+                      <div className="text-[10px] text-white/25">
+                        {formatTime(currentPhase.time_start)} – {formatTime(currentPhase.time_end)} の区間を切り抜き動画として生成
+                      </div>
+                      {isClipFailed && (
+                        <div className="text-[10px] text-red-400">生成に失敗しました。再度お試しください。</div>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             )}
 
