@@ -1260,22 +1260,7 @@ def main():
             # ---------- REPORT 1 ----------
             r1 = build_report_1_timeline(phase_units)
 
-            # ---------- REPORT 2 (PHASE INSIGHTS) ----------
-            r2_raw = build_report_2_phase_insights_raw(
-                phase_units, best_data, excel_data=excel_data
-            )
-            r2_gpt = rewrite_report_2_with_gpt(r2_raw, excel_data=excel_data)
-
-            for item in r2_gpt:
-                upsert_phase_insight_sync(
-                    user_id,
-                    video_id=video_id,
-                    phase_index=item["phase_index"],
-                    group_id=int(item["group_id"]) if item.get("group_id") else None,
-                    insight=item["insight"],
-                )
-
-            # ---------- REPORT 3 (VIDEO STRUCTURE vs BENCHMARK) ----------
+            # ---------- REPORT 2 & 3 (PARALLEL GPT CALLS) ----------
             from report_pipeline import (
                 build_report_3_structure_vs_benchmark_raw,
                 rewrite_report_3_structure_with_gpt,
@@ -1286,6 +1271,14 @@ def main():
                 get_video_structure_group_stats_sync,
             )
 
+            r2_raw = build_report_2_phase_insights_raw(
+                phase_units, best_data, excel_data=excel_data
+            )
+
+            # Prepare Report 3 raw data (fast, no GPT)
+            r3_raw = None
+            r3_gpt = None
+
             group_id = get_video_structure_group_id_of_video_sync(video_id, user_id)
             if not group_id:
                 logger.info("[REPORT3] No structure group, skip")
@@ -1295,12 +1288,9 @@ def main():
                     logger.info("[REPORT3] No benchmark video, skip")
                 else:
                     best_video_id = best["video_id"]
-
                     current_features = get_video_structure_features_sync(video_id, user_id)
                     best_features = get_video_structure_features_sync(best_video_id, user_id)
-
                     group_stats = get_video_structure_group_stats_sync(group_id, user_id)
-
                     if not current_features or not best_features:
                         logger.info("[REPORT3] Missing structure features, skip")
                     else:
@@ -1312,23 +1302,44 @@ def main():
                             product_exposures=exposures,
                         )
 
-                        r3_gpt = rewrite_report_3_structure_with_gpt(r3_raw)
+            # Run Report 2 GPT and Report 3 GPT in parallel
+            logger.info("[REPORT] Running Report 2 & 3 GPT rewrites in parallel")
+            r2_gpt = None
+            with ThreadPoolExecutor(max_workers=2) as report_pool:
+                fut_r2 = report_pool.submit(rewrite_report_2_with_gpt, r2_raw, excel_data=excel_data)
+                fut_r3 = None
+                if r3_raw is not None:
+                    fut_r3 = report_pool.submit(rewrite_report_3_structure_with_gpt, r3_raw)
 
-                        # Save debug artifacts (optional)
-                        save_reports(
-                            video_id,
-                            r1,
-                            r2_raw,
-                            r2_gpt,
-                            r3_raw,
-                            r3_gpt,
-                        )
+                r2_gpt = fut_r2.result()
+                if fut_r3 is not None:
+                    r3_gpt = fut_r3.result()
 
-                        insert_video_insight_sync(
-                            video_id=video_id,
-                            title="Video Structure Analysis",
-                            content=json.dumps(r3_gpt, ensure_ascii=False),
-                        )
+            # Persist Report 2
+            for item in r2_gpt:
+                upsert_phase_insight_sync(
+                    user_id,
+                    video_id=video_id,
+                    phase_index=item["phase_index"],
+                    group_id=int(item["group_id"]) if item.get("group_id") else None,
+                    insight=item["insight"],
+                )
+
+            # Persist Report 3
+            if r3_gpt is not None:
+                save_reports(
+                    video_id,
+                    r1,
+                    r2_raw,
+                    r2_gpt,
+                    r3_raw,
+                    r3_gpt,
+                )
+                insert_video_insight_sync(
+                    video_id=video_id,
+                    title="Video Structure Analysis",
+                    content=json.dumps(r3_gpt, ensure_ascii=False),
+                )
 
         else:
             logger.info("[SKIP] STEP 13")
