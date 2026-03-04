@@ -480,13 +480,34 @@ def main():
             raise  # Will be caught by outer except → exit code 1 → retry
 
         if pre_user_id is None:
-            # DB query succeeded but video not found → orphan (exit code 2)
-            logger.warning(
-                "[ORPHAN_VIDEO] video_id=%s not found in DB (deleted or never created). "
-                "Skipping download and processing. Message should be deleted.",
-                video_id,
+            # Not found on first check — sleep and recheck once to guard against
+            # DB replication lag or a race with upload_complete commit.
+            logger.info(
+                "[ORPHAN_RECHECK] video_id=%s not found on first check. "
+                "Sleeping 3s and rechecking once...", video_id,
             )
-            sys.exit(2)  # Special exit code: orphan video, no retry
+            time.sleep(3)
+            try:
+                pre_user_id = get_user_id_of_video_sync(video_id)
+            except Exception as db_err2:
+                logger.error(
+                    "[DB_ERROR] Recheck failed for video_id=%s: %s", video_id, db_err2,
+                )
+                raise  # retry-able
+
+            if pre_user_id is None:
+                # Still not found after recheck → confirmed orphan (exit code 2)
+                logger.warning(
+                    "[ORPHAN_VIDEO] video_id=%s not found in DB after recheck. "
+                    "Skipping download and processing. Message should be deleted.",
+                    video_id,
+                )
+                sys.exit(2)  # Special exit code: orphan video, no retry
+            else:
+                logger.info(
+                    "[ORPHAN_RECHECK] video_id=%s found on recheck (user_id=%s). "
+                    "Proceeding with processing.", video_id, pre_user_id,
+                )
 
         video_path, video_id = _resolve_inputs(args)
 
