@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 import MarkdownWithTables from "./markdown/MarkdownWithTables";
 import ChatInput from "./ChatInput";
-import VideoPreviewModal from "./modals/VideoPreviewModal";
+import DockPlayer from "./DockPlayer";
 import VideoService from "../base/services/videoService";
 import "../assets/css/sidebar.css";
 import AnalyticsSection from "./AnalyticsSection";
@@ -1476,13 +1476,20 @@ export default function VideoDetail({ videoData }) {
         </div>
       </div>
 
-      <VideoPreviewModal
+      <DockPlayer
         open={!!previewData}
         onClose={() => setPreviewData(null)}
         videoUrl={previewData?.url}
         timeStart={previewData?.timeStart}
         timeEnd={previewData?.timeEnd}
         isClipPreview={previewData?.isClipPreview}
+        reports1={videoData?.reports_1 || []}
+        phaseRatings={phaseRatings}
+        onRatePhase={handleRatePhase}
+        ratingComments={ratingComments}
+        onCommentChange={(idx, val) => setRatingComments(prev => ({ ...prev, [idx]: val }))}
+        onSaveComment={handleSaveComment}
+        onPhaseNavigate={(phase) => handlePhasePreview(phase)}
       />
     </div>
   );
