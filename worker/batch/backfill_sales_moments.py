@@ -54,10 +54,14 @@ def find_local_trend_file(video_id: str) -> str | None:
 
 
 def parse_trend_excel_safe(file_path: str):
-    """Try to parse trend data from Excel file."""
+    """Try to parse trend data from Excel file. Returns a DataFrame."""
+    import pandas as pd
     try:
         from excel_parser import parse_trend_excel
-        return parse_trend_excel(file_path)
+        data = parse_trend_excel(file_path)  # returns list[dict]
+        if not data:
+            return None
+        return pd.DataFrame(data)
     except Exception as e:
         print(f"  [WARN] excel_parser failed: {e}")
         return None
