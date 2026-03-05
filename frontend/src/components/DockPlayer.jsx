@@ -364,7 +364,7 @@ export default function DockPlayer({
 
       // Always seek video directly (faster, no async race condition)
       const vid = videoRef.current;
-      if (vid && !isClipPreview) {
+      if (vid) {
         vid.currentTime = Number(targetPhase.time_start) || 0;
         if (vid.paused) vid.play().catch(() => {});
       }
@@ -379,7 +379,7 @@ export default function DockPlayer({
         navLockRef.current = false;
       }, 500);
     },
-    [currentPhaseIndex, reports1, isClipPreview, onPhaseNavigate]
+    [currentPhaseIndex, reports1, onPhaseNavigate]
   );
 
   // ── Auto-save function (debounced) ──────────────────────────
