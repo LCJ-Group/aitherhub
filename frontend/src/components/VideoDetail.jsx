@@ -124,6 +124,9 @@ export default function VideoDetail({ videoData }) {
   // Sales Moments state (click_spike / order_spike / strong markers)
   const [salesMoments, setSalesMoments] = useState([]);
 
+  // AI Event Scores state (sell-ability prediction per phase)
+  const [eventScores, setEventScores] = useState([]);
+
   // Initialize ratings from existing data
   useEffect(() => {
     if (!videoData?.reports_1) return;
@@ -167,6 +170,23 @@ export default function VideoDetail({ videoData }) {
         }
       } catch (err) {
         console.warn('[VideoDetail] Failed to load sales moments:', err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [videoData?.id]);
+
+  // Load AI event scores when video loads
+  useEffect(() => {
+    if (!videoData?.id) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await VideoService.getEventScores(videoData.id);
+        if (!cancelled && Array.isArray(res)) {
+          setEventScores(res);
+        }
+      } catch (err) {
+        console.warn('[VideoDetail] Failed to load event scores:', err);
       }
     })();
     return () => { cancelled = true; };
@@ -1572,6 +1592,7 @@ export default function VideoDetail({ videoData }) {
         onClipGenerate={handleClipGeneration}
         videoData={videoData}
         salesMoments={salesMoments}
+        eventScores={eventScores}
       />
     </div>
   );

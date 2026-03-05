@@ -1016,6 +1016,21 @@ class VideoService extends BaseApiService {
       return { status: 'error', count: 0 };
     }
   }
+
+  /**
+   * Get AI event scores (sell-ability prediction) for each phase.
+   * @param {string} videoId
+   * @returns {Promise<Array<{phase_index: number, ai_score: number, score_source: string, rank: number}>>}
+   */
+  async getEventScores(videoId) {
+    try {
+      const response = await this.get(`/api/v1/videos/${videoId}/event-scores`);
+      return Array.isArray(response) ? response : [];
+    } catch (error) {
+      console.warn('[VideoService] getEventScores failed:', error);
+      return [];
+    }
+  }
 }
 
 export default new VideoService();

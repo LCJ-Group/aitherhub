@@ -115,6 +115,7 @@ export default function DockPlayer({
   onClipGenerate,
   videoData,
   salesMoments = [],
+  eventScores = [],
 }) {
   const videoRef = useRef(null);
   const hasSetupRef = useRef(false);
@@ -635,6 +636,30 @@ export default function DockPlayer({
                       CTA {ctaScore}
                     </span>
                   )}
+                  {/* AI Score Badge */}
+                  {(() => {
+                    const scoreData = eventScores.find(s => s.phase_index === currentPhase?.phase_index);
+                    if (!scoreData || scoreData.ai_score == null) return null;
+                    const score = scoreData.ai_score;
+                    const rank = scoreData.rank;
+                    const pct = Math.round(score * 100);
+                    const isHot = score >= 0.7;
+                    const isWarm = score >= 0.4;
+                    return (
+                      <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold border ${
+                        isHot ? "bg-gradient-to-r from-red-500/20 to-orange-500/20 text-orange-200 border-orange-500/40 animate-pulse"
+                        : isWarm ? "bg-amber-500/15 text-amber-300 border-amber-500/30"
+                        : "bg-gray-500/15 text-gray-400 border-gray-500/30"
+                      }`}>
+                        {isHot && (
+                          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M12 23c-3.866 0-7-3.134-7-7 0-3.866 3.134-7 7-7s7 3.134 7 7c0 3.866-3.134 7-7 7zm0-12c-2.761 0-5 2.239-5 5s2.239 5 5 5 5-2.239 5-5-2.239-5-5-5zm0-2c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3z" />
+                          </svg>
+                        )}
+                        AI {pct}%{rank && rank <= 3 ? ` #${rank}` : ""}
+                      </span>
+                    );
+                  })()}
                 </div>
 
                 {/* AI-detected tags (read-only inline display) */}
@@ -769,6 +794,47 @@ export default function DockPlayer({
                 <p className="text-sm text-white/65 leading-relaxed">{currentPhase.insight}</p>
               </div>
             )}
+
+            {/* ── AI Sell Score Detail ─────────────────────── */}
+            {(() => {
+              const scoreData = eventScores.find(s => s.phase_index === currentPhase?.phase_index);
+              if (!scoreData || scoreData.ai_score == null) return null;
+              const score = scoreData.ai_score;
+              const rank = scoreData.rank;
+              const total = eventScores.length;
+              const pct = Math.round(score * 100);
+              const isHot = score >= 0.7;
+              const barColor = isHot ? 'bg-gradient-to-r from-orange-500 to-red-500' : score >= 0.4 ? 'bg-amber-500' : 'bg-gray-500';
+              return (
+                <div className={`rounded-xl p-4 border ${
+                  isHot ? 'bg-gradient-to-br from-red-500/10 to-orange-500/10 border-orange-500/25' : 'bg-white/5 border-white/10'
+                }`}>
+                  <div className="text-[11px] text-white/40 mb-2 font-medium flex items-center gap-1.5">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M12 2L15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2z" />
+                    </svg>
+                    AI売れやすさスコア
+                    <span className="ml-auto text-[10px] text-white/25">{scoreData.score_source === 'model' ? 'ML Model' : 'Heuristic'}</span>
+                  </div>
+                  <div className="flex items-center gap-3 mb-2">
+                    <div className={`text-2xl font-black ${
+                      isHot ? 'text-orange-300' : score >= 0.4 ? 'text-amber-300' : 'text-gray-400'
+                    }`}>
+                      {pct}%
+                    </div>
+                    <div className="flex-1">
+                      <div className="w-full h-2 rounded-full bg-white/10 overflow-hidden">
+                        <div className={`h-full rounded-full transition-all duration-500 ${barColor}`} style={{ width: `${pct}%` }} />
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between text-[10px] text-white/35">
+                    <span>ランク: {rank} / {total}フェーズ</span>
+                    {isHot && <span className="text-orange-400 font-semibold">売れやすい瞬間</span>}
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* ── Reviewer Name ─────────────────────────────── */}
             {phaseKey >= 0 && (
