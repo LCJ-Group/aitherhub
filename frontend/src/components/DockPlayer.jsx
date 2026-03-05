@@ -146,6 +146,12 @@ export default function DockPlayer({
   const [showSpeedOverlay, setShowSpeedOverlay] = useState(false);
   const speedOverlayTimer = useRef(null);
 
+  // ── Phase Lock Mode ──────────────────────────────────────
+  // 'phase' = フェーズロック再生（TikTok型自動ループ）
+  // 'full'  = 自由再生（フェーズロック解除）
+  const [playMode, setPlayMode] = useState('phase');
+  const [loopFade, setLoopFade] = useState(false); // ループ暗転演出
+
   // Combined tags: { phaseKey: ['HOOK', 'CHAT', 'EMPATHY', ...] }
   const [selectedPhaseTags, setSelectedPhaseTags] = useState({});
   const [phaseTagsSaving, setPhaseTagsSaving] = useState({});
@@ -234,6 +240,8 @@ export default function DockPlayer({
       setNavDisabled(false);
       navLockRef.current = false;
       navTokenRef.current = 0;
+      setPlayMode('phase');
+      setLoopFade(false);
       // Reset video source to prop values for next open
       setActiveVideoUrl(videoUrl);
       setUsingFullVideo(!isClipPreview);
@@ -332,7 +340,7 @@ export default function DockPlayer({
     };
   }, [activeVideoUrl, open, timeStart, usingFullVideo, findPhaseIndex, seekTo]);
 
-  // ── Timeupdate: track current phase ───────────────────────
+  // ── Timeupdate: track current phase + Phase Lock ───────────
   useEffect(() => {
     if (!open) return;
     const vid = videoRef.current;
@@ -341,16 +349,58 @@ export default function DockPlayer({
     const onTimeUpdate = () => {
       // Skip timeupdate if navigatePhase just fired (prevents race condition)
       if (navLockRef.current) return;
+
       // For clip preview: video.currentTime is relative (0-based),
       // but phases use absolute time, so add timeStart as offset
       const absoluteTime = usingFullVideo ? vid.currentTime : vid.currentTime + timeStart;
       const idx = findPhaseIndex(absoluteTime);
       setCurrentPhaseIndex((prev) => (idx !== prev ? idx : prev));
+
+      // ── Phase Lock: auto-loop within phase boundaries ──
+      if (playMode === 'phase' && idx >= 0 && idx < reports1.length) {
+        const phase = reports1[idx];
+        const phaseEnd = Number(phase.time_end) || Infinity;
+        const phaseStart = Number(phase.time_start) || 0;
+
+        if (absoluteTime >= phaseEnd - 0.05) {
+          // Loop back to phase start with brief fade
+          setLoopFade(true);
+          setTimeout(() => setLoopFade(false), 150);
+
+          if (usingFullVideo) {
+            vid.currentTime = phaseStart;
+          } else {
+            vid.currentTime = 0; // clip starts at 0
+          }
+          if (vid.paused) vid.play().catch(() => {});
+        }
+      }
     };
 
-    vid.addEventListener("timeupdate", onTimeUpdate);
-    return () => vid.removeEventListener("timeupdate", onTimeUpdate);
-  }, [open, findPhaseIndex, usingFullVideo, timeStart]);
+    // ── Seeking control: clamp to phase boundaries in Phase Mode ──
+    const onSeeking = () => {
+      if (playMode !== 'phase' || navLockRef.current) return;
+      if (currentPhaseIndex < 0 || currentPhaseIndex >= reports1.length) return;
+
+      const phase = reports1[currentPhaseIndex];
+      const phaseStart = Number(phase.time_start) || 0;
+      const phaseEnd = Number(phase.time_end) || Infinity;
+      const baseOffset = usingFullVideo ? 0 : timeStart;
+
+      const target = vid.currentTime + baseOffset;
+      if (target < phaseStart || target > phaseEnd) {
+        const clamped = Math.max(phaseStart, Math.min(phaseEnd, target));
+        vid.currentTime = clamped - baseOffset;
+      }
+    };
+
+    vid.addEventListener('timeupdate', onTimeUpdate);
+    vid.addEventListener('seeking', onSeeking);
+    return () => {
+      vid.removeEventListener('timeupdate', onTimeUpdate);
+      vid.removeEventListener('seeking', onSeeking);
+    };
+  }, [open, findPhaseIndex, usingFullVideo, timeStart, playMode, reports1, currentPhaseIndex]);
 
   // ── Playback rate change with overlay ─────────────────────
   const handleSpeedChange = useCallback(
@@ -392,6 +442,14 @@ export default function DockPlayer({
           break;
         case "Escape":
           onClose?.();
+          break;
+        case "p":
+        case "P":
+          setPlayMode('phase');
+          break;
+        case "f":
+        case "F":
+          setPlayMode('full');
           break;
         default:
           break;
@@ -474,14 +532,22 @@ export default function DockPlayer({
         });
       } else {
         // Already on full video: just seek directly
-        requestAnimationFrame(() => {
-          if (token !== navTokenRef.current) return;
-          seekTo(targetTime);
-        });
-
-        setTimeout(() => {
+        const vid = videoRef.current;
+        if (vid) {
+          requestAnimationFrame(() => {
+            if (token !== navTokenRef.current) return;
+            try {
+              vid.currentTime = targetTime;
+              vid.playbackRate = playbackRate;
+              if (vid.paused) vid.play().catch(() => {});
+            } catch (e) {
+              console.warn('navigatePhase seek failed:', e);
+            }
+            setTimeout(() => { navLockRef.current = false; }, 300);
+          });
+        } else {
           navLockRef.current = false;
-        }, 500);
+        }
       }
 
       // Notify parent for URL params sync
@@ -489,7 +555,7 @@ export default function DockPlayer({
         onPhaseNavigate(targetPhase);
       }
     },
-    [currentPhaseIndex, reports1, onPhaseNavigate, seekTo, navDisabled, usingFullVideo, fullVideoUrl, activeVideoUrl, playbackRate]
+    [currentPhaseIndex, reports1, onPhaseNavigate, navDisabled, usingFullVideo, fullVideoUrl, activeVideoUrl, playbackRate]
   );
 
   // ── Auto-save function (debounced) ──────────────────────────
@@ -667,6 +733,28 @@ export default function DockPlayer({
               {isBuffering && !isLoading && (
                 <div className="absolute inset-0 bg-black/30 flex items-center justify-center pointer-events-none">
                   <div className="animate-spin rounded-full h-10 w-10 border-2 border-white/30 border-t-white" />
+                </div>
+              )}
+
+              {/* Loop fade overlay (TikTok-style brief blackout) */}
+              {loopFade && (
+                <div className="absolute inset-0 bg-black pointer-events-none z-30" style={{ opacity: 0.7, transition: 'opacity 0.1s ease-out' }} />
+              )}
+
+              {/* Phase Lock indicator overlay */}
+              {currentPhase && (
+                <div className="absolute top-3 left-3 z-20 pointer-events-none">
+                  <div className="flex items-center gap-2 bg-black/70 backdrop-blur-sm rounded-lg px-3 py-1.5">
+                    <span className="text-white/90 text-xs font-bold">
+                      {formatTime(currentPhase.time_start)} – {formatTime(currentPhase.time_end)}
+                    </span>
+                    <span className="text-white/50 text-[10px]">
+                      Phase {currentPhaseIndex + 1} / {reports1.length}
+                    </span>
+                    {playMode === 'phase' && (
+                      <span className="text-amber-400 text-[9px] font-semibold uppercase">LOOP</span>
+                    )}
+                  </div>
                 </div>
               )}
             </>
@@ -1353,11 +1441,36 @@ export default function DockPlayer({
               </button>
             </div>
 
-            {/* Keyboard hints */}
-            <div className="hidden lg:flex items-center gap-2 text-[9px] text-white/20">
-              <span>1/2/3=速度</span>
-              <span>Shift+矢印=移動</span>
-              <span>Esc=閉じる</span>
+            {/* Play Mode toggle */}
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => setPlayMode('phase')}
+                className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[10px] font-semibold transition-all duration-150 ${
+                  playMode === 'phase'
+                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                    : 'bg-white/5 text-white/30 border border-white/10 hover:bg-white/10 hover:text-white/50'
+                }`}
+                title="Phase Mode: フェーズロック再生（自動ループ）"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M17 1l4 4-4 4" /><path d="M3 11V9a4 4 0 0 1 4-4h14" /><path d="M7 23l-4-4 4-4" /><path d="M21 13v2a4 4 0 0 1-4 4H3" />
+                </svg>
+                Phase
+              </button>
+              <button
+                onClick={() => setPlayMode('full')}
+                className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[10px] font-semibold transition-all duration-150 ${
+                  playMode === 'full'
+                    ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+                    : 'bg-white/5 text-white/30 border border-white/10 hover:bg-white/10 hover:text-white/50'
+                }`}
+                title="Full Mode: 自由再生（フェーズロック解除）"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <polygon points="5 3 19 12 5 21 5 3" />
+                </svg>
+                Full
+              </button>
             </div>
           </div>
         </div>
