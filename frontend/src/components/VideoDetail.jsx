@@ -94,6 +94,7 @@ export default function VideoDetail({ videoData }) {
   const [chatMessages, setChatMessages] = useState([]);
   const [previewData, setPreviewData] = useState(null); // { url, timeStart, timeEnd, isClipPreview }
   const restoringFromUrlRef = useRef(false);
+  const closingRef = useRef(false); // Prevent URL restore from re-opening DockPlayer after close
   const [, setPreviewLoading] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
   const hasAnswerStartedRef = useRef(false);
@@ -568,6 +569,7 @@ export default function VideoDetail({ videoData }) {
 
   // ── Close DockPlayer and clear URL params ──
   const handleCloseDockPlayer = useCallback(() => {
+    closingRef.current = true;
     setPreviewData(null);
     setSearchParams(prev => {
       const next = new URLSearchParams(prev);
@@ -575,11 +577,14 @@ export default function VideoDetail({ videoData }) {
       next.delete('phase');
       return next;
     }, { replace: true });
+    // Keep closingRef true for a tick to prevent URL restore useEffect from re-opening
+    setTimeout(() => { closingRef.current = false; }, 200);
   }, [setSearchParams]);
 
   // ── Restore DockPlayer from URL query params on reload ──
   useEffect(() => {
     if (restoringFromUrlRef.current) return;
+    if (closingRef.current) return; // Don't re-open while closing
     const view = searchParams.get('view');
     const phaseParam = searchParams.get('phase');
     if (view !== 'timeline' || phaseParam == null) return;
