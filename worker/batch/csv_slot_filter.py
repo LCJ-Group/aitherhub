@@ -662,7 +662,13 @@ def detect_sales_moments(
             reasons: list[str],     # 検出理由
         }
     """
-    if not trends:
+    import pandas as pd
+    # Handle both DataFrame and list[dict]
+    if isinstance(trends, pd.DataFrame):
+        if trends.empty:
+            return []
+        trends = trends.to_dict(orient="records")
+    elif not trends:
         return []
 
     time_key = _detect_time_key(trends)
