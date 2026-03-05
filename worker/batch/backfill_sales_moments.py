@@ -2,8 +2,6 @@
 backfill_sales_moments.py  –  既存動画のsales_momentsをDBに投入
 ==================================================================
 Worker VM上で直接実行する。
-Azure App Service上のbackfill APIはworkerコードにアクセスできないため、
-このスクリプトでWorker VM上から直接DBに書き込む。
 
 使い方:
   python backfill_sales_moments.py                    # 全動画
@@ -26,10 +24,13 @@ load_dotenv()
 
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy import text
+from sqlalchemy import text as sa_text
 
 from csv_slot_filter import detect_sales_moments
-from db_ops import ensure_sales_moments_table_sync, bulk_insert_sales_moments_sync
+from db_ops import (
+    ensure_sales_moments_table_sync,
+    bulk_insert_sales_moments_sync,
+)
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
@@ -52,14 +53,14 @@ def parse_trend_excel_safe(file_path: str):
 async def backfill_all(video_id: str = None, limit: int = None):
     """Backfill sales_moments for existing videos."""
 
-    async with AsyncSessionLocal() as session:
-        # Ensure table exists
-        conn = await session.connection()
-        raw_conn = await conn.get_raw_connection()
-        sync_conn = raw_conn.driver_connection
-        ensure_sales_moments_table_sync(sync_conn)
+    # Ensure table exists (no arguments - uses internal DB connection)
+    try:
+        ensure_sales_moments_table_sync()
         print("[backfill] video_sales_moments table ensured.")
+    except Exception as e:
+        print(f"[backfill] Table creation error (may already exist): {e}")
 
+    async with AsyncSessionLocal() as session:
         # Get videos with excel_trend_blob_url
         sql = """
             SELECT id, filename, excel_trend_blob_url, time_offset_seconds
@@ -74,7 +75,7 @@ async def backfill_all(video_id: str = None, limit: int = None):
         if limit:
             sql += f" LIMIT {limit}"
 
-        result = await session.execute(text(sql))
+        result = await session.execute(sa_text(sql))
         videos = result.fetchall()
         print(f"[backfill] Found {len(videos)} videos with trend data.")
 
@@ -92,7 +93,7 @@ async def backfill_all(video_id: str = None, limit: int = None):
 
             # Check if already has sales_moments
             try:
-                check_sql = text("SELECT COUNT(*) FROM video_sales_moments WHERE video_id = :vid")
+                check_sql = sa_text("SELECT COUNT(*) FROM video_sales_moments WHERE video_id = :vid")
                 check_result = await session.execute(check_sql, {"vid": vid})
                 existing_count = check_result.scalar()
                 if existing_count and existing_count > 0:
@@ -141,11 +142,8 @@ async def backfill_all(video_id: str = None, limit: int = None):
 
                 print(f"  Detected {len(moments)} moments")
 
-                # Save to DB
-                conn2 = await session.connection()
-                raw_conn2 = await conn2.get_raw_connection()
-                sync_conn2 = raw_conn2.driver_connection
-                bulk_insert_sales_moments_sync(sync_conn2, vid, moments)
+                # Save to DB (no conn argument - uses internal DB connection)
+                bulk_insert_sales_moments_sync(vid, moments)
                 print(f"  ✅ Saved {len(moments)} moments to DB")
                 success_count += 1
 
