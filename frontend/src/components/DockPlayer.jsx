@@ -173,6 +173,15 @@ export default function DockPlayer({
   const [isEditingReviewer, setIsEditingReviewer] = useState(false);
   const [reviewerInput, setReviewerInput] = useState('');
 
+  // ── DockPlayer internal toast ──────────────────────────────
+  const [dockToast, setDockToast] = useState(null);
+  const dockToastTimer = useRef(null);
+  const showDockToast = useCallback((message, type = 'success') => {
+    if (dockToastTimer.current) clearTimeout(dockToastTimer.current);
+    setDockToast({ message, type });
+    dockToastTimer.current = setTimeout(() => setDockToast(null), 2000);
+  }, []);
+
   // ── Robust seekTo helper (handles readyState, retries) ──────
   const seekTo = useCallback((t) => {
     const vid = videoRef.current;
@@ -584,13 +593,15 @@ export default function DockPlayer({
           await onTagConfirm(pk, newTags);
         }
         setPhaseTagsSaved(prev => ({ ...prev, [pk]: true }));
+        showDockToast('保存しました');
       } catch (e) {
         console.error('Failed to auto-save tags:', e);
+        showDockToast('保存に失敗しました', 'error');
       } finally {
         setPhaseTagsSaving(prev => ({ ...prev, [pk]: false }));
       }
     }, 500);
-  }, [onTagConfirm]);
+  }, [onTagConfirm, showDockToast]);
 
   // ── Tag toggle (1-tap select/deselect → auto-save) ──────────
   const togglePhaseTag = useCallback((pk, tag) => {
@@ -663,7 +674,23 @@ export default function DockPlayer({
   // ── Full Analysis Mode ────────────────────────────────────
   return (
     <div className="fixed inset-0 z-50 bg-gray-950 flex flex-col">
-      {/* ─── Top Bar ──────────────────────────────────────── */}
+      {/* ─── Toast Notification ────────────────────────────── */}
+      {dockToast && (
+        <div
+          className={`fixed top-4 left-1/2 -translate-x-1/2 z-[9999] px-4 py-2 rounded-lg text-sm font-medium shadow-lg transition-all duration-300 ${
+            dockToast.type === 'error'
+              ? 'bg-red-500/90 text-white'
+              : 'bg-emerald-500/90 text-white'
+          }`}
+          style={{ animation: 'fadeInDown 0.3s ease-out' }}
+        >
+          {dockToast.type !== 'error' && (
+            <span className="mr-1.5">✓</span>
+          )}
+          {dockToast.message}
+        </div>
+      )}
+      {/* ─── Top Bar ────────────────────────────────────────── */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-white/10 flex-shrink-0">
         <div className="flex items-center gap-3">
           <button
@@ -1173,6 +1200,7 @@ export default function DockPlayer({
                         onClick={() => {
                           if (!isSavingRating && onRatePhase && phaseKey >= 0) {
                             onRatePhase(phaseKey, star);
+                            showDockToast('保存しました');
                           }
                         }}
                         disabled={isSavingRating || phaseKey < 0}
@@ -1220,13 +1248,22 @@ export default function DockPlayer({
                     type="text"
                     value={ratingComments[phaseKey] || ''}
                     onChange={(e) => onCommentChange?.(phaseKey, e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') onSaveComment?.(phaseKey); }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && ratingComments[phaseKey]?.trim()) {
+                        e.preventDefault();
+                        onSaveComment?.(phaseKey);
+                        showDockToast('保存しました');
+                      }
+                    }}
                     placeholder="この区間へのメモ（任意）"
                     className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 placeholder-white/25 focus:outline-none focus:border-white/30 focus:ring-1 focus:ring-white/20 transition-colors"
                   />
                   <button
-                    onClick={() => onSaveComment?.(phaseKey)}
-                    disabled={!ratingComments[phaseKey]}
+                    onClick={() => {
+                      onSaveComment?.(phaseKey);
+                      if (ratingComments[phaseKey]?.trim()) showDockToast('保存しました');
+                    }}
+                    disabled={!ratingComments[phaseKey]?.trim()}
                     className="px-3 py-2 rounded-lg text-xs font-medium bg-white/10 text-white/70 hover:bg-white/20 transition-colors disabled:opacity-30 disabled:cursor-not-allowed flex-shrink-0"
                   >
                     保存
@@ -1493,6 +1530,10 @@ export default function DockPlayer({
         }
         .animate-fade-in {
           animation: fade-in 0.15s ease-out;
+        }
+        @keyframes fadeInDown {
+          from { opacity: 0; transform: translate(-50%, -16px); }
+          to { opacity: 1; transform: translate(-50%, 0); }
         }
       `}</style>
     </div>

@@ -545,6 +545,18 @@ class VideoService extends BaseApiService {
     }
   }
 
+  async savePhaseComment(videoId, phaseIndex, comment = '', reviewerName = '') {
+    try {
+      const body = { comment };
+      if (reviewerName) body.reviewer_name = reviewerName;
+      const response = await this.put(`/api/v1/videos/${videoId}/phases/${phaseIndex}/comment`, body);
+      return response;
+    } catch (error) {
+      console.warn('Failed to save phase comment:', error);
+      throw error;
+    }
+  }
+
   // =========================================================
   // Human Sales Tags API (Human-in-the-loop)
   // =========================================================

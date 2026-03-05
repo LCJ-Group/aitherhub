@@ -1684,6 +1684,74 @@ async def rate_phase(
 
 
 # =========================================================
+# Phase Comment API (save comment without requiring rating)
+# =========================================================
+
+@router.put("/{video_id}/phases/{phase_index}/comment")
+async def save_phase_comment(
+    video_id: str,
+    phase_index: int,
+    request_body: dict,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """
+    Save a comment for a specific phase (rating not required).
+    Body:
+    {
+        "comment": "text",
+        "reviewer_name": "optional"
+    }
+    """
+    try:
+        user_id = user.get("user_id") or user.get("id")
+        comment = request_body.get("comment", "")
+        reviewer_name = request_body.get("reviewer_name", "")
+
+        # Verify video belongs to user
+        video_repo = VideoRepository(lambda: db)
+        video = await video_repo.get_video_by_id(video_id)
+        if not video:
+            raise HTTPException(status_code=404, detail="Video not found")
+        if str(getattr(video, "user_id", None)) != str(user_id):
+            raise HTTPException(status_code=403, detail="Forbidden")
+
+        sql_update = text("""
+            UPDATE video_phases
+            SET user_comment = :comment,
+                reviewer_name = COALESCE(:reviewer_name, reviewer_name),
+                updated_at = NOW()
+            WHERE video_id = :video_id AND phase_index = :phase_index
+        """)
+        result = await db.execute(sql_update, {
+            "comment": comment,
+            "reviewer_name": reviewer_name or None,
+            "video_id": video_id,
+            "phase_index": phase_index,
+        })
+        await db.commit()
+
+        if result.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Phase not found")
+
+        logger.info(f"Phase comment saved: video={video_id}, phase={phase_index}, comment={comment[:50] if comment else ''}")
+
+        return {
+            "success": True,
+            "video_id": video_id,
+            "phase_index": phase_index,
+            "comment": comment,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        await db.rollback()
+        logger.exception(f"Failed to save phase comment: {exc}")
+        raise HTTPException(status_code=500, detail=f"Failed to save phase comment: {exc}")
+
+
+# =========================================================
 # Human Sales Tags API (Human-in-the-loop)
 # =========================================================
 

@@ -235,7 +235,7 @@ export default function VideoDetail({ videoData }) {
       ...prev,
       [phaseIndex]: { rating, saving: false, saved: true },
     }));
-    showToast(`★${rating} 保存されました`);
+    showToast('保存しました');
     // Fire-and-forget: save in background
     VideoService.ratePhase(videoData.id, phaseIndex, rating, comment, reviewerName)
       .catch(err => {
@@ -251,18 +251,20 @@ export default function VideoDetail({ videoData }) {
 
   const handleSaveComment = (phaseIndex) => {
     if (!videoData?.id) return;
-    const currentRating = phaseRatings[phaseIndex]?.rating;
-    if (!currentRating) return;
     const comment = ratingComments[phaseIndex] || '';
+    if (!comment.trim()) return;
+    const currentRating = phaseRatings[phaseIndex]?.rating;
     // Optimistic update: immediately show saved
     setPhaseRatings(prev => ({
       ...prev,
       [phaseIndex]: { ...prev[phaseIndex], saving: false, saved: true },
     }));
-    showToast('コメント保存されました');
-    // Fire-and-forget: save in background
-    VideoService.ratePhase(videoData.id, phaseIndex, currentRating, comment, getReviewerName())
-      .catch(err => {
+    showToast('保存しました');
+    // Use rating API if rating exists, otherwise use comment-only API
+    const savePromise = currentRating
+      ? VideoService.ratePhase(videoData.id, phaseIndex, currentRating, comment, getReviewerName())
+      : VideoService.savePhaseComment(videoData.id, phaseIndex, comment, getReviewerName());
+    savePromise.catch(err => {
         console.error('Failed to save comment:', err);
         showToast('保存に失敗しました', 'error');
         // Revert on failure
@@ -316,21 +318,21 @@ export default function VideoDetail({ videoData }) {
     });
   };
 
-  const handleTagConfirm = (phaseIndex, aiTags) => {
-    // "Correct" = accept AI tags as-is
-    const tags = aiTags || [];
-    setHumanTags(prev => ({ ...prev, [phaseIndex]: [...tags] }));
+  const handleTagConfirm = async (phaseIndex, tags) => {
+    // Accept tags (from AI confirm or DockPlayer toggle)
+    const finalTags = tags || [];
+    setHumanTags(prev => ({ ...prev, [phaseIndex]: [...finalTags] }));
     setTagEditState(prev => ({ ...prev, [phaseIndex]: { editing: false, saving: true, saved: false } }));
-    showToast('タグ確認済み');
-    VideoService.updateHumanSalesTags(videoData.id, phaseIndex, tags, getReviewerName())
-      .then(() => {
-        setTagEditState(prev => ({ ...prev, [phaseIndex]: { editing: false, saving: false, saved: true } }));
-      })
-      .catch(err => {
-        console.error('Failed to confirm tags:', err);
-        showToast('保存に失敗しました', 'error');
-        setTagEditState(prev => ({ ...prev, [phaseIndex]: { editing: false, saving: false, saved: false } }));
-      });
+    try {
+      await VideoService.updateHumanSalesTags(videoData.id, phaseIndex, finalTags, getReviewerName());
+      setTagEditState(prev => ({ ...prev, [phaseIndex]: { editing: false, saving: false, saved: true } }));
+      showToast('保存しました');
+    } catch (err) {
+      console.error('Failed to confirm tags:', err);
+      showToast('保存に失敗しました', 'error');
+      setTagEditState(prev => ({ ...prev, [phaseIndex]: { editing: false, saving: false, saved: false } }));
+      throw err; // Re-throw so DockPlayer's autoSaveTags can catch it
+    }
   };
 
   const handleTagSave = (phaseIndex) => {
