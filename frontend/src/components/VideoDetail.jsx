@@ -1,4 +1,5 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { useSearchParams } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import MarkdownWithTables from "./markdown/MarkdownWithTables";
 import ChatInput from "./ChatInput";
@@ -10,6 +11,7 @@ import ClipSection from "./ClipSection";
 // ProductTimeline is now integrated into AnalyticsSection
 
 export default function VideoDetail({ videoData }) {
+  const [searchParams, setSearchParams] = useSearchParams();
   const markdownTableStyles = `
   .markdown table {
     width: 100%;
@@ -91,6 +93,7 @@ export default function VideoDetail({ videoData }) {
   const [toast, setToast] = useState(null); // { message, type }
   const [chatMessages, setChatMessages] = useState([]);
   const [previewData, setPreviewData] = useState(null); // { url, timeStart, timeEnd, isClipPreview }
+  const restoringFromUrlRef = useRef(false);
   const [, setPreviewLoading] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
   const hasAnswerStartedRef = useRef(false);
@@ -482,12 +485,57 @@ export default function VideoDetail({ videoData }) {
       };
 
       setPreviewData(previewDataObj);
+
+      // Update URL query params to persist DockPlayer state across reload
+      const phaseIdx = phase.phase_index ?? (videoData?.reports_1 || []).findIndex(
+        r => r.time_start === phase.time_start && r.time_end === phase.time_end
+      );
+      if (phaseIdx >= 0) {
+        setSearchParams(prev => {
+          const next = new URLSearchParams(prev);
+          next.set('view', 'timeline');
+          next.set('phase', String(phaseIdx));
+          return next;
+        }, { replace: true });
+      }
     } catch (err) {
       console.error("Failed to load preview url", err);
     } finally {
       setPreviewLoading(false);
     }
   };
+
+  // ── Close DockPlayer and clear URL params ──
+  const handleCloseDockPlayer = useCallback(() => {
+    setPreviewData(null);
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      next.delete('view');
+      next.delete('phase');
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
+
+  // ── Restore DockPlayer from URL query params on reload ──
+  useEffect(() => {
+    if (restoringFromUrlRef.current) return;
+    const view = searchParams.get('view');
+    const phaseParam = searchParams.get('phase');
+    if (view !== 'timeline' || phaseParam == null) return;
+    if (!videoData?.reports_1?.length) return;
+    if (previewData) return; // already open
+
+    const phaseIdx = parseInt(phaseParam, 10);
+    if (isNaN(phaseIdx) || phaseIdx < 0 || phaseIdx >= videoData.reports_1.length) return;
+
+    const phase = videoData.reports_1[phaseIdx];
+    if (!phase) return;
+
+    restoringFromUrlRef.current = true;
+    handlePhasePreview(phase).finally(() => {
+      restoringFromUrlRef.current = false;
+    });
+  }, [videoData?.reports_1, searchParams, previewData]);
 
   const reloadHistory = async () => {
     const vid = videoData?.id;
@@ -1478,7 +1526,7 @@ export default function VideoDetail({ videoData }) {
 
       <DockPlayer
         open={!!previewData}
-        onClose={() => setPreviewData(null)}
+        onClose={handleCloseDockPlayer}
         videoUrl={previewData?.url}
         timeStart={previewData?.timeStart}
         timeEnd={previewData?.timeEnd}
