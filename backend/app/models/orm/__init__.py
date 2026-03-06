@@ -18,3 +18,11 @@ from .base import Base
 from .chat import Chat
 from .feedback import Feedback
 from .live_session import LiveSession
+from .extension_events import (
+    ExtSession,
+    RawEvent,
+    ProductSnapshot,
+    TrendSnapshot,
+    ExtSalesMoment,
+    MomentEventLink,
+)

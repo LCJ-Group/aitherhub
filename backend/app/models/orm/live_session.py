@@ -4,6 +4,9 @@ Persistent live session model.
 Stores both worker-based live_capture sessions and Chrome extension sessions.
 In-memory caches (metrics, SSE events) remain in live_event_service for
 real-time performance; this table provides persistence across restarts.
+
+Note: Extension-specific 2-screen session tracking has been moved to
+ext_sessions table (see extension_events.py).
 """
 from sqlalchemy import Integer, String, Text, Boolean, DateTime, JSON
 from sqlalchemy.orm import Mapped, mapped_column
