@@ -490,13 +490,17 @@ async def get_video_detail(
             ]}
 
         # ── E. Reports check ──
-        reports_sql = text("""
-            SELECT COUNT(*) AS report_count
-            FROM reports
-            WHERE video_id = :vid
-        """)
-        reports_result = await db.execute(reports_sql, {"vid": video_id})
-        report_count = reports_result.scalar() or 0
+        try:
+            reports_sql = text("""
+                SELECT COUNT(*) AS report_count
+                FROM reports
+                WHERE video_id = :vid
+            """)
+            reports_result = await db.execute(reports_sql, {"vid": video_id})
+            report_count = reports_result.scalar() or 0
+        except Exception:
+            await db.rollback()
+            report_count = 0  # table may not exist
 
         # ── F. Transcript check ──
         transcript_sql = text("""
