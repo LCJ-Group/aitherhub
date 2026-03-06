@@ -326,11 +326,23 @@ async def end_session(
         f"(events={event_count}, snapshots={snapshot_count})"
     )
 
+    # Auto-detect moments on session end
+    moments_detected = 0
+    try:
+        from app.services.moment_engine import MomentEngine
+        engine = MomentEngine(db)
+        moments = await engine.detect_moments(session_id, force=True)
+        moments_detected = len(moments)
+        logger.info(f"Auto-detected {moments_detected} moments for session {session_id}")
+    except Exception as e:
+        logger.error(f"Moment detection failed for session {session_id}: {e}")
+
     return {
         "status": "ended",
         "session_id": session_id,
         "total_events": event_count or 0,
         "total_product_snapshots": snapshot_count or 0,
+        "moments_detected": moments_detected,
     }
 
 
@@ -534,6 +546,41 @@ async def add_manual_marker(
     )
 
     return {"status": "ok", "event_id": event.id}
+
+
+# ── Moment Detection ──
+
+@router.post("/session/{session_id}/detect-moments")
+async def detect_moments(
+    session_id: str,
+    force: bool = Query(False, description="If true, re-detect moments (clear existing)"),
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Run the rule-based moment detection engine for a session.
+    Can be called:
+      - Automatically when session ends
+      - Manually from admin/debug UI
+      - Periodically during a long session
+    """
+    from app.services.moment_engine import MomentEngine
+
+    await _get_session_or_404(db, session_id)
+
+    engine = MomentEngine(db)
+    moments = await engine.detect_moments(session_id, force=force)
+
+    logger.info(
+        f"Moment detection complete: session={session_id}, "
+        f"moments_found={len(moments)}, force={force}"
+    )
+
+    return {
+        "session_id": session_id,
+        "moments_detected": len(moments),
+        "moments": moments,
+    }
 
 
 # ── Session Summary ──
