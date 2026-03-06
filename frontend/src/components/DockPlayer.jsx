@@ -290,8 +290,17 @@ export default function DockPlayer({
     }
   }, [phaseKey, humanTags]);
 
-  // ── Reset on close ────────────────────────────────────────
+  // ── Reset on close / sync on open ───────────────────────────────────────
   useEffect(() => {
+    if (open) {
+      // Sync activeVideoUrl when DockPlayer opens (videoUrl may have changed while closed)
+      if (videoUrl) {
+        setActiveVideoUrl(videoUrl);
+        setUsingFullVideo(!isClipPreview);
+      }
+      return;
+    }
+    // ── Reset on close ──
     if (!open) {
       hasSetupRef.current = false;
       setIsLoading(true);
