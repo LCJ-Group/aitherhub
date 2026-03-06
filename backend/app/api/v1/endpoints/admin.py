@@ -246,6 +246,418 @@ async def get_stuck_videos(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ──────────────────────────────────────────────────────────────────────
+# Video Processing / Learning Log endpoints
+# ──────────────────────────────────────────────────────────────────────
+
+@router.get("/videos")
+async def get_video_list(
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    db: AsyncSession = Depends(get_db),
+    status_filter: Optional[str] = None,
+    upload_type_filter: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+):
+    """List all videos with processing status, phase count, sales_moment count,
+    human label stats, and dataset inclusion status."""
+    expected_key = f"{ADMIN_ID}:{ADMIN_PASS}"
+    if x_admin_key != expected_key:
+        raise HTTPException(status_code=403, detail="Invalid admin credentials")
+
+    try:
+        # Build WHERE clause
+        conditions = []
+        params = {"lim": limit, "off": offset}
+        if status_filter:
+            conditions.append("v.status = :sf")
+            params["sf"] = status_filter
+        if upload_type_filter:
+            conditions.append("v.upload_type = :uf")
+            params["uf"] = upload_type_filter
+        where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+        sql = text(f"""
+            SELECT
+                v.id,
+                v.original_filename,
+                v.upload_type,
+                v.status,
+                v.step_progress,
+                v.created_at,
+                v.updated_at,
+                u.email AS user_email,
+                COALESCE(ph.phase_count, 0) AS phase_count,
+                COALESCE(sm.moment_count, 0) AS moment_count,
+                sm.moment_sources,
+                COALESCE(hl.rating_count, 0) AS rating_count,
+                COALESCE(hl.tag_count, 0) AS tag_count,
+                COALESCE(hl.comment_count, 0) AS comment_count,
+                vps.frames_extracted,
+                vps.audio_extracted,
+                vps.speech_done,
+                vps.vision_done
+            FROM videos v
+            LEFT JOIN users u ON v.user_id = u.id
+            LEFT JOIN (
+                SELECT video_id, COUNT(*) AS phase_count
+                FROM video_phases
+                WHERE deleted_at IS NULL
+                GROUP BY video_id
+            ) ph ON ph.video_id = CAST(v.id AS TEXT)
+            LEFT JOIN (
+                SELECT video_id,
+                       COUNT(*) AS moment_count,
+                       STRING_AGG(DISTINCT COALESCE(source, 'csv'), ',') AS moment_sources
+                FROM video_sales_moments
+                GROUP BY video_id
+            ) sm ON sm.video_id = CAST(v.id AS TEXT)
+            LEFT JOIN (
+                SELECT video_id,
+                       COUNT(CASE WHEN user_rating IS NOT NULL THEN 1 END) AS rating_count,
+                       COUNT(CASE WHEN human_sales_tags IS NOT NULL AND human_sales_tags != '[]' THEN 1 END) AS tag_count,
+                       COUNT(CASE WHEN user_comment IS NOT NULL AND user_comment != '' THEN 1 END) AS comment_count
+                FROM video_phases
+                WHERE deleted_at IS NULL
+                GROUP BY video_id
+            ) hl ON hl.video_id = CAST(v.id AS TEXT)
+            LEFT JOIN video_processing_state vps ON vps.video_id = CAST(v.id AS TEXT)
+            {where_clause}
+            ORDER BY v.created_at DESC
+            LIMIT :lim OFFSET :off
+        """)
+
+        result = await db.execute(sql, params)
+        rows = result.fetchall()
+
+        # Total count
+        count_sql = text(f"SELECT COUNT(*) FROM videos v {where_clause}")
+        total = (await db.execute(count_sql, params)).scalar() or 0
+
+        videos = []
+        for r in rows:
+            # Determine dataset status
+            ds_status = "excluded"
+            ds_reason = None
+            if r.status == "DONE":
+                if r.moment_count > 0:
+                    ds_status = "included"
+                else:
+                    ds_status = "excluded"
+                    ds_reason = "no_sales_moments"
+            elif r.status == "ERROR":
+                ds_status = "excluded"
+                ds_reason = "processing_error"
+            else:
+                ds_status = "pending"
+                ds_reason = "still_processing"
+
+            videos.append({
+                "id": str(r.id),
+                "filename": r.original_filename,
+                "upload_type": r.upload_type or "screen_recording",
+                "status": r.status,
+                "step_progress": r.step_progress,
+                "created_at": str(r.created_at) if r.created_at else None,
+                "updated_at": str(r.updated_at) if r.updated_at else None,
+                "user_email": r.user_email,
+                "phase_count": r.phase_count,
+                "moment_count": r.moment_count,
+                "moment_sources": r.moment_sources,
+                "rating_count": r.rating_count,
+                "tag_count": r.tag_count,
+                "comment_count": r.comment_count,
+                "dataset_status": ds_status,
+                "dataset_excluded_reason": ds_reason,
+                "processing_state": {
+                    "frames_extracted": r.frames_extracted if r.frames_extracted is not None else False,
+                    "audio_extracted": r.audio_extracted if r.audio_extracted is not None else False,
+                    "speech_done": r.speech_done if r.speech_done is not None else False,
+                    "vision_done": r.vision_done if r.vision_done is not None else False,
+                } if r.frames_extracted is not None else None,
+            })
+
+        return {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "videos": videos,
+        }
+    except Exception as e:
+        logger.exception(f"Failed to fetch video list: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/videos/{video_id}")
+async def get_video_detail(
+    video_id: str,
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get detailed processing and learning log for a specific video."""
+    expected_key = f"{ADMIN_ID}:{ADMIN_PASS}"
+    if x_admin_key != expected_key:
+        raise HTTPException(status_code=403, detail="Invalid admin credentials")
+
+    try:
+        # ── A. Basic info ──
+        video_sql = text("""
+            SELECT v.id, v.original_filename, v.upload_type, v.status,
+                   v.step_progress, v.created_at, v.updated_at,
+                   v.excel_product_blob_url, v.excel_trend_blob_url,
+                   v.compressed_blob_url, v.top_products,
+                   v.time_offset_seconds,
+                   v.queue_enqueued_at, v.worker_claimed_at,
+                   v.worker_instance_id, v.dequeue_count,
+                   v.enqueue_status, v.enqueue_error,
+                   u.email AS user_email
+            FROM videos v
+            LEFT JOIN users u ON v.user_id = u.id
+            WHERE v.id = :vid
+        """)
+        result = await db.execute(video_sql, {"vid": video_id})
+        video = result.fetchone()
+        if not video:
+            raise HTTPException(status_code=404, detail="Video not found")
+
+        # ── B. Processing state ──
+        state_sql = text("""
+            SELECT * FROM video_processing_state WHERE video_id = :vid
+        """)
+        state_result = await db.execute(state_sql, {"vid": video_id})
+        state = state_result.fetchone()
+
+        # ── C. Phases summary ──
+        phases_sql = text("""
+            SELECT
+                COUNT(*) AS total_phases,
+                COUNT(CASE WHEN user_rating IS NOT NULL THEN 1 END) AS rated_phases,
+                COUNT(CASE WHEN human_sales_tags IS NOT NULL AND human_sales_tags != '[]' THEN 1 END) AS tagged_phases,
+                COUNT(CASE WHEN user_comment IS NOT NULL AND user_comment != '' THEN 1 END) AS commented_phases,
+                AVG(user_rating) AS avg_rating,
+                MIN(time_start) AS min_time,
+                MAX(time_end) AS max_time,
+                STRING_AGG(DISTINCT reviewer_name, ', ') FILTER (WHERE reviewer_name IS NOT NULL) AS reviewers
+            FROM video_phases
+            WHERE video_id = :vid AND deleted_at IS NULL
+        """)
+        phases_result = await db.execute(phases_sql, {"vid": video_id})
+        phases_summary = phases_result.fetchone()
+
+        # ── D. Sales moments breakdown ──
+        moments_sql = text("""
+            SELECT
+                COALESCE(source, 'csv') AS source,
+                moment_type,
+                moment_type_detail,
+                COUNT(*) AS count,
+                AVG(confidence) AS avg_confidence
+            FROM video_sales_moments
+            WHERE video_id = :vid
+            GROUP BY source, moment_type, moment_type_detail
+            ORDER BY source, count DESC
+        """)
+        moments_result = await db.execute(moments_sql, {"vid": video_id})
+        moments_rows = moments_result.fetchall()
+
+        moments_total = sum(r.count for r in moments_rows)
+        moments_by_source = {}
+        for r in moments_rows:
+            src = r.source or "csv"
+            if src not in moments_by_source:
+                moments_by_source[src] = []
+            moments_by_source[src].append({
+                "moment_type": r.moment_type,
+                "moment_type_detail": r.moment_type_detail,
+                "count": r.count,
+                "avg_confidence": round(float(r.avg_confidence), 3) if r.avg_confidence else None,
+            })
+
+        # ── E. Reports check ──
+        reports_sql = text("""
+            SELECT COUNT(*) AS report_count
+            FROM reports
+            WHERE video_id = :vid
+        """)
+        reports_result = await db.execute(reports_sql, {"vid": video_id})
+        report_count = reports_result.scalar() or 0
+
+        # ── F. Transcript check ──
+        transcript_sql = text("""
+            SELECT COUNT(*) AS segment_count
+            FROM video_speech_segments
+            WHERE video_id = :vid
+        """)
+        try:
+            transcript_result = await db.execute(transcript_sql, {"vid": video_id})
+            transcript_count = transcript_result.scalar() or 0
+        except Exception:
+            await db.rollback()
+            transcript_count = -1  # table may not exist
+
+        # ── G. Build pipeline steps status ──
+        # Derive step completion from video status
+        status = video.status or ""
+        step_order = [
+            "STEP_0_EXTRACT_FRAMES",
+            "STEP_1_DETECT_PHASES",
+            "STEP_2_EXTRACT_METRICS",
+            "STEP_3_TRANSCRIBE_AUDIO",
+            "STEP_4_IMAGE_CAPTION",
+            "STEP_5_BUILD_PHASE_UNITS",
+            "STEP_6_BUILD_PHASE_DESCRIPTION",
+            "STEP_7_GROUPING",
+            "STEP_8_UPDATE_BEST_PHASE",
+            "STEP_9_BUILD_VIDEO_STRUCTURE_FEATURES",
+            "STEP_10_ASSIGN_VIDEO_STRUCTURE_GROUP",
+            "STEP_11_UPDATE_VIDEO_STRUCTURE_GROUP_STATS",
+            "STEP_12_UPDATE_VIDEO_STRUCTURE_BEST",
+            "STEP_12_5_PRODUCT_DETECTION",
+            "STEP_13_BUILD_REPORTS",
+            "STEP_14_FINALIZE",
+        ]
+
+        step_labels = {
+            "STEP_0_EXTRACT_FRAMES": "フレーム抽出",
+            "STEP_1_DETECT_PHASES": "フェーズ検出",
+            "STEP_2_EXTRACT_METRICS": "メトリクス抽出",
+            "STEP_3_TRANSCRIBE_AUDIO": "音声文字起こし",
+            "STEP_4_IMAGE_CAPTION": "画像キャプション",
+            "STEP_5_BUILD_PHASE_UNITS": "フェーズ構築 (CSV/Screen統合含む)",
+            "STEP_6_BUILD_PHASE_DESCRIPTION": "AI要約生成",
+            "STEP_7_GROUPING": "グルーピング",
+            "STEP_8_UPDATE_BEST_PHASE": "ベストフェーズ選定",
+            "STEP_9_BUILD_VIDEO_STRUCTURE_FEATURES": "動画構造特徴量",
+            "STEP_10_ASSIGN_VIDEO_STRUCTURE_GROUP": "構造グループ割当",
+            "STEP_11_UPDATE_VIDEO_STRUCTURE_GROUP_STATS": "グループ統計更新",
+            "STEP_12_UPDATE_VIDEO_STRUCTURE_BEST": "構造ベスト更新",
+            "STEP_12_5_PRODUCT_DETECTION": "商品検出",
+            "STEP_13_BUILD_REPORTS": "レポート生成",
+            "STEP_14_FINALIZE": "最終処理",
+        }
+
+        if status == "DONE":
+            current_step_idx = len(step_order)  # all done
+        elif status == "ERROR":
+            # Find last known step from status pattern
+            current_step_idx = -1  # unknown
+        elif status in step_order:
+            current_step_idx = step_order.index(status)
+        else:
+            current_step_idx = -1
+
+        pipeline_steps = []
+        for i, step_name in enumerate(step_order):
+            if status == "DONE":
+                step_status = "success"
+            elif status == "ERROR" and current_step_idx == -1:
+                # Can't determine which step failed
+                step_status = "unknown"
+            elif i < current_step_idx:
+                step_status = "success"
+            elif i == current_step_idx:
+                step_status = "running" if status not in ("DONE", "ERROR") else "failed"
+            else:
+                step_status = "pending"
+
+            pipeline_steps.append({
+                "step_name": step_name,
+                "label": step_labels.get(step_name, step_name),
+                "status": step_status,
+            })
+
+        # ── H. Duration ──
+        duration_sec = None
+        if phases_summary and phases_summary.max_time:
+            duration_sec = round(float(phases_summary.max_time), 1)
+
+        # ── I. Dataset status ──
+        ds_status = "excluded"
+        ds_reason = None
+        if status == "DONE":
+            if moments_total > 0:
+                ds_status = "included"
+            else:
+                ds_status = "excluded"
+                ds_reason = "no_sales_moments"
+        elif status == "ERROR":
+            ds_status = "excluded"
+            ds_reason = "processing_error"
+        else:
+            ds_status = "pending"
+            ds_reason = "still_processing"
+
+        return {
+            "basic_info": {
+                "video_id": str(video.id),
+                "filename": video.original_filename,
+                "upload_type": video.upload_type or "screen_recording",
+                "status": video.status,
+                "step_progress": video.step_progress,
+                "duration_sec": duration_sec,
+                "created_at": str(video.created_at) if video.created_at else None,
+                "updated_at": str(video.updated_at) if video.updated_at else None,
+                "user_email": video.user_email,
+                "has_excel_product": bool(video.excel_product_blob_url),
+                "has_excel_trend": bool(video.excel_trend_blob_url),
+                "has_compressed": bool(video.compressed_blob_url),
+                "top_products": video.top_products,
+                "time_offset_seconds": video.time_offset_seconds,
+            },
+            "queue_info": {
+                "enqueued_at": str(video.queue_enqueued_at) if video.queue_enqueued_at else None,
+                "worker_claimed_at": str(video.worker_claimed_at) if video.worker_claimed_at else None,
+                "worker_instance_id": video.worker_instance_id,
+                "dequeue_count": video.dequeue_count,
+                "enqueue_status": video.enqueue_status,
+                "enqueue_error": video.enqueue_error,
+            },
+            "processing_state": {
+                "frames_extracted": state.frames_extracted if state else None,
+                "audio_extracted": state.audio_extracted if state else None,
+                "speech_done": state.speech_done if state else None,
+                "vision_done": state.vision_done if state else None,
+                "updated_at": str(state.updated_at) if state and state.updated_at else None,
+            } if state else None,
+            "pipeline_steps": pipeline_steps,
+            "phases": {
+                "total": phases_summary.total_phases if phases_summary else 0,
+                "duration_sec": duration_sec,
+                "rated": phases_summary.rated_phases if phases_summary else 0,
+                "tagged": phases_summary.tagged_phases if phases_summary else 0,
+                "commented": phases_summary.commented_phases if phases_summary else 0,
+                "avg_rating": round(float(phases_summary.avg_rating), 2) if phases_summary and phases_summary.avg_rating else None,
+                "reviewers": phases_summary.reviewers if phases_summary else None,
+            },
+            "sales_moments": {
+                "total": moments_total,
+                "by_source": moments_by_source,
+            },
+            "reports": {
+                "count": report_count,
+            },
+            "transcript": {
+                "segment_count": transcript_count,
+            },
+            "human_labels": {
+                "rated_phases": phases_summary.rated_phases if phases_summary else 0,
+                "tagged_phases": phases_summary.tagged_phases if phases_summary else 0,
+                "commented_phases": phases_summary.commented_phases if phases_summary else 0,
+                "avg_rating": round(float(phases_summary.avg_rating), 2) if phases_summary and phases_summary.avg_rating else None,
+                "reviewers": phases_summary.reviewers if phases_summary else None,
+            },
+            "dataset": {
+                "status": ds_status,
+                "excluded_reason": ds_reason,
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Failed to fetch video detail: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/retry-video/{video_id}")
 async def retry_video(
     video_id: str,

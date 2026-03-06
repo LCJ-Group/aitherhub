@@ -1,5 +1,7 @@
 import { useState, useEffect } from "react";
 import axios from "axios";
+import AdminVideoList from "./admin/AdminVideoList";
+import AdminVideoDetail from "./admin/AdminVideoDetail";
 
 const ADMIN_ID = "aither";
 const ADMIN_PASS = "hub";
@@ -16,7 +18,8 @@ export default function AdminDashboard() {
   const [feedbackLoading, setFeedbackLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [activeTab, setActiveTab] = useState("dashboard"); // "dashboard" | "feedbacks"
+  const [activeTab, setActiveTab] = useState("dashboard"); // "dashboard" | "feedbacks" | "videos"
+  const [selectedVideoId, setSelectedVideoId] = useState(null);
 
   // Check session on mount
   useEffect(() => {
@@ -188,6 +191,16 @@ export default function AdminDashboard() {
           >
             フィードバック
           </button>
+          <button
+            onClick={() => { setActiveTab("videos"); setSelectedVideoId(null); }}
+            className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+              activeTab === "videos"
+                ? "bg-white text-gray-800 shadow-sm"
+                : "text-gray-500 hover:text-gray-700"
+            }`}
+          >
+            動画ログ
+          </button>
         </div>
 
         {activeTab === "dashboard" && (
@@ -239,6 +252,21 @@ export default function AdminDashboard() {
 
         {activeTab === "feedbacks" && (
           <FeedbackSection data={feedbackData} loading={feedbackLoading} />
+        )}
+
+        {activeTab === "videos" && (
+          selectedVideoId ? (
+            <AdminVideoDetail
+              videoId={selectedVideoId}
+              adminKey={`${ADMIN_ID}:${ADMIN_PASS}`}
+              onBack={() => setSelectedVideoId(null)}
+            />
+          ) : (
+            <AdminVideoList
+              adminKey={`${ADMIN_ID}:${ADMIN_PASS}`}
+              onSelectVideo={(id) => setSelectedVideoId(id)}
+            />
+          )
         )}
       </div>
     </div>
