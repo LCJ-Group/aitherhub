@@ -1,6 +1,12 @@
 """
-train.py  –  LCJ AI 学習パイプライン v4
+train.py  –  LCJ AI 学習パイプライン v5
 ========================================
+変更点 (v5):
+  - human_sales_tags one-hot (行動8 + 販売心理14 = 22特徴量) 追加
+  - user_rating, has_human_review, human_tag_count 追加
+  - comment_length + comment_kw_* (6特徴量) 追加
+  - generate_dataset.py v3 との整合性確保
+
 変更点 (v4):
   - Repeated GroupKFold (5fold × 3回 = 15評価) → mean±std
   - GroupStratified 自作 (greedy均等分割で正例率を均等化)
@@ -39,6 +45,11 @@ NUMERIC_FEATURES = [
     "text_length",
     "has_number",
     "exclamation_count",
+    # ── Human review features (v5) ──
+    "user_rating",
+    "has_human_review",
+    "human_tag_count",
+    "comment_length",
 ]
 
 KEYWORD_FEATURES = [
@@ -58,13 +69,36 @@ PRODUCT_FEATURES = [
     "matched_product_count",
 ]
 
+# ── Human sales tag one-hot features (v5) ──
+BEHAVIOR_TAGS = [
+    "HOOK", "CHAT", "PREP", "PHONE_OP",
+    "LONG_GREET", "COMMENT_READ", "SILENCE", "PRICE_SHOW",
+]
+PSYCHOLOGY_TAGS = [
+    "EMPATHY", "PROBLEM", "EDUCATION", "SOLUTION",
+    "DEMONSTRATION", "COMPARISON", "PROOF", "TRUST", "SOCIAL_PROOF",
+    "OBJECTION_HANDLING", "URGENCY", "LIMITED_OFFER", "BONUS", "CTA",
+]
+ALL_HUMAN_TAGS = BEHAVIOR_TAGS + PSYCHOLOGY_TAGS
+HUMAN_TAG_FEATURES = [f"htag_{t}" for t in ALL_HUMAN_TAGS]
+
+# ── Comment keyword features (v5) ──
+COMMENT_KEYWORD_FEATURES = [
+    "comment_kw_price",
+    "comment_kw_cta",
+    "comment_kw_positive",
+    "comment_kw_negative",
+    "comment_kw_emotion",
+    "comment_kw_timing",
+]
+
 KNOWN_EVENT_TYPES = [
     "HOOK", "GREETING", "INTRO", "DEMONSTRATION", "PRICE",
     "CTA", "OBJECTION", "SOCIAL_PROOF", "URGENCY",
     "EMPATHY", "EDUCATION", "CHAT", "TRANSITION", "CLOSING", "UNKNOWN",
 ]
 
-MODEL_VERSION = 4
+MODEL_VERSION = 5
 DATE_TAG = datetime.now().strftime("%Y%m%d")
 
 # ── Label definition (for manifest traceability) ──
@@ -122,6 +156,8 @@ def extract_features(records, target="click"):
     feature_names.extend(NUMERIC_FEATURES)
     feature_names.extend(KEYWORD_FEATURES)
     feature_names.extend(PRODUCT_FEATURES)
+    feature_names.extend(HUMAN_TAG_FEATURES)
+    feature_names.extend(COMMENT_KEYWORD_FEATURES)
     feature_names.extend([f"event_{et}" for et in KNOWN_EVENT_TYPES])
 
     X = np.zeros((len(records), len(feature_names)), dtype=np.float32)
@@ -132,13 +168,13 @@ def extract_features(records, target="click"):
     for i, rec in enumerate(records):
         col = 0
 
-        # Numeric features
+        # Numeric features (includes user_rating, has_human_review, human_tag_count, comment_length)
         for feat in NUMERIC_FEATURES:
             val = rec.get(feat)
             X[i, col] = float(val) if val is not None else 0.0
             col += 1
 
-        # Keyword flags
+        # Keyword flags (from phase description)
         for feat in KEYWORD_FEATURES:
             X[i, col] = 1.0 if rec.get(feat) else 0.0
             col += 1
@@ -147,6 +183,16 @@ def extract_features(records, target="click"):
         for feat in PRODUCT_FEATURES:
             val = rec.get(feat)
             X[i, col] = float(val) if val is not None else 0.0
+            col += 1
+
+        # Human tag one-hot features (行動8 + 販売心理14 = 22)
+        for feat in HUMAN_TAG_FEATURES:
+            X[i, col] = 1.0 if rec.get(feat) else 0.0
+            col += 1
+
+        # Comment keyword features (6)
+        for feat in COMMENT_KEYWORD_FEATURES:
+            X[i, col] = 1.0 if rec.get(feat) else 0.0
             col += 1
 
         # Event type one-hot

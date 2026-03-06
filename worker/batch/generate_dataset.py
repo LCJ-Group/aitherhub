@@ -1,5 +1,5 @@
 """
-generate_dataset.py  –  AI学習用データセット生成ジョブ v2
+generate_dataset.py  –  AI学習用データセット生成ジョブ v3
 =====================================================
 仕様:
   ① 目的変数: y_click (click_spike窓重複), y_order (order_spike窓重複), y_strong
@@ -8,14 +8,29 @@ generate_dataset.py  –  AI学習用データセット生成ジョブ v2
   ④ 正例:負例 = 1:3 サンプリング
   ⑤ 情報リーク防止: GMV/注文数/クリック数は特徴量に入れない
 
+v3 変更点:
+  - human_sales_tags を行動タグ(8) + 販売心理タグ(14) の one-hot 特徴量に展開
+  - user_rating (1-5) を数値特徴量として追加
+  - user_comment からキーワード特徴量 + テキスト長を抽出
+  - has_human_review フラグ追加（レビュー済みかどうか）
+  - reviewer_name は補助メタデータとして出力（特徴量には入れない）
+
 出力: train_click.jsonl / train_order.jsonl
 
-特徴量 (v1):
+特徴量 (v3):
   テキスト系: keyword flags (円/¥/割引/今だけ/残り/リンク/カート/タップ etc.)
               数字出現フラグ, text_length
   構造系:     event_type, event_duration, event_position_min
   商品系:     product_match, top_product_name_in_text
   CTA系:      cta_score, importance_score (AI生成なのでリークではない)
+  人間レビュー系:
+    user_rating (1-5, 未評価=0)
+    has_human_review (0/1)
+    human_tag_count (選択されたタグ数)
+    htag_HOOK, htag_CHAT, ... (行動タグ one-hot × 8)
+    htag_EMPATHY, htag_PROBLEM, ... (販売心理タグ one-hot × 14)
+    comment_length (コメント文字数)
+    comment_kw_price, comment_kw_cta, ... (コメントからのキーワードフラグ)
 
 使い方:
   python generate_dataset.py --output-dir /tmp/datasets
@@ -41,11 +56,19 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy import text
 
 DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    raise RuntimeError("DATABASE_URL not set")
 
-engine = create_async_engine(DATABASE_URL, pool_pre_ping=True, echo=False)
-AsyncSessionLocal = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+# DB engine is lazily initialized (only when generate() is called)
+engine = None
+AsyncSessionLocal = None
+
+def _init_db():
+    global engine, AsyncSessionLocal
+    if engine is not None:
+        return
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL not set")
+    engine = create_async_engine(DATABASE_URL, pool_pre_ping=True, echo=False)
+    AsyncSessionLocal = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 
 # ── Config ──
 MOMENT_WINDOW_SEC = 150       # ±150s window for label matching
@@ -53,7 +76,27 @@ WEIGHT_DECAY_TAU = 60.0       # exp(-d/tau) decay constant
 NEG_RATIO = 3                 # negative:positive ratio
 RANDOM_SEED = 42
 
-# ── Keyword flags for feature extraction ──
+# ── Human Sales Tags (must match frontend/backend definitions) ──
+# Behavior tags (行動タグ)
+BEHAVIOR_TAGS = [
+    "HOOK", "CHAT", "PREP", "PHONE_OP",
+    "LONG_GREET", "COMMENT_READ", "SILENCE", "PRICE_SHOW",
+]
+
+# Sales psychology tags (販売心理タグ)
+PSYCHOLOGY_TAGS = [
+    "EMPATHY", "PROBLEM", "EDUCATION", "SOLUTION",
+    "DEMONSTRATION", "COMPARISON", "PROOF", "TRUST", "SOCIAL_PROOF",
+    "OBJECTION_HANDLING", "URGENCY", "LIMITED_OFFER", "BONUS", "CTA",
+]
+
+# Combined: all human-assignable tags
+ALL_HUMAN_TAGS = BEHAVIOR_TAGS + PSYCHOLOGY_TAGS
+
+# Feature name prefix for human tags
+HUMAN_TAG_FEATURES = [f"htag_{t}" for t in ALL_HUMAN_TAGS]
+
+# ── Keyword flags for feature extraction (phase description) ──
 # 各キーワードグループ: (flag_name, [patterns])
 KEYWORD_GROUPS = [
     ("kw_price",      [r"円", r"¥", r"\d+円", r"価格", r"値段", r"プライス"]),
@@ -64,6 +107,16 @@ KEYWORD_GROUPS = [
     ("kw_comparison", [r"通常", r"定価", r"普通", r"比べ", r"違い", r"他と"]),
     ("kw_quality",    [r"品質", r"成分", r"効果", r"おすすめ", r"人気", r"ランキング"]),
     ("kw_number",     [r"\d{3,}"]),  # 3桁以上の数字 = 価格っぽい
+]
+
+# ── Keyword flags for user_comment extraction ──
+COMMENT_KEYWORD_GROUPS = [
+    ("comment_kw_price",    [r"円", r"¥", r"価格", r"値段", r"安", r"高"]),
+    ("comment_kw_cta",      [r"CTA", r"購入", r"カート", r"リンク", r"誘導"]),
+    ("comment_kw_positive", [r"良", r"上手", r"うまい", r"すごい", r"最高", r"神", r"完璧"]),
+    ("comment_kw_negative", [r"弱", r"微妙", r"改善", r"もっと", r"足りない", r"ダメ", r"悪"]),
+    ("comment_kw_emotion",  [r"感情", r"共感", r"泣", r"笑", r"熱", r"テンション"]),
+    ("comment_kw_timing",   [r"タイミング", r"早", r"遅", r"長", r"短", r"間"]),
 ]
 
 
@@ -82,6 +135,21 @@ def extract_keyword_flags(text_str: str) -> dict:
     return flags
 
 
+def extract_comment_keyword_flags(comment: str) -> dict:
+    """user_commentからキーワードフラグを抽出."""
+    if not comment:
+        return {g[0]: 0 for g in COMMENT_KEYWORD_GROUPS}
+    flags = {}
+    for flag_name, patterns in COMMENT_KEYWORD_GROUPS:
+        matched = 0
+        for pat in patterns:
+            if re.search(pat, comment, re.IGNORECASE):
+                matched = 1
+                break
+        flags[flag_name] = matched
+    return flags
+
+
 def extract_text_features(text_str: str) -> dict:
     """テキスト長と数字出現フラグ."""
     if not text_str:
@@ -90,6 +158,25 @@ def extract_text_features(text_str: str) -> dict:
         "text_length": len(text_str),
         "has_number": 1 if re.search(r"\d+", text_str) else 0,
         "exclamation_count": text_str.count("！") + text_str.count("!"),
+    }
+
+
+def extract_human_tag_features(human_tags: list) -> dict:
+    """human_sales_tagsをone-hotフラグに展開."""
+    tag_set = set(human_tags) if human_tags else set()
+    features = {}
+    for tag in ALL_HUMAN_TAGS:
+        features[f"htag_{tag}"] = 1 if tag in tag_set else 0
+    return features
+
+
+def extract_comment_features(comment: str) -> dict:
+    """user_commentからテキスト特徴量を抽出."""
+    if not comment:
+        return {"comment_length": 0, **{g[0]: 0 for g in COMMENT_KEYWORD_GROUPS}}
+    return {
+        "comment_length": len(comment),
+        **extract_comment_keyword_flags(comment),
     }
 
 
@@ -118,6 +205,9 @@ async def fetch_phases(session, video_id=None, user_id=None):
             vp.cta_score,
             vp.sales_psychology_tags,
             vp.human_sales_tags,
+            vp.user_rating,
+            vp.user_comment,
+            vp.reviewer_name,
             COALESCE(vp.importance_score, 0) as importance_score,
             vp.group_id
         FROM video_phases vp
@@ -310,6 +400,7 @@ def parse_json_field(raw):
 
 async def generate(output_dir: str, video_id=None, user_id=None):
     """Main dataset generation."""
+    _init_db()
     random.seed(RANDOM_SEED)
 
     async with AsyncSessionLocal() as session:
@@ -351,6 +442,7 @@ async def generate(output_dir: str, video_id=None, user_id=None):
 
     # ── Build all records ──
     all_records = []
+    n_reviewed = 0
 
     for r in phases:
         vid = str(r.video_id)
@@ -361,10 +453,19 @@ async def generate(output_dir: str, video_id=None, user_id=None):
         if duration <= 0:
             continue
 
-        # Tags
+        # AI tags
         tags = parse_json_field(r.sales_psychology_tags)
-        human_tags = parse_json_field(r.human_sales_tags)
         event_type = tags[0] if tags else "UNKNOWN"
+
+        # Human review data
+        human_tags = parse_json_field(r.human_sales_tags)
+        user_rating = int(r.user_rating) if r.user_rating is not None else 0
+        user_comment = r.user_comment or ""
+        reviewer_name = r.reviewer_name or ""
+        has_human_review = 1 if (user_rating > 0 or len(human_tags) > 0 or len(user_comment) > 0) else 0
+
+        if has_human_review:
+            n_reviewed += 1
 
         # Description text for feature extraction
         desc = r.phase_description or ""
@@ -377,11 +478,17 @@ async def generate(output_dir: str, video_id=None, user_id=None):
         video_products = products_idx.get(vid, [])
         product_features = check_product_in_text(desc, video_products)
 
-        # Keyword flags
+        # Keyword flags (from phase description)
         kw_flags = extract_keyword_flags(desc)
 
-        # Text features
+        # Text features (from phase description)
         text_feats = extract_text_features(desc)
+
+        # Human tag one-hot features
+        htag_features = extract_human_tag_features(human_tags)
+
+        # Comment features
+        comment_feats = extract_comment_features(user_comment)
 
         # Position in stream (minutes from start)
         video_duration = durations.get(vid, 0)
@@ -407,25 +514,41 @@ async def generate(output_dir: str, video_id=None, user_id=None):
             "cta_score": r.cta_score or 0,
             "importance_score": float(r.importance_score),
 
-            # Text
+            # Text (from phase description)
             **text_feats,
 
-            # Keywords
+            # Keywords (from phase description)
             **kw_flags,
 
             # Product
             **product_features,
 
-            # Tags (for reference, not direct feature)
+            # ── HUMAN REVIEW FEATURES (v3) ──
+            "user_rating": user_rating,
+            "has_human_review": has_human_review,
+            "human_tag_count": len(human_tags),
+
+            # Human tag one-hot (行動タグ 8 + 販売心理タグ 14 = 22 features)
+            **htag_features,
+
+            # Comment features
+            **comment_feats,
+
+            # ── METADATA (not used as features in training) ──
             "tags": tags,
             "human_tags": human_tags,
+            "reviewer_name": reviewer_name,
             "text": desc[:200],  # truncated for reference
+            "comment_text": user_comment[:200] if user_comment else "",
 
             # ── LABELS ──
             **labels,
         }
 
         all_records.append(record)
+
+    print(f"[dataset] Human-reviewed phases: {n_reviewed} / {len(all_records)}"
+          f" ({n_reviewed / max(len(all_records), 1) * 100:.1f}%)")
 
     # ── Split into positive/negative and sample ──
     os.makedirs(output_dir, exist_ok=True)
@@ -476,6 +599,13 @@ async def generate(output_dir: str, video_id=None, user_id=None):
             print(f"  positive rate: {n_pos / len(dataset) * 100:.1f}%")
 
     # Also write combined stats
+    stats["human_review"] = {
+        "reviewed_phases": n_reviewed,
+        "total_phases": len(all_records),
+        "review_rate": round(n_reviewed / max(len(all_records), 1), 4),
+        "human_tag_features": HUMAN_TAG_FEATURES,
+        "comment_keyword_features": [g[0] for g in COMMENT_KEYWORD_GROUPS],
+    }
     stats_path = os.path.join(output_dir, "dataset_stats.json")
     with open(stats_path, "w", encoding="utf-8") as f:
         json.dump(stats, f, indent=2, ensure_ascii=False)
@@ -485,7 +615,7 @@ async def generate(output_dir: str, video_id=None, user_id=None):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate AI training dataset v2")
+    parser = argparse.ArgumentParser(description="Generate AI training dataset v3")
     parser.add_argument("--output-dir", "-o", default="/tmp/datasets",
                         help="Output directory for JSONL files")
     parser.add_argument("--video-id", default=None,

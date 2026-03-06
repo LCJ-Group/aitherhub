@@ -1,7 +1,13 @@
 """
-predict.py  –  LCJ AI 推論モジュール
-=====================================
+predict.py  –  LCJ AI 推論モジュール v5
+========================================
 学習済みモデルを読み込み、各eventに「売れやすさスコア」を付与する。
+
+v5: train.py v5 の特徴量定義と完全同期
+  - NUMERIC_FEATURES に user_rating, has_human_review, human_tag_count, comment_length 追加
+  - HUMAN_TAG_FEATURES (22 one-hot) 追加
+  - COMMENT_KEYWORD_FEATURES (6 flags) 追加
+  - 旧 BOOL_FEATURES / AUDIO_FEATURES を削除（train.py v5 に存在しない）
 
 使い方:
   # JSONL入力 → JSONL出力 (スコア付き)
@@ -21,7 +27,8 @@ import numpy as np
 
 # Import feature config from train.py
 from train import (
-    NUMERIC_FEATURES, BOOL_FEATURES, AUDIO_FEATURES,
+    NUMERIC_FEATURES, KEYWORD_FEATURES, PRODUCT_FEATURES,
+    HUMAN_TAG_FEATURES, COMMENT_KEYWORD_FEATURES,
     KNOWN_EVENT_TYPES, extract_features, load_jsonl,
 )
 
@@ -47,18 +54,23 @@ class EventScorer:
                 self.feature_names = json.load(f)
 
         # Load eval metrics to determine best model
-        metrics_path = os.path.join(self.model_dir, "eval_metrics.json")
+        # Try target-specific metrics first, then generic
         best_model = "lgbm"  # default
-        if os.path.exists(metrics_path):
-            with open(metrics_path, "r") as f:
-                metrics = json.load(f)
-                best_model = metrics.get("best_model", "lgbm")
+        for metrics_file in ["eval_metrics_click.json", "eval_metrics.json"]:
+            metrics_path = os.path.join(self.model_dir, metrics_file)
+            if os.path.exists(metrics_path):
+                with open(metrics_path, "r") as f:
+                    metrics = json.load(f)
+                    best_model = metrics.get("best_model", "lgbm")
+                break
 
         # Try loading best model first, then fallback
         if best_model == "lgbm":
-            load_order = ["model_lgbm.pkl", "model_lr.pkl"]
+            load_order = ["model_click_lgbm.pkl", "model_lgbm.pkl",
+                          "model_click_lr.pkl", "model_lr.pkl"]
         else:
-            load_order = ["model_lr.pkl", "model_lgbm.pkl"]
+            load_order = ["model_click_lr.pkl", "model_lr.pkl",
+                          "model_click_lgbm.pkl", "model_lgbm.pkl"]
 
         for model_file in load_order:
             path = os.path.join(self.model_dir, model_file)
@@ -66,10 +78,10 @@ class EventScorer:
                 with open(path, "rb") as f:
                     obj = pickle.load(f)
 
-                if model_file == "model_lr.pkl":
+                if isinstance(obj, dict) and "model" in obj:
                     self.model = obj["model"]
-                    self.scaler = obj["scaler"]
-                    self.model_type = "lr"
+                    self.scaler = obj.get("scaler")
+                    self.model_type = "lr" if "lr" in model_file else "lgbm"
                 else:
                     self.model = obj
                     self.model_type = "lgbm"
@@ -80,22 +92,39 @@ class EventScorer:
         raise FileNotFoundError(f"No model found in {self.model_dir}")
 
     def _record_to_features(self, record: dict) -> np.ndarray:
-        """Convert a single record dict to feature vector."""
+        """Convert a single record dict to feature vector.
+
+        Feature order must match train.py extract_features():
+          1. NUMERIC_FEATURES (13 features, includes human review)
+          2. KEYWORD_FEATURES (8 flags)
+          3. PRODUCT_FEATURES (3 features)
+          4. HUMAN_TAG_FEATURES (22 one-hot)
+          5. COMMENT_KEYWORD_FEATURES (6 flags)
+          6. Event type one-hot (15 features)
+        """
         features = []
 
-        # Numeric
+        # Numeric features (includes user_rating, has_human_review, etc.)
         for feat in NUMERIC_FEATURES:
             val = record.get(feat)
             features.append(float(val) if val is not None else 0.0)
 
-        # Boolean
-        for feat in BOOL_FEATURES:
+        # Keyword flags (from phase description)
+        for feat in KEYWORD_FEATURES:
             features.append(1.0 if record.get(feat) else 0.0)
 
-        # Audio
-        for feat in AUDIO_FEATURES:
+        # Product features
+        for feat in PRODUCT_FEATURES:
             val = record.get(feat)
             features.append(float(val) if val is not None else 0.0)
+
+        # Human tag one-hot features (22)
+        for feat in HUMAN_TAG_FEATURES:
+            features.append(1.0 if record.get(feat) else 0.0)
+
+        # Comment keyword features (6)
+        for feat in COMMENT_KEYWORD_FEATURES:
+            features.append(1.0 if record.get(feat) else 0.0)
 
         # Event type one-hot
         event_type = record.get("event_type", "UNKNOWN")
@@ -120,7 +149,7 @@ class EventScorer:
         if not records:
             return []
 
-        X, _, _ = extract_features(records)
+        X, _, _, _, _, _, _ = extract_features(records)
 
         if self.model_type == "lr" and self.scaler:
             X = self.scaler.transform(X)
@@ -149,7 +178,7 @@ class EventScorer:
 def main():
     import argparse
 
-    parser = argparse.ArgumentParser(description="Score events with trained model")
+    parser = argparse.ArgumentParser(description="Score events with trained model v5")
     parser.add_argument("--input", "-i", required=True,
                         help="Input JSONL file")
     parser.add_argument("--model-dir", "-m", default="/tmp/models/",
@@ -198,7 +227,7 @@ def main():
         print(f"\n[predict] Top {args.top_k} events:", file=sys.stderr)
         for i, rec in enumerate(records[:args.top_k]):
             print(f"  {i+1}. score={rec['ai_score']:.4f}  type={rec.get('event_type','?')}  "
-                  f"desc={rec.get('phase_description','')[:50]}", file=sys.stderr)
+                  f"desc={rec.get('text','')[:50]}", file=sys.stderr)
 
 
 if __name__ == "__main__":
