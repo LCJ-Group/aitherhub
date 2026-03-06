@@ -48,6 +48,10 @@ let stats = {
   aiAnalyses: 0
 };
 
+// v2.0 aggregated stats from content scripts
+let _liveStats = { viewers: null, comments: 0 };
+let _dashStats = { gmv: null, sales: null, products: 0 };
+
 // ══════════════════════════════════════════════════════════════
 // Initialization
 // ══════════════════════════════════════════════════════════════
@@ -108,11 +112,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // ── New v2.0 Messages ──
 
     case 'EXT_START_SESSION':
-      handleExtStartSession(message.data, tabId)
+      handleExtStartSession(message.data || {}, tabId)
         .then(r => sendResponse(r))
         .catch(e => sendResponse({ error: e.message }));
       return true;
 
+    case 'EXT_STOP_SESSION':
     case 'EXT_END_SESSION':
       handleExtEndSession()
         .then(r => sendResponse(r))
@@ -148,7 +153,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     case 'EXT_TAB_PING':
       SessionManager.tabPing(message.tab_type, tabId);
-      sendResponse({ status: 'ok' });
+      // Update tab states even without active session (for popup display)
+      if (message.tab_type && SessionManager._tabStates[message.tab_type]) {
+        SessionManager._tabStates[message.tab_type].tabId = tabId;
+        SessionManager._tabStates[message.tab_type].connected = true;
+        SessionManager._tabStates[message.tab_type].lastPing = Date.now();
+        if (message.url) {
+          SessionManager._tabStates[message.tab_type].url = message.url;
+        }
+      }
+      sendResponse({
+        status: 'ok',
+        hasSession: SessionManager.hasSession(),
+        sessionId: SessionManager.getSessionId(),
+      });
       break;
 
     case 'EXT_GET_STATE':
@@ -241,16 +259,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // ══════════════════════════════════════════════════════════════
 
 async function handleExtStartSession(data, tabId) {
+  // If called from popup (no tab info), use existing tab states
+  const liveTab = SessionManager._tabStates.live;
+  const dashTab = SessionManager._tabStates.dashboard;
+
   const result = await SessionManager.startSession({
     platform: data.platform || 'tiktok_live',
-    creator_id: data.creator_id,
-    live_url: data.live_url,
-    dashboard_url: data.dashboard_url,
-    live_tab_id: data.live_tab_id,
-    dashboard_tab_id: data.dashboard_tab_id,
-    live_title: data.live_title,
-    room_id: data.room_id,
+    creator_id: data.creator_id || null,
+    live_url: data.live_url || liveTab.url || null,
+    dashboard_url: data.dashboard_url || dashTab.url || null,
+    live_tab_id: data.live_tab_id || liveTab.tabId || null,
+    dashboard_tab_id: data.dashboard_tab_id || dashTab.tabId || null,
+    live_title: data.live_title || null,
+    room_id: data.room_id || null,
   });
+
+  // Reset stats for new session
+  _liveStats = { viewers: null, comments: 0 };
+  _dashStats = { gmv: null, sales: null, products: 0 };
 
   updateBadge('REC', '#FF1744');
   return result;
@@ -278,12 +304,25 @@ function handleExtEvents(events, sourceType, tabId) {
       ...evt,
       source_type: evt.source_type || sourceType || 'live_dom',
     });
+
+    // Update aggregated stats from events
+    if (evt.event_type === 'viewer_count_snapshot' && evt.numeric_value != null) {
+      _liveStats.viewers = evt.numeric_value;
+    }
+    if (evt.event_type === 'comment_added') {
+      _liveStats.comments++;
+    }
+    if (evt.event_type === 'dashboard_kpi_snapshot' && evt.payload) {
+      if (evt.payload.gmv != null) _dashStats.gmv = evt.payload.gmv;
+      if (evt.payload.total_sales != null) _dashStats.sales = evt.payload.total_sales;
+    }
   }
 }
 
 function handleExtProductSnapshot(data) {
   if (data && data.products) {
     EventBuffer.setProductSnapshot(data.products);
+    _dashStats.products = data.products.length;
   }
 }
 
@@ -323,11 +362,38 @@ async function handleExtGetSummary() {
 }
 
 function getExtState() {
+  const smState = SessionManager.getState();
+  const bufStats = EventBuffer.getStats();
+  const tabStates = smState ? smState.tabs : { live: { connected: false }, dashboard: { connected: false } };
+  const session = smState ? smState.session : null;
+
   return {
-    session: SessionManager.getState(),
+    // Connection status (popup expects these top-level)
+    liveConnected: tabStates.live.connected,
+    dashboardConnected: tabStates.dashboard.connected,
+
+    // Session info
     hasSession: SessionManager.hasSession(),
-    isActive: SessionManager.isActive(),
-    bufferStats: EventBuffer.getStats(),
+    sessionStatus: session ? session.status : null,
+    sessionStartedAt: session ? session.startedAt : null,
+    sessionId: session ? session.id : null,
+
+    // Stats for popup display
+    stats: {
+      viewers: _liveStats.viewers,
+      comments: _liveStats.comments,
+      gmv: _dashStats.gmv,
+      sales: _dashStats.sales,
+      products: _dashStats.products,
+      events: bufStats.eventsSent + bufStats.pendingEvents,
+    },
+
+    // Sync info
+    lastSyncAt: bufStats.lastFlushAt,
+
+    // Raw details
+    session: smState,
+    bufferStats: bufStats,
   };
 }
 
