@@ -289,6 +289,8 @@ async def get_video_list(
                 u.email AS user_email,
                 COALESCE(ph.phase_count, 0) AS phase_count,
                 COALESCE(sm.moment_count, 0) AS moment_count,
+                COALESCE(sm.csv_moment_count, 0) AS csv_moment_count,
+                COALESCE(sm.screen_moment_count, 0) AS screen_moment_count,
                 COALESCE(hl.rating_count, 0) AS rating_count,
                 COALESCE(hl.tag_count, 0) AS tag_count,
                 COALESCE(hl.comment_count, 0) AS comment_count,
@@ -305,7 +307,9 @@ async def get_video_list(
             ) ph ON CAST(ph.video_id AS UUID) = v.id
             LEFT JOIN (
                 SELECT video_id,
-                       COUNT(*) AS moment_count
+                       COUNT(*) AS moment_count,
+                       COUNT(CASE WHEN source = 'csv' THEN 1 END) AS csv_moment_count,
+                       COUNT(CASE WHEN source = 'screen' THEN 1 END) AS screen_moment_count
                 FROM video_sales_moments
                 GROUP BY video_id
             ) sm ON CAST(sm.video_id AS UUID) = v.id
@@ -359,7 +363,10 @@ async def get_video_list(
                 "user_email": r.user_email,
                 "phase_count": r.phase_count,
                 "moment_count": r.moment_count,
-                "moment_sources": None,  # requires migration for source column
+                "moment_sources": {
+                    "csv": r.csv_moment_count,
+                    "screen": r.screen_moment_count,
+                } if r.moment_count > 0 else None,
                 "rating_count": r.rating_count,
                 "tag_count": r.tag_count,
                 "comment_count": r.comment_count,
