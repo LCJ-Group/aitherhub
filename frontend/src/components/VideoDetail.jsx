@@ -467,47 +467,34 @@ export default function VideoDetail({ videoData }) {
 
     setPreviewLoading(true);
     try {
-      // Quick URL check – treats any non-2xx (including 409 Conflict from Azure CDN) as failure
-      const checkUrl = async (url, timeout = 3000) => {
-        try {
-          const controller = new AbortController();
-          const id = setTimeout(() => controller.abort(), timeout);
-          const res = await fetch(url, { method: 'HEAD', mode: 'cors', signal: controller.signal });
-          clearTimeout(id);
-          if (res.ok || res.status === 206) return true;
-          console.warn(`checkUrl HEAD ${res.status} for`, url);
-          return false;
-        } catch {
-          return false;
-        }
-      };
-
+      // ── Build video URLs without pre-checking (avoids CORS/timeout issues) ──
+      // Priority: clip URL > preview_url > backend download URL
+      // DockPlayer handles video load errors via onerror fallback
       let url = null;
-      let okPhaseUrl = false;
+      let fullUrl = null;
+      let isClip = false;
 
-      // 1) Try clip URL (fast path)
+      // 1) Use clip URL directly if available (no fetch check — let <video> handle errors)
       if (phase?.video_clip_url) {
-        const ok = await checkUrl(phase.video_clip_url);
-        if (ok) {
-          url = phase.video_clip_url;
-          okPhaseUrl = true;
-        }
+        url = phase.video_clip_url;
+        isClip = true;
+        console.log('Using clip URL for playback');
       }
 
       // 2) Fallback: compressed preview URL
       if (!url && videoData?.preview_url) {
-        const ok = await checkUrl(videoData.preview_url);
-        if (ok) {
-          url = videoData.preview_url;
-          console.log('Using compressed preview URL for playback');
-        }
+        url = videoData.preview_url;
+        console.log('Using compressed preview URL for playback');
       }
 
-      // 3) Fallback: backend download URL (always works, generates fresh SAS)
+      // 3) Fallback: backend download URL (generates fresh SAS token)
       if (!url) {
         try {
           const downloadUrl = await VideoService.getDownloadUrl(videoData.id);
-          if (downloadUrl) url = downloadUrl;
+          if (downloadUrl) {
+            url = downloadUrl;
+            console.log('Using backend download URL for playback');
+          }
         } catch (err) {
           console.error('Failed to get backend download URL', err);
         }
@@ -518,13 +505,11 @@ export default function VideoDetail({ videoData }) {
         return;
       }
 
-      // Resolve full video URL so DockPlayer can switch on navigation
-      let fullUrl = null;
-      if (okPhaseUrl) {
-        if (videoData?.preview_url) {
-          const ok = await checkUrl(videoData.preview_url);
-          if (ok) fullUrl = videoData.preview_url;
-        }
+      // Resolve full video URL for DockPlayer navigation
+      // Use preview_url or backend download URL (don't pre-check, lazy resolve)
+      if (isClip) {
+        fullUrl = videoData?.preview_url || null;
+        // If no preview_url, get download URL from backend
         if (!fullUrl) {
           try {
             fullUrl = await VideoService.getDownloadUrl(videoData.id);
@@ -536,11 +521,12 @@ export default function VideoDetail({ videoData }) {
 
       const previewDataObj = {
         url,
-        fullVideoUrl: fullUrl || url, // full video URL for navigation
+        fullVideoUrl: fullUrl || url,
         timeStart: Number(phase.time_start) || 0,
         timeEnd: phase.time_end != null ? Number(phase.time_end) : null,
-        isClipPreview: !!okPhaseUrl,
+        isClipPreview: isClip,
       };
+      console.log('Setting previewData:', previewDataObj);
 
       setPreviewData(previewDataObj);
 

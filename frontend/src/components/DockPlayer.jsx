@@ -173,6 +173,49 @@ export default function DockPlayer({
   const [isEditingReviewer, setIsEditingReviewer] = useState(false);
   const [reviewerInput, setReviewerInput] = useState('');
 
+  // ── Video error fallback ──────────────────────────────────
+  const videoErrorRetried = useRef(false);
+
+  const handleVideoError = useCallback(async (e) => {
+    console.error('DockPlayer video error:', e?.target?.error?.message || e);
+    if (videoErrorRetried.current) {
+      console.error('DockPlayer: already retried, giving up');
+      return;
+    }
+    videoErrorRetried.current = true;
+
+    // Try fallback URLs in order: fullVideoUrl > preview_url > getDownloadUrl
+    const fallbacks = [];
+    if (fullVideoUrl && fullVideoUrl !== activeVideoUrl) fallbacks.push(fullVideoUrl);
+    if (videoData?.preview_url && videoData.preview_url !== activeVideoUrl) fallbacks.push(videoData.preview_url);
+
+    for (const fb of fallbacks) {
+      console.log('DockPlayer: trying fallback URL:', fb);
+      setActiveVideoUrl(fb);
+      setUsingFullVideo(true);
+      return;
+    }
+
+    // Last resort: get fresh download URL from backend
+    try {
+      const { default: VideoService } = await import('../base/services/videoService');
+      const freshUrl = await VideoService.getDownloadUrl(videoData?.id);
+      if (freshUrl) {
+        console.log('DockPlayer: using fresh download URL from backend');
+        setActiveVideoUrl(freshUrl);
+        setUsingFullVideo(true);
+        return;
+      }
+    } catch (err) {
+      console.error('DockPlayer: failed to get fallback download URL', err);
+    }
+  }, [activeVideoUrl, fullVideoUrl, videoData]);
+
+  // Reset error retry flag when video URL changes from parent
+  useEffect(() => {
+    videoErrorRetried.current = false;
+  }, [videoUrl]);
+
   // ── DockPlayer internal toast ──────────────────────────────
   const [dockToast, setDockToast] = useState(null);
   const dockToastTimer = useRef(null);
@@ -743,7 +786,7 @@ export default function DockPlayer({
                 }}
                 onWaiting={handleWaiting}
                 onPlaying={handlePlaying}
-                onError={(e) => console.error("DockPlayer video error:", e)}
+                onError={handleVideoError}
               />
 
               {/* Speed overlay on video (YouTube style) */}
