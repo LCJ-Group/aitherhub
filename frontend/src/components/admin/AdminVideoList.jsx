@@ -157,7 +157,21 @@ export default function AdminVideoList({ adminKey, onSelectVideo }) {
                     <td className="px-3 py-2.5 text-center font-mono">{v.moment_count}</td>
                     <td className="px-3 py-2.5 text-center">
                       {v.moment_sources ? (
-                        <span className="text-xs text-gray-600">{v.moment_sources}</span>
+                        <div className="flex gap-1 justify-center">
+                          {v.moment_sources.csv > 0 && (
+                            <span className="text-xs bg-indigo-100 text-indigo-700 px-1.5 rounded" title={`CSV: ${v.moment_sources.csv}件`}>
+                              CSV:{v.moment_sources.csv}
+                            </span>
+                          )}
+                          {v.moment_sources.screen > 0 && (
+                            <span className="text-xs bg-teal-100 text-teal-700 px-1.5 rounded" title={`Screen: ${v.moment_sources.screen}件`}>
+                              SCR:{v.moment_sources.screen}
+                            </span>
+                          )}
+                          {v.moment_sources.csv === 0 && v.moment_sources.screen === 0 && (
+                            <span className="text-xs text-gray-400">legacy</span>
+                          )}
+                        </div>
                       ) : (
                         <span className="text-xs text-gray-300">-</span>
                       )}
