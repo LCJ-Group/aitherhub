@@ -1,19 +1,37 @@
 /**
- * AitherHub LIVE Connector - Background Service Worker v1.4.0
+ * AitherHub LIVE Connector - Background Service Worker v2.0.0
+ * 
+ * Central message hub for the 2-screen (LIVE + Dashboard) extension.
  * 
  * Handles:
- * - Receiving data from content scripts (content.js + ai_commander.js)
- * - Sending data to AitherHub API
- * - AI analysis requests forwarding
- * - Managing connection state
- * - Token refresh
- * - Periodic health checks
+ * - Session management via SessionManager
+ * - Event routing from content scripts to EventBuffer
+ * - Tab lifecycle monitoring
+ * - API communication via ExtApiClient
+ * - Legacy LIVE_DATA support (backward compatible)
+ * - AI analysis requests
  */
 
-const DEFAULT_API_BASE = 'https://aitherhubapi-cpcjcnezbgf5f7e2.japaneast-01.azurewebsites.net';
-const SEND_INTERVAL_MS = 5000; // 5 seconds
+// ══════════════════════════════════════════════════════════════
+// Import modules (loaded via importScripts for MV3 service worker)
+// ══════════════════════════════════════════════════════════════
+try {
+  importScripts(
+    'storage.js',
+    'api_client.js',
+    'event_buffer.js',
+    'session_manager.js'
+  );
+} catch (e) {
+  console.error('[AitherHub BG] Failed to import modules:', e);
+}
 
-// State
+// ══════════════════════════════════════════════════════════════
+// Legacy State (backward compatible with v1.x content.js)
+// ══════════════════════════════════════════════════════════════
+const DEFAULT_API_BASE = 'https://aitherhubapi-cpcjcnezbgf5f7e2.japaneast-01.azurewebsites.net';
+const SEND_INTERVAL_MS = 5000;
+
 let apiBase = DEFAULT_API_BASE;
 let apiToken = '';
 let refreshToken = '';
@@ -22,7 +40,6 @@ let lastSendTime = 0;
 let pendingData = null;
 let sessionStartTime = null;
 
-// Stats tracking
 let stats = {
   dataSent: 0,
   comments: 0,
@@ -31,21 +48,34 @@ let stats = {
   aiAnalyses: 0
 };
 
+// ══════════════════════════════════════════════════════════════
+// Initialization
+// ══════════════════════════════════════════════════════════════
+
 // Load settings from storage on startup
 chrome.storage.local.get(['apiBase', 'accessToken', 'apiToken', 'refreshToken'], (result) => {
   if (result.apiBase) apiBase = result.apiBase;
-  // Prefer accessToken (new login flow), fall back to apiToken (legacy)
   apiToken = result.accessToken || result.apiToken || '';
   refreshToken = result.refreshToken || '';
   console.log('[AitherHub BG] Loaded config, hasToken:', !!apiToken);
 });
 
-// Listen for storage changes (e.g., when popup saves new tokens)
+// Initialize new modules
+(async () => {
+  try {
+    await ExtApiClient.init();
+    await SessionManager.init();
+    console.log('[AitherHub BG] v2.0 modules initialized');
+  } catch (e) {
+    console.error('[AitherHub BG] Module init error:', e);
+  }
+})();
+
+// Listen for storage changes
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local') {
     if (changes.accessToken) {
       apiToken = changes.accessToken.newValue || '';
-      console.log('[AitherHub BG] Token updated from storage');
     }
     if (changes.apiToken) {
       apiToken = changes.apiToken.newValue || apiToken;
@@ -59,9 +89,80 @@ chrome.storage.onChanged.addListener((changes, area) => {
   }
 });
 
-// Listen for messages from content scripts and popup
+// ══════════════════════════════════════════════════════════════
+// Tab Lifecycle Monitoring
+// ══════════════════════════════════════════════════════════════
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  SessionManager.onTabClosed(tabId);
+});
+
+// ══════════════════════════════════════════════════════════════
+// Message Handler
+// ══════════════════════════════════════════════════════════════
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  const tabId = sender.tab ? sender.tab.id : null;
+
   switch (message.type) {
+    // ── New v2.0 Messages ──
+
+    case 'EXT_START_SESSION':
+      handleExtStartSession(message.data, tabId)
+        .then(r => sendResponse(r))
+        .catch(e => sendResponse({ error: e.message }));
+      return true;
+
+    case 'EXT_END_SESSION':
+      handleExtEndSession()
+        .then(r => sendResponse(r))
+        .catch(e => sendResponse({ error: e.message }));
+      return true;
+
+    case 'EXT_BIND_TAB':
+      handleExtBindTab(message.data, tabId)
+        .then(r => sendResponse(r))
+        .catch(e => sendResponse({ error: e.message }));
+      return true;
+
+    case 'EXT_EVENTS':
+      handleExtEvents(message.events, message.source_type, tabId);
+      sendResponse({ status: 'buffered', count: (message.events || []).length });
+      break;
+
+    case 'EXT_PRODUCT_SNAPSHOT':
+      handleExtProductSnapshot(message.data);
+      sendResponse({ status: 'buffered' });
+      break;
+
+    case 'EXT_TREND_SNAPSHOT':
+      handleExtTrendSnapshot(message.data);
+      sendResponse({ status: 'buffered' });
+      break;
+
+    case 'EXT_MANUAL_MARKER':
+      handleExtManualMarker(message.data)
+        .then(r => sendResponse(r))
+        .catch(e => sendResponse({ error: e.message }));
+      return true;
+
+    case 'EXT_TAB_PING':
+      SessionManager.tabPing(message.tab_type, tabId);
+      sendResponse({ status: 'ok' });
+      break;
+
+    case 'EXT_GET_STATE':
+      sendResponse(getExtState());
+      break;
+
+    case 'EXT_GET_SUMMARY':
+      handleExtGetSummary()
+        .then(r => sendResponse(r))
+        .catch(e => sendResponse({ error: e.message }));
+      return true;
+
+    // ── Legacy v1.x Messages (backward compatible) ──
+
     case 'LIVE_DATA':
       handleLiveData(message.data, sender.tab);
       sendResponse({ status: 'received' });
@@ -78,16 +179,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       break;
 
     case 'AI_ANALYZE':
-      // Forward AI analysis request to backend
       handleAiAnalyze(message.data)
         .then(result => sendResponse(result))
-        .catch(err => sendResponse({ 
+        .catch(err => sendResponse({
           suggestions: [{
             type: 'info',
             text: 'AI分析に接続できませんでした: ' + err.message
           }]
         }));
-      return true; // Keep channel open for async response
+      return true;
 
     case 'GET_STATUS':
       sendResponse({
@@ -98,7 +198,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         stats: {
           ...stats,
           uptime: sessionStartTime ? Math.floor((Date.now() - sessionStartTime) / 1000) : 0
-        }
+        },
+        // v2.0 state
+        extSession: SessionManager.getState(),
       });
       break;
 
@@ -114,7 +216,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       break;
 
     case 'BRIDGE_TOKEN_SYNC':
-      // Token synced from AitherHub website via aitherhub_bridge.js
       if (message.accessToken) {
         apiToken = message.accessToken;
         refreshToken = message.refreshToken || refreshToken;
@@ -123,7 +224,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           apiToken: apiToken,
           refreshToken: refreshToken
         });
-        console.log('[AitherHub BG] Token synced from AitherHub website');
         sendResponse({ status: 'saved' });
       } else {
         sendResponse({ status: 'no_token' });
@@ -133,33 +233,121 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     default:
       sendResponse({ status: 'unknown_type' });
   }
-  return true; // Keep message channel open for async response
+  return true;
 });
 
-/**
- * Handle live session start
- * Deduplicates: if we already have an active session for the same account,
- * reuse it regardless of source (streamer vs workbench).
- * Both pages share the same session so their metrics are merged.
- */
-async function handleLiveStarted(data, tab) {
-  console.log('[AitherHub BG] Live session started:', data);
+// ══════════════════════════════════════════════════════════════
+// v2.0 Handlers
+// ══════════════════════════════════════════════════════════════
 
-  // Check if we already have an active session for the same account
-  // Note: We ignore source (streamer/workbench) for deduplication because
-  // both pages should share the same session to merge their metrics
+async function handleExtStartSession(data, tabId) {
+  const result = await SessionManager.startSession({
+    platform: data.platform || 'tiktok_live',
+    creator_id: data.creator_id,
+    live_url: data.live_url,
+    dashboard_url: data.dashboard_url,
+    live_tab_id: data.live_tab_id,
+    dashboard_tab_id: data.dashboard_tab_id,
+    live_title: data.live_title,
+    room_id: data.room_id,
+  });
+
+  updateBadge('REC', '#FF1744');
+  return result;
+}
+
+async function handleExtEndSession() {
+  const result = await SessionManager.endSession();
+  updateBadge('', '');
+  return result;
+}
+
+async function handleExtBindTab(data, tabId) {
+  return SessionManager.bindTab(
+    data.tab_type,
+    data.tab_id || tabId,
+    data.url
+  );
+}
+
+function handleExtEvents(events, sourceType, tabId) {
+  if (!events || !Array.isArray(events)) return;
+
+  for (const evt of events) {
+    EventBuffer.addEvent({
+      ...evt,
+      source_type: evt.source_type || sourceType || 'live_dom',
+    });
+  }
+}
+
+function handleExtProductSnapshot(data) {
+  if (data && data.products) {
+    EventBuffer.setProductSnapshot(data.products);
+  }
+}
+
+function handleExtTrendSnapshot(data) {
+  if (data && data.trends) {
+    EventBuffer.setTrendSnapshot(data.trends);
+  }
+}
+
+async function handleExtManualMarker(data) {
+  const sessionId = SessionManager.getSessionId();
+  if (!sessionId) return { error: 'No active session' };
+
+  // Add to event buffer for immediate recording
+  EventBuffer.addEvent({
+    event_type: 'manual_marker_added',
+    source_type: 'manual',
+    text_value: data.label || 'manual_mark',
+    video_sec: data.video_sec,
+    confidence_score: 1.0,
+    payload: { label: data.label, video_sec: data.video_sec },
+  });
+
+  // Also send directly to API for immediate persistence
+  try {
+    return await ExtApiClient.addMarker(sessionId, data.label, data.video_sec);
+  } catch (err) {
+    console.warn('[AitherHub BG] Direct marker send failed, buffered instead:', err.message);
+    return { status: 'buffered' };
+  }
+}
+
+async function handleExtGetSummary() {
+  const sessionId = SessionManager.getSessionId();
+  if (!sessionId) return { error: 'No active session' };
+  return ExtApiClient.getSessionSummary(sessionId);
+}
+
+function getExtState() {
+  return {
+    session: SessionManager.getState(),
+    hasSession: SessionManager.hasSession(),
+    isActive: SessionManager.isActive(),
+    bufferStats: EventBuffer.getStats(),
+  };
+}
+
+// ══════════════════════════════════════════════════════════════
+// Legacy v1.x Handlers (backward compatible)
+// ══════════════════════════════════════════════════════════════
+
+async function handleLiveStarted(data, tab) {
+  console.log('[AitherHub BG] Live session started (legacy):', data);
+
   const existing = await chrome.storage.local.get(['liveSessionId', 'liveSessionAccount', 'liveSessionSource']);
-  if (existing.liveSessionId && 
-      existing.liveSessionAccount === data.account && 
+  if (existing.liveSessionId &&
+      existing.liveSessionAccount === data.account &&
       isConnected) {
-    console.log('[AitherHub BG] Reusing existing session for', data.source, ':', existing.liveSessionId);
-    // Already connected with same account, skip creating new session
     return;
   }
 
   sessionStartTime = Date.now();
   stats = { dataSent: 0, comments: 0, products: 0, uptime: 0, aiAnalyses: 0 };
-  
+
   const payload = {
     event: 'live_started',
     source: data.source,
@@ -172,7 +360,7 @@ async function handleLiveStarted(data, tab) {
   try {
     const response = await sendToAPI('/api/v1/live/extension/session/start', payload);
     if (response && response.session_id) {
-      chrome.storage.local.set({ 
+      chrome.storage.local.set({
         liveSessionId: response.session_id,
         liveSessionAccount: data.account || '',
         liveSessionSource: data.source || ''
@@ -186,12 +374,7 @@ async function handleLiveStarted(data, tab) {
   }
 }
 
-/**
- * Handle live session end
- */
 async function handleLiveEnded(data) {
-  console.log('[AitherHub BG] Live session ended');
-  
   const sessionId = (await chrome.storage.local.get('liveSessionId')).liveSessionId;
   if (sessionId) {
     try {
@@ -210,20 +393,16 @@ async function handleLiveEnded(data) {
   updateBadge('', '');
 }
 
-/**
- * Handle incoming live data from content scripts
- */
 async function handleLiveData(data, tab) {
   const now = Date.now();
-  
-  // Throttle: merge data if sending too frequently
+
   if (pendingData && (now - lastSendTime) < SEND_INTERVAL_MS) {
     pendingData = mergeData(pendingData, data);
     return;
   }
 
   const sessionId = (await chrome.storage.local.get('liveSessionId')).liveSessionId;
-  
+
   const payload = {
     session_id: sessionId,
     source: data.source,
@@ -240,64 +419,39 @@ async function handleLiveData(data, tab) {
     await sendToAPI('/api/v1/live/extension/data', payload);
     lastSendTime = now;
     pendingData = null;
-    
-    // Update stats
     stats.dataSent++;
     stats.comments += (data.comments || []).length;
     stats.products = Math.max(stats.products, (data.products || []).length);
-    
     updateBadge('ON', '#00C853');
   } catch (err) {
     console.error('[AitherHub BG] Failed to send data:', err);
-    pendingData = data; // Retry next time
-    
-    // If 401, try to refresh token
+    pendingData = data;
     if (err.message && err.message.includes('401')) {
       await tryRefreshToken();
     }
-    
     updateBadge('ERR', '#FF1744');
   }
 }
 
-/**
- * Handle AI analysis request from AI Commander panel
- */
 async function handleAiAnalyze(snapshot) {
-  console.log('[AitherHub BG] AI analysis requested');
   stats.aiAnalyses++;
-
   try {
     const result = await sendToAPI('/api/v1/live/ai/analyze', snapshot);
     return result;
   } catch (err) {
-    console.error('[AitherHub BG] AI analysis API failed:', err);
-    
-    // If 401, try to refresh token and retry
     if (err.message && err.message.includes('401')) {
       const refreshed = await tryRefreshToken();
       if (refreshed) {
-        try {
-          return await sendToAPI('/api/v1/live/ai/analyze', snapshot);
-        } catch (retryErr) {
-          throw retryErr;
-        }
+        return await sendToAPI('/api/v1/live/ai/analyze', snapshot);
       }
     }
-    
     throw err;
   }
 }
 
-/**
- * Merge two data objects (for throttling)
- * IMPORTANT: metrics must be MERGED (not replaced) because Streamer and Workbench
- * pages send different metric keys. Replacing would lose one source's data.
- */
 function mergeData(existing, incoming) {
   return {
     ...incoming,
-    // Deep merge metrics so both Streamer and Workbench metrics are preserved
     metrics: { ...(existing.metrics || {}), ...(incoming.metrics || {}) },
     comments: [...(existing.comments || []), ...(incoming.comments || [])],
     activities: [...(existing.activities || []), ...(incoming.activities || [])],
@@ -306,19 +460,10 @@ function mergeData(existing, incoming) {
   };
 }
 
-/**
- * Send data to AitherHub API
- */
 async function sendToAPI(endpoint, payload) {
   const url = `${apiBase}${endpoint}`;
-  
-  const headers = {
-    'Content-Type': 'application/json'
-  };
-  
-  if (apiToken) {
-    headers['Authorization'] = `Bearer ${apiToken}`;
-  }
+  const headers = { 'Content-Type': 'application/json' };
+  if (apiToken) headers['Authorization'] = `Bearer ${apiToken}`;
 
   const response = await fetch(url, {
     method: 'POST',
@@ -329,70 +474,62 @@ async function sendToAPI(endpoint, payload) {
   if (!response.ok) {
     throw new Error(`API error: ${response.status} ${response.statusText}`);
   }
-
   return response.json();
 }
 
-/**
- * Try to refresh the access token using the refresh token
- */
 async function tryRefreshToken() {
-  if (!refreshToken) {
-    console.log('[AitherHub BG] No refresh token available');
-    return false;
-  }
-
+  if (!refreshToken) return false;
   try {
     const response = await fetch(`${apiBase}/api/v1/auth/refresh`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ refresh_token: refreshToken })
     });
-
     if (!response.ok) {
-      console.error('[AitherHub BG] Token refresh failed:', response.status);
-      // Clear tokens - user needs to re-login
       apiToken = '';
       refreshToken = '';
       await chrome.storage.local.remove(['accessToken', 'apiToken', 'refreshToken']);
       return false;
     }
-
     const data = await response.json();
     apiToken = data.access_token;
     refreshToken = data.refresh_token || refreshToken;
-
     await chrome.storage.local.set({
       accessToken: apiToken,
       apiToken: apiToken,
       refreshToken: refreshToken
     });
-
-    console.log('[AitherHub BG] Token refreshed successfully');
     return true;
   } catch (err) {
-    console.error('[AitherHub BG] Token refresh error:', err);
     return false;
   }
 }
 
-/**
- * Update extension badge
- */
+// ══════════════════════════════════════════════════════════════
+// Badge & Alarms
+// ══════════════════════════════════════════════════════════════
+
 function updateBadge(text, color) {
   chrome.action.setBadgeText({ text });
-  if (color) {
-    chrome.action.setBadgeBackgroundColor({ color });
-  }
+  if (color) chrome.action.setBadgeBackgroundColor({ color });
 }
 
-// Periodic flush of pending data
-chrome.alarms.create('flushData', { periodInMinutes: 0.1 }); // Every 6 seconds
+// Periodic flush for legacy data
+chrome.alarms.create('flushData', { periodInMinutes: 0.1 });
+
+// Periodic flush for v2.0 event buffer
+chrome.alarms.create('flushEventBuffer', { periodInMinutes: 0.083 }); // ~5 seconds
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === 'flushData' && pendingData) {
     const data = pendingData;
     pendingData = null;
     await handleLiveData(data, null);
+  }
+
+  if (alarm.name === 'flushEventBuffer') {
+    if (SessionManager.hasSession() && EventBuffer._isRunning) {
+      await EventBuffer.flush();
+    }
   }
 });

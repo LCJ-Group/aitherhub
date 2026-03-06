@@ -1,12 +1,13 @@
 {
   "manifest_version": 3,
   "name": "AitherHub LIVE Connector",
-  "version": "1.5.2",
-  "description": "TikTok Shop LIVEデータをAitherHubダッシュボードにリアルタイム送信。コメント・商品・メトリクス・トラフィックを自動収集",
+  "version": "2.0.0",
+  "description": "TikTok Shop LIVEデータをAitherHubに送信。配信画面+ダッシュボード2画面同期で商品反応の時系列DBを構築",
   "permissions": [
     "activeTab",
     "storage",
-    "alarms"
+    "alarms",
+    "tabs"
   ],
   "host_permissions": [
     "https://shop.tiktok.com/*",
@@ -14,16 +15,32 @@
     "https://aitherhubapi-cpcjcnezbgf5f7e2.japaneast-01.azurewebsites.net/*"
   ],
   "background": {
-    "service_worker": "src/background.js"
+    "service_worker": "src/background.js",
+    "type": "module"
   },
   "content_scripts": [
     {
       "matches": [
-        "https://shop.tiktok.com/streamer/*",
-        "https://shop.tiktok.com/workbench/*"
+        "https://shop.tiktok.com/streamer/*"
       ],
-      "js": ["src/content.js"],
-      "css": ["src/content.css"],
+      "js": [
+        "src/selectors.js",
+        "src/parser_live.js",
+        "src/content_live.js"
+      ],
+      "css": ["src/content.css", "src/minibar.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://shop.tiktok.com/workbench/live/*"
+      ],
+      "js": [
+        "src/selectors.js",
+        "src/parser_dashboard.js",
+        "src/content_dashboard.js"
+      ],
+      "css": ["src/content.css", "src/minibar.css"],
       "run_at": "document_idle"
     },
     {
