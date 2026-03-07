@@ -2963,3 +2963,427 @@ async def get_sales_clip_candidates(
     except Exception as exc:
         logger.exception(f"[SALES_CLIP] Failed for {video_id}: {exc}")
         raise HTTPException(status_code=500, detail=f"Failed to compute sales clip candidates: {exc}")
+
+
+
+# =========================
+# Lightning Clip Editor APIs
+# =========================
+
+@router.patch("/{video_id}/clips/{clip_id}/trim")
+async def trim_clip(
+    video_id: str,
+    clip_id: str,
+    request_body: dict,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """
+    Adjust clip start/end time (±3 seconds max per adjustment).
+    Re-queues clip generation with new boundaries.
+
+    Body:
+    {
+        "time_start": float,  // new start time (full video seconds)
+        "time_end": float,    // new end time (full video seconds)
+        "speed_factor": 1.2   // optional
+    }
+    """
+    try:
+        user_id = user.get("user_id") or user.get("id")
+        new_start = float(request_body.get("time_start", 0))
+        new_end = float(request_body.get("time_end", 0))
+        speed_factor = float(request_body.get("speed_factor", 1.2))
+
+        if new_end <= new_start:
+            raise HTTPException(status_code=400, detail="time_end must be greater than time_start")
+
+        # Clamp speed_factor
+        speed_factor = max(0.5, min(2.0, speed_factor))
+
+        # Get existing clip
+        sql = text("""
+            SELECT id, video_id, phase_index, time_start, time_end
+            FROM video_clips
+            WHERE id = :clip_id AND video_id = :video_id
+        """)
+        result = await db.execute(sql, {"clip_id": clip_id, "video_id": video_id})
+        clip_row = result.fetchone()
+
+        if not clip_row:
+            raise HTTPException(status_code=404, detail="Clip not found")
+
+        # Verify video ownership
+        video_sql = text("SELECT id, user_id, original_filename FROM videos WHERE id = :video_id")
+        vres = await db.execute(video_sql, {"video_id": video_id})
+        video_row = vres.fetchone()
+        if not video_row or video_row.user_id != user_id:
+            raise HTTPException(status_code=403, detail="Not authorized")
+
+        # Create new clip record (keep old one for history)
+        new_clip_id = str(uuid_module.uuid4())
+        insert_sql = text("""
+            INSERT INTO video_clips (id, video_id, user_id, phase_index, time_start, time_end, status)
+            VALUES (:id, :video_id, :user_id, :phase_index, :time_start, :time_end, 'pending')
+        """)
+        await db.execute(insert_sql, {
+            "id": new_clip_id,
+            "video_id": video_id,
+            "user_id": user_id,
+            "phase_index": clip_row.phase_index,
+            "time_start": new_start,
+            "time_end": new_end,
+        })
+        await db.commit()
+
+        # Get user email for blob path
+        user_sql = text("SELECT email FROM users WHERE id = :user_id")
+        ures = await db.execute(user_sql, {"user_id": user_id})
+        user_row = ures.fetchone()
+        email = user_row.email if user_row else None
+
+        if not email:
+            raise HTTPException(status_code=400, detail="User email not found")
+
+        # Generate download SAS URL
+        from app.services.storage_service import generate_download_sas
+        download_url, _ = await generate_download_sas(
+            email=email,
+            video_id=video_id,
+            filename=video_row.original_filename,
+            expires_in_minutes=1440,
+        )
+
+        # Enqueue clip generation job
+        from app.services.queue_service import enqueue_job
+        await enqueue_job({
+            "job_type": "generate_clip",
+            "clip_id": new_clip_id,
+            "video_id": video_id,
+            "blob_url": download_url,
+            "time_start": new_start,
+            "time_end": new_end,
+            "phase_index": clip_row.phase_index,
+            "speed_factor": speed_factor,
+        })
+
+        logger.info(
+            f"[TRIM] Clip trimmed: {clip_id} → {new_clip_id}, "
+            f"time={new_start:.1f}-{new_end:.1f}s"
+        )
+
+        return {
+            "clip_id": new_clip_id,
+            "old_clip_id": clip_id,
+            "status": "pending",
+            "time_start": new_start,
+            "time_end": new_end,
+            "message": "Clip re-generation started with new boundaries",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(f"Failed to trim clip: {exc}")
+        raise HTTPException(status_code=500, detail=f"Failed to trim clip: {exc}")
+
+
+@router.patch("/{video_id}/clips/{clip_id}/captions")
+async def update_clip_captions(
+    video_id: str,
+    clip_id: str,
+    request_body: dict,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """
+    Update clip caption text (stored for next re-generation).
+
+    Body:
+    {
+        "captions": [
+            {"start": 0.0, "end": 2.5, "text": "修正後テキスト", "emphasis": false},
+            ...
+        ]
+    }
+    """
+    try:
+        user_id = user.get("user_id") or user.get("id")
+        captions = request_body.get("captions", [])
+
+        if not captions:
+            raise HTTPException(status_code=400, detail="captions array is required")
+
+        # Verify clip exists
+        sql = text("""
+            SELECT id, video_id FROM video_clips
+            WHERE id = :clip_id AND video_id = :video_id
+        """)
+        result = await db.execute(sql, {"clip_id": clip_id, "video_id": video_id})
+        clip_row = result.fetchone()
+        if not clip_row:
+            raise HTTPException(status_code=404, detail="Clip not found")
+
+        # Store captions as JSON in a new column (or metadata)
+        # For now, store in error_message field as JSON (we'll add a proper column later)
+        import json as _json
+        captions_json = _json.dumps(captions, ensure_ascii=False)
+
+        update_sql = text("""
+            UPDATE video_clips
+            SET error_message = :captions_json, updated_at = NOW()
+            WHERE id = :clip_id
+        """)
+        await db.execute(update_sql, {"captions_json": f"CAPTIONS:{captions_json}", "clip_id": clip_id})
+        await db.commit()
+
+        logger.info(f"[CAPTIONS] Updated {len(captions)} captions for clip {clip_id}")
+
+        return {
+            "clip_id": clip_id,
+            "captions_count": len(captions),
+            "message": "Captions updated successfully",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(f"Failed to update captions: {exc}")
+        raise HTTPException(status_code=500, detail=f"Failed to update captions: {exc}")
+
+
+
+# =========================
+# Sales Moment Clip API
+# =========================
+
+@router.get("/{video_id}/sales-moment-clips")
+async def get_sales_moment_clips(
+    video_id: str,
+    top_n: int = 5,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """
+    売上・注文・クリック・視聴者のスパイク（急増）を検出し、
+    その瞬間を中心にクリップ候補を自動生成する。
+
+    既存の sales-clip-candidates がフェーズ単位のスコアリングであるのに対し、
+    このエンドポイントは時系列データのスパイクから直接クリップ候補を生成する。
+    """
+    from app.services.sales_moment_clip_service import (
+        detect_spikes,
+        build_moment_clips,
+        compute_timed_metrics_from_phases,
+    )
+
+    try:
+        user_id = user.get("user_id") or user.get("id")
+
+        # フェーズデータ取得
+        sql_phases = text("""
+            SELECT
+                vp.phase_index,
+                vp.time_start,
+                vp.time_end,
+                COALESCE(vp.gmv, 0) as gmv,
+                COALESCE(vp.order_count, 0) as order_count,
+                COALESCE(vp.viewer_count, 0) as viewer_count,
+                COALESCE(vp.product_clicks, 0) as product_clicks,
+                COALESCE(vp.cta_score, 0) as cta_score
+            FROM video_phases vp
+            WHERE vp.video_id = :video_id
+              AND vp.user_id = :user_id
+            ORDER BY vp.phase_index ASC
+        """)
+        phases_result = await db.execute(sql_phases, {
+            "video_id": video_id,
+            "user_id": user_id,
+        })
+        phase_rows = phases_result.fetchall()
+
+        if not phase_rows:
+            return {
+                "video_id": video_id,
+                "spike_count": 0,
+                "candidates": [],
+            }
+
+        phases = [dict(row._mapping) for row in phase_rows]
+
+        # 動画の総秒数
+        video_sql = text("SELECT duration FROM videos WHERE id = :video_id")
+        vres = await db.execute(video_sql, {"video_id": video_id})
+        video_row = vres.fetchone()
+        video_duration = float(video_row.duration) if video_row and video_row.duration else 0.0
+
+        # 時系列メトリクスを構築
+        timed_metrics = compute_timed_metrics_from_phases(phases)
+
+        # スパイク検出
+        spikes = detect_spikes(timed_metrics)
+
+        # クリップ候補生成
+        top_n_clamped = max(1, min(int(top_n), 10))
+        candidates = build_moment_clips(
+            spikes=spikes,
+            phases=phases,
+            video_duration=video_duration,
+            top_n=top_n_clamped,
+        )
+
+        return {
+            "video_id": video_id,
+            "spike_count": len(spikes),
+            "video_duration": video_duration,
+            "candidates": [
+                {
+                    "rank": c.rank,
+                    "label": c.label,
+                    "phase_index": c.phase_index,
+                    "time_start": c.time_start,
+                    "time_end": c.time_end,
+                    "duration": c.duration,
+                    "score": c.score,
+                    "primary_metric": c.primary_metric,
+                    "summary": c.summary,
+                    "spike_events": [
+                        {
+                            "video_sec": se.video_sec,
+                            "metric": se.metric,
+                            "value": se.value,
+                            "spike_ratio": se.spike_ratio,
+                        }
+                        for se in c.spike_events[:5]  # 最大5件
+                    ],
+                }
+                for c in candidates
+            ],
+        }
+
+    except Exception as exc:
+        logger.exception(f"[SALES_MOMENT_CLIP] Failed for {video_id}: {exc}")
+        raise HTTPException(status_code=500, detail=f"Failed to compute sales moment clips: {exc}")
+
+
+
+# =========================
+# Hook Detection API
+# =========================
+
+@router.get("/{video_id}/hook-detection")
+async def detect_hooks_for_video(
+    video_id: str,
+    max_candidates: int = 10,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """
+    動画のトランスクリプトからフック（Hook）候補を検出する。
+    TikTok / Reels 向けに「最初3秒」で視聴者を引き付ける
+    フレーズをスコアリングして返す。
+    """
+    from app.services.hook_detection_service import detect_hooks, suggest_hook_placement
+
+    try:
+        user_id = user.get("user_id") or user.get("id")
+
+        # トランスクリプトセグメントを取得
+        # まず video_phases の audio_text から取得を試みる
+        sql_phases = text("""
+            SELECT
+                vp.phase_index,
+                vp.time_start,
+                vp.time_end,
+                vp.audio_text
+            FROM video_phases vp
+            WHERE vp.video_id = :video_id
+              AND vp.user_id = :user_id
+            ORDER BY vp.phase_index ASC
+        """)
+        phases_result = await db.execute(sql_phases, {
+            "video_id": video_id,
+            "user_id": user_id,
+        })
+        phase_rows = phases_result.fetchall()
+
+        # フェーズのaudio_textからセグメントを構築
+        segments = []
+        for row in phase_rows:
+            audio_text = row.audio_text
+            if not audio_text:
+                continue
+            t_start = float(row.time_start) if row.time_start else 0.0
+            t_end = float(row.time_end) if row.time_end else t_start + 60.0
+
+            # audio_text を文に分割
+            import re as _re
+            sentences = _re.split(r'[。！？\n]', str(audio_text))
+            sentences = [s.strip() for s in sentences if s.strip()]
+
+            if not sentences:
+                segments.append({
+                    "start": t_start,
+                    "end": t_end,
+                    "text": str(audio_text).strip(),
+                })
+            else:
+                # 均等に時間を割り当て
+                duration = t_end - t_start
+                per_sentence = duration / len(sentences) if sentences else duration
+                for i, sent in enumerate(sentences):
+                    seg_start = t_start + i * per_sentence
+                    seg_end = seg_start + per_sentence
+                    segments.append({
+                        "start": seg_start,
+                        "end": seg_end,
+                        "text": sent,
+                    })
+
+        if not segments:
+            return {
+                "video_id": video_id,
+                "hook_count": 0,
+                "hooks": [],
+                "message": "トランスクリプトが見つかりません",
+            }
+
+        # フック検出
+        max_cand = max(1, min(int(max_candidates), 20))
+        hooks = detect_hooks(segments, max_candidates=max_cand)
+
+        # 動画全体のフック配置提案
+        video_sql = text("SELECT duration FROM videos WHERE id = :video_id")
+        vres = await db.execute(video_sql, {"video_id": video_id})
+        video_row = vres.fetchone()
+        video_duration = float(video_row.duration) if video_row and video_row.duration else 0.0
+
+        placement = suggest_hook_placement(hooks, 0, video_duration) if hooks else None
+
+        return {
+            "video_id": video_id,
+            "hook_count": len(hooks),
+            "hooks": [
+                {
+                    "text": h.text,
+                    "start_sec": h.start_sec,
+                    "end_sec": h.end_sec,
+                    "hook_score": h.hook_score,
+                    "hook_reasons": h.hook_reasons,
+                    "is_question": h.is_question,
+                    "has_number": h.has_number,
+                    "keyword_matches": h.keyword_matches,
+                }
+                for h in hooks
+            ],
+            "placement_suggestion": {
+                "should_reorder": placement.get("should_reorder", False) if placement else False,
+                "suggested_start": placement.get("suggested_start", 0) if placement else 0,
+                "reason": placement.get("reason", "") if placement else "",
+                "best_hook_text": placement["best_hook"].text if placement and placement.get("best_hook") else None,
+            } if placement else None,
+        }
+
+    except Exception as exc:
+        logger.exception(f"[HOOK_DETECTION] Failed for {video_id}: {exc}")
+        raise HTTPException(status_code=500, detail=f"Failed to detect hooks: {exc}")

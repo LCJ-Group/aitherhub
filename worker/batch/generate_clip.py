@@ -336,6 +336,210 @@ def cut_segment(input_path: str, output_path: str, start_sec: float, end_sec: fl
 
 
 # =========================
+# Speech-Aware Cut
+# =========================
+
+# Japanese sentence-ending patterns for boundary detection
+_JP_SENTENCE_END_RE = re.compile(
+    r'[。！？!?…]$'
+    r'|ます$|です$|ました$|でした$|ません$|ください$'
+    r'|よね$|だよ$|だね$|かな$|よ$|ね$|な$|わ$|さ$'
+    r'|って$|けど$|から$|ので$|のに$|ても$|ても$'
+)
+
+# Pause threshold (seconds) – a gap this long between words suggests a natural break
+_PAUSE_THRESHOLD = 0.4
+
+
+def _find_speech_boundary(words: list, target_sec: float, search_window: float = 3.0, prefer: str = "after") -> float:
+    """
+    Find the best speech boundary near *target_sec* within ±search_window.
+
+    Strategy (priority order):
+      1. Sentence-ending word whose *end* is closest to target_sec
+      2. Long pause (>= _PAUSE_THRESHOLD) between consecutive words
+      3. Any word boundary closest to target_sec
+      4. Original target_sec (no adjustment)
+
+    Parameters
+    ----------
+    words : list[dict]
+        Word-level timestamps [{"word": str, "start": float, "end": float}, ...]
+    target_sec : float
+        The original cut point (in clip-local seconds).
+    search_window : float
+        How many seconds before/after target_sec to search.
+    prefer : str
+        "after" = prefer boundaries >= target_sec (for end cuts)
+        "before" = prefer boundaries <= target_sec (for start cuts)
+    """
+    if not words:
+        return target_sec
+
+    lo = target_sec - search_window
+    hi = target_sec + search_window
+
+    # Collect candidate boundaries in the window
+    sentence_ends: list[float] = []
+    pause_points: list[float] = []
+    word_ends: list[float] = []
+
+    for i, w in enumerate(words):
+        w_end = w.get("end", 0)
+        if not (lo <= w_end <= hi):
+            continue
+
+        word_ends.append(w_end)
+
+        # Check sentence-ending pattern
+        text = w.get("word", "").strip()
+        if text and _JP_SENTENCE_END_RE.search(text):
+            sentence_ends.append(w_end)
+
+        # Check pause after this word
+        if i + 1 < len(words):
+            next_start = words[i + 1].get("start", 0)
+            gap = next_start - w_end
+            if gap >= _PAUSE_THRESHOLD:
+                pause_points.append(w_end)
+
+    def _best(candidates: list[float]) -> float | None:
+        if not candidates:
+            return None
+        if prefer == "after":
+            after = [c for c in candidates if c >= target_sec]
+            if after:
+                return min(after, key=lambda c: abs(c - target_sec))
+        elif prefer == "before":
+            before = [c for c in candidates if c <= target_sec]
+            if before:
+                return min(before, key=lambda c: abs(c - target_sec))
+        return min(candidates, key=lambda c: abs(c - target_sec))
+
+    # Priority 1: sentence end
+    best = _best(sentence_ends)
+    if best is not None:
+        return best
+
+    # Priority 2: pause
+    best = _best(pause_points)
+    if best is not None:
+        return best
+
+    # Priority 3: any word boundary
+    best = _best(word_ends)
+    if best is not None:
+        return best
+
+    return target_sec
+
+
+def adjust_cut_to_speech_boundary(
+    source_path: str,
+    original_start: float,
+    original_end: float,
+    search_window: float = 3.0,
+) -> tuple[float, float]:
+    """
+    Pre-transcribe a slightly wider region around the requested clip and
+    snap start/end to natural speech boundaries.
+
+    Returns (adjusted_start, adjusted_end).
+    """
+    # Widen the region by search_window on each side for analysis
+    analysis_start = max(0.0, original_start - search_window)
+    analysis_end = original_end + search_window
+
+    # Extract audio for the wider region
+    work_dir = tempfile.mkdtemp(prefix="speech_boundary_")
+    try:
+        # Cut wider segment
+        wider_path = os.path.join(work_dir, "wider.mp4")
+        duration = analysis_end - analysis_start
+        cmd = [
+            FFMPEG_BIN, "-y",
+            "-ss", f"{analysis_start:.3f}",
+            "-accurate_seek",
+            "-i", source_path,
+            "-t", f"{duration:.3f}",
+            "-c:v", "copy",
+            "-c:a", "aac", "-b:a", "64k",
+            wider_path,
+        ]
+        subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+
+        # Extract audio
+        audio_path = os.path.join(work_dir, "boundary_audio.wav")
+        if not extract_audio(wider_path, audio_path):
+            logger.warning("[SPEECH_CUT] Audio extraction failed, using original boundaries")
+            return original_start, original_end
+
+        # Transcribe to get word-level timestamps
+        segments = transcribe_audio(audio_path)
+        if not segments:
+            logger.warning("[SPEECH_CUT] No transcript, using original boundaries")
+            return original_start, original_end
+
+        # Collect all words (timestamps are relative to analysis_start)
+        all_words = []
+        for seg in segments:
+            for w in seg.get("words", []):
+                all_words.append({
+                    "word": w["word"],
+                    "start": w["start"] + analysis_start,  # Convert to full-video time
+                    "end": w["end"] + analysis_start,
+                })
+
+        if not all_words:
+            # Fallback: use segment-level boundaries
+            for seg in segments:
+                all_words.append({
+                    "word": seg.get("text", ""),
+                    "start": seg["start"] + analysis_start,
+                    "end": seg["end"] + analysis_start,
+                })
+
+        if not all_words:
+            return original_start, original_end
+
+        # Adjust start: find a boundary BEFORE or AT original_start
+        adj_start = _find_speech_boundary(
+            all_words, original_start, search_window=search_window, prefer="before"
+        )
+        # Adjust end: find a boundary AFTER or AT original_end
+        adj_end = _find_speech_boundary(
+            all_words, original_end, search_window=search_window, prefer="after"
+        )
+
+        # Sanity checks
+        if adj_end <= adj_start:
+            logger.warning("[SPEECH_CUT] Adjusted end <= start, using originals")
+            return original_start, original_end
+
+        # Don't let the clip grow by more than 2× search_window total
+        max_growth = search_window * 2
+        original_dur = original_end - original_start
+        adjusted_dur = adj_end - adj_start
+        if adjusted_dur > original_dur + max_growth:
+            logger.warning(f"[SPEECH_CUT] Clip grew too much ({adjusted_dur:.1f}s vs {original_dur:.1f}s), clamping")
+            adj_end = adj_start + original_dur + max_growth
+
+        logger.info(
+            f"[SPEECH_CUT] Adjusted: {original_start:.2f}-{original_end:.2f} → "
+            f"{adj_start:.2f}-{adj_end:.2f} (delta_start={adj_start - original_start:+.2f}s, "
+            f"delta_end={adj_end - original_end:+.2f}s)"
+        )
+        return adj_start, adj_end
+
+    except Exception as e:
+        logger.warning(f"[SPEECH_CUT] Failed: {e}, using original boundaries")
+        return original_start, original_end
+    finally:
+        import shutil
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+
+# =========================
 # Transcribe with Whisper
 # =========================
 
@@ -513,24 +717,41 @@ def refine_subtitles_with_gpt(segments: list, phase_context: str = "") -> list:
         context_section = f"""\n## このフェーズの内容（参考情報 - 商品名や固有名詞の修正に活用）
 {phase_context}\n"""
 
-    prompt = f"""あなたは日本語のライブ配信動画（ライブコマース）の字幕を修正する専門家です。
-Whisperで自動生成された字幕テキストを修正してください。
+    prompt = f"""あなたは日本語ライブコマース動画のTikTok/Reels向けバイラル字幕を作成する専門家です。
+Whisperで自動生成された字幕テキストを、SNS動画で最大限バズる形式に変換してください。
 {context_section}
 ## 修正ルール（優先度順）
-1. **誤認識の修正**: 日本語として不自然な単語や文を正しく修正する。特に以下に注意：
-   - 同音異義語の誤り（例: 「使用感」→「使用感」、「乾きやすさ」→「乾きやすさ」）
+1. **誤認識の修正**: 日本語として不自然な単語や文を正しく修正する
    - 商品名・ブランド名の誤認識（コンテキストから推測）
    - 数字・金額の誤り（例: 「センエン」→「1000円」）
    - 敬語・丁寧語の崩れ修正
 2. **フィラーワード除去**: 「えー」「あのー」「うーん」「なんか」「まあ」等を除去
-3. **文節分割**: 各行を自然な日本語の文節（7〜12文字）で分割。意味の区切りを優先
-4. **句読点**: 自然な位置に「、」を追加（「。」は字幕なので最小限）
+3. **バイラル文節分割（最重要）**: TikTok字幕として最適な改行で分割する
+   - 1行は5〜10文字が理想（短いほど読みやすい）
+   - 意味の区切り・息継ぎで改行
+   - 重要ワード（商品名、金額、感嘆表現）は単独行にする
+   - 例: 「ブリーチ毛って色がすぐ抜けるじゃないですか」→
+     「ブリーチ毛って」「色がすぐ」「抜けるじゃないですか」
+4. **重要ワードマーキング**: 以下のワードは emphasis: true を付ける
+   - 商品名・ブランド名
+   - 金額（例: 1000円、半額）
+   - 感嘆表現（すごい、やばい、めっちゃ、マジで）
+   - 数量限定表現（限定、残りわずか、ラスト）
+   - CTA表現（今すぐ、ポチって、買って）
+5. **句読点**: 自然な位置に「、」を追加。字幕なので「。」は最小限
 
 ## 入力（Whisper生テキスト + タイムスタンプ）
 {raw_text}
 
 ## 出力形式
-以下のJSON配列形式で出力。各要素は {{"start": float, "end": float, "text": "修正後テキスト"}} です。
+以下のJSON配列形式で出力。各要素は:
+{{{{
+  "start": float,
+  "end": float,
+  "text": "修正後テキスト",
+  "emphasis": true/false
+}}}}
+- emphasis: true の行は字幕で大きく強調表示される
 - 元のタイムスタンプ範囲を維持しつつ、テキストを自然な文節で再分割
 - 1つの元セグメントを複数に分割する場合、タイムスタンプを文字数比率で分配
 - フィラーワードのみのセグメントは除去
@@ -606,6 +827,7 @@ JSON配列のみ出力（説明不要）:"""
                         "end": round(s_end, 3),
                         "text": text_val,
                         "words": words,
+                        "emphasis": bool(seg.get("emphasis", False)),
                     })
 
         if not valid_segments:
@@ -857,14 +1079,18 @@ def build_ass_subtitle(segments: list, style: dict, video_width: int = 1080, vid
     
     Uses word-level timestamps to create a karaoke effect where each character
     is highlighted as it is spoken, similar to popular TikTok/Reels subtitles.
+    Supports emphasis segments with larger font size and accent color.
     """
     fontsize = style["fontsize"]
+    emphasis_fontsize = int(fontsize * 1.5)  # 150% for emphasis words
     fontcolor_ass = _hex_to_ass_color(style["fontcolor"])
     highlight_color_ass = _hex_to_ass_color(style.get("highlight_color", "#FFD700"))
+    emphasis_color_ass = _hex_to_ass_color(style.get("highlight_color", "#FFD700"))
     bordercolor_ass = _hex_to_ass_color(style.get("bordercolor", "black"))
     outline = style.get("borderw", 4)
+    emphasis_outline = outline + 2
 
-    # ASS header with two styles: Default (unhighlighted) and Highlight (karaoke active)
+    # ASS header with Default + Emphasis styles
     ass_content = f"""[Script Info]
 Title: TikTok Clip Subtitles - Karaoke
 ScriptType: v4.00+
@@ -875,6 +1101,7 @@ WrapStyle: 0
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Default,{JP_FONT_NAME},{fontsize},{fontcolor_ass},{highlight_color_ass},{bordercolor_ass},&H00000000,-1,0,0,0,100,100,2,0,1,{outline},0,2,40,40,320,1
+Style: Emphasis,{JP_FONT_NAME},{emphasis_fontsize},{emphasis_color_ass},{highlight_color_ass},{bordercolor_ass},&H00000000,-1,0,0,0,100,100,2,0,1,{emphasis_outline},0,2,40,40,300,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -884,20 +1111,20 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         start_time = _seconds_to_ass_time(seg["start"])
         end_time = _seconds_to_ass_time(seg["end"])
         words = seg.get("words", [])
+        is_emphasis = seg.get("emphasis", False)
+        style_name = "Emphasis" if is_emphasis else "Default"
 
         if words and len(words) > 1:
             # Build karaoke effect using \kf (smooth fill) tags
-            # \kf<duration_in_centiseconds> highlights each character progressively
             karaoke_text = ""
             for w in words:
-                w_duration_cs = max(1, int((w["end"] - w["start"]) * 100))  # centiseconds
+                w_duration_cs = max(1, int((w["end"] - w["start"]) * 100))
                 char = w["word"].replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}")
                 karaoke_text += f"{{\\kf{w_duration_cs}}}{char}"
-            ass_content += f"Dialogue: 0,{start_time},{end_time},Default,,0,0,0,,{karaoke_text}\n"
+            ass_content += f"Dialogue: 0,{start_time},{end_time},{style_name},,0,0,0,,{karaoke_text}\n"
         else:
-            # Fallback: no word-level data, show plain text
             text = seg["text"].replace("\n", "\\N")
-            ass_content += f"Dialogue: 0,{start_time},{end_time},Default,,0,0,0,,{text}\n"
+            ass_content += f"Dialogue: 0,{start_time},{end_time},{style_name},,0,0,0,,{text}\n"
 
     return ass_content
 
@@ -1324,6 +1551,18 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
 
         if not os.path.exists(source_path) or os.path.getsize(source_path) == 0:
             raise RuntimeError("Failed to download source video")
+
+        # 1.5. Speech-Aware Cut: adjust boundaries to avoid mid-sentence cuts
+        logger.info("[SPEECH_CUT] Adjusting clip boundaries to speech boundaries...")
+        adj_start, adj_end = adjust_cut_to_speech_boundary(
+            source_path, time_start, time_end, search_window=3.0
+        )
+        if (adj_start, adj_end) != (time_start, time_end):
+            logger.info(
+                f"[SPEECH_CUT] Boundaries adjusted: {time_start:.2f}-{time_end:.2f} "
+                f"→ {adj_start:.2f}-{adj_end:.2f}"
+            )
+            time_start, time_end = adj_start, adj_end
 
         # 2. Cut segment
         segment_path = os.path.join(work_dir, "segment.mp4")

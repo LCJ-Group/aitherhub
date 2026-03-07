@@ -1,5 +1,6 @@
-import { useState, useCallback, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import VideoService from "../base/services/videoService";
+import LightningClipEditor from "./LightningClipEditor";
 
 /**
  * SalesClipCandidates
@@ -19,6 +20,7 @@ export default function SalesClipCandidates({ videoData, onRequestClip, clipStat
   const [collapsed, setCollapsed] = useState(false);
   // feedbackMap: { [phaseIndex]: "adopted" | "rejected" | "submitting" }
   const [feedbackMap, setFeedbackMap] = useState({});
+  const [editorClip, setEditorClip] = useState(null); // clip data for Lightning Editor
 
   // 既存フィードバックを復元（ページロード時）
   useEffect(() => {
@@ -140,17 +142,34 @@ export default function SalesClipCandidates({ videoData, onRequestClip, clipStat
 
     if (state?.status === "completed" && state?.clip_url) {
       return (
-        <a
-          href={state.clip_url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-500 text-white text-xs font-medium hover:bg-green-600 transition-colors"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
-          </svg>
-          ダウンロード
-        </a>
+        <div className="flex items-center gap-1.5">
+          <a
+            href={state.clip_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-500 text-white text-xs font-medium hover:bg-green-600 transition-colors"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            DL
+          </a>
+          <button
+            type="button"
+            onClick={() => setEditorClip({
+              clip_id: state.clip_id,
+              clip_url: state.clip_url,
+              phase_index: candidate.phase_index,
+              time_start: candidate.time_start,
+              time_end: candidate.time_end,
+              captions: [],
+            })}
+            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-indigo-500 text-white text-xs font-medium hover:bg-indigo-600 transition-colors"
+            title="Lightning Clip Editor"
+          >
+            ⚡ 編集
+          </button>
+        </div>
       );
     }
 
@@ -450,6 +469,21 @@ export default function SalesClipCandidates({ videoData, onRequestClip, clipStat
           </div>
         )}
       </div>
+
+      {/* Lightning Clip Editor Modal */}
+      {editorClip && (
+        <LightningClipEditor
+          videoId={videoData?.id}
+          clip={editorClip}
+          onClose={() => setEditorClip(null)}
+          onClipUpdated={(res) => {
+            // Update clip state after trim
+            if (res?.clip_id) {
+              setEditorClip(null);
+            }
+          }}
+        />
+      )}
     </div>
   );
 }

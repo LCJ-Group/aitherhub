@@ -9,6 +9,8 @@ import "../assets/css/sidebar.css";
 import AnalyticsSection from "./AnalyticsSection";
 import ClipSection from "./ClipSection";
 import SalesClipCandidates from "./SalesClipCandidates";
+import SalesMomentClips from "./SalesMomentClips";
+import HookDetection from "./HookDetection";
 import LiveReportSection from "./LiveReportSection";
 // ProductTimeline is now integrated into AnalyticsSection
 
@@ -810,6 +812,27 @@ export default function VideoDetail({ videoData }) {
                 { time_start: candidate.time_start, time_end: candidate.time_end },
                 candidate.phase_index
               );
+            }}
+          />
+
+          {/* Sales Moment Clips - spike-based */}
+          <SalesMomentClips
+            videoData={videoData}
+            clipStates={clipStates}
+            onRequestClip={(candidate) => {
+              handleClipGeneration(
+                { time_start: candidate.time_start, time_end: candidate.time_end },
+                candidate.phase_index
+              );
+            }}
+          />
+
+          {/* Hook Detection */}
+          <HookDetection
+            videoData={videoData}
+            onSelectHook={(hook) => {
+              // フック選択時にプレビュー
+              handlePhasePreview({ time_start: hook.start_sec, time_end: hook.end_sec });
             }}
           />
 

@@ -1138,7 +1138,79 @@ class VideoService extends BaseApiService {
       throw error;
     }
   }
+
+  /**
+   * Trim clip with new start/end times.
+   * @param {string} videoId
+   * @param {string} clipId
+   * @param {number} timeStart - New start time in seconds
+   * @param {number} timeEnd - New end time in seconds
+   * @param {number} [speedFactor=1.2]
+   * @returns {Promise<{clip_id, status, message}>}
+   */
+  async trimClip(videoId, clipId, timeStart, timeEnd, speedFactor = 1.2) {
+    try {
+      const response = await this.patch(`/api/v1/videos/${videoId}/clips/${clipId}/trim`, {
+        time_start: timeStart,
+        time_end: timeEnd,
+        speed_factor: speedFactor,
+      });
+      return response;
+    } catch (error) {
+      console.error('Failed to trim clip:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Update clip captions.
+   * @param {string} videoId
+   * @param {string} clipId
+   * @param {Array} captions - Array of {start, end, text, emphasis}
+   * @returns {Promise<{clip_id, captions_count, message}>}
+   */
+  async updateClipCaptions(videoId, clipId, captions) {
+    try {
+      const response = await this.patch(`/api/v1/videos/${videoId}/clips/${clipId}/captions`, {
+        captions,
+      });
+      return response;
+    } catch (error) {
+      console.error('Failed to update captions:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get sales moment clips (spike-based clip candidates).
+   * @param {string} videoId
+   * @param {number} topN
+   * @returns {Promise<{video_id, spike_count, candidates}>}
+   */
+  async getSalesMomentClips(videoId, topN = 5) {
+    try {
+      const response = await this.get(`/api/v1/videos/${videoId}/sales-moment-clips?top_n=${topN}`);
+      return response;
+    } catch (error) {
+      console.error('Failed to get sales moment clips:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Detect hooks (strong opening phrases) in a video.
+   * @param {string} videoId
+   * @param {number} maxCandidates
+   * @returns {Promise<{video_id, hook_count, hooks, placement_suggestion}>}
+   */
+  async getHookDetection(videoId, maxCandidates = 10) {
+    try {
+      const response = await this.get(`/api/v1/videos/${videoId}/hook-detection?max_candidates=${maxCandidates}`);
+      return response;
+    } catch (error) {
+      console.error('Failed to detect hooks:', error);
+      throw error;
+    }
+  }
 }
-
 export default new VideoService();
-
