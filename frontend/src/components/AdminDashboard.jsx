@@ -327,7 +327,7 @@ function UploadHealthSection({ data, loading }) {
     );
   }
 
-  const { overall, last_24h, last_7d, stuck_videos, status_distribution, recent_uploads, recent_errors } = data;
+  const { overall, last_24h, last_7d, stuck_videos, status_distribution, recent_uploads, recent_errors, enqueue_stats, pipeline_stages, retry_candidates, recent_stage_events, failed_stage_videos } = data;
 
   const statusColor = (status) => {
     const map = { DONE: "text-green-600 bg-green-50", ERROR: "text-red-600 bg-red-50", uploaded: "text-blue-600 bg-blue-50", NEW: "text-gray-600 bg-gray-50" };
@@ -427,6 +427,149 @@ function UploadHealthSection({ data, loading }) {
           </table>
         </div>
       </section>
+
+      {/* Enqueue Stats */}
+      {enqueue_stats && (
+        <section className="mb-8">
+          <div className="flex items-center gap-2 mb-4">
+            <span className="text-lg">&#x1F4E8;</span>
+            <h2 className="text-lg font-semibold text-gray-700">Enqueue 統計</h2>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <StatCard label="Enqueue OK" value={enqueue_stats.total_ok} unit="件" color="green" />
+            <StatCard label="Enqueue FAILED" value={enqueue_stats.total_failed} unit="件" color="red" />
+            <StatCard label="OK (24h)" value={enqueue_stats.ok_last_24h} unit="件" color="green" />
+            <StatCard label="FAILED (24h)" value={enqueue_stats.failed_last_24h} unit="件" color="red" />
+          </div>
+          {enqueue_stats.enqueue_success_rate_pct != null && (
+            <div className="mt-3">
+              <StatCard label="Enqueue 成功率" value={`${enqueue_stats.enqueue_success_rate_pct}%`} color={enqueue_stats.enqueue_success_rate_pct >= 95 ? "green" : "red"} />
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* Pipeline Stages */}
+      {pipeline_stages && (
+        <section className="mb-8">
+          <div className="flex items-center gap-2 mb-4">
+            <span className="text-lg">&#x2699;&#xFE0F;</span>
+            <h2 className="text-lg font-semibold text-gray-700">パイプラインステージ</h2>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+            <StatCard label="アップロード待ち" value={pipeline_stages.uploaded_waiting} unit="件" color="blue" />
+            <StatCard label="処理中" value={pipeline_stages.processing} unit="件" color="yellow" />
+            <StatCard label="完了" value={pipeline_stages.done} unit="件" color="green" />
+            <StatCard label="エラー" value={pipeline_stages.error} unit="件" color="red" />
+            <StatCard label="Enqueue失敗" value={pipeline_stages.enqueue_failed} unit="件" color="red" />
+            <StatCard label="スタック(>2h)" value={pipeline_stages.stuck_gt_2h} unit="件" color={pipeline_stages.stuck_gt_2h > 0 ? "red" : "gray"} />
+          </div>
+        </section>
+      )}
+
+      {/* Retry Candidates */}
+      {retry_candidates && retry_candidates.length > 0 && (
+        <section className="mb-8">
+          <div className="flex items-center gap-2 mb-4">
+            <span className="text-lg">&#x1F504;</span>
+            <h2 className="text-lg font-semibold text-orange-600">リトライ候補 (Enqueue失敗)</h2>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-200">
+                  <th className="text-left py-2 px-3 text-gray-500 font-medium">ファイル名</th>
+                  <th className="text-left py-2 px-3 text-gray-500 font-medium">ステータス</th>
+                  <th className="text-left py-2 px-3 text-gray-500 font-medium">エラー内容</th>
+                  <th className="text-left py-2 px-3 text-gray-500 font-medium">ユーザー</th>
+                  <th className="text-left py-2 px-3 text-gray-500 font-medium">日時</th>
+                </tr>
+              </thead>
+              <tbody>
+                {retry_candidates.map((r, i) => (
+                  <tr key={i} className="border-b border-gray-100 hover:bg-orange-50">
+                    <td className="py-2 px-3 truncate max-w-[200px]" title={r.filename}>{r.filename || "--"}</td>
+                    <td className="py-2 px-3"><span className={`px-2 py-0.5 rounded text-xs font-medium ${statusColor(r.status)}`}>{r.status}</span></td>
+                    <td className="py-2 px-3 text-red-500 text-xs truncate max-w-[200px]" title={r.enqueue_error}>{r.enqueue_error || "--"}</td>
+                    <td className="py-2 px-3 text-gray-500 truncate max-w-[150px]" title={r.user_email}>{r.user_email || "--"}</td>
+                    <td className="py-2 px-3 text-gray-400 text-xs">{r.created_at || "--"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {/* Failed Stage Videos */}
+      {failed_stage_videos && failed_stage_videos.length > 0 && (
+        <section className="mb-8">
+          <div className="flex items-center gap-2 mb-4">
+            <span className="text-lg">&#x1F6A8;</span>
+            <h2 className="text-lg font-semibold text-red-600">パイプラインステージエラー</h2>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-200">
+                  <th className="text-left py-2 px-3 text-gray-500 font-medium">ファイル名</th>
+                  <th className="text-left py-2 px-3 text-gray-500 font-medium">エラーステージ</th>
+                  <th className="text-left py-2 px-3 text-gray-500 font-medium">最終ステージ</th>
+                  <th className="text-left py-2 px-3 text-gray-500 font-medium">エラー内容</th>
+                  <th className="text-left py-2 px-3 text-gray-500 font-medium">ユーザー</th>
+                  <th className="text-left py-2 px-3 text-gray-500 font-medium">日時</th>
+                </tr>
+              </thead>
+              <tbody>
+                {failed_stage_videos.map((v, i) => (
+                  <tr key={i} className="border-b border-gray-100 hover:bg-red-50">
+                    <td className="py-2 px-3 truncate max-w-[180px]" title={v.filename}>{v.filename || "--"}</td>
+                    <td className="py-2 px-3"><span className="px-2 py-0.5 rounded text-xs font-medium text-red-700 bg-red-100">{v.error_stage}</span></td>
+                    <td className="py-2 px-3"><span className="px-2 py-0.5 rounded text-xs font-medium text-blue-700 bg-blue-100">{v.last_stage}</span></td>
+                    <td className="py-2 px-3 text-red-500 text-xs truncate max-w-[200px]" title={v.error_message}>{v.error_message || "--"}</td>
+                    <td className="py-2 px-3 text-gray-500 truncate max-w-[120px]" title={v.user_email}>{v.user_email || "--"}</td>
+                    <td className="py-2 px-3 text-gray-400 text-xs">{v.created_at || "--"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {/* Recent Stage Events (errors only) */}
+      {recent_stage_events && recent_stage_events.length > 0 && (
+        <section className="mb-8">
+          <div className="flex items-center gap-2 mb-4">
+            <span className="text-lg">&#x1F4DD;</span>
+            <h2 className="text-lg font-semibold text-gray-700">最近のステージエラーログ</h2>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-200">
+                  <th className="text-left py-2 px-3 text-gray-500 font-medium">ステージ</th>
+                  <th className="text-left py-2 px-3 text-gray-500 font-medium">エラータイプ</th>
+                  <th className="text-left py-2 px-3 text-gray-500 font-medium">エラー内容</th>
+                  <th className="text-left py-2 px-3 text-gray-500 font-medium">所要時間</th>
+                  <th className="text-left py-2 px-3 text-gray-500 font-medium">日時</th>
+                </tr>
+              </thead>
+              <tbody>
+                {recent_stage_events.map((e, i) => (
+                  <tr key={i} className="border-b border-gray-100 hover:bg-gray-50">
+                    <td className="py-2 px-3"><span className="px-2 py-0.5 rounded text-xs font-medium text-red-700 bg-red-100">{e.stage}</span></td>
+                    <td className="py-2 px-3 text-gray-600 text-xs">{e.error_type || "--"}</td>
+                    <td className="py-2 px-3 text-red-500 text-xs truncate max-w-[250px]" title={e.error_message}>{e.error_message || "--"}</td>
+                    <td className="py-2 px-3 text-gray-500 text-xs">{e.duration_ms != null ? `${e.duration_ms}ms` : "--"}</td>
+                    <td className="py-2 px-3 text-gray-400 text-xs">{e.created_at || "--"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
       {/* Recent Errors */}
       {recent_errors.length > 0 && (
