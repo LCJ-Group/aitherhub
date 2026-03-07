@@ -1016,3 +1016,264 @@ async def get_upload_health(
     except Exception as e:
         logger.exception(f"Failed to get upload health: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Recompute Phase Metrics ──────────────────────────────────────────────────
+
+@router.post("/recompute-phase-metrics/{video_id}")
+async def recompute_phase_metrics(
+    video_id: str,
+    dry_run: bool = False,
+    db: AsyncSession = Depends(get_db),
+    x_admin_key: Optional[str] = Header(None),
+):
+    """
+    既存動画の video_phases テーブルの CSV 由来指標を再計算して上書きする。
+
+    修正後ロジック（csv_first_sec + time_offset_seconds + start_sec）で
+    gmv / order_count / viewer_count / like_count / comment_count /
+    share_count / new_followers / product_clicks / conversion_rate / gpm
+    を再集計する。
+
+    Parameters
+    ----------
+    video_id : str
+        対象動画の UUID
+    dry_run : bool
+        True の場合、計算結果を返すが DB は更新しない
+
+    Headers
+    -------
+    X-Admin-Key : str
+        認証キー（aither:hub）
+    """
+    if x_admin_key != f"{ADMIN_ID}:{ADMIN_PASS}":
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    # ── 動画情報を取得 ──────────────────────────────────────────
+    sql_video = text("""
+        SELECT id, original_filename, upload_type,
+               excel_trend_blob_url, time_offset_seconds
+        FROM videos
+        WHERE id = :vid
+    """)
+    result = await db.execute(sql_video, {"vid": video_id})
+    row = result.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    vid = str(row[0])
+    fname = str(row[1] or "?")
+    upload_type = str(row[2] or "")
+    trend_url = str(row[3] or "")
+    time_offset = float(row[4] or 0)
+
+    if upload_type != "clean_video":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Video upload_type={upload_type!r} is not 'clean_video'. "
+                   "Only clean_video has CSV trend data.",
+        )
+    if not trend_url or len(trend_url) < 5:
+        raise HTTPException(status_code=400, detail="No excel_trend_blob_url found for this video")
+
+    # ── フェーズ一覧を取得 ──────────────────────────────────────
+    sql_phases = text("""
+        SELECT phase_index, time_start, time_end
+        FROM video_phases
+        WHERE video_id = :vid
+        ORDER BY phase_index
+    """)
+    r2 = await db.execute(sql_phases, {"vid": vid})
+    phase_rows = r2.fetchall()
+    phases = [
+        {"phase_index": pr[0], "time_start": pr[1], "time_end": pr[2]}
+        for pr in phase_rows
+    ]
+    if not phases:
+        raise HTTPException(status_code=400, detail="No phases found for this video")
+
+    # ── Excel/CSV を読み込む ────────────────────────────────────
+    try:
+        import sys, os
+        worker_batch = os.path.join(
+            os.path.dirname(__file__), "..", "..", "..", "..", "worker", "batch"
+        )
+        if worker_batch not in sys.path:
+            sys.path.insert(0, os.path.abspath(worker_batch))
+        from excel_parser import load_excel_data
+    except ImportError as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Cannot import excel_parser from worker: {e}. "
+                   "Run backfill_phase_metrics.py on the Worker VM instead.",
+        )
+
+    excel_urls = {
+        "excel_trend_blob_url":   trend_url,
+        "excel_product_blob_url": None,
+        "upload_type":            "clean_video",
+        "time_offset_seconds":    time_offset,
+    }
+    excel_data = load_excel_data(vid, excel_urls)
+    if not excel_data or not excel_data.get("has_trend_data"):
+        raise HTTPException(status_code=400, detail="No trend data loaded from Excel/CSV")
+
+    trends = excel_data["trends"]
+
+    # ── 指標を再計算 ────────────────────────────────────────────
+    try:
+        from csv_slot_filter import (
+            _find_key, _safe_float, _parse_time_to_seconds,
+            _detect_time_key, compute_slot_scores, KPI_ALIASES,
+        )
+    except ImportError as e:
+        raise HTTPException(status_code=500, detail=f"Cannot import csv_slot_filter: {e}")
+
+    try:
+        from column_normalizer import detect_all_columns
+        detection_result = detect_all_columns(trends[0] if trends else {})
+        detected = detection_result["detected"]
+        gmv_key      = detected.get("gmv")
+        order_key    = detected.get("order_count")
+        viewer_key   = detected.get("viewer_count")
+        like_key     = detected.get("like_count")
+        comment_key  = detected.get("comment_count")
+        share_key    = detected.get("share_count")
+        follower_key = detected.get("new_followers")
+        click_key    = detected.get("product_clicks")
+        conv_key     = detected.get("ctor")
+        gpm_key      = detected.get("gpm")
+    except ImportError:
+        sample = trends[0] if trends else {}
+        gmv_key      = _find_key(sample, KPI_ALIASES["gmv"])
+        order_key    = _find_key(sample, KPI_ALIASES["order_count"])
+        viewer_key   = _find_key(sample, KPI_ALIASES["viewer_count"])
+        like_key     = _find_key(sample, KPI_ALIASES["like_count"])
+        comment_key  = _find_key(sample, KPI_ALIASES["comment_count"])
+        share_key    = _find_key(sample, KPI_ALIASES["share_count"])
+        follower_key = _find_key(sample, KPI_ALIASES["new_followers"])
+        click_key    = _find_key(sample, KPI_ALIASES["product_clicks"])
+        conv_key     = _find_key(sample, KPI_ALIASES["ctor"])
+        gpm_key      = _find_key(sample, KPI_ALIASES["gpm"])
+
+    time_key = _detect_time_key(trends)
+    timed_entries = []
+    if time_key:
+        for entry in trends:
+            t_sec = _parse_time_to_seconds(entry.get(time_key))
+            if t_sec is not None:
+                timed_entries.append({"time_sec": t_sec, "entry": entry})
+        timed_entries.sort(key=lambda x: x["time_sec"])
+
+    if not timed_entries:
+        raise HTTPException(status_code=400, detail="No timed entries found in CSV")
+
+    csv_first_sec = timed_entries[0]["time_sec"]
+    scored_slots = compute_slot_scores(trends)
+    score_map = {s["time_sec"]: s["score"] for s in scored_slots}
+
+    phase_results = []
+    for ph in phases:
+        phase_index = ph["phase_index"]
+        start_sec   = float(ph["time_start"] or 0)
+        end_sec     = float(ph["time_end"] or 0)
+
+        # 正しい変換: csv_first_sec + time_offset_seconds + phase_relative_sec
+        phase_abs_start = csv_first_sec + time_offset + start_sec
+        phase_abs_end   = csv_first_sec + time_offset + end_sec
+
+        phase_gmv = 0.0; phase_orders = 0; phase_viewers = 0
+        phase_likes = 0; phase_comments = 0; phase_shares = 0
+        phase_followers = 0; phase_clicks = 0
+        phase_conv = 0.0; phase_gpm = 0.0; phase_score = 0.0
+        match_count = 0
+
+        for te in timed_entries:
+            t = te["time_sec"]
+            e = te["entry"]
+            if phase_abs_start <= t <= phase_abs_end:
+                match_count += 1
+                if gmv_key:      phase_gmv      += _safe_float(e.get(gmv_key)) or 0
+                if order_key:    phase_orders   += int(_safe_float(e.get(order_key)) or 0)
+                if viewer_key:   phase_viewers   = max(phase_viewers, int(_safe_float(e.get(viewer_key)) or 0))
+                if like_key:     phase_likes     = max(phase_likes, int(_safe_float(e.get(like_key)) or 0))
+                if comment_key:  phase_comments += int(_safe_float(e.get(comment_key)) or 0)
+                if share_key:    phase_shares   += int(_safe_float(e.get(share_key)) or 0)
+                if follower_key: phase_followers += int(_safe_float(e.get(follower_key)) or 0)
+                if click_key:    phase_clicks   += int(_safe_float(e.get(click_key)) or 0)
+                if conv_key:     phase_conv      = max(phase_conv, _safe_float(e.get(conv_key)) or 0)
+                if gpm_key:      phase_gpm       = max(phase_gpm, _safe_float(e.get(gpm_key)) or 0)
+                phase_score = max(phase_score, score_map.get(t, 0))
+
+        metrics = {
+            "phase_index":     phase_index,
+            "gmv":             round(phase_gmv, 2),
+            "order_count":     phase_orders,
+            "viewer_count":    phase_viewers,
+            "like_count":      phase_likes,
+            "comment_count":   phase_comments,
+            "share_count":     phase_shares,
+            "new_followers":   phase_followers,
+            "product_clicks":  phase_clicks,
+            "conversion_rate": round(phase_conv, 4),
+            "gpm":             round(phase_gpm, 2),
+            "importance_score":round(phase_score, 4),
+            "_debug": {
+                "phase_abs_start":  round(phase_abs_start, 1),
+                "phase_abs_end":    round(phase_abs_end, 1),
+                "csv_match_count":  match_count,
+            },
+        }
+        phase_results.append(metrics)
+
+        # DB 更新
+        if not dry_run:
+            sql_upd = text("""
+                UPDATE video_phases
+                SET
+                    gmv              = :gmv,
+                    order_count      = :order_count,
+                    viewer_count     = :viewer_count,
+                    like_count       = :like_count,
+                    comment_count    = :comment_count,
+                    share_count      = :share_count,
+                    new_followers    = :new_followers,
+                    product_clicks   = :product_clicks,
+                    conversion_rate  = :conversion_rate,
+                    gpm              = :gpm,
+                    importance_score = :importance_score,
+                    updated_at       = now()
+                WHERE video_id = :video_id
+                  AND phase_index = :phase_index
+            """)
+            await db.execute(sql_upd, {
+                "video_id":         vid,
+                "phase_index":      phase_index,
+                "gmv":              metrics["gmv"],
+                "order_count":      metrics["order_count"],
+                "viewer_count":     metrics["viewer_count"],
+                "like_count":       metrics["like_count"],
+                "comment_count":    metrics["comment_count"],
+                "share_count":      metrics["share_count"],
+                "new_followers":    metrics["new_followers"],
+                "product_clicks":   metrics["product_clicks"],
+                "conversion_rate":  metrics["conversion_rate"],
+                "gpm":              metrics["gpm"],
+                "importance_score": metrics["importance_score"],
+            })
+
+    if not dry_run:
+        await db.commit()
+
+    return {
+        "status":              "ok" if not dry_run else "dry_run",
+        "video_id":            vid,
+        "filename":            fname,
+        "dry_run":             dry_run,
+        "csv_first_sec":       round(csv_first_sec, 1),
+        "time_offset_seconds": time_offset,
+        "trend_rows":          len(trends),
+        "phases_updated":      len(phase_results),
+        "phase_metrics":       phase_results,
+    }

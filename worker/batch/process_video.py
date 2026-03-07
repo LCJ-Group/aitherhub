@@ -955,20 +955,21 @@ def main():
                 end_sec = tr.get("end_sec", 0)
 
                 # CSVタイムラインに合わせて動画内秒数をCSV絶対時刻に変換
-                # csv_first_sec: CSVの最初の行の絶対時刻（秒）
+                # csv_first_sec: CSVの最初の行の絶対時刻（秒）例: 14:30:00 = 52200
+                # time_offset_seconds: この動画がCSVタイムライン内のどこから始まるか
+                #   例: 単一動画なら 0、バッチ2本目なら 3600 など
                 # start_sec / end_sec: 動画内のフェーズ開始・終了秒（0始まり）
-                # 正しい変換: phase_abs = csv_first_sec + start_sec
-                # ※ time_offset_secondsは「CSVの何秒目から動画が始まるか」を示すが
-                #   フェーズのCSVマッチングには csv_first_sec + start_sec が正しい
-                phase_abs_start = csv_first_sec + start_sec
-                phase_abs_end = csv_first_sec + end_sec
+                # 正しい変換: phase_abs = csv_first_sec + time_offset_seconds + start_sec
+                phase_abs_start = csv_first_sec + time_offset_seconds + start_sec
+                phase_abs_end   = csv_first_sec + time_offset_seconds + end_sec
                 sales_info = match_sales_to_phase(trends, phase_abs_start, phase_abs_end)
                 p["sales_data"] = sales_info
                 logger.debug(
                     "[CSV_METRICS] Phase %s: start_sec=%.1f end_sec=%.1f "
-                    "phase_abs_start=%.1f phase_abs_end=%.1f",
+                    "phase_abs_start=%.1f phase_abs_end=%.1f (csv_first=%.1f offset=%.1f)",
                     p.get("phase_index", "?"), start_sec, end_sec,
                     phase_abs_start, phase_abs_end,
+                    csv_first_sec, time_offset_seconds,
                 )
 
                 # フェーズに重なるCSVエントリを集約
