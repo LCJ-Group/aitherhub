@@ -1092,6 +1092,52 @@ class VideoService extends BaseApiService {
       return { candidates: [], phase_scores: [], total_phases: 0, moments_count: 0 };
     }
   }
+
+  /**
+   * Submit adopt/reject feedback for a clip candidate.
+   * This data becomes the training signal for the Clip Rank AI model.
+   * @param {string} videoId
+   * @param {Object} payload - { phase_index, time_start, time_end, feedback, clip_id?, reviewer_name?, ai_score_at_feedback?, score_breakdown?, ai_reasons_at_feedback? }
+   */
+  async submitClipFeedback(videoId, payload) {
+    try {
+      const response = await this.post(`/api/v1/clips/${videoId}/feedback`, payload);
+      return response;
+    } catch (error) {
+      console.warn('[VideoService] submitClipFeedback failed:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get existing feedback for a video (to restore UI state on load).
+   * @param {string} videoId
+   * @returns {Promise<Array>} - Array of feedback objects
+   */
+  async getClipFeedback(videoId) {
+    try {
+      const response = await this.get(`/api/v1/clips/${videoId}/feedback`);
+      return Array.isArray(response) ? response : [];
+    } catch (error) {
+      console.warn('[VideoService] getClipFeedback failed:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Delete feedback for a specific phase (undo adopt/reject).
+   * @param {string} videoId
+   * @param {number} phaseIndex
+   */
+  async deleteClipFeedback(videoId, phaseIndex) {
+    try {
+      const response = await this.delete(`/api/v1/clips/${videoId}/feedback/${phaseIndex}`);
+      return response;
+    } catch (error) {
+      console.warn('[VideoService] deleteClipFeedback failed:', error);
+      throw error;
+    }
+  }
 }
 
 export default new VideoService();
