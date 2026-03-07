@@ -744,3 +744,193 @@ async def retry_video(
     except Exception as e:
         logger.exception(f"Failed to retry video: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+
+# ── Upload Health Check ──────────────────────────────────────────────────
+@router.get("/upload-health")
+async def get_upload_health(
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Upload pipeline health metrics for the admin dashboard.
+
+    Returns success/failure rates, average processing times, stuck uploads,
+    and recent upload history.
+    """
+    expected_key = f"{ADMIN_ID}:{ADMIN_PASS}"
+    if x_admin_key != expected_key:
+        raise HTTPException(status_code=403, detail="Invalid admin credentials")
+
+    try:
+        # ── Overall counts ──
+        total_uploads = await _q(db, "SELECT COUNT(*) FROM videos")
+        done_count = await _q(db, "SELECT COUNT(*) FROM videos WHERE status = 'DONE'")
+        error_count = await _q(db, "SELECT COUNT(*) FROM videos WHERE status = 'ERROR'")
+        processing_count = await _q(
+            db,
+            "SELECT COUNT(*) FROM videos WHERE status NOT IN ('DONE', 'ERROR', 'NEW', 'uploaded')",
+        )
+        queued_count = await _q(
+            db,
+            "SELECT COUNT(*) FROM videos WHERE status IN ('uploaded', 'NEW')",
+        )
+
+        success_rate = round(done_count / total_uploads * 100, 1) if total_uploads > 0 else 0.0
+        error_rate = round(error_count / total_uploads * 100, 1) if total_uploads > 0 else 0.0
+
+        # ── Last 24h ──
+        uploads_24h = await _q(
+            db,
+            "SELECT COUNT(*) FROM videos WHERE created_at >= NOW() - INTERVAL '24 hours'",
+        )
+        done_24h = await _q(
+            db,
+            "SELECT COUNT(*) FROM videos WHERE status = 'DONE' AND created_at >= NOW() - INTERVAL '24 hours'",
+        )
+        error_24h = await _q(
+            db,
+            "SELECT COUNT(*) FROM videos WHERE status = 'ERROR' AND created_at >= NOW() - INTERVAL '24 hours'",
+        )
+
+        # ── Last 7 days ──
+        uploads_7d = await _q(
+            db,
+            "SELECT COUNT(*) FROM videos WHERE created_at >= NOW() - INTERVAL '7 days'",
+        )
+        done_7d = await _q(
+            db,
+            "SELECT COUNT(*) FROM videos WHERE status = 'DONE' AND created_at >= NOW() - INTERVAL '7 days'",
+        )
+        error_7d = await _q(
+            db,
+            "SELECT COUNT(*) FROM videos WHERE status = 'ERROR' AND created_at >= NOW() - INTERVAL '7 days'",
+        )
+
+        # ── Stuck videos (processing > 2 hours) ──
+        stuck_count = await _q(
+            db,
+            """
+            SELECT COUNT(*) FROM videos
+            WHERE status NOT IN ('DONE', 'ERROR', 'NEW', 'uploaded')
+              AND created_at < NOW() - INTERVAL '2 hours'
+            """,
+        )
+
+        # ── Recent uploads (last 20) ──
+        try:
+            recent_result = await db.execute(text("""
+                SELECT
+                    v.id,
+                    v.original_filename,
+                    v.status,
+                    v.upload_type,
+                    v.created_at,
+                    u.email as user_email
+                FROM videos v
+                LEFT JOIN users u ON v.user_id = u.id
+                ORDER BY v.created_at DESC
+                LIMIT 20
+            """))
+            recent_rows = recent_result.fetchall()
+            recent_uploads = [
+                {
+                    "video_id": str(row.id),
+                    "filename": row.original_filename,
+                    "status": row.status,
+                    "upload_type": row.upload_type,
+                    "created_at": str(row.created_at) if row.created_at else None,
+                    "user_email": row.user_email,
+                }
+                for row in recent_rows
+            ]
+        except Exception as e:
+            logger.warning(f"Failed to fetch recent uploads: {e}")
+            try:
+                await db.rollback()
+            except Exception:
+                pass
+            recent_uploads = []
+
+        # ── Status distribution ──
+        try:
+            status_result = await db.execute(text("""
+                SELECT status, COUNT(*) as cnt
+                FROM videos
+                GROUP BY status
+                ORDER BY cnt DESC
+            """))
+            status_rows = status_result.fetchall()
+            status_distribution = {row.status: row.cnt for row in status_rows}
+        except Exception as e:
+            logger.warning(f"Failed to fetch status distribution: {e}")
+            try:
+                await db.rollback()
+            except Exception:
+                pass
+            status_distribution = {}
+
+        # ── Error breakdown (last 7 days) ──
+        try:
+            error_result = await db.execute(text("""
+                SELECT
+                    v.id,
+                    v.original_filename,
+                    v.status,
+                    v.created_at,
+                    u.email as user_email
+                FROM videos v
+                LEFT JOIN users u ON v.user_id = u.id
+                WHERE v.status = 'ERROR'
+                  AND v.created_at >= NOW() - INTERVAL '7 days'
+                ORDER BY v.created_at DESC
+                LIMIT 10
+            """))
+            error_rows = error_result.fetchall()
+            recent_errors = [
+                {
+                    "video_id": str(row.id),
+                    "filename": row.original_filename,
+                    "created_at": str(row.created_at) if row.created_at else None,
+                    "user_email": row.user_email,
+                }
+                for row in error_rows
+            ]
+        except Exception as e:
+            logger.warning(f"Failed to fetch error breakdown: {e}")
+            try:
+                await db.rollback()
+            except Exception:
+                pass
+            recent_errors = []
+
+        return {
+            "overall": {
+                "total_uploads": total_uploads,
+                "done": done_count,
+                "error": error_count,
+                "processing": processing_count,
+                "queued": queued_count,
+                "success_rate_pct": success_rate,
+                "error_rate_pct": error_rate,
+            },
+            "last_24h": {
+                "uploads": uploads_24h,
+                "done": done_24h,
+                "error": error_24h,
+            },
+            "last_7d": {
+                "uploads": uploads_7d,
+                "done": done_7d,
+                "error": error_7d,
+            },
+            "stuck_videos": stuck_count,
+            "status_distribution": status_distribution,
+            "recent_uploads": recent_uploads,
+            "recent_errors": recent_errors,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Failed to get upload health: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

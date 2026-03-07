@@ -20,6 +20,8 @@ export default function AdminDashboard() {
   const [error, setError] = useState(null);
   const [activeTab, setActiveTab] = useState("dashboard"); // "dashboard" | "feedbacks" | "videos"
   const [selectedVideoId, setSelectedVideoId] = useState(null);
+  const [uploadHealth, setUploadHealth] = useState(null);
+  const [uploadHealthLoading, setUploadHealthLoading] = useState(false);
 
   // Check session on mount
   useEffect(() => {
@@ -69,6 +71,27 @@ export default function AdminDashboard() {
     })();
     return () => { cancelled = true; };
   }, [authenticated, activeTab, feedbackData]);
+
+  // Fetch upload health when tab switches
+  useEffect(() => {
+    if (!authenticated || activeTab !== "upload-health") return;
+    let cancelled = false;
+    (async () => {
+      try {
+        setUploadHealthLoading(true);
+        const baseURL = import.meta.env.VITE_API_BASE_URL;
+        const res = await axios.get(`${baseURL}/api/v1/admin/upload-health`, {
+          headers: { "X-Admin-Key": `${ADMIN_ID}:${ADMIN_PASS}` },
+        });
+        if (!cancelled) setUploadHealth(res.data);
+      } catch (err) {
+        console.error("Failed to fetch upload health:", err);
+      } finally {
+        if (!cancelled) setUploadHealthLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [authenticated, activeTab]);
 
   const handleLogin = (e) => {
     e.preventDefault();
@@ -201,6 +224,16 @@ export default function AdminDashboard() {
           >
             動画ログ
           </button>
+          <button
+            onClick={() => setActiveTab("upload-health")}
+            className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+              activeTab === "upload-health"
+                ? "bg-white text-gray-800 shadow-sm"
+                : "text-gray-500 hover:text-gray-700"
+            }`}
+          >
+            Upload Health
+          </button>
         </div>
 
         {activeTab === "dashboard" && (
@@ -268,7 +301,153 @@ export default function AdminDashboard() {
             />
           )
         )}
+        {activeTab === "upload-health" && (
+          <UploadHealthSection data={uploadHealth} loading={uploadHealthLoading} />
+        )}
       </div>
+    </div>
+  );
+}
+
+// ── Upload Health Section ──
+function UploadHealthSection({ data, loading }) {
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-16">
+        <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-orange-500"></div>
+      </div>
+    );
+  }
+
+  if (!data) {
+    return (
+      <div className="text-center py-16 text-gray-400">
+        Upload Healthデータの取得に失敗しました
+      </div>
+    );
+  }
+
+  const { overall, last_24h, last_7d, stuck_videos, status_distribution, recent_uploads, recent_errors } = data;
+
+  const statusColor = (status) => {
+    const map = { DONE: "text-green-600 bg-green-50", ERROR: "text-red-600 bg-red-50", uploaded: "text-blue-600 bg-blue-50", NEW: "text-gray-600 bg-gray-50" };
+    return map[status] || "text-yellow-600 bg-yellow-50";
+  };
+
+  return (
+    <div>
+      {/* Overall */}
+      <section className="mb-8">
+        <div className="flex items-center gap-2 mb-4">
+          <span className="text-lg">&#x2705;</span>
+          <h2 className="text-lg font-semibold text-gray-700">Upload Health 概要</h2>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <StatCard label="総アップロード" value={overall.total_uploads} unit="件" color="orange" />
+          <StatCard label="成功" value={overall.done} unit="件" color="green" />
+          <StatCard label="エラー" value={overall.error} unit="件" color="red" />
+          <StatCard label="処理中" value={overall.processing} unit="件" color="yellow" />
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mt-4">
+          <StatCard label="成功率" value={`${overall.success_rate_pct}%`} color="green" />
+          <StatCard label="エラー率" value={`${overall.error_rate_pct}%`} color="red" />
+          <StatCard label="スタック" value={stuck_videos} unit="件" color={stuck_videos > 0 ? "red" : "gray"} />
+        </div>
+      </section>
+
+      {/* Time-based */}
+      <section className="mb-8">
+        <div className="flex items-center gap-2 mb-4">
+          <span className="text-lg">&#x23F0;</span>
+          <h2 className="text-lg font-semibold text-gray-700">期間別</h2>
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div className="rounded-xl border border-blue-200 bg-blue-50 p-4">
+            <p className="text-xs text-gray-500 mb-2">過去24時間</p>
+            <div className="flex gap-4">
+              <div><span className="text-sm text-gray-500">UP</span> <span className="text-lg font-bold text-blue-600">{last_24h.uploads}</span></div>
+              <div><span className="text-sm text-gray-500">OK</span> <span className="text-lg font-bold text-green-600">{last_24h.done}</span></div>
+              <div><span className="text-sm text-gray-500">NG</span> <span className="text-lg font-bold text-red-600">{last_24h.error}</span></div>
+            </div>
+          </div>
+          <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-4">
+            <p className="text-xs text-gray-500 mb-2">過去7日間</p>
+            <div className="flex gap-4">
+              <div><span className="text-sm text-gray-500">UP</span> <span className="text-lg font-bold text-indigo-600">{last_7d.uploads}</span></div>
+              <div><span className="text-sm text-gray-500">OK</span> <span className="text-lg font-bold text-green-600">{last_7d.done}</span></div>
+              <div><span className="text-sm text-gray-500">NG</span> <span className="text-lg font-bold text-red-600">{last_7d.error}</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Status Distribution */}
+      <section className="mb-8">
+        <div className="flex items-center gap-2 mb-4">
+          <span className="text-lg">&#x1F4CA;</span>
+          <h2 className="text-lg font-semibold text-gray-700">ステータス分布</h2>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {Object.entries(status_distribution).map(([status, count]) => (
+            <span key={status} className={`px-3 py-1 rounded-full text-sm font-medium ${statusColor(status)}`}>
+              {status}: {count}
+            </span>
+          ))}
+        </div>
+      </section>
+
+      {/* Recent Uploads */}
+      <section className="mb-8">
+        <div className="flex items-center gap-2 mb-4">
+          <span className="text-lg">&#x1F4C4;</span>
+          <h2 className="text-lg font-semibold text-gray-700">最近のアップロード</h2>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-200">
+                <th className="text-left py-2 px-3 text-gray-500 font-medium">ファイル名</th>
+                <th className="text-left py-2 px-3 text-gray-500 font-medium">ステータス</th>
+                <th className="text-left py-2 px-3 text-gray-500 font-medium">タイプ</th>
+                <th className="text-left py-2 px-3 text-gray-500 font-medium">ユーザー</th>
+                <th className="text-left py-2 px-3 text-gray-500 font-medium">日時</th>
+              </tr>
+            </thead>
+            <tbody>
+              {recent_uploads.map((u, i) => (
+                <tr key={i} className="border-b border-gray-100 hover:bg-gray-50">
+                  <td className="py-2 px-3 truncate max-w-[200px]" title={u.filename}>{u.filename || "--"}</td>
+                  <td className="py-2 px-3"><span className={`px-2 py-0.5 rounded text-xs font-medium ${statusColor(u.status)}`}>{u.status}</span></td>
+                  <td className="py-2 px-3 text-gray-500">{u.upload_type || "--"}</td>
+                  <td className="py-2 px-3 text-gray-500 truncate max-w-[150px]" title={u.user_email}>{u.user_email || "--"}</td>
+                  <td className="py-2 px-3 text-gray-400 text-xs">{u.created_at || "--"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {/* Recent Errors */}
+      {recent_errors.length > 0 && (
+        <section className="mb-8">
+          <div className="flex items-center gap-2 mb-4">
+            <span className="text-lg">&#x26A0;&#xFE0F;</span>
+            <h2 className="text-lg font-semibold text-red-600">最近のエラー (7日間)</h2>
+          </div>
+          <div className="space-y-2">
+            {recent_errors.map((e, i) => (
+              <div key={i} className="rounded-lg border border-red-200 bg-red-50 p-3 flex justify-between items-center">
+                <div>
+                  <p className="text-sm font-medium text-red-700 truncate max-w-[300px]">{e.filename || e.video_id}</p>
+                  <p className="text-xs text-red-400">{e.user_email}</p>
+                </div>
+                <p className="text-xs text-red-400">{e.created_at}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
     </div>
   );
 }
