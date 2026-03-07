@@ -3,6 +3,7 @@ import { URL_CONSTANTS } from '../api/endpoints/constant';
 import { BlockBlobClient } from "@azure/storage-blob";
 import TokenManager from '../utils/tokenManager';
 import { openDB } from 'idb';
+import { UPLOAD_STAGES, UploadStageError, wrapStageError } from './uploadErrors';
 
 const DB_NAME = 'VideoUploadDB';
 const STORE_NAME = 'uploads';
@@ -116,11 +117,15 @@ class UploadService extends BaseApiService {
    * @returns {Promise<{video_id, upload_url, blob_url, expires_at}>}
    */
   async generateUploadUrl(email, filename) {
-    return await this.retryWithBackoff(
-      () => this.post(URL_CONSTANTS.GENERATE_UPLOAD_URL, { email, filename }),
-      MAX_RETRIES,
-      'generateUploadUrl'
-    );
+    try {
+      return await this.retryWithBackoff(
+        () => this.post(URL_CONSTANTS.GENERATE_UPLOAD_URL, { email, filename }),
+        MAX_RETRIES,
+        'generateUploadUrl'
+      );
+    } catch (error) {
+      throw wrapStageError(UPLOAD_STAGES.SAS_GENERATE, error);
+    }
   }
 
   /**
@@ -243,10 +248,14 @@ class UploadService extends BaseApiService {
           const block = pendingBlocks[current];
 
           // Retry each block upload with exponential backoff
-          await this.retryWithBackoff(async () => {
-            const blockSize = block.end - block.start;
-            await blockBlobClient.stageBlock(block.id, block.data, blockSize);
-          }, MAX_RETRIES, `stageBlock[${block.index}]`);
+          try {
+            await this.retryWithBackoff(async () => {
+              const blockSize = block.end - block.start;
+              await blockBlobClient.stageBlock(block.id, block.data, blockSize);
+            }, MAX_RETRIES, `stageBlock[${block.index}]`);
+          } catch (error) {
+            throw wrapStageError(UPLOAD_STAGES.BLOB_PUT, error);
+          }
 
           await safeMarkUploaded(block.id);
           uploadedSet.add(block.id);
@@ -260,14 +269,18 @@ class UploadService extends BaseApiService {
     }
 
     // 4. Commit all blocks (with retry)
-    await this.retryWithBackoff(async () => {
-      await blockBlobClient.commitBlockList(blockIds, {
-        blobHTTPHeaders: {
-          blobContentType: contentType,
-          blobCacheControl: 'public, max-age=3600',
-        },
-      });
-    }, MAX_RETRIES, 'commitBlockList');
+    try {
+      await this.retryWithBackoff(async () => {
+        await blockBlobClient.commitBlockList(blockIds, {
+          blobHTTPHeaders: {
+            blobContentType: contentType,
+            blobCacheControl: 'public, max-age=3600',
+          },
+        });
+      }, MAX_RETRIES, 'commitBlockList');
+    } catch (error) {
+      throw wrapStageError(UPLOAD_STAGES.BLOCK_COMMIT, error);
+    }
     
     // Clear metadata after successful commit
     await this.clearUploadMetadata(uploadId);
@@ -285,18 +298,22 @@ class UploadService extends BaseApiService {
     // Verify token is valid before making authenticated request
     const token = TokenManager.getToken();
     if (!token) {
-      throw new Error(window.__t('authTokenNotFound'));
+      throw new UploadStageError(UPLOAD_STAGES.AUTH, window.__t('authTokenNotFound') || 'Auth token not found');
     }
 
     if (TokenManager.isTokenExpired(token)) {
-      throw new Error(window.__t('sessionExpired'));
+      throw new UploadStageError(UPLOAD_STAGES.AUTH, window.__t('sessionExpired') || 'Session expired');
     }
 
-    return await this.retryWithBackoff(
-      () => this.post(URL_CONSTANTS.UPLOAD_COMPLETE, { email, video_id, filename, upload_id }),
-      MAX_RETRIES,
-      'uploadComplete'
-    );
+    try {
+      return await this.retryWithBackoff(
+        () => this.post(URL_CONSTANTS.UPLOAD_COMPLETE, { email, video_id, filename, upload_id }),
+        MAX_RETRIES,
+        'uploadComplete'
+      );
+    } catch (error) {
+      throw wrapStageError(UPLOAD_STAGES.UPLOAD_COMPLETE, error);
+    }
   }
 
   /**
@@ -308,11 +325,15 @@ class UploadService extends BaseApiService {
    * @returns {Promise<{video_id, product_upload_url, product_blob_url, trend_upload_url, trend_blob_url, expires_at}>}
    */
   async generateExcelUploadUrls(email, video_id, product_filename, trend_filename) {
-    return await this.retryWithBackoff(
-      () => this.post(URL_CONSTANTS.GENERATE_EXCEL_UPLOAD_URL, { email, video_id, product_filename, trend_filename }),
-      MAX_RETRIES,
-      'generateExcelUploadUrls'
-    );
+    try {
+      return await this.retryWithBackoff(
+        () => this.post(URL_CONSTANTS.GENERATE_EXCEL_UPLOAD_URL, { email, video_id, product_filename, trend_filename }),
+        MAX_RETRIES,
+        'generateExcelUploadUrls'
+      );
+    } catch (error) {
+      throw wrapStageError(UPLOAD_STAGES.EXCEL_SAS, error);
+    }
   }
 
   /**
@@ -322,14 +343,18 @@ class UploadService extends BaseApiService {
    * @returns {Promise<void>}
    */
   async uploadExcelToAzure(file, uploadUrl) {
-    await this.retryWithBackoff(async () => {
-      const blockBlobClient = new BlockBlobClient(uploadUrl);
-      await blockBlobClient.uploadData(file, {
-        blobHTTPHeaders: {
-          blobContentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        },
-      });
-    }, MAX_RETRIES, 'uploadExcelToAzure');
+    try {
+      await this.retryWithBackoff(async () => {
+        const blockBlobClient = new BlockBlobClient(uploadUrl);
+        await blockBlobClient.uploadData(file, {
+          blobHTTPHeaders: {
+            blobContentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          },
+        });
+      }, MAX_RETRIES, 'uploadExcelToAzure');
+    } catch (error) {
+      throw wrapStageError(UPLOAD_STAGES.EXCEL_UPLOAD, error);
+    }
   }
 
   /**
@@ -346,24 +371,28 @@ class UploadService extends BaseApiService {
   async uploadCompleteWithType(email, video_id, filename, upload_id, upload_type = 'screen_recording', excel_product_blob_url = null, excel_trend_blob_url = null) {
     const token = TokenManager.getToken();
     if (!token) {
-      throw new Error(window.__t('authTokenNotFound'));
+      throw new UploadStageError(UPLOAD_STAGES.AUTH, window.__t('authTokenNotFound') || 'Auth token not found');
     }
     if (TokenManager.isTokenExpired(token)) {
-      throw new Error(window.__t('sessionExpired'));
+      throw new UploadStageError(UPLOAD_STAGES.AUTH, window.__t('sessionExpired') || 'Session expired');
     }
-    return await this.retryWithBackoff(
-      () => this.post(URL_CONSTANTS.UPLOAD_COMPLETE, {
-        email,
-        video_id,
-        filename,
-        upload_id,
-        upload_type,
-        excel_product_blob_url,
-        excel_trend_blob_url,
-      }),
-      MAX_RETRIES,
-      'uploadCompleteWithType'
-    );
+    try {
+      return await this.retryWithBackoff(
+        () => this.post(URL_CONSTANTS.UPLOAD_COMPLETE, {
+          email,
+          video_id,
+          filename,
+          upload_id,
+          upload_type,
+          excel_product_blob_url,
+          excel_trend_blob_url,
+        }),
+        MAX_RETRIES,
+        'uploadCompleteWithType'
+      );
+    } catch (error) {
+      throw wrapStageError(UPLOAD_STAGES.UPLOAD_COMPLETE, error);
+    }
   }
 
   /**
@@ -580,11 +609,15 @@ class UploadService extends BaseApiService {
       excel_trend_blob_url: trend_blob_url,
     };
 
-    await this.retryWithBackoff(
-      () => this.post(URL_CONSTANTS.BATCH_UPLOAD_COMPLETE, batchPayload),
-      MAX_RETRIES,
-      'batchUploadComplete'
-    );
+    try {
+      await this.retryWithBackoff(
+        () => this.post(URL_CONSTANTS.BATCH_UPLOAD_COMPLETE, batchPayload),
+        MAX_RETRIES,
+        'batchUploadComplete'
+      );
+    } catch (error) {
+      throw wrapStageError(UPLOAD_STAGES.BATCH_COMPLETE, error);
+    }
 
     if (onProgress) onProgress(100);
     return uploadedVideos.map(v => v.video_id);

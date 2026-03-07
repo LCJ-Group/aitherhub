@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import UploadService from "../base/services/uploadService";
 import VideoService from "../base/services/videoService";
+import { formatUploadError, logUploadError } from "../base/services/uploadErrors";
 import { toast } from "../hooks/use-toast";
 import LoginModal from "./modals/LoginModal";
 import ProcessingSteps from "./ProcessingSteps";
@@ -348,14 +349,8 @@ export default function MainContent({
         }
       }
     } catch (error) {
-      console.error('[Upload] Upload failed:', error);
-      let errorMsg = error?.message || window.__t('uploadFailedMessage');
-      if (errorMsg.includes('Failed to fetch') || errorMsg.includes('Network') || errorMsg.includes('sending request')) {
-        errorMsg = 'ネットワークエラーが発生しました。インターネット接続を確認して、もう一度お試しください。';
-      } else if (errorMsg.includes('timeout') || errorMsg.includes('Timeout')) {
-        errorMsg = 'アップロードがタイムアウトしました。安定したネットワーク環境でお試しください。';
-      }
-      toast.error(errorMsg);
+      logUploadError('handleCleanVideoUpload', error);
+      toast.error(formatUploadError(error));
     } finally {
       clearActiveResumeUploadStorageKey();
       setUploading(false);
@@ -491,14 +486,8 @@ export default function MainContent({
         onUploadSuccess(video_id);
       }
     } catch (error) {
-      console.error('[Upload] Resume upload failed:', error);
-      let errorMsg = error?.message || window.__t('uploadFailedMessage');
-      if (errorMsg.includes('Failed to fetch') || errorMsg.includes('Network') || errorMsg.includes('sending request')) {
-        errorMsg = 'ネットワークエラーが発生しました。インターネット接続を確認して、もう一度お試しください。';
-      } else if (errorMsg.includes('timeout') || errorMsg.includes('Timeout')) {
-        errorMsg = 'アップロードがタイムアウトしました。安定したネットワーク環境でお試しください。';
-      }
-      toast.error(errorMsg);
+      logUploadError('handleResumeFileSelect', error);
+      toast.error(formatUploadError(error));
     } finally {
       clearActiveResumeUploadStorageKey();
       setUploading(false);
@@ -558,14 +547,8 @@ export default function MainContent({
         onUploadSuccess(video_id);
       }
     } catch (error) {
-      console.error('[Upload] Upload failed:', error);
-      let errorMsg = error?.message || window.__t('uploadFailedMessage');
-      if (errorMsg.includes('Failed to fetch') || errorMsg.includes('Network') || errorMsg.includes('sending request')) {
-        errorMsg = 'ネットワークエラーが発生しました。インターネット接続を確認して、もう一度お試しください。';
-      } else if (errorMsg.includes('timeout') || errorMsg.includes('Timeout')) {
-        errorMsg = 'アップロードがタイムアウトしました。安定したネットワーク環境でお試しください。';
-      }
-      toast.error(errorMsg);
+      logUploadError('handleUpload', error);
+      toast.error(formatUploadError(error));
     } finally {
       clearActiveResumeUploadStorageKey();
       setUploading(false);

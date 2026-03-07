@@ -977,6 +977,75 @@ async def get_upload_health(
             "stuck_gt_2h": stuck_count,
         }
 
+        # ── Recent stage events (from upload_event_log) ──
+        recent_stage_events = []
+        try:
+            stage_result = await db.execute(text("""
+                SELECT
+                    video_id, upload_id, user_id, stage, status,
+                    duration_ms, error_message, error_type, created_at
+                FROM upload_event_log
+                WHERE status = 'error'
+                ORDER BY created_at DESC
+                LIMIT 20
+            """))
+            stage_rows = stage_result.fetchall()
+            recent_stage_events = [
+                {
+                    "video_id": str(row.video_id) if row.video_id else None,
+                    "upload_id": str(row.upload_id) if row.upload_id else None,
+                    "stage": row.stage,
+                    "status": row.status,
+                    "duration_ms": row.duration_ms,
+                    "error_message": row.error_message,
+                    "error_type": row.error_type,
+                    "created_at": str(row.created_at) if row.created_at else None,
+                }
+                for row in stage_rows
+            ]
+        except Exception as e:
+            logger.warning(f"Failed to fetch stage events (table may not exist): {e}")
+            try:
+                await db.rollback()
+            except Exception:
+                pass
+
+        # ── Videos with upload_error_stage ──
+        failed_stage_videos = []
+        try:
+            fs_result = await db.execute(text("""
+                SELECT
+                    v.id, v.original_filename, v.status,
+                    v.upload_last_stage, v.upload_error_stage,
+                    v.upload_error_message, v.created_at,
+                    u.email as user_email
+                FROM videos v
+                LEFT JOIN users u ON v.user_id = u.id
+                WHERE v.upload_error_stage IS NOT NULL
+                ORDER BY v.created_at DESC
+                LIMIT 10
+            """))
+            fs_rows = fs_result.fetchall()
+            failed_stage_videos = [
+                {
+                    "video_id": str(row.id),
+                    "filename": row.original_filename,
+                    "status": row.status,
+                    "last_stage": row.upload_last_stage,
+                    "error_stage": row.upload_error_stage,
+                    "error_message": (row.upload_error_message or "")[:200],
+                    "created_at": str(row.created_at) if row.created_at else None,
+                    "user_email": row.user_email,
+                }
+                for row in fs_rows
+            ]
+        except Exception as e:
+            logger.warning(f"Failed to fetch failed stage videos (columns may not exist): {e}")
+            try:
+                await db.rollback()
+            except Exception:
+                pass
+
         return {
             "overall": {
                 "total_uploads": total_uploads,
@@ -1010,6 +1079,8 @@ async def get_upload_health(
             "status_distribution": status_distribution,
             "recent_uploads": recent_uploads,
             "recent_errors": recent_errors,
+            "recent_stage_events": recent_stage_events,
+            "failed_stage_videos": failed_stage_videos,
         }
     except HTTPException:
         raise

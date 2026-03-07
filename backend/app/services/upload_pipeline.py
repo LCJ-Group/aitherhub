@@ -3,11 +3,11 @@ Upload Pipeline Service
 =======================
 Encapsulates the **only** correct order for completing a video upload:
 
-    Step 1 – Verify blob exists in Azure Blob Storage
+    Step 1 – Validate inputs
     Step 2 – Create video DB record  (status = "uploaded")
     Step 3 – Generate download SAS URL for worker
-    Step 4 – Enqueue worker job
-    Step 5 – Persist enqueue evidence back to DB
+    Step 4 – Build queue payload  (+Excel URLs for clean_video)
+    Step 5 – Enqueue worker job + persist evidence
     Step 6 – Clean up upload session record
 
 Rules
@@ -22,13 +22,15 @@ Rules
 """
 from __future__ import annotations
 
+import json
 import logging
+import time
 import uuid as uuid_module
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Dict, List, Optional
 
-from sqlalchemy import delete, update
+from sqlalchemy import delete, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.orm.upload import Upload
@@ -38,6 +40,42 @@ from app.services.queue_service import EnqueueResult, enqueue_job
 from app.services.storage_service import generate_download_sas
 
 _logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Upload Stage Constants
+# ---------------------------------------------------------------------------
+
+class UploadStage:
+    """Pipeline stage identifiers for observability."""
+    VALIDATE = "validate"
+    DB_RECORD = "db_record"
+    SAS_GENERATE = "sas_generate"
+    QUEUE_BUILD = "queue_build"
+    ENQUEUE = "enqueue"
+    PERSIST_EVIDENCE = "persist_evidence"
+    CLEANUP = "cleanup"
+    BLOB_VERIFY = "blob_verify"
+
+    ALL_STAGES = [
+        VALIDATE, DB_RECORD, SAS_GENERATE,
+        QUEUE_BUILD, ENQUEUE, PERSIST_EVIDENCE, CLEANUP,
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Stage Event dataclass
+# ---------------------------------------------------------------------------
+
+@dataclass
+class StageEvent:
+    """Records one pipeline stage execution."""
+    stage: str
+    status: str          # "ok" | "error" | "skipped"
+    duration_ms: int = 0
+    error_message: Optional[str] = None
+    error_type: Optional[str] = None
+    metadata: Optional[dict] = None
 
 
 # ---------------------------------------------------------------------------
@@ -52,14 +90,29 @@ class UploadPipelineResult:
     enqueue_status: str          # "OK" | "FAILED" | "SKIPPED"
     message: str
     enqueue_error: Optional[str] = None
+    failed_stage: Optional[str] = None
+    stage_events: List[StageEvent] = field(default_factory=list)
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "video_id": self.video_id,
             "status": self.status,
             "enqueue_status": self.enqueue_status,
             "message": self.message,
         }
+        if self.failed_stage:
+            d["failed_stage"] = self.failed_stage
+        if self.stage_events:
+            d["stages"] = [
+                {
+                    "stage": e.stage,
+                    "status": e.status,
+                    "duration_ms": e.duration_ms,
+                    **({"error": e.error_message} if e.error_message else {}),
+                }
+                for e in self.stage_events
+            ]
+        return d
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +131,75 @@ class UploadPipelineService:
         if video_repository is None:
             raise ValueError("VideoRepository is required")
         self._repo = video_repository
+
+    # ------------------------------------------------------------------
+    # Stage event logging helper
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    async def _log_stage_event(
+        db: AsyncSession,
+        video_id: str,
+        upload_id: Optional[str],
+        user_id: Optional[int],
+        event: StageEvent,
+    ) -> None:
+        """Persist a stage event to upload_event_log table (best-effort)."""
+        try:
+            await db.execute(
+                text("""
+                    INSERT INTO upload_event_log
+                        (video_id, upload_id, user_id, stage, status,
+                         duration_ms, error_message, error_type, metadata_json)
+                    VALUES
+                        (:video_id, :upload_id, :user_id, :stage, :status,
+                         :duration_ms, :error_message, :error_type, :metadata_json)
+                """),
+                {
+                    "video_id": video_id,
+                    "upload_id": upload_id,
+                    "user_id": user_id,
+                    "stage": event.stage,
+                    "status": event.status,
+                    "duration_ms": event.duration_ms,
+                    "error_message": event.error_message,
+                    "error_type": event.error_type,
+                    "metadata_json": json.dumps(event.metadata) if event.metadata else None,
+                },
+            )
+            await db.commit()
+        except Exception as exc:
+            _logger.debug(f"[upload_pipeline] Could not log stage event: {exc}")
+            try:
+                await db.rollback()
+            except Exception:
+                pass
+
+    @staticmethod
+    async def _update_video_stage(
+        db: AsyncSession,
+        video_id: str,
+        last_stage: str,
+        error_stage: Optional[str] = None,
+        error_message: Optional[str] = None,
+    ) -> None:
+        """Update the video record with the latest pipeline stage info (best-effort)."""
+        try:
+            vid_uuid = uuid_module.UUID(video_id)
+            values: Dict = {"upload_last_stage": last_stage}
+            if error_stage:
+                values["upload_error_stage"] = error_stage
+                values["upload_error_message"] = (error_message or "")[:2000]
+            await db.execute(
+                update(Video).where(Video.id == vid_uuid).values(**values)
+            )
+            await db.commit()
+        except Exception as exc:
+            _logger.debug(f"[upload_pipeline] Could not update video stage: {exc}")
+            try:
+                await db.rollback()
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -110,68 +232,219 @@ class UploadPipelineService:
         6. Persist enqueue evidence
         7. Clean up upload session
         """
+        pipeline_start = time.monotonic()
+        stage_events: List[StageEvent] = []
+        failed_stage: Optional[str] = None
+
         _logger.info(
             f"[upload_pipeline] START video_id={video_id} "
-            f"user_id={user_id} upload_type={upload_type}"
+            f"user_id={user_id} upload_type={upload_type} "
+            f"filename={original_filename}"
         )
 
         # ── Step 1: Validate inputs ───────────────────────────────────────
-        self._validate_inputs(video_id=video_id, email=email, filename=original_filename)
+        t0 = time.monotonic()
+        try:
+            self._validate_inputs(video_id=video_id, email=email, filename=original_filename)
+            evt = StageEvent(
+                stage=UploadStage.VALIDATE, status="ok",
+                duration_ms=int((time.monotonic() - t0) * 1000),
+            )
+            stage_events.append(evt)
+            _logger.info(f"[upload_pipeline] Step 1 OK: validate ({evt.duration_ms}ms)")
+        except Exception as exc:
+            evt = StageEvent(
+                stage=UploadStage.VALIDATE, status="error",
+                duration_ms=int((time.monotonic() - t0) * 1000),
+                error_message=str(exc), error_type=type(exc).__name__,
+            )
+            stage_events.append(evt)
+            failed_stage = UploadStage.VALIDATE
+            _logger.error(f"[upload_pipeline] Step 1 FAILED: {exc}")
+            # Try to log event (may fail if video_id is invalid)
+            try:
+                await self._log_stage_event(db, video_id, upload_id, user_id, evt)
+            except Exception:
+                pass
+            raise
 
         # ── Step 2: Create DB record ──────────────────────────────────────
-        video = await self._create_db_record(
-            user_id=user_id,
-            video_id=video_id,
-            original_filename=original_filename,
-            upload_type=upload_type,
-            excel_product_blob_url=excel_product_blob_url,
-            excel_trend_blob_url=excel_trend_blob_url,
-            time_offset_seconds=time_offset_seconds,
-        )
-        _logger.info(f"[upload_pipeline] Step 2 OK: DB record created video_id={video.id}")
-
-        # ── Step 3: Generate download SAS URL ─────────────────────────────
-        download_url = await self._generate_download_url(
-            email=email,
-            video_id=str(video.id),
-            filename=original_filename,
-        )
-        _logger.info(f"[upload_pipeline] Step 3 OK: SAS URL generated")
-
-        # ── Step 4 + 5: Enqueue + persist evidence ────────────────────────
-        queue_payload = self._build_queue_payload(
-            video=video,
-            download_url=download_url,
-            original_filename=original_filename,
-            user_id=user_id,
-            upload_type=upload_type,
-            time_offset_seconds=time_offset_seconds,
-        )
-
-        # Add Excel download URLs for clean_video uploads
-        if upload_type == "clean_video":
-            queue_payload = await self._add_excel_urls(
-                queue_payload=queue_payload,
-                email=email,
-                video_id=str(video.id),
+        t0 = time.monotonic()
+        try:
+            video = await self._create_db_record(
+                user_id=user_id,
+                video_id=video_id,
+                original_filename=original_filename,
+                upload_type=upload_type,
                 excel_product_blob_url=excel_product_blob_url,
                 excel_trend_blob_url=excel_trend_blob_url,
+                time_offset_seconds=time_offset_seconds,
+            )
+            evt = StageEvent(
+                stage=UploadStage.DB_RECORD, status="ok",
+                duration_ms=int((time.monotonic() - t0) * 1000),
+                metadata={"upload_type": upload_type},
+            )
+            stage_events.append(evt)
+            _logger.info(
+                f"[upload_pipeline] Step 2 OK: DB record created "
+                f"video_id={video.id} ({evt.duration_ms}ms)"
+            )
+            await self._log_stage_event(db, video_id, upload_id, user_id, evt)
+        except Exception as exc:
+            evt = StageEvent(
+                stage=UploadStage.DB_RECORD, status="error",
+                duration_ms=int((time.monotonic() - t0) * 1000),
+                error_message=str(exc), error_type=type(exc).__name__,
+            )
+            stage_events.append(evt)
+            failed_stage = UploadStage.DB_RECORD
+            _logger.error(f"[upload_pipeline] Step 2 FAILED: {exc}")
+            try:
+                await self._log_stage_event(db, video_id, upload_id, user_id, evt)
+            except Exception:
+                pass
+            raise
+
+        # ── Step 3: Generate download SAS URL ─────────────────────────────
+        t0 = time.monotonic()
+        try:
+            download_url = await self._generate_download_url(
+                email=email,
+                video_id=str(video.id),
+                filename=original_filename,
+            )
+            evt = StageEvent(
+                stage=UploadStage.SAS_GENERATE, status="ok",
+                duration_ms=int((time.monotonic() - t0) * 1000),
+            )
+            stage_events.append(evt)
+            _logger.info(f"[upload_pipeline] Step 3 OK: SAS URL generated ({evt.duration_ms}ms)")
+            await self._log_stage_event(db, video_id, upload_id, user_id, evt)
+        except Exception as exc:
+            evt = StageEvent(
+                stage=UploadStage.SAS_GENERATE, status="error",
+                duration_ms=int((time.monotonic() - t0) * 1000),
+                error_message=str(exc), error_type=type(exc).__name__,
+            )
+            stage_events.append(evt)
+            failed_stage = UploadStage.SAS_GENERATE
+            _logger.error(f"[upload_pipeline] Step 3 FAILED: {exc}")
+            await self._log_stage_event(db, video_id, upload_id, user_id, evt)
+            await self._update_video_stage(db, video_id, UploadStage.DB_RECORD, UploadStage.SAS_GENERATE, str(exc))
+            raise
+
+        # ── Step 4: Build queue payload ───────────────────────────────────
+        t0 = time.monotonic()
+        try:
+            queue_payload = self._build_queue_payload(
+                video=video,
+                download_url=download_url,
+                original_filename=original_filename,
+                user_id=user_id,
+                upload_type=upload_type,
+                time_offset_seconds=time_offset_seconds,
             )
 
+            # Add Excel download URLs for clean_video uploads
+            if upload_type == "clean_video":
+                queue_payload = await self._add_excel_urls(
+                    queue_payload=queue_payload,
+                    email=email,
+                    video_id=str(video.id),
+                    excel_product_blob_url=excel_product_blob_url,
+                    excel_trend_blob_url=excel_trend_blob_url,
+                )
+
+            evt = StageEvent(
+                stage=UploadStage.QUEUE_BUILD, status="ok",
+                duration_ms=int((time.monotonic() - t0) * 1000),
+                metadata={"has_excel": upload_type == "clean_video"},
+            )
+            stage_events.append(evt)
+            _logger.info(f"[upload_pipeline] Step 4 OK: queue payload built ({evt.duration_ms}ms)")
+            await self._log_stage_event(db, video_id, upload_id, user_id, evt)
+        except Exception as exc:
+            evt = StageEvent(
+                stage=UploadStage.QUEUE_BUILD, status="error",
+                duration_ms=int((time.monotonic() - t0) * 1000),
+                error_message=str(exc), error_type=type(exc).__name__,
+            )
+            stage_events.append(evt)
+            failed_stage = UploadStage.QUEUE_BUILD
+            _logger.error(f"[upload_pipeline] Step 4 FAILED: {exc}")
+            await self._log_stage_event(db, video_id, upload_id, user_id, evt)
+            await self._update_video_stage(db, video_id, UploadStage.SAS_GENERATE, UploadStage.QUEUE_BUILD, str(exc))
+            raise
+
+        # ── Step 5: Enqueue + persist evidence ────────────────────────────
+        t0 = time.monotonic()
         enqueue_result = await self._enqueue_and_persist(
             db=db,
             video=video,
             queue_payload=queue_payload,
         )
+        enqueue_ms = int((time.monotonic() - t0) * 1000)
+
+        if enqueue_result.success:
+            evt = StageEvent(
+                stage=UploadStage.ENQUEUE, status="ok",
+                duration_ms=enqueue_ms,
+                metadata={"message_id": enqueue_result.message_id},
+            )
+            stage_events.append(evt)
+            _logger.info(
+                f"[upload_pipeline] Step 5 OK: enqueued "
+                f"video={video.id} msg_id={enqueue_result.message_id} ({enqueue_ms}ms)"
+            )
+            await self._update_video_stage(db, video_id, UploadStage.ENQUEUE)
+        else:
+            evt = StageEvent(
+                stage=UploadStage.ENQUEUE, status="error",
+                duration_ms=enqueue_ms,
+                error_message=enqueue_result.error,
+                error_type="EnqueueError",
+            )
+            stage_events.append(evt)
+            # Enqueue failure is non-fatal
+            _logger.error(
+                f"[upload_pipeline] Step 5 FAILED (non-fatal): "
+                f"video={video.id} error={enqueue_result.error} ({enqueue_ms}ms)"
+            )
+            await self._update_video_stage(
+                db, video_id, UploadStage.ENQUEUE,
+                UploadStage.ENQUEUE, enqueue_result.error,
+            )
+        await self._log_stage_event(db, video_id, upload_id, user_id, evt)
 
         # ── Step 7: Clean up upload session ──────────────────────────────
-        await self._cleanup_upload_session(
-            db=db,
-            upload_id=upload_id,
-            user_id=user_id,
-        )
+        t0 = time.monotonic()
+        try:
+            await self._cleanup_upload_session(
+                db=db,
+                upload_id=upload_id,
+                user_id=user_id,
+            )
+            evt = StageEvent(
+                stage=UploadStage.CLEANUP, status="ok",
+                duration_ms=int((time.monotonic() - t0) * 1000),
+            )
+            stage_events.append(evt)
+            await self._log_stage_event(db, video_id, upload_id, user_id, evt)
+        except Exception as exc:
+            evt = StageEvent(
+                stage=UploadStage.CLEANUP, status="error",
+                duration_ms=int((time.monotonic() - t0) * 1000),
+                error_message=str(exc), error_type=type(exc).__name__,
+            )
+            stage_events.append(evt)
+            # Cleanup failure is non-fatal
+            _logger.warning(f"[upload_pipeline] Step 7 FAILED (non-fatal): {exc}")
+            await self._log_stage_event(db, video_id, upload_id, user_id, evt)
 
         # ── Build result ──────────────────────────────────────────────────
+        total_ms = int((time.monotonic() - pipeline_start) * 1000)
+
         if enqueue_result.success:
             message = "Video upload completed; queued for analysis"
             enqueue_status = "OK"
@@ -184,7 +457,9 @@ class UploadPipelineService:
 
         _logger.info(
             f"[upload_pipeline] DONE video_id={video.id} "
-            f"enqueue={enqueue_status}"
+            f"enqueue={enqueue_status} total={total_ms}ms "
+            f"stages={len(stage_events)} "
+            f"failed_stage={failed_stage or 'none'}"
         )
 
         return UploadPipelineResult(
@@ -193,6 +468,8 @@ class UploadPipelineService:
             enqueue_status=enqueue_status,
             message=message,
             enqueue_error=enqueue_result.error,
+            failed_stage=failed_stage,
+            stage_events=stage_events,
         )
 
     # ------------------------------------------------------------------
@@ -346,10 +623,6 @@ class UploadPipelineService:
                         enqueue_error=None,
                     )
                 )
-                _logger.info(
-                    f"[upload_pipeline] Step 5 OK: enqueued "
-                    f"video={video.id} msg_id={enqueue_result.message_id}"
-                )
             else:
                 await db.execute(
                     update(Video)
@@ -360,10 +633,6 @@ class UploadPipelineService:
                         queue_enqueued_at=None,
                         enqueue_error=enqueue_result.error,
                     )
-                )
-                _logger.error(
-                    f"[upload_pipeline] Step 5 FAILED: enqueue error "
-                    f"video={video.id} error={enqueue_result.error}"
                 )
             await db.commit()
         except Exception as db_err:
