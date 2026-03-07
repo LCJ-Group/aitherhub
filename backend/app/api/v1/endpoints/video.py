@@ -2856,3 +2856,110 @@ def _explain_score(phase, moments, product_names, video_duration):
             reasons.append("商品名言及あり")
 
     return reasons[:3]  # Top 3 only
+
+
+# =========================================================
+# SALES CLIP CANDIDATES (GET)
+# =========================================================
+@router.get("/{video_id}/sales-clip-candidates")
+async def get_sales_clip_candidates(
+    video_id: str,
+    top_n: int = 5,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """
+    動画の各フェーズに sales_score を付与し、
+    売上につながる可能性が高いクリップ候補（TOP3〜5）を返す。
+    """
+    from app.services.sales_clip_service import compute_sales_scores, extract_clip_candidates
+
+    try:
+        user_id = user.get("user_id") or user.get("id")
+
+        sql_phases = text("""
+            SELECT
+                vp.phase_index,
+                vp.time_start,
+                vp.time_end,
+                COALESCE(vp.gmv, 0) as gmv,
+                COALESCE(vp.order_count, 0) as order_count,
+                COALESCE(vp.viewer_count, 0) as viewer_count,
+                COALESCE(vp.product_clicks, 0) as product_clicks,
+                COALESCE(vp.cta_score, 0) as cta_score,
+                vp.user_rating,
+                vp.sales_psychology_tags,
+                vp.human_sales_tags
+            FROM video_phases vp
+            WHERE vp.video_id = :video_id
+              AND vp.user_id = :user_id
+            ORDER BY vp.phase_index ASC
+        """)
+        phases_result = await db.execute(sql_phases, {
+            "video_id": video_id,
+            "user_id": user_id,
+        })
+        phase_rows = phases_result.fetchall()
+
+        if not phase_rows:
+            return {
+                "video_id": video_id,
+                "total_phases": 0,
+                "candidates": [],
+                "phase_scores": [],
+            }
+
+        phases = [dict(row._mapping) for row in phase_rows]
+
+        moments: list[dict] = []
+        try:
+            sql_moments = text("""
+                SELECT video_sec, moment_type, click_value, order_value, gmv_value
+                FROM video_sales_moments
+                WHERE video_id = :video_id
+                ORDER BY video_sec ASC
+            """)
+            moments_result = await db.execute(sql_moments, {"video_id": video_id})
+            moments = [dict(row._mapping) for row in moments_result.fetchall()]
+        except Exception:
+            pass
+
+        phase_scores = compute_sales_scores(phases, moments)
+        top_n_clamped = max(1, min(int(top_n), 10))
+        candidates = extract_clip_candidates(phase_scores, top_n=top_n_clamped)
+
+        return {
+            "video_id": video_id,
+            "total_phases": len(phases),
+            "moments_count": len(moments),
+            "candidates": [
+                {
+                    "rank": c.rank,
+                    "label": c.label,
+                    "phase_index": c.phase_index,
+                    "phase_indices": c.phase_indices,
+                    "time_start": c.time_start,
+                    "time_end": c.time_end,
+                    "duration": c.duration,
+                    "sales_score": c.sales_score,
+                    "score_breakdown": c.score_breakdown,
+                    "reasons": c.reasons,
+                }
+                for c in candidates
+            ],
+            "phase_scores": [
+                {
+                    "phase_index": ps.phase_index,
+                    "time_start": ps.time_start,
+                    "time_end": ps.time_end,
+                    "sales_score": ps.sales_score,
+                    "score_breakdown": ps.score_breakdown,
+                    "reasons": ps.reasons,
+                }
+                for ps in phase_scores
+            ],
+        }
+
+    except Exception as exc:
+        logger.exception(f"[SALES_CLIP] Failed for {video_id}: {exc}")
+        raise HTTPException(status_code=500, detail=f"Failed to compute sales clip candidates: {exc}")

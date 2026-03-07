@@ -1075,6 +1075,23 @@ class VideoService extends BaseApiService {
       throw error;
     }
   }
+
+  /**
+   * Get AI-powered sales clip candidates for a video.
+   * Returns TOP3-5 clip candidates with sales_score and reasons.
+   * @param {string} videoId
+   * @param {number} topN - Number of candidates (1-10, default 5)
+   * @returns {Promise<{candidates: Array, phase_scores: Array, total_phases: number, moments_count: number}>}
+   */
+  async getSalesClipCandidates(videoId, topN = 5) {
+    try {
+      const response = await this.get(`/api/v1/videos/${videoId}/sales-clip-candidates?top_n=${topN}`);
+      return response;
+    } catch (error) {
+      console.warn('[VideoService] getSalesClipCandidates failed:', error);
+      return { candidates: [], phase_scores: [], total_phases: 0, moments_count: 0 };
+    }
+  }
 }
 
 export default new VideoService();

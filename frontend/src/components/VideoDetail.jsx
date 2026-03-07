@@ -8,6 +8,7 @@ import VideoService from "../base/services/videoService";
 import "../assets/css/sidebar.css";
 import AnalyticsSection from "./AnalyticsSection";
 import ClipSection from "./ClipSection";
+import SalesClipCandidates from "./SalesClipCandidates";
 import LiveReportSection from "./LiveReportSection";
 // ProductTimeline is now integrated into AnalyticsSection
 
@@ -799,6 +800,18 @@ export default function VideoDetail({ videoData }) {
         <div className="flex-1 overflow-y-auto scrollbar-custom text-left px-0 md:px-4 md:mb-0">
           {/* Clip Section - show generated clips at the top */}
           <ClipSection videoData={videoData} clipStates={clipStates} reports1={videoData?.reports_1} />
+
+          {/* AI Sales Clip Candidates */}
+          <SalesClipCandidates
+            videoData={videoData}
+            clipStates={clipStates}
+            onRequestClip={(candidate) => {
+              handleClipGeneration(
+                { time_start: candidate.time_start, time_end: candidate.time_end },
+                candidate.phase_index
+              );
+            }}
+          />
 
           {/* Analytics Section - above report */}
           <AnalyticsSection reports1={videoData?.reports_1} videoData={videoData}
