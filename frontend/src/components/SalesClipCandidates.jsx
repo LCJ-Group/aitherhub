@@ -258,6 +258,10 @@ export default function SalesClipCandidates({ videoData, onRequestClip, clipStat
             <div>
               <div className="text-gray-900 text-xl font-semibold flex items-center gap-2">
                 🔥 AIおすすめクリップ
+                {/* Beta label – remove once clip generation accuracy is validated */}
+                <span className="inline-flex items-center justify-center px-2 py-0.5 rounded-md text-xs font-bold bg-orange-100 text-orange-600 border border-orange-300 tracking-wide">
+                  Beta
+                </span>
                 {candidates !== null && (
                   <span className="inline-flex items-center justify-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gradient-to-r from-indigo-500 to-purple-600 text-white">
                     {candidates.length}件

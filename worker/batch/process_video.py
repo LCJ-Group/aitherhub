@@ -954,15 +954,22 @@ def main():
                 start_sec = tr.get("start_sec", 0)
                 end_sec = tr.get("end_sec", 0)
 
-                # 従来のsales_dataマッチ（time_offsetを加算してCSVタイムラインに合わせる）
-                offset_start = start_sec + time_offset_seconds
-                offset_end = end_sec + time_offset_seconds
-                sales_info = match_sales_to_phase(trends, offset_start, offset_end)
+                # CSVタイムラインに合わせて動画内秒数をCSV絶対時刻に変換
+                # csv_first_sec: CSVの最初の行の絶対時刻（秒）
+                # start_sec / end_sec: 動画内のフェーズ開始・終了秒（0始まり）
+                # 正しい変換: phase_abs = csv_first_sec + start_sec
+                # ※ time_offset_secondsは「CSVの何秒目から動画が始まるか」を示すが
+                #   フェーズのCSVマッチングには csv_first_sec + start_sec が正しい
+                phase_abs_start = csv_first_sec + start_sec
+                phase_abs_end = csv_first_sec + end_sec
+                sales_info = match_sales_to_phase(trends, phase_abs_start, phase_abs_end)
                 p["sales_data"] = sales_info
-
-                # CSVの該当タイムスロットを見つけて指標を取得
-                phase_abs_start = start_sec + video_start_sec
-                phase_abs_end = end_sec + video_start_sec
+                logger.debug(
+                    "[CSV_METRICS] Phase %s: start_sec=%.1f end_sec=%.1f "
+                    "phase_abs_start=%.1f phase_abs_end=%.1f",
+                    p.get("phase_index", "?"), start_sec, end_sec,
+                    phase_abs_start, phase_abs_end,
+                )
 
                 # フェーズに重なるCSVエントリを集約
                 phase_gmv = 0

@@ -221,44 +221,87 @@ def download_video(blob_url: str, dest_path: str):
 # Cut segment
 # =========================
 
+def _get_video_duration_sec(path: str) -> float | None:
+    """Return the duration (seconds) of a video file via ffprobe, or None on failure."""
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                path,
+            ],
+            capture_output=True, text=True, timeout=30,
+        )
+        val = result.stdout.strip()
+        return float(val) if val else None
+    except Exception:
+        return None
+
+
 def cut_segment(input_path: str, output_path: str, start_sec: float, end_sec: float) -> bool:
     """Cut a segment from the video with audio.
-    
-    IMPORTANT: Uses -ss AFTER -i for frame-accurate seeking, and always re-encodes
-    to ensure audio and video are perfectly synchronized. Using -ss before -i with
-    -c copy causes audio/video desync because video seeks to nearest keyframe while
-    audio seeks to exact position.
+
+    Strategy (2026-03 revision):
+    - Use ``-ss BEFORE -i`` with ``-accurate_seek`` for fast AND frame-accurate
+      seeking.  This avoids decoding the entire file up to start_sec, which made
+      90-minute videos take >10 minutes and sometimes time-out.
+    - Always re-encode (libx264 + aac) so that audio/video are perfectly synced
+      at the new start point regardless of keyframe alignment.
+    - After cutting, verify the output duration with ffprobe and log a warning
+      if it deviates by more than 2 s from the requested duration.
+
+    Previous approach (``-ss AFTER -i``) was frame-accurate but extremely slow on
+    long videos and caused the fallback path (with a broken relative-offset
+    calculation) to be triggered, producing wrong clip start times.
     """
     duration = end_sec - start_sec
     if duration <= 0:
+        logger.error(
+            f"[CUT_SEGMENT] Invalid range: start={start_sec:.2f}s end={end_sec:.2f}s "
+            f"(duration={duration:.2f}s)"
+        )
         return False
 
-    # Always re-encode with -ss after -i for frame-accurate cut
-    # This ensures audio and video start at exactly the same point
+    logger.info(
+        f"[CUT_SEGMENT] Cutting {start_sec:.2f}s - {end_sec:.2f}s "
+        f"(requested duration={duration:.2f}s) from {input_path}"
+    )
+
+    # Primary: -ss BEFORE -i + -accurate_seek  (fast + accurate)
     cmd = [
         FFMPEG_BIN, "-y",
+        "-ss", f"{start_sec:.3f}",
+        "-accurate_seek",
         "-i", input_path,
-        "-ss", str(start_sec),
-        "-t", str(duration),
+        "-t", f"{duration:.3f}",
         "-c:v", "libx264", "-preset", "fast", "-crf", "23",
         "-c:a", "aac", "-b:a", "128k",
         "-movflags", "+faststart",
         output_path,
     ]
-
+    success = False
     try:
         subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=600)
-        return True
+        success = True
+        logger.info(f"[CUT_SEGMENT] Primary cut succeeded")
     except subprocess.CalledProcessError as e:
-        logger.error(f"Failed to cut segment: {e}")
-        # Fallback: try with -ss before -i for faster seeking on very long videos,
-        # but still re-encode to maintain sync
+        logger.error(
+            f"[CUT_SEGMENT] Primary cut failed (start={start_sec:.2f}s): "
+            f"{e.stderr[-500:] if e.stderr else e}"
+        )
+    except subprocess.TimeoutExpired:
+        logger.error(f"[CUT_SEGMENT] Primary cut timed out after 600s (start={start_sec:.2f}s)")
+
+    if not success:
+        # Fallback: -ss BEFORE -i without -accurate_seek (nearest keyframe, slightly
+        # less accurate but never wrong by more than ~2s)
+        logger.warning(f"[CUT_SEGMENT] Trying fallback cut (keyframe seek, no accurate_seek)")
         cmd_fallback = [
             FFMPEG_BIN, "-y",
-            "-ss", str(max(0, start_sec - 5)),  # Seek 5s before for keyframe
+            "-ss", f"{start_sec:.3f}",
             "-i", input_path,
-            "-ss", "5" if start_sec >= 5 else str(start_sec),  # Fine-tune position
-            "-t", str(duration),
+            "-t", f"{duration:.3f}",
             "-c:v", "libx264", "-preset", "fast", "-crf", "23",
             "-c:a", "aac", "-b:a", "128k",
             "-movflags", "+faststart",
@@ -266,10 +309,30 @@ def cut_segment(input_path: str, output_path: str, start_sec: float, end_sec: fl
         ]
         try:
             subprocess.run(cmd_fallback, check=True, capture_output=True, text=True, timeout=600)
-            return True
+            success = True
+            logger.info(f"[CUT_SEGMENT] Fallback cut succeeded")
         except Exception as e2:
-            logger.error(f"Fallback cut also failed: {e2}")
+            logger.error(f"[CUT_SEGMENT] Fallback cut also failed: {e2}")
             return False
+
+    # Post-cut verification
+    actual_dur = _get_video_duration_sec(output_path)
+    if actual_dur is not None:
+        deviation = abs(actual_dur - duration)
+        if deviation > 2.0:
+            logger.warning(
+                f"[CUT_SEGMENT] Duration mismatch! requested={duration:.2f}s "
+                f"actual={actual_dur:.2f}s deviation={deviation:.2f}s "
+                f"(start={start_sec:.2f}s end={end_sec:.2f}s)"
+            )
+        else:
+            logger.info(
+                f"[CUT_SEGMENT] Duration OK: requested={duration:.2f}s actual={actual_dur:.2f}s"
+            )
+    else:
+        logger.warning(f"[CUT_SEGMENT] Could not verify output duration")
+
+    return success
 
 
 # =========================
@@ -905,18 +968,33 @@ def create_vertical_clip(
         crop_x = 0
         crop_y = (height - crop_h) // 2
 
-    # NOTE: Do NOT adjust subtitle timestamps for speed change here.
-    # The ASS subtitle filter is applied BEFORE setpts in the FFmpeg filter chain:
-    #   crop -> scale -> ass -> setpts
-    # ASS evaluates timestamps against the ORIGINAL PTS (before speed change),
-    # so the Whisper timestamps (relative to the segment video) are already correct.
-    # Adjusting them would cause double-correction and misaligned subtitles.
+    # NOTE: Subtitle timestamps MUST be adjusted for speed change.
+    # When setpts=PTS/speed_factor is applied, the video plays speed_factor times
+    # faster. The ASS filter uses the frame's PTS to decide when to show subtitles.
+    # Since PTS is scaled by 1/speed_factor, subtitles at original timestamp T
+    # will appear at wall-clock time T/speed_factor. Therefore we must divide
+    # subtitle timestamps by speed_factor so they align with the sped-up video.
+    subtitle_segments = segments
     if speed_factor != 1.0 and speed_factor > 0:
-        logger.info(f"Speed factor {speed_factor}x applied; subtitle timestamps kept as-is (ASS applied before setpts)")
+        logger.info(
+            f"Speed factor {speed_factor}x applied; adjusting subtitle timestamps by 1/{speed_factor:.3f}"
+        )
+        subtitle_segments = [
+            {
+                **seg,
+                "start": seg["start"] / speed_factor,
+                "end": seg["end"] / speed_factor,
+                "words": [
+                    {**w, "start": w["start"] / speed_factor, "end": w["end"] / speed_factor}
+                    for w in seg.get("words", [])
+                ] if seg.get("words") else seg.get("words"),
+            }
+            for seg in segments
+        ]
 
     # Build ASS subtitle file
     ass_path = input_path + ".ass"
-    ass_content = build_ass_subtitle(segments, style, target_w, target_h)
+    ass_content = build_ass_subtitle(subtitle_segments, style, target_w, target_h)
     with open(ass_path, "w", encoding="utf-8") as f:
         f.write(ass_content)
 
