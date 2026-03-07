@@ -30,4 +30,7 @@ export const URL_CONSTANTS = {
   LIVE_EXTENSION_SESSIONS: "/api/v1/live/extension/sessions",
   LIVE_AI_CHAT: "/api/v1/live/ai/chat",
   LIVE_AI_ANALYZE: "/api/v1/live/ai/analyze",
+  // Live Report v1
+  REPORT_GENERATE: "/api/v1/reports",  // /{video_id}/generate
+  REPORT_GET: "/api/v1/reports",        // /{video_id}
 };

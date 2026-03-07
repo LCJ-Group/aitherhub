@@ -11,6 +11,7 @@ from app.api.v1.endpoints.live import router as live_router
 from app.api.v1.endpoints.live_extension import router as live_extension_router
 from app.api.v1.endpoints.live_ai import router as live_ai_router
 from app.api.v1.endpoints.extension_events_api import router as ext_events_router
+from app.api.v1.endpoints.report import router as report_router
 
 routers = APIRouter()
 routers.include_router(auth_router, prefix="/auth", tags=["Auth"])
@@ -24,3 +25,4 @@ routers.include_router(live_router)
 routers.include_router(live_extension_router)
 routers.include_router(live_ai_router)
 routers.include_router(ext_events_router)
+routers.include_router(report_router)
