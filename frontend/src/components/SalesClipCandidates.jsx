@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import VideoService from "../base/services/videoService";
 import LightningClipEditor from "./LightningClipEditor";
 import ClipFeedbackPanel from "./ClipFeedbackPanel";
