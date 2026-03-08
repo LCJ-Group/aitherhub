@@ -2193,6 +2193,7 @@ async def get_sales_moments(
     try:
         sql = text("""
             SELECT id, video_id, time_key, time_sec, video_sec, moment_type,
+                   moment_type_detail, source, frame_meta,
                    click_value, click_delta, click_sigma_score,
                    order_value, order_delta, gmv_value,
                    confidence, reasons, created_at
@@ -2212,6 +2213,12 @@ async def get_sales_moments(
                     r["reasons"] = json.loads(r["reasons"])
                 except Exception:
                     r["reasons"] = [r["reasons"]]
+            # frame_metaはJSON文字列なのでパース
+            if r.get("frame_meta") and isinstance(r["frame_meta"], str):
+                try:
+                    r["frame_meta"] = json.loads(r["frame_meta"])
+                except Exception:
+                    r["frame_meta"] = None
             # datetimeをISO文字列に変換
             if r.get("created_at"):
                 r["created_at"] = r["created_at"].isoformat()
@@ -3387,3 +3394,307 @@ async def detect_hooks_for_video(
     except Exception as exc:
         logger.exception(f"[HOOK_DETECTION] Failed for {video_id}: {exc}")
         raise HTTPException(status_code=500, detail=f"Failed to detect hooks: {exc}")
+
+
+
+# ── Moment-based Clipping API ──────────────────────────────────────────────
+
+MOMENT_CATEGORIES = {
+    "purchase_popup": {
+        "label": "Purchase Popup Clips",
+        "icon": "shopping_cart",
+        "description": "購入ポップアップが表示された瞬間",
+        "padding_before": 20.0,
+        "padding_after": 20.0,
+        "priority": 1,
+    },
+    "comment_spike": {
+        "label": "Comment Explosion Clips",
+        "icon": "chat_bubble",
+        "description": "コメントが爆発的に増えた瞬間",
+        "padding_before": 15.0,
+        "padding_after": 15.0,
+        "priority": 2,
+    },
+    "viewer_spike": {
+        "label": "Viewer Spike Clips",
+        "icon": "visibility",
+        "description": "視聴者数が急増した瞬間",
+        "padding_before": 15.0,
+        "padding_after": 15.0,
+        "priority": 3,
+    },
+    "gift_animation": {
+        "label": "Gift / Like Animation Clips",
+        "icon": "card_giftcard",
+        "description": "ギフト・いいねアニメーションが集中した瞬間",
+        "padding_before": 10.0,
+        "padding_after": 15.0,
+        "priority": 4,
+    },
+    "product_reveal": {
+        "label": "Product Reveal Clips",
+        "icon": "unarchive",
+        "description": "商品を見せる・開封する瞬間",
+        "padding_before": 5.0,
+        "padding_after": 20.0,
+        "priority": 5,
+    },
+    "chat_purchase_highlight": {
+        "label": "Chat Highlight Clips",
+        "icon": "forum",
+        "description": "購入関連コメントが集中した瞬間",
+        "padding_before": 10.0,
+        "padding_after": 15.0,
+        "priority": 6,
+    },
+    "product_viewers_popup": {
+        "label": "Product Viewers Clips",
+        "icon": "people",
+        "description": "商品閲覧者数ポップアップが表示された瞬間",
+        "padding_before": 10.0,
+        "padding_after": 15.0,
+        "priority": 7,
+    },
+}
+
+
+@router.get("/{video_id}/moment-clips")
+async def get_moment_clips(
+    video_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """
+    Moment-based Clipping API
+    =========================
+    video_sales_moments の moment_type_detail でグループ化し、
+    各カテゴリごとにクリップ候補を自動生成して返す。
+
+    レスポンス:
+    {
+        "video_id": "...",
+        "categories": [
+            {
+                "category": "purchase_popup",
+                "label": "Purchase Popup Clips",
+                "icon": "shopping_cart",
+                "description": "...",
+                "clips": [
+                    {
+                        "id": 1,
+                        "time_start": 120.0,
+                        "time_end": 160.0,
+                        "duration": 40.0,
+                        "video_sec": 140.0,
+                        "confidence": 0.85,
+                        "reasons": [...],
+                        "order_value": 3,
+                        "click_value": 5,
+                        "frame_meta": {...},
+                    }
+                ],
+                "count": 3,
+            }
+        ],
+        "total_moments": 15,
+        "auto_zoom_data": [...],
+    }
+    """
+    try:
+        user_id = current_user.get("user_id") or current_user.get("id")
+
+        # 動画情報を取得
+        video_sql = text("SELECT duration, upload_type FROM videos WHERE id = :video_id AND user_id = :user_id")
+        vres = await db.execute(video_sql, {"video_id": video_id, "user_id": user_id})
+        video_row = vres.fetchone()
+        if not video_row:
+            raise HTTPException(status_code=404, detail="Video not found")
+
+        video_duration = float(video_row.duration) if video_row.duration else 0.0
+
+        # sales_moments を取得（moment_type_detail 含む）
+        sql = text("""
+            SELECT id, video_id, time_key, time_sec, video_sec, moment_type,
+                   moment_type_detail, source, frame_meta,
+                   click_value, click_delta, click_sigma_score,
+                   order_value, order_delta, gmv_value,
+                   confidence, reasons, created_at
+            FROM video_sales_moments
+            WHERE video_id = :video_id
+            ORDER BY video_sec ASC
+        """)
+        result = await db.execute(sql, {"video_id": video_id})
+        rows = result.fetchall()
+
+        if not rows:
+            return {
+                "video_id": video_id,
+                "categories": [],
+                "total_moments": 0,
+                "auto_zoom_data": [],
+            }
+
+        # moment_type_detail でグループ化
+        from collections import defaultdict
+        grouped = defaultdict(list)
+        auto_zoom_data = []
+
+        for row in rows:
+            r = dict(row._mapping)
+            # JSON パース
+            if r.get("reasons") and isinstance(r["reasons"], str):
+                try:
+                    r["reasons"] = json.loads(r["reasons"])
+                except Exception:
+                    r["reasons"] = [r["reasons"]]
+            if r.get("frame_meta") and isinstance(r["frame_meta"], str):
+                try:
+                    r["frame_meta"] = json.loads(r["frame_meta"])
+                except Exception:
+                    r["frame_meta"] = None
+            if r.get("created_at"):
+                r["created_at"] = r["created_at"].isoformat()
+            if r.get("id"):
+                r["id"] = str(r["id"])
+            if r.get("video_id"):
+                r["video_id"] = str(r["video_id"])
+
+            detail = r.get("moment_type_detail") or r.get("moment_type", "unknown")
+            grouped[detail].append(r)
+
+            # Auto Zoom データ収集
+            if r.get("frame_meta"):
+                fm = r["frame_meta"]
+                if fm.get("face_region") or fm.get("product_region"):
+                    auto_zoom_data.append({
+                        "video_sec": r["video_sec"],
+                        "face_region": fm.get("face_region"),
+                        "product_region": fm.get("product_region"),
+                    })
+
+        # カテゴリごとにクリップ候補を生成
+        categories = []
+        for detail_type, cat_config in sorted(MOMENT_CATEGORIES.items(), key=lambda x: x[1]["priority"]):
+            moments_in_cat = grouped.get(detail_type, [])
+            if not moments_in_cat:
+                continue
+
+            # 近接するモーメントをマージしてクリップ化
+            clips = _build_moment_category_clips(
+                moments_in_cat,
+                padding_before=cat_config["padding_before"],
+                padding_after=cat_config["padding_after"],
+                video_duration=video_duration,
+                merge_gap=10.0,
+            )
+
+            categories.append({
+                "category": detail_type,
+                "label": cat_config["label"],
+                "icon": cat_config["icon"],
+                "description": cat_config["description"],
+                "clips": clips,
+                "count": len(clips),
+            })
+
+        return {
+            "video_id": video_id,
+            "categories": categories,
+            "total_moments": len(rows),
+            "auto_zoom_data": auto_zoom_data,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(f"[MOMENT_CLIPS] Failed for {video_id}: {exc}")
+        raise HTTPException(status_code=500, detail=f"Failed to get moment clips: {exc}")
+
+
+def _build_moment_category_clips(
+    moments: list,
+    padding_before: float = 15.0,
+    padding_after: float = 15.0,
+    video_duration: float = 0.0,
+    merge_gap: float = 10.0,
+) -> list:
+    """
+    同一カテゴリのモーメントを近接マージしてクリップ候補を生成する。
+    """
+    if not moments:
+        return []
+
+    # video_sec でソート
+    sorted_moments = sorted(moments, key=lambda m: m.get("video_sec", 0))
+
+    clips = []
+    current_clip = None
+
+    for m in sorted_moments:
+        vsec = m.get("video_sec", 0)
+        t_start = max(0, vsec - padding_before)
+        t_end = vsec + padding_after
+        if video_duration > 0:
+            t_end = min(t_end, video_duration)
+
+        if current_clip is None:
+            current_clip = {
+                "time_start": t_start,
+                "time_end": t_end,
+                "moments": [m],
+                "best_confidence": m.get("confidence", 0),
+            }
+        elif t_start <= current_clip["time_end"] + merge_gap:
+            # マージ
+            current_clip["time_end"] = max(current_clip["time_end"], t_end)
+            current_clip["moments"].append(m)
+            current_clip["best_confidence"] = max(
+                current_clip["best_confidence"], m.get("confidence", 0)
+            )
+        else:
+            clips.append(current_clip)
+            current_clip = {
+                "time_start": t_start,
+                "time_end": t_end,
+                "moments": [m],
+                "best_confidence": m.get("confidence", 0),
+            }
+
+    if current_clip:
+        clips.append(current_clip)
+
+    # confidence 降順でソート
+    clips.sort(key=lambda c: c["best_confidence"], reverse=True)
+
+    # クリップ候補に変換
+    result = []
+    for i, clip in enumerate(clips, 1):
+        best_moment = max(clip["moments"], key=lambda m: m.get("confidence", 0))
+        all_reasons = []
+        for m in clip["moments"]:
+            if m.get("reasons"):
+                all_reasons.extend(m["reasons"] if isinstance(m["reasons"], list) else [m["reasons"]])
+
+        # frame_meta を集約（最初に見つかったものを使用）
+        frame_meta = None
+        for m in clip["moments"]:
+            if m.get("frame_meta"):
+                frame_meta = m["frame_meta"]
+                break
+
+        result.append({
+            "id": i,
+            "time_start": round(clip["time_start"], 1),
+            "time_end": round(clip["time_end"], 1),
+            "duration": round(clip["time_end"] - clip["time_start"], 1),
+            "video_sec": round(best_moment.get("video_sec", 0), 1),
+            "confidence": round(clip["best_confidence"], 2),
+            "moment_count": len(clip["moments"]),
+            "reasons": all_reasons[:5],
+            "order_value": sum(m.get("order_value", 0) for m in clip["moments"]),
+            "click_value": sum(m.get("click_value", 0) for m in clip["moments"]),
+            "frame_meta": frame_meta,
+        })
+
+    return result

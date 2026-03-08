@@ -1926,13 +1926,13 @@ async def bulk_insert_sales_moments(
              moment_type_detail, source,
              click_value, click_delta, click_sigma_score,
              order_value, order_delta, gmv_value,
-             confidence, reasons)
+             confidence, reasons, frame_meta)
         VALUES
             (:video_id, :time_key, :time_sec, :video_sec, :moment_type,
              :moment_type_detail, :source,
              :click_value, :click_delta, :click_sigma_score,
              :order_value, :order_delta, :gmv_value,
-             :confidence, :reasons)
+             :confidence, :reasons, :frame_meta)
     """)
 
     async with AsyncSessionLocal() as session:
@@ -1955,6 +1955,7 @@ async def bulk_insert_sales_moments(
                 "gmv_value": m.get("gmv_value", 0),
                 "confidence": m.get("confidence", 0),
                 "reasons": _json.dumps(m.get("reasons", []), ensure_ascii=False),
+                "frame_meta": _json.dumps(m.get("frame_meta", {}), ensure_ascii=False) if m.get("frame_meta") else None,
             })
 
         await session.commit()
