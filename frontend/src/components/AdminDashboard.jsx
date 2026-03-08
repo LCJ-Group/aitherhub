@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import axios from "axios";
 import AdminVideoList from "./admin/AdminVideoList";
 import AdminVideoDetail from "./admin/AdminVideoDetail";
+import AdminDiagnostics from "./admin/AdminDiagnostics";
 
 const ADMIN_ID = "aither";
 const ADMIN_PASS = "hub";
@@ -234,6 +235,16 @@ export default function AdminDashboard() {
           >
             Upload Health
           </button>
+          <button
+            onClick={() => setActiveTab("diagnostics")}
+            className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+              activeTab === "diagnostics"
+                ? "bg-white text-red-600 shadow-sm"
+                : "text-gray-500 hover:text-gray-700"
+            }`}
+          >
+            Diagnostics
+          </button>
         </div>
 
         {activeTab === "dashboard" && (
@@ -303,6 +314,9 @@ export default function AdminDashboard() {
         )}
         {activeTab === "upload-health" && (
           <UploadHealthSection data={uploadHealth} loading={uploadHealthLoading} />
+        )}
+        {activeTab === "diagnostics" && (
+          <AdminDiagnostics adminKey={`${ADMIN_ID}:${ADMIN_PASS}`} />
         )}
       </div>
     </div>

@@ -2,6 +2,8 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import Highcharts from "highcharts";
 import HighchartsReact from "highcharts-react-official";
 import VideoService from "../base/services/videoService";
+import { logSectionError } from "../base/utils/runtimeErrorLogger";
+import { ErrorState, LoadingSpinner } from "./SectionStateUI";
 
 /**
  * AnalyticsSection – Unified analytics dashboard (v3 Mockup-matching)
@@ -191,12 +193,14 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
   const [collapsed, setCollapsed] = useState(false);
   const [excelData, setExcelData] = useState(null);
   const [loadingExcel, setLoadingExcel] = useState(false);
+  const [excelError, setExcelError] = useState(null);
   const [productCollapsed, setProductCollapsed] = useState(true);
   const [phaseProductCollapsed, setPhaseProductCollapsed] = useState(true);
 
   // Product exposure states (merged from ProductTimeline)
   const [exposures, setExposures] = useState([]);
   const [loadingExposures, setLoadingExposures] = useState(false);
+  const [exposuresError, setExposuresError] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [showAddForm, setShowAddForm] = useState(false);
   const [ganttExpanded, setGanttExpanded] = useState(false);
@@ -212,8 +216,16 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
     if (!videoData.excel_product_blob_url && !videoData.excel_trend_blob_url) return;
     let cancelled = false;
     setLoadingExcel(true);
+    setExcelError(null);
     VideoService.getProductData(videoData.id)
       .then((data) => { if (!cancelled) setExcelData(data); })
+      .catch((e) => {
+        if (!cancelled) {
+          const errType = e?.response?.status === 404 ? "not_found" : e?.response?.status >= 500 ? "server" : "unknown";
+          setExcelError({ type: errType, message: e?.message || "Excel data load failed", status: e?.response?.status });
+          logSectionError({ sectionName: "配信パフォーマンス/Excel", videoId: videoData.id, endpoint: "getProductData", errorType: errType, errorMessage: e?.message, httpStatus: e?.response?.status });
+        }
+      })
       .finally(() => { if (!cancelled) setLoadingExcel(false); });
     return () => { cancelled = true; };
   }, [videoData?.id, videoData?.excel_product_blob_url, videoData?.excel_trend_blob_url]);
@@ -222,10 +234,16 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
   const fetchExposures = useCallback(async () => {
     if (!videoData?.id) return;
     setLoadingExposures(true);
+    setExposuresError(null);
     try {
       const result = await VideoService.getProductExposures(videoData.id);
       setExposures(result?.exposures || []);
-    } catch (e) { console.error("Failed to fetch exposures:", e); }
+    } catch (e) {
+      console.error("Failed to fetch exposures:", e);
+      const errType = e?.response?.status === 404 ? "not_found" : e?.response?.status >= 500 ? "server" : "unknown";
+      setExposuresError({ type: errType, message: e?.message || "Exposures load failed", status: e?.response?.status });
+      logSectionError({ sectionName: "配信パフォーマンス/商品露出", videoId: videoData.id, endpoint: "getProductExposures", errorType: errType, errorMessage: e?.message, httpStatus: e?.response?.status });
+    }
     setLoadingExposures(false);
   }, [videoData?.id]);
 
