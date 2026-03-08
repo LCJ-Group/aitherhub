@@ -1,11 +1,12 @@
 import React from "react";
+import { logBoundaryError } from "../base/utils/runtimeErrorLogger";
 
 /**
  * SectionErrorBoundary
- * 
+ *
  * セクション単位のError Boundary。
  * 1コンポーネントが落ちても、ページ全体が白画面にならないようにする。
- * 
+ *
  * Props:
  *   sectionName  - セクション名（エラーUI表示用）
  *   onError      - エラー発生時のコールバック (error, errorInfo) => void
@@ -29,37 +30,10 @@ export default class SectionErrorBoundary extends React.Component {
   componentDidCatch(error, errorInfo) {
     const { sectionName, onError } = this.props;
 
-    // ランタイムエラーログ
-    console.error(
-      `[SectionErrorBoundary] ${sectionName || "Unknown"} crashed:`,
-      error,
-      errorInfo
-    );
-
     this.setState({ errorInfo });
 
-    // グローバルエラーログに記録
-    try {
-      const logEntry = {
-        timestamp: new Date().toISOString(),
-        section: sectionName || "Unknown",
-        error: error?.message || String(error),
-        stack: error?.stack || "",
-        componentStack: errorInfo?.componentStack || "",
-        url: window.location.href,
-        videoId: window.location.pathname.match(/\/video\/([^/]+)/)?.[1] || "",
-      };
-
-      // sessionStorage に最新20件を保存
-      const key = "aitherhub_runtime_errors";
-      let logs = [];
-      try {
-        logs = JSON.parse(sessionStorage.getItem(key) || "[]");
-      } catch { /* ignore */ }
-      logs.unshift(logEntry);
-      if (logs.length > 20) logs.length = 20;
-      sessionStorage.setItem(key, JSON.stringify(logs));
-    } catch { /* storage error - ignore */ }
+    // 構造化ログに記録
+    logBoundaryError({ sectionName, error, errorInfo });
 
     // 外部コールバック
     if (typeof onError === "function") {
@@ -86,8 +60,10 @@ export default class SectionErrorBoundary extends React.Component {
           : this.props.fallback;
       }
 
-      // デフォルトfallback UI
+      // デフォルトfallback UI - コンポーネントクラッシュ用
       const sectionName = this.props.sectionName || "このセクション";
+      const errorMessage = this.state.error?.message || "予期しないエラーが発生しました";
+
       return (
         <div className="w-full my-2 mx-auto">
           <div className="rounded-2xl bg-red-50 border border-red-200 p-4 md:p-5">
@@ -112,11 +88,16 @@ export default class SectionErrorBoundary extends React.Component {
                   </svg>
                 </div>
                 <div>
-                  <div className="text-red-700 text-sm font-medium">
-                    {sectionName}の表示に失敗しました
+                  <div className="flex items-center gap-2">
+                    <span className="text-red-700 text-sm font-medium">
+                      {sectionName}の表示に失敗しました
+                    </span>
+                    <span className="text-red-400 text-[10px] px-1.5 py-0.5 rounded bg-red-100">
+                      クラッシュ
+                    </span>
                   </div>
                   <div className="text-red-500 text-xs mt-0.5">
-                    {this.state.error?.message || "予期しないエラーが発生しました"}
+                    {errorMessage}
                   </div>
                 </div>
               </div>

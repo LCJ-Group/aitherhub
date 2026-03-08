@@ -1,6 +1,7 @@
 import axios from "axios";
 import TokenManager from "../utils/tokenManager";
 import AuthService from "../services/userService";
+import { generateRequestId } from "../utils/runtimeErrorLogger";
 
 /**
  * Endpoints that do NOT require authentication (no Bearer token needed).
@@ -84,6 +85,12 @@ export default class BaseApiService {
 
     this.client.interceptors.request.use(
       async (config) => {
+        // Attach X-Request-Id for log correlation (frontend ↔ backend)
+        const requestId = generateRequestId();
+        config.headers['X-Request-Id'] = requestId;
+        // Store on config for downstream error logging
+        config._requestId = requestId;
+
         const requestUrl = config.url || '';
 
         // Public auth endpoints (login, register, refresh) don't need a token
