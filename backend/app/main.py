@@ -1,4 +1,5 @@
 import logging
+import time
 from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
 
@@ -13,6 +14,10 @@ _rid_filter = RequestIdFilter()
 logging.getLogger().addFilter(_rid_filter)
 
 logger = logging.getLogger(__name__)
+
+# Track startup time for diagnostics
+_startup_time = time.time()
+
 
 @singleton
 class AppCreator:
@@ -43,10 +48,45 @@ class AppCreator:
                 allow_headers=["*"],
             )
 
-        # Health check
+        # ── Health check endpoints ──
+
         @self.app.get("/")
         async def root():
             return {"status": "service is working"}
+
+        @self.app.get("/health/ready")
+        async def health_ready():
+            """
+            Readiness probe for Azure App Service Health Check.
+            Verifies that the app is fully started and can serve requests.
+            Configure Azure Health Check path to: /health/ready
+            """
+            from app.core.db import get_async_session
+
+            checks = {
+                "app": "ok",
+                "database": "unknown",
+                "uptime_seconds": round(time.time() - _startup_time, 1),
+            }
+
+            # Verify database connectivity
+            try:
+                async for session in get_async_session():
+                    from sqlalchemy import text
+                    result = await session.execute(text("SELECT 1"))
+                    result.scalar()
+                    checks["database"] = "ok"
+                    break
+            except Exception as e:
+                checks["database"] = f"error: {type(e).__name__}"
+                logger.warning(f"Health check: database connectivity failed: {e}")
+                from fastapi.responses import JSONResponse
+                return JSONResponse(
+                    status_code=503,
+                    content={"status": "degraded", "checks": checks}
+                )
+
+            return {"status": "healthy", "checks": checks}
 
         # API v1 routes
         self.app.include_router(
