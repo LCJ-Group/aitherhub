@@ -8,9 +8,12 @@ class VideoService extends BaseApiService {
   }
 
   async getVideosByUser(userId) {
+    const endpoint1 = `/api/v1/videos/user/${userId}/with-clips`;
+    const endpoint2 = `/api/v1/videos/user/${userId}`;
+
     try {
       // Try the new endpoint with clip counts first
-      const response = await this.get(`/api/v1/videos/user/${userId}/with-clips`);
+      const response = await this.get(endpoint1);
       if (Array.isArray(response)) {
         return response;
       } else if (response?.data && Array.isArray(response.data)) {
@@ -18,33 +21,31 @@ class VideoService extends BaseApiService {
       } else if (response?.videos && Array.isArray(response.videos)) {
         return response.videos;
       }
+      // Response shape mismatch - log and return empty (not an error)
+      console.warn(`[VideoService] Unexpected response shape from ${endpoint1}:`, typeof response);
       return [];
     } catch (error) {
+      const status1 = error?.response?.status;
+      console.warn(`[VideoService] Primary endpoint failed (${status1}):`, endpoint1);
+
+      // Auth errors should propagate immediately - don't mask with fallback
+      if (status1 === 401 || status1 === 403) {
+        throw error;
+      }
+
       // Fallback to original endpoint without clip counts
       try {
-        const fallback = await this.get(`/api/v1/videos/user/${userId}`);
+        const fallback = await this.get(endpoint2);
         if (Array.isArray(fallback)) return fallback;
         if (fallback?.data && Array.isArray(fallback.data)) return fallback.data;
         if (fallback?.videos && Array.isArray(fallback.videos)) return fallback.videos;
+        console.warn(`[VideoService] Unexpected response shape from ${endpoint2}:`, typeof fallback);
         return [];
       } catch (fallbackError) {
-        if (fallbackError.response?.status === 404 || fallbackError.response?.status === 501) {
-          return [
-            {
-              "id": "1",
-              "original_filename": "富士山.mp4",
-              "status": "completed",
-              "created_at": "2026-01-08T00:00:00.000Z"
-            },          
-            {
-              "id": "2",
-              "original_filename": "video 2",
-              "status": "processing",
-              "created_at": "2026-01-08T00:00:00.000Z"
-            },
-          ];
-        }
-        return [];
+        const status2 = fallbackError?.response?.status;
+        console.error(`[VideoService] Both endpoints failed. Primary: ${status1}, Fallback: ${status2}`);
+        // Propagate the error so Sidebar can show error state instead of empty
+        throw fallbackError;
       }
     }
   }

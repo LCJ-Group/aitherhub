@@ -26,6 +26,7 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
   const [openForgotPassword, setOpenForgotPassword] = useState(false);
   const [videos, setVideos] = useState([]);
   const [loadingVideos, setLoadingVideos] = useState(false);
+  const [videoListError, setVideoListError] = useState(null); // null | 'error' | 'auth'
   const [selectedVideoId, setSelectedVideoId] = useState(null);
   const [menuOpenVideoId, setMenuOpenVideoId] = useState(null);
   const [renamingVideoId, setRenamingVideoId] = useState(null);
@@ -121,6 +122,7 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
       }
 
       setLoadingVideos(true);
+      setVideoListError(null);
       try {
         const videoList = await VideoService.getVideosByUser(userId);
         // Deduplicate: keep only the latest video per original_filename
@@ -134,9 +136,20 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
           }
         }
         setVideos(deduped);
+        setVideoListError(null);
       } catch (error) {
-        console.error("Error fetching videos:", error);
-        setVideos([]);
+        console.error("[Sidebar] Error fetching videos:", error);
+        // Distinguish auth errors from general errors
+        const status = error?.response?.status;
+        if (status === 401 || status === 403) {
+          setVideoListError('auth');
+        } else {
+          setVideoListError('error');
+        }
+        // Keep existing videos if we had some (don't flash empty on transient errors)
+        if (videos.length === 0) {
+          setVideos([]);
+        }
       } finally {
         setLoadingVideos(false);
       }
@@ -635,11 +648,73 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
                       </>
                     )}
                   </div>
+                ) : videoListError === 'auth' ? (
+                  /* Auth error state */
+                  <div className="flex flex-col items-center gap-2 py-6 px-4">
+                    <div className="w-10 h-10 rounded-full bg-amber-50 flex items-center justify-center">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-amber-500">
+                        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+                      </svg>
+                    </div>
+                    <span className="text-xs text-amber-600 font-medium text-center">
+                      {window.__t("videoListAuthError") || "Please check your login status"}
+                    </span>
+                  </div>
+                ) : videoListError === 'error' ? (
+                  /* API error state */
+                  <div className="flex flex-col items-center gap-2 py-6 px-4">
+                    <div className="w-10 h-10 rounded-full bg-red-50 flex items-center justify-center">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-red-400">
+                        <circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>
+                      </svg>
+                    </div>
+                    <span className="text-xs text-red-500 font-medium text-center">
+                      {window.__t("videoListError") || "Failed to load video list"}
+                    </span>
+                    <button
+                      onClick={() => {
+                        setVideoListError(null);
+                        setLoadingVideos(true);
+                        VideoService.getVideosByUser(effectiveUser?.id || effectiveUser?.email).then((list) => {
+                          const seen = new Map();
+                          const deduped = [];
+                          for (const v of (list || [])) {
+                            const key = v.original_filename || v.id;
+                            if (!seen.has(key)) { seen.set(key, true); deduped.push(v); }
+                          }
+                          setVideos(deduped);
+                          setVideoListError(null);
+                        }).catch((err) => {
+                          console.error("[Sidebar] Retry failed:", err);
+                          setVideoListError(err?.response?.status === 401 || err?.response?.status === 403 ? 'auth' : 'error');
+                        }).finally(() => setLoadingVideos(false));
+                      }}
+                      className="px-3 py-1.5 text-xs font-medium text-white bg-red-500 hover:bg-red-600 rounded-lg transition-colors"
+                    >
+                      {window.__t("videoListRetry") || "Retry"}
+                    </button>
+                  </div>
                 ) : (
-                  <div className="text-center text-gray-400 text-sm py-4">
-                    {videos.length > 0 && searchValue.trim()
-                      ? (window.__t("noSearchResults") || "No results")
-                      : window.__t("noVideos")}
+                  /* Genuinely empty state */
+                  <div className="flex flex-col items-center gap-3 py-8 px-4">
+                    <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-gray-300">
+                        <polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+                      </svg>
+                    </div>
+                    <span className="text-xs text-gray-400 text-center">
+                      {videos.length > 0 && searchValue.trim()
+                        ? (window.__t("noSearchResults") || "No results")
+                        : (window.__t("noVideos") || "No videos yet")}
+                    </span>
+                    {!searchValue.trim() && (
+                      <button
+                        onClick={onNewAnalysis}
+                        className="px-3 py-1.5 text-xs font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors"
+                      >
+                        {window.__t("newAnalysis") || "New analysis"}
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
