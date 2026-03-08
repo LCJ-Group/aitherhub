@@ -1,7 +1,7 @@
 import { useState, useRef } from "react";
 import BaseApiService from "../base/api/BaseApiService";
 import { validateCsvDateTime } from "../base/utils/csvDateTimeValidator";
-import { extractTrendStartTime, extractProductDate, extractDateFromFilename } from "../base/utils/csvDateTimeExtractor";
+import { extractTrendStartTime, extractProductDate, extractExcelFileNameDate, extractVideoDateTime } from "../base/utils/csvDateTimeExtractor";
 
 /**
  * CsvReplaceModal - CSV（Excel）ファイルを差し替えるモーダル
@@ -43,7 +43,7 @@ export default function CsvReplaceModal({ videoData, onClose, onComplete }) {
     try {
       // 動画ファイル名から日時を推定
       const videoFilename = videoData?.original_filename || "";
-      const videoDate = extractDateFromFilename(videoFilename);
+      const videoDate = extractVideoDateTime(videoFilename);
 
       // トレンドExcelから開始時刻を抽出
       let trendStartTime = null;
@@ -70,7 +70,7 @@ export default function CsvReplaceModal({ videoData, onClose, onComplete }) {
         videoDate: videoDate?.date || null,
         videoStartTime: videoDate?.time || null,
         trendStartTime,
-        productDate: productDate?.date || extractDateFromFilename(productFile?.name)?.date || null,
+        productDate: productDate?.date || extractExcelFileNameDate(productFile?.name)?.date || null,
         productFilename: productFile?.name || null,
         trendFilename: trendFile?.name || null,
       });
