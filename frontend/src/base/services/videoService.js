@@ -1287,5 +1287,20 @@ class VideoService extends BaseApiService {
       throw error;
     }
   }
+
+  /**
+   * Get moment-based clips grouped by category.
+   * @param {string} videoId
+   * @returns {{ video_id, categories, total_moments, auto_zoom_data }}
+   */
+  async getMomentClips(videoId) {
+    try {
+      const response = await this.get(`/api/v1/videos/${videoId}/moment-clips`);
+      return response;
+    } catch (error) {
+      console.error('Failed to get moment clips:', error);
+      throw error;
+    }
+  }
 }
 export default new VideoService();
