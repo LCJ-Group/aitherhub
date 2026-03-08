@@ -1311,6 +1311,35 @@ async def report_frontend_error(
         user_agent    - ブラウザUA
     """
     try:
+        # Auto-create table if not exists (same pattern as phase_metrics_recalc_log)
+        await db.execute(text("""
+            CREATE TABLE IF NOT EXISTS frontend_diagnostics (
+                id BIGSERIAL PRIMARY KEY,
+                video_id VARCHAR(255) NOT NULL DEFAULT '',
+                section_name VARCHAR(100) NOT NULL DEFAULT 'unknown',
+                endpoint VARCHAR(500) DEFAULT '',
+                error_type VARCHAR(50) NOT NULL DEFAULT 'unknown',
+                error_message TEXT,
+                http_status INTEGER,
+                request_id VARCHAR(100) DEFAULT '',
+                page_url VARCHAR(1000) DEFAULT '',
+                user_agent VARCHAR(500) DEFAULT '',
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+        """))
+        await db.execute(text("""
+            CREATE INDEX IF NOT EXISTS ix_fd_video_id ON frontend_diagnostics (video_id)
+        """))
+        await db.execute(text("""
+            CREATE INDEX IF NOT EXISTS ix_fd_section_name ON frontend_diagnostics (section_name)
+        """))
+        await db.execute(text("""
+            CREATE INDEX IF NOT EXISTS ix_fd_error_type ON frontend_diagnostics (error_type)
+        """))
+        await db.execute(text("""
+            CREATE INDEX IF NOT EXISTS ix_fd_created_at ON frontend_diagnostics (created_at)
+        """))
+
         sql = text("""
             INSERT INTO frontend_diagnostics
                 (video_id, section_name, endpoint, error_type, error_message,
@@ -1361,6 +1390,23 @@ async def get_frontend_diagnostics(
         raise HTTPException(status_code=403, detail="Invalid admin credentials")
 
     try:
+        # Ensure table exists
+        await db.execute(text("""
+            CREATE TABLE IF NOT EXISTS frontend_diagnostics (
+                id BIGSERIAL PRIMARY KEY,
+                video_id VARCHAR(255) NOT NULL DEFAULT '',
+                section_name VARCHAR(100) NOT NULL DEFAULT 'unknown',
+                endpoint VARCHAR(500) DEFAULT '',
+                error_type VARCHAR(50) NOT NULL DEFAULT 'unknown',
+                error_message TEXT,
+                http_status INTEGER,
+                request_id VARCHAR(100) DEFAULT '',
+                page_url VARCHAR(1000) DEFAULT '',
+                user_agent VARCHAR(500) DEFAULT '',
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+        """))
+
         conditions = []
         params = {"lim": limit, "off": offset}
 
@@ -1454,6 +1500,23 @@ async def get_frontend_diagnostics_summary(
         raise HTTPException(status_code=403, detail="Invalid admin credentials")
 
     try:
+        # Ensure table exists
+        await db.execute(text("""
+            CREATE TABLE IF NOT EXISTS frontend_diagnostics (
+                id BIGSERIAL PRIMARY KEY,
+                video_id VARCHAR(255) NOT NULL DEFAULT '',
+                section_name VARCHAR(100) NOT NULL DEFAULT 'unknown',
+                endpoint VARCHAR(500) DEFAULT '',
+                error_type VARCHAR(50) NOT NULL DEFAULT 'unknown',
+                error_message TEXT,
+                http_status INTEGER,
+                request_id VARCHAR(100) DEFAULT '',
+                page_url VARCHAR(1000) DEFAULT '',
+                user_agent VARCHAR(500) DEFAULT '',
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+        """))
+
         interval = f"{hours} hours"
 
         # セクション別
