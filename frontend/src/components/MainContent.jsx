@@ -524,12 +524,28 @@ export default function MainContent({
         throw new Error('Video ID not found in metadata. Please start a new upload.');
       }
 
-      await UploadService.uploadComplete(
-        user.email,
-        video_id,
-        file.name,
-        resumeUploadId
-      );
+      // Use correct completion method based on upload mode
+      const uploadMode = metadata.uploadMode || 'screen_recording';
+      if (uploadMode === 'clean_video') {
+        // Clean video: include upload_type and Excel URLs from metadata
+        await UploadService.uploadCompleteWithType(
+          user.email,
+          video_id,
+          file.name,
+          resumeUploadId,
+          'clean_video',
+          metadata.excelProductBlobUrl || null,
+          metadata.excelTrendBlobUrl || null
+        );
+      } else {
+        // Screen recording: simple completion
+        await UploadService.uploadComplete(
+          user.email,
+          video_id,
+          file.name,
+          resumeUploadId
+        );
+      }
 
       await UploadService.clearUploadMetadata(resumeUploadId);
 
