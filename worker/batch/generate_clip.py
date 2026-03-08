@@ -1023,22 +1023,38 @@ def concatenate_intervals(video_path: str, intervals: list, output_path: str) ->
         if duration < 0.5:  # Skip very short segments
             continue
 
-        # Use -ss AFTER -i for frame-accurate seeking (same approach as cut_segment)
+        # Use stream copy for near-instant cutting (2026-03 optimization)
         cmd = [
             FFMPEG_BIN, "-y",
+            "-ss", f"{start:.3f}",
             "-i", video_path,
-            "-ss", str(start),
-            "-t", str(duration),
-            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-            "-c:a", "aac", "-b:a", "128k",
+            "-t", f"{duration:.3f}",
+            "-c", "copy",
             "-movflags", "+faststart",
+            "-avoid_negative_ts", "make_zero",
             seg_path,
         ]
         try:
-            subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=120)
+            subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=30)
             segment_files.append(seg_path)
         except Exception as e:
-            logger.error(f"Failed to cut person interval {i}: {e}")
+            logger.warning(f"Stream-copy cut failed for interval {i}, trying re-encode: {e}")
+            # Fallback to re-encode
+            cmd_fallback = [
+                FFMPEG_BIN, "-y",
+                "-ss", f"{start:.3f}",
+                "-i", video_path,
+                "-t", f"{duration:.3f}",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+                "-c:a", "aac", "-b:a", "128k",
+                "-movflags", "+faststart",
+                seg_path,
+            ]
+            try:
+                subprocess.run(cmd_fallback, check=True, capture_output=True, text=True, timeout=300)
+                segment_files.append(seg_path)
+            except Exception as e2:
+                logger.error(f"Failed to cut person interval {i}: {e2}")
 
     if not segment_files:
         return False
@@ -1055,14 +1071,13 @@ def concatenate_intervals(video_path: str, intervals: list, output_path: str) ->
             f.write(f"file '{seg_path}'\n")
 
     # Concatenate using FFmpeg concat demuxer
-    # Re-encode to ensure continuous timestamps (copy can cause PTS discontinuities)
+    # Use stream copy first (fast), fallback to re-encode if needed
     cmd = [
         FFMPEG_BIN, "-y",
         "-f", "concat",
         "-safe", "0",
         "-i", concat_list_path,
-        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-        "-c:a", "aac", "-b:a", "128k",
+        "-c", "copy",
         "-movflags", "+faststart",
         output_path,
     ]
@@ -1298,8 +1313,8 @@ def create_vertical_clip(
     
     cmd.extend([
         "-c:v", "libx264",
-        "-preset", "medium",
-        "-crf", "20",
+        "-preset", "veryfast",
+        "-crf", "22",
         "-c:a", "aac",
         "-b:a", "128k",
         "-ar", "44100",
@@ -1381,8 +1396,8 @@ def create_vertical_clip_drawtext(
         "-i", input_path,
         "-vf", vf,
         "-c:v", "libx264",
-        "-preset", "medium",
-        "-crf", "20",
+        "-preset", "veryfast",
+        "-crf", "22",
         "-c:a", "aac",
         "-b:a", "128k",
         "-ar", "44100",
@@ -1419,8 +1434,8 @@ def create_vertical_clip_nosub(
         "-i", input_path,
         "-vf", f"crop={crop_w}:{crop_h}:{crop_x}:{crop_y},scale={target_w}:{target_h}:flags=lanczos",
         "-c:v", "libx264",
-        "-preset", "medium",
-        "-crf", "20",
+        "-preset", "veryfast",
+        "-crf", "22",
         "-c:a", "aac",
         "-b:a", "128k",
         "-movflags", "+faststart",
