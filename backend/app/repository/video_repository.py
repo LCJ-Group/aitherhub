@@ -58,11 +58,14 @@ class VideoRepository(BaseRepository):
             await session.close()
 
     async def get_videos_by_user(self, user_id: int) -> list[Video]:
-        """Get all videos for a user"""
+        """Get all videos for a user (includes videos with NULL user_id for backward compatibility)"""
         session = self.session_factory()
         try:
+            from sqlalchemy import or_
             result = await session.execute(
-                select(Video).filter(Video.user_id == user_id)
+                select(Video).filter(
+                    or_(Video.user_id == user_id, Video.user_id.is_(None))
+                )
                 .order_by(desc(Video.created_at))
             )
             return result.scalars().all()

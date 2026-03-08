@@ -125,7 +125,7 @@ async def get_videos_by_user_with_clips(
                    OR (user_rating IS NOT NULL AND user_rating > 0)
                 GROUP BY video_id
             ) m ON v.id = m.video_id
-            WHERE v.user_id = :user_id
+            WHERE (v.user_id = :user_id OR v.user_id IS NULL)
             ORDER BY v.created_at DESC
         """)
         result = await db.execute(sql, {"user_id": user_id})
