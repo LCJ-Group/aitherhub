@@ -5,8 +5,12 @@ from starlette.middleware.cors import CORSMiddleware
 from app.api.v1.routes import routers as v1_routers
 from app.core.config import configs
 from app.core.container import Container
-from app.core.request_id_middleware import RequestIdMiddleware
+from app.core.request_id_middleware import RequestIdMiddleware, RequestIdFilter
 from app.utils.class_object import singleton
+
+# RequestIdFilter を root logger に追加して、全ログに request_id/video_id/user_id を自動付与
+_rid_filter = RequestIdFilter()
+logging.getLogger().addFilter(_rid_filter)
 
 logger = logging.getLogger(__name__)
 
