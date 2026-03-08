@@ -9,6 +9,8 @@ import LoginModal from "./modals/LoginModal";
 import ProcessingSteps from "./ProcessingSteps";
 import VideoDetail from "./VideoDetail";
 import FeedbackPage from "./FeedbackPage";
+import CsvValidationGate from "./CsvValidationGate";
+import { validateCsvDateTime } from "../base/utils/csvDateTimeValidator";
 // LiveDashboard is now at /live/:sessionId route (LivePage.jsx)
 
 /**
@@ -98,6 +100,10 @@ export default function MainContent({
   const [liveCapturing, setLiveCapturing] = useState(false);
   const [showLiveDashboard, setShowLiveDashboard] = useState(false);
   const [liveDashboardData, setLiveDashboardData] = useState(null);
+  // CSV Validation Gate states
+  const [csvValidating, setCsvValidating] = useState(false);
+  const [csvValidationResult, setCsvValidationResult] = useState(null);
+  const [showCsvValidationGate, setShowCsvValidationGate] = useState(false);
 
   useEffect(() => {
     console.log("[MainContent] user", user);
@@ -308,9 +314,41 @@ export default function MainContent({
     if (file) setTrendExcelFile(file);
   };
 
+  // CSV Validation Gate: バリデーション実行
   const handleCleanVideoUpload = async () => {
     const filesToUpload = cleanVideoFiles.length > 0 ? cleanVideoFiles : (cleanVideoFile ? [cleanVideoFile] : []);
     if (!isLoggedIn || filesToUpload.length === 0 || !productExcelFile || !trendExcelFile || uploading) return;
+
+    // CSV日時バリデーションを実行
+    setCsvValidating(true);
+    setShowCsvValidationGate(true);
+    try {
+      const result = await validateCsvDateTime(filesToUpload, productExcelFile, trendExcelFile);
+      setCsvValidationResult(result);
+      setCsvValidating(false);
+
+      // OK判定の場合は自動的にアップロード開始
+      if (result.verdict === 'ok') {
+        setShowCsvValidationGate(false);
+        setCsvValidationResult(null);
+        await executeCleanVideoUpload(filesToUpload);
+      }
+      // warning/error/unknown の場合はモーダルで確認を待つ
+    } catch (err) {
+      console.error('[CsvValidationGate] Validation failed:', err);
+      setCsvValidating(false);
+      setShowCsvValidationGate(false);
+      // バリデーション自体が失敗した場合はそのままアップロード
+      await executeCleanVideoUpload(filesToUpload);
+    }
+  };
+
+  // CSV Validation Gate: 確認後のアップロード実行
+  const executeCleanVideoUpload = async (filesToUpload) => {
+    if (!filesToUpload) {
+      filesToUpload = cleanVideoFiles.length > 0 ? cleanVideoFiles : (cleanVideoFile ? [cleanVideoFile] : []);
+    }
+    if (filesToUpload.length === 0) return;
 
     setUploading(true);
     setMessage("");
@@ -393,6 +431,59 @@ export default function MainContent({
     } finally {
       clearActiveResumeUploadStorageKey();
       setUploading(false);
+    }
+  };
+
+  // CSV Validation Gate: コールバックハンドラー
+  const handleCsvValidationContinue = async () => {
+    setShowCsvValidationGate(false);
+    const result = csvValidationResult;
+    setCsvValidationResult(null);
+    // 判定結果とユーザーの選択をログ保存
+    logCsvValidationDecision(result, 'continue');
+    await executeCleanVideoUpload();
+  };
+
+  const handleCsvValidationReplace = () => {
+    const result = csvValidationResult;
+    setShowCsvValidationGate(false);
+    setCsvValidationResult(null);
+    setProductExcelFile(null);
+    setTrendExcelFile(null);
+    logCsvValidationDecision(result, 'replace');
+    toast.info('CSVファイルを再選択してください');
+  };
+
+  const handleCsvValidationForce = async () => {
+    setShowCsvValidationGate(false);
+    const result = csvValidationResult;
+    setCsvValidationResult(null);
+    logCsvValidationDecision(result, 'force');
+    await executeCleanVideoUpload();
+  };
+
+  const logCsvValidationDecision = (result, decision) => {
+    try {
+      const payload = {
+        verdict: result?.verdict,
+        decision,
+        checks: result?.checks?.map(c => ({ id: c.id, result: c.result, detail: c.detail })),
+        video_filename: result?.extracted?.video?.filename,
+        trend_filename: result?.extracted?.trend?.filename,
+        product_filename: result?.extracted?.product?.filename,
+        timestamp: new Date().toISOString(),
+        user_email: user?.email,
+      };
+      console.log('[CsvValidationGate] Decision:', payload);
+      // バックエンドに非同期送信
+      const apiBase = import.meta.env.VITE_API_BASE_URL || '';
+      fetch(`${apiBase}/api/v1/admin/csv-validation-log`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }).catch(() => {}); // fire-and-forget
+    } catch (e) {
+      console.warn('[CsvValidationGate] Failed to log decision:', e);
     }
   };
 
@@ -963,6 +1054,22 @@ export default function MainContent({
         }}
         onSwitchToRegister={() => setShowLoginModal(false)}
       />
+
+      {/* CSV Date/Time Validation Gate */}
+      {showCsvValidationGate && (
+        <CsvValidationGate
+          validationResult={csvValidationResult}
+          isValidating={csvValidating}
+          onContinue={handleCsvValidationContinue}
+          onReplace={handleCsvValidationReplace}
+          onForce={handleCsvValidationForce}
+          onClose={() => {
+            setShowCsvValidationGate(false);
+            setCsvValidationResult(null);
+            setCsvValidating(false);
+          }}
+        />
+      )}
 
       <Body>
         {showFeedback ? (

@@ -1578,3 +1578,138 @@ async def get_frontend_diagnostics_summary(
     except Exception as e:
         logger.exception(f"Failed to fetch diagnostics summary: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── CSV Validation Log ───
+
+@router.post("/csv-validation-log")
+async def log_csv_validation(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    CSV Date/Time Validation Gate の判定結果とユーザーの選択をログ保存する。
+    テーブルが存在しない場合は自動作成する。
+    """
+    try:
+        body = await request.json()
+
+        # テーブル自動作成
+        create_sql = text("""
+            CREATE TABLE IF NOT EXISTS csv_validation_logs (
+                id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                verdict VARCHAR(20),
+                decision VARCHAR(20),
+                video_filename VARCHAR(500),
+                trend_filename VARCHAR(500),
+                product_filename VARCHAR(500),
+                checks JSON,
+                user_email VARCHAR(255),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_csv_val_created (created_at),
+                INDEX idx_csv_val_verdict (verdict),
+                INDEX idx_csv_val_decision (decision)
+            )
+        """)
+        await db.execute(create_sql)
+
+        insert_sql = text("""
+            INSERT INTO csv_validation_logs
+                (verdict, decision, video_filename, trend_filename, product_filename, checks, user_email)
+            VALUES
+                (:verdict, :decision, :video_filename, :trend_filename, :product_filename, :checks, :user_email)
+        """)
+        import json as json_mod
+        await db.execute(insert_sql, {
+            "verdict": body.get("verdict"),
+            "decision": body.get("decision"),
+            "video_filename": body.get("video_filename", "")[:500],
+            "trend_filename": body.get("trend_filename", "")[:500],
+            "product_filename": body.get("product_filename", "")[:500],
+            "checks": json_mod.dumps(body.get("checks", []), ensure_ascii=False),
+            "user_email": body.get("user_email", "")[:255],
+        })
+        await db.commit()
+
+        return {"status": "ok"}
+    except Exception as e:
+        logger.warning(f"Failed to log CSV validation: {e}")
+        return {"status": "error", "detail": str(e)}
+
+
+@router.get("/csv-validation-logs")
+async def get_csv_validation_logs(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    limit: int = 50,
+    offset: int = 0,
+    verdict: str = None,
+    decision: str = None,
+):
+    """
+    CSV Validation ログ一覧を取得する（Admin用）。
+    """
+    try:
+        # テーブル自動作成
+        create_sql = text("""
+            CREATE TABLE IF NOT EXISTS csv_validation_logs (
+                id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                verdict VARCHAR(20),
+                decision VARCHAR(20),
+                video_filename VARCHAR(500),
+                trend_filename VARCHAR(500),
+                product_filename VARCHAR(500),
+                checks JSON,
+                user_email VARCHAR(255),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_csv_val_created (created_at),
+                INDEX idx_csv_val_verdict (verdict),
+                INDEX idx_csv_val_decision (decision)
+            )
+        """)
+        await db.execute(create_sql)
+
+        where_clauses = ["1=1"]
+        params = {"limit_val": limit, "offset_val": offset}
+
+        if verdict:
+            where_clauses.append("verdict = :verdict")
+            params["verdict"] = verdict
+        if decision:
+            where_clauses.append("decision = :decision")
+            params["decision"] = decision
+
+        where_str = " AND ".join(where_clauses)
+
+        sql = text(f"""
+            SELECT id, verdict, decision, video_filename, trend_filename, product_filename,
+                   checks, user_email, created_at
+            FROM csv_validation_logs
+            WHERE {where_str}
+            ORDER BY created_at DESC
+            LIMIT :limit_val OFFSET :offset_val
+        """)
+        result = await db.execute(sql, params)
+        rows = result.fetchall()
+
+        return {
+            "logs": [
+                {
+                    "id": r.id,
+                    "verdict": r.verdict,
+                    "decision": r.decision,
+                    "video_filename": r.video_filename,
+                    "trend_filename": r.trend_filename,
+                    "product_filename": r.product_filename,
+                    "checks": r.checks,
+                    "user_email": r.user_email,
+                    "created_at": str(r.created_at) if r.created_at else None,
+                }
+                for r in rows
+            ],
+            "limit": limit,
+            "offset": offset,
+        }
+    except Exception as e:
+        logger.exception(f"Failed to fetch CSV validation logs: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
