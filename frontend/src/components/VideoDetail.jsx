@@ -13,6 +13,7 @@ import SalesMomentClips from "./SalesMomentClips";
 import MomentClips from "./MomentClips";
 import HookDetection from "./HookDetection";
 import LiveReportSection from "./LiveReportSection";
+import SectionErrorBoundary from "./SectionErrorBoundary";
 // ProductTimeline is now integrated into AnalyticsSection
 
 export default function VideoDetail({ videoData }) {
@@ -135,33 +136,41 @@ export default function VideoDetail({ videoData }) {
 
   // Initialize ratings from existing data
   useEffect(() => {
-    if (!videoData?.reports_1) return;
-    const initialRatings = {};
-    const initialComments = {};
-    for (const item of videoData.reports_1) {
-      const key = item.phase_index ?? 0;
-      if (item.user_rating) {
-        initialRatings[key] = { rating: item.user_rating, saving: false, saved: true };
+    try {
+      if (!videoData?.reports_1) return;
+      const initialRatings = {};
+      const initialComments = {};
+      for (const item of videoData.reports_1) {
+        const key = item?.phase_index ?? 0;
+        if (item?.user_rating) {
+          initialRatings[key] = { rating: item.user_rating, saving: false, saved: true };
+        }
+        if (item?.user_comment) {
+          initialComments[key] = item.user_comment;
+        }
       }
-      if (item.user_comment) {
-        initialComments[key] = item.user_comment;
-      }
+      if (Object.keys(initialRatings).length > 0) setPhaseRatings(initialRatings);
+      if (Object.keys(initialComments).length > 0) setRatingComments(initialComments);
+    } catch (err) {
+      console.warn('[VideoDetail] Failed to init ratings:', err);
     }
-    if (Object.keys(initialRatings).length > 0) setPhaseRatings(initialRatings);
-    if (Object.keys(initialComments).length > 0) setRatingComments(initialComments);
   }, [videoData?.reports_1]);
 
   // Initialize human tags from existing data
   useEffect(() => {
-    if (!videoData?.reports_1) return;
-    const initial = {};
-    for (const item of videoData.reports_1) {
-      const key = item.phase_index ?? 0;
-      if (item.human_sales_tags) {
-        initial[key] = item.human_sales_tags;
+    try {
+      if (!videoData?.reports_1) return;
+      const initial = {};
+      for (const item of videoData.reports_1) {
+        const key = item?.phase_index ?? 0;
+        if (item?.human_sales_tags) {
+          initial[key] = item.human_sales_tags;
+        }
       }
+      if (Object.keys(initial).length > 0) setHumanTags(initial);
+    } catch (err) {
+      console.warn('[VideoDetail] Failed to init human tags:', err);
     }
-    if (Object.keys(initial).length > 0) setHumanTags(initial);
   }, [videoData?.reports_1]);
 
   // Load sales moments when video loads
@@ -802,69 +811,84 @@ export default function VideoDetail({ videoData }) {
         {/* SCROLL AREA */}
         <div className="flex-1 overflow-y-auto scrollbar-custom text-left px-0 md:px-4 md:mb-0">
           {/* Clip Section - show generated clips at the top */}
-          <ClipSection videoData={videoData} clipStates={clipStates} reports1={videoData?.reports_1} />
+          <SectionErrorBoundary sectionName="切り抜き動画">
+            <ClipSection videoData={videoData} clipStates={clipStates} reports1={videoData?.reports_1} />
+          </SectionErrorBoundary>
 
           {/* AI Sales Clip Candidates */}
-          <SalesClipCandidates
-            videoData={videoData}
-            clipStates={clipStates}
-            onRequestClip={(candidate) => {
-              handleClipGeneration(
-                { time_start: candidate.time_start, time_end: candidate.time_end },
-                candidate.phase_index
-              );
-            }}
-          />
+          <SectionErrorBoundary sectionName="AIおすすめクリップ">
+            <SalesClipCandidates
+              videoData={videoData}
+              clipStates={clipStates}
+              onRequestClip={(candidate) => {
+                handleClipGeneration(
+                  { time_start: candidate.time_start, time_end: candidate.time_end },
+                  candidate.phase_index
+                );
+              }}
+            />
+          </SectionErrorBoundary>
 
           {/* Sales Moment Clips - spike-based */}
-          <SalesMomentClips
-            videoData={videoData}
-            clipStates={clipStates}
-            onRequestClip={(candidate) => {
-              handleClipGeneration(
-                { time_start: candidate.time_start, time_end: candidate.time_end },
-                candidate.phase_index
-              );
-            }}
-          />
+          <SectionErrorBoundary sectionName="Sales Moment Clips">
+            <SalesMomentClips
+              videoData={videoData}
+              clipStates={clipStates}
+              onRequestClip={(candidate) => {
+                handleClipGeneration(
+                  { time_start: candidate.time_start, time_end: candidate.time_end },
+                  candidate.phase_index
+                );
+              }}
+            />
+          </SectionErrorBoundary>
 
           {/* Moment Clips - category-based (screen recording) */}
-          <MomentClips
-            videoData={videoData}
-            clipStates={clipStates}
-            onRequestClip={(candidate) => {
-              handleClipGeneration(
-                { time_start: candidate.time_start, time_end: candidate.time_end },
-                candidate.phase_index
-              );
-            }}
-          />
+          <SectionErrorBoundary sectionName="Moment Clips">
+            <MomentClips
+              videoData={videoData}
+              clipStates={clipStates}
+              onRequestClip={(candidate) => {
+                handleClipGeneration(
+                  { time_start: candidate.time_start, time_end: candidate.time_end },
+                  candidate.phase_index
+                );
+              }}
+            />
+          </SectionErrorBoundary>
 
           {/* Hook Detection */}
-          <HookDetection
-            videoData={videoData}
-            onSelectHook={(hook) => {
-              // フック選択時にプレビュー
-              handlePhasePreview({ time_start: hook.start_sec, time_end: hook.end_sec });
-            }}
-          />
+          <SectionErrorBoundary sectionName="Hook Detection">
+            <HookDetection
+              videoData={videoData}
+              onSelectHook={(hook) => {
+                // フック選択時にプレビュー
+                handlePhasePreview({ time_start: hook.start_sec, time_end: hook.end_sec });
+              }}
+            />
+          </SectionErrorBoundary>
 
           {/* Analytics Section - above report */}
-          <AnalyticsSection reports1={videoData?.reports_1} videoData={videoData}
-            onPreviewSegment={(timeStart, timeEnd) => {
-              handlePhasePreview({ time_start: timeStart, time_end: timeEnd });
-            }}
-          />
+          <SectionErrorBoundary sectionName="配信パフォーマンス">
+            <AnalyticsSection reports1={videoData?.reports_1} videoData={videoData}
+              onPreviewSegment={(timeStart, timeEnd) => {
+                handlePhasePreview({ time_start: timeStart, time_end: timeEnd });
+              }}
+            />
+          </SectionErrorBoundary>
 
           {/* Live Report v1 - 3-layer report */}
-          <div className="w-full mt-2 mx-auto">
-            <div className="rounded-2xl bg-gray-50 border border-gray-200 p-4 md:p-5">
-              <LiveReportSection videoData={videoData} />
+          <SectionErrorBoundary sectionName="ライブレポート">
+            <div className="w-full mt-2 mx-auto">
+              <div className="rounded-2xl bg-gray-50 border border-gray-200 p-4 md:p-5">
+                <LiveReportSection videoData={videoData} />
+              </div>
             </div>
-          </div>
+          </SectionErrorBoundary>
 
           {/* Product Timeline is now integrated into AnalyticsSection above */}
 
+          <SectionErrorBoundary sectionName="レポート：全体戦略">
           <div className="w-full mt-6 mx-auto">
             <div className="rounded-2xl bg-gray-50 border border-gray-200">
               <div onClick={() => setReportCollapsed((s) => !s)} className="flex items-center justify-between p-5 cursor-pointer hover:bg-gray-100 transform transition-all duration-200">
@@ -1579,7 +1603,10 @@ export default function VideoDetail({ videoData }) {
             </div>
 
           </div>
+          </SectionErrorBoundary>
+
           {/* Questions and Answers Section */}
+          <SectionErrorBoundary sectionName="質問と回答">
           <div className="space-y-3 pt-4 mt-4 border-t border-gray-200">
             <p className="text-gray-400 text-xs text-center">質問と回答</p>
             <div className="rounded-2xl p-4 max-w-[85%] bg-gray-50 border border-gray-200">
@@ -1622,6 +1649,7 @@ export default function VideoDetail({ videoData }) {
               </div>
             )}
           </div>
+          </SectionErrorBoundary>
         </div>
 
         <div className="w-full mx-auto hidden md:block mt-4 pb-4">
@@ -1629,6 +1657,7 @@ export default function VideoDetail({ videoData }) {
         </div>
       </div>
 
+      <SectionErrorBoundary sectionName="動画プレビュー">
       <DockPlayer
         open={!!previewData}
         onClose={handleCloseDockPlayer}
@@ -1671,6 +1700,7 @@ export default function VideoDetail({ videoData }) {
         salesMoments={salesMoments}
         eventScores={eventScores}
       />
+      </SectionErrorBoundary>
     </div>
   );
 }
