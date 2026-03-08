@@ -26,6 +26,8 @@ class Video(Base, UUIDMixin, TimestampMixin):
     # Excel file blob URLs (only for clean_video uploads)
     excel_product_blob_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     excel_trend_blob_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Total video duration in seconds
+    duration: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     # Compressed preview video blob path (e.g., email/video_id/video_id_preview.mp4)
     compressed_blob_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     # Cached top 2 product names by GMV as JSON string

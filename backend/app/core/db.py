@@ -77,3 +77,6 @@ AsyncSessionLocal = sessionmaker(
 async def get_db():
     async with AsyncSessionLocal() as session:
         yield session
+
+# Alias for backward compatibility (used by health/ready endpoint)
+get_async_session = get_db

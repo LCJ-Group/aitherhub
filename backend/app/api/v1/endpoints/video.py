@@ -3188,26 +3188,52 @@ async def get_sales_moment_clips(
         user_id = user.get("user_id") or user.get("id")
 
         # フェーズデータ取得
-        sql_phases = text("""
-            SELECT
-                vp.phase_index,
-                vp.time_start,
-                vp.time_end,
-                COALESCE(vp.gmv, 0) as gmv,
-                COALESCE(vp.order_count, 0) as order_count,
-                COALESCE(vp.viewer_count, 0) as viewer_count,
-                COALESCE(vp.product_clicks, 0) as product_clicks,
-                COALESCE(vp.cta_score, 0) as cta_score
-            FROM video_phases vp
-            WHERE vp.video_id = :video_id
-              AND (vp.user_id = :user_id OR vp.user_id IS NULL)
-            ORDER BY vp.phase_index ASC
-        """)
-        phases_result = await db.execute(sql_phases, {
-            "video_id": video_id,
-            "user_id": user_id,
-        })
-        phase_rows = phases_result.fetchall()
+        try:
+            sql_phases = text("""
+                SELECT
+                    vp.phase_index,
+                    vp.time_start,
+                    vp.time_end,
+                    COALESCE(vp.gmv, 0) as gmv,
+                    COALESCE(vp.order_count, 0) as order_count,
+                    COALESCE(vp.viewer_count, 0) as viewer_count,
+                    COALESCE(vp.product_clicks, 0) as product_clicks,
+                    COALESCE(vp.cta_score, 0) as cta_score
+                FROM video_phases vp
+                WHERE vp.video_id = :video_id
+                  AND (vp.user_id = :user_id OR vp.user_id IS NULL)
+                ORDER BY vp.phase_index ASC
+            """)
+            phases_result = await db.execute(sql_phases, {
+                "video_id": video_id,
+                "user_id": user_id,
+            })
+            phase_rows = phases_result.fetchall()
+        except Exception:
+            # Fallback: query without sales metric columns
+            await db.rollback()
+            sql_phases_fallback = text("""
+                SELECT
+                    vp.phase_index,
+                    vp.time_start,
+                    vp.time_end,
+                    COALESCE(vp.cta_score, 0) as cta_score
+                FROM video_phases vp
+                WHERE vp.video_id = :video_id
+                  AND (vp.user_id = :user_id OR vp.user_id IS NULL)
+                ORDER BY vp.phase_index ASC
+            """)
+            phases_result = await db.execute(sql_phases_fallback, {
+                "video_id": video_id,
+                "user_id": user_id,
+            })
+            phase_rows = phases_result.fetchall()
+            # Add default values for missing columns
+            phase_rows = [
+                type(row, (), {**dict(row._mapping), "gmv": 0, "order_count": 0, "viewer_count": 0, "product_clicks": 0})
+                if not hasattr(row, 'gmv') else row
+                for row in phase_rows
+            ]
 
         if not phase_rows:
             return {
@@ -3218,11 +3244,15 @@ async def get_sales_moment_clips(
 
         phases = [dict(row._mapping) for row in phase_rows]
 
-        # 動画の総秒数
-        video_sql = text("SELECT duration FROM videos WHERE id = :video_id")
-        vres = await db.execute(video_sql, {"video_id": video_id})
-        video_row = vres.fetchone()
-        video_duration = float(video_row.duration) if video_row and video_row.duration else 0.0
+        # 動画の総秒数（duration カラムが存在しない場合は video_phases から計算）
+        try:
+            video_sql = text("SELECT duration FROM videos WHERE id = :video_id")
+            vres = await db.execute(video_sql, {"video_id": video_id})
+            video_row = vres.fetchone()
+            video_duration = float(video_row.duration) if video_row and video_row.duration else 0.0
+        except Exception:
+            # Fallback: compute from phases
+            video_duration = max((float(p.get("time_end", 0)) for p in phases), default=0.0)
 
         # 時系列メトリクスを構築
         timed_metrics = compute_timed_metrics_from_phases(phases)
@@ -3297,22 +3327,45 @@ async def detect_hooks_for_video(
 
         # トランスクリプトセグメントを取得
         # まず video_phases の audio_text から取得を試みる
-        sql_phases = text("""
-            SELECT
-                vp.phase_index,
-                vp.time_start,
-                vp.time_end,
-                vp.audio_text
-            FROM video_phases vp
-            WHERE vp.video_id = :video_id
-              AND (vp.user_id = :user_id OR vp.user_id IS NULL)
-            ORDER BY vp.phase_index ASC
-        """)
-        phases_result = await db.execute(sql_phases, {
-            "video_id": video_id,
-            "user_id": user_id,
-        })
-        phase_rows = phases_result.fetchall()
+        phase_rows = []
+        has_audio_text = True
+        try:
+            sql_phases = text("""
+                SELECT
+                    vp.phase_index,
+                    vp.time_start,
+                    vp.time_end,
+                    vp.audio_text
+                FROM video_phases vp
+                WHERE vp.video_id = :video_id
+                  AND (vp.user_id = :user_id OR vp.user_id IS NULL)
+                ORDER BY vp.phase_index ASC
+            """)
+            phases_result = await db.execute(sql_phases, {
+                "video_id": video_id,
+                "user_id": user_id,
+            })
+            phase_rows = phases_result.fetchall()
+        except Exception:
+            # audio_text column doesn't exist yet - fallback to phase_description
+            has_audio_text = False
+            await db.rollback()
+            sql_phases_fallback = text("""
+                SELECT
+                    vp.phase_index,
+                    vp.time_start,
+                    vp.time_end,
+                    vp.phase_description as audio_text
+                FROM video_phases vp
+                WHERE vp.video_id = :video_id
+                  AND (vp.user_id = :user_id OR vp.user_id IS NULL)
+                ORDER BY vp.phase_index ASC
+            """)
+            phases_result = await db.execute(sql_phases_fallback, {
+                "video_id": video_id,
+                "user_id": user_id,
+            })
+            phase_rows = phases_result.fetchall()
 
         # フェーズのaudio_textからセグメントを構築
         segments = []
@@ -3359,11 +3412,14 @@ async def detect_hooks_for_video(
         max_cand = max(1, min(int(max_candidates), 20))
         hooks = detect_hooks(segments, max_candidates=max_cand)
 
-        # 動画全体のフック配置提案
-        video_sql = text("SELECT duration FROM videos WHERE id = :video_id")
-        vres = await db.execute(video_sql, {"video_id": video_id})
-        video_row = vres.fetchone()
-        video_duration = float(video_row.duration) if video_row and video_row.duration else 0.0
+        # 動画全体のフック配置提案（duration カラムが存在しない場合はフェーズから計算）
+        try:
+            video_sql = text("SELECT duration FROM videos WHERE id = :video_id")
+            vres = await db.execute(video_sql, {"video_id": video_id})
+            video_row = vres.fetchone()
+            video_duration = float(video_row.duration) if video_row and video_row.duration else 0.0
+        except Exception:
+            video_duration = max((s.get("end", 0) for s in segments), default=0.0) if segments else 0.0
 
         placement = suggest_hook_placement(hooks, 0, video_duration) if hooks else None
 
@@ -3504,28 +3560,63 @@ async def get_moment_clips(
     try:
         user_id = current_user.get("user_id") or current_user.get("id")
 
-        # 動画情報を取得
-        video_sql = text("SELECT duration, upload_type FROM videos WHERE id = :video_id AND user_id = :user_id")
-        vres = await db.execute(video_sql, {"video_id": video_id, "user_id": user_id})
-        video_row = vres.fetchone()
-        if not video_row:
-            raise HTTPException(status_code=404, detail="Video not found")
-
-        video_duration = float(video_row.duration) if video_row.duration else 0.0
+        # 動画情報を取得（duration カラムが存在しない場合のフォールバック付き）
+        try:
+            video_sql = text("SELECT duration, upload_type FROM videos WHERE id = :video_id AND user_id = :user_id")
+            vres = await db.execute(video_sql, {"video_id": video_id, "user_id": user_id})
+            video_row = vres.fetchone()
+            if not video_row:
+                raise HTTPException(status_code=404, detail="Video not found")
+            video_duration = float(video_row.duration) if video_row.duration else 0.0
+        except HTTPException:
+            raise
+        except Exception:
+            # Fallback: check video exists without duration column
+            video_check_sql = text("SELECT id, upload_type FROM videos WHERE id = :video_id AND user_id = :user_id")
+            vres = await db.execute(video_check_sql, {"video_id": video_id, "user_id": user_id})
+            video_row = vres.fetchone()
+            if not video_row:
+                raise HTTPException(status_code=404, detail="Video not found")
+            # Compute duration from video_phases
+            dur_sql = text("SELECT MAX(time_end) as max_end FROM video_phases WHERE video_id = :video_id")
+            dur_res = await db.execute(dur_sql, {"video_id": video_id})
+            dur_row = dur_res.fetchone()
+            video_duration = float(dur_row.max_end) if dur_row and dur_row.max_end else 0.0
 
         # sales_moments を取得（moment_type_detail 含む）
-        sql = text("""
-            SELECT id, video_id, time_key, time_sec, video_sec, moment_type,
-                   moment_type_detail, source, frame_meta,
-                   click_value, click_delta, click_sigma_score,
-                   order_value, order_delta, gmv_value,
-                   confidence, reasons, created_at
-            FROM video_sales_moments
-            WHERE video_id = :video_id
-            ORDER BY video_sec ASC
-        """)
-        result = await db.execute(sql, {"video_id": video_id})
-        rows = result.fetchall()
+        try:
+            sql = text("""
+                SELECT id, video_id, time_key, time_sec, video_sec, moment_type,
+                       moment_type_detail, source, frame_meta,
+                       click_value, click_delta, click_sigma_score,
+                       order_value, order_delta, gmv_value,
+                       confidence, reasons, created_at
+                FROM video_sales_moments
+                WHERE video_id = :video_id
+                ORDER BY video_sec ASC
+            """)
+            result = await db.execute(sql, {"video_id": video_id})
+            rows = result.fetchall()
+        except Exception:
+            # Fallback: query without newer columns
+            await db.rollback()
+            try:
+                sql_fallback = text("""
+                    SELECT id, video_id, time_key, time_sec, video_sec, moment_type,
+                           moment_type AS moment_type_detail,
+                           'pipeline' AS source,
+                           NULL AS frame_meta,
+                           click_value, click_delta, click_sigma_score,
+                           order_value, order_delta, gmv_value,
+                           confidence, reasons, created_at
+                    FROM video_sales_moments
+                    WHERE video_id = :video_id
+                    ORDER BY video_sec ASC
+                """)
+                result = await db.execute(sql_fallback, {"video_id": video_id})
+                rows = result.fetchall()
+            except Exception:
+                rows = []
 
         if not rows:
             return {
