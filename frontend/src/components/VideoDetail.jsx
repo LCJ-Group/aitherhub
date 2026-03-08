@@ -14,6 +14,8 @@ import MomentClips from "./MomentClips";
 import HookDetection from "./HookDetection";
 import LiveReportSection from "./LiveReportSection";
 import SectionErrorBoundary from "./SectionErrorBoundary";
+import CsvAssetPanel from "./CsvAssetPanel";
+import CsvReplaceModal from "./CsvReplaceModal";
 // ProductTimeline is now integrated into AnalyticsSection
 
 export default function VideoDetail({ videoData }) {
@@ -110,6 +112,8 @@ export default function VideoDetail({ videoData }) {
   const reloadTimeoutRef = useRef(null);
   const chatEndRef = useRef(null);
 
+  const [showCsvReplace, setShowCsvReplace] = useState(false);
+  const [csvReplaceKey, setCsvReplaceKey] = useState(0); // force re-render after replace
   const [reportCollapsed, setReportCollapsed] = useState(false);
   const [timelineCollapsed, setTimelineCollapsed] = useState(true);
   const [expandedTimeline, setExpandedTimeline] = useState({});
@@ -810,6 +814,28 @@ export default function VideoDetail({ videoData }) {
         </div>
         {/* SCROLL AREA */}
         <div className="flex-1 overflow-y-auto scrollbar-custom text-left px-0 md:px-4 md:mb-0">
+          {/* CSV / Excel Info Panel */}
+          <SectionErrorBoundary sectionName="CSVアセット管理">
+            <CsvAssetPanel
+              key={csvReplaceKey}
+              videoData={videoData}
+              onReplace={() => setShowCsvReplace(true)}
+              onRefresh={() => setCsvReplaceKey((k) => k + 1)}
+            />
+          </SectionErrorBoundary>
+
+          {/* CSV Replace Modal */}
+          {showCsvReplace && (
+            <CsvReplaceModal
+              videoData={videoData}
+              onClose={() => setShowCsvReplace(false)}
+              onComplete={() => {
+                setShowCsvReplace(false);
+                setCsvReplaceKey((k) => k + 1);
+              }}
+            />
+          )}
+
           {/* Clip Section - show generated clips at the top */}
           <SectionErrorBoundary sectionName="切り抜き動画">
             <ClipSection videoData={videoData} clipStates={clipStates} reports1={videoData?.reports_1} />
