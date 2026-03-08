@@ -1,5 +1,7 @@
 import React, { useState } from "react";
 import VideoService from "../base/services/videoService";
+import { useSectionState } from "../base/hooks/useSectionState";
+import { ErrorState } from "./SectionStateUI";
 
 /**
  * SalesMomentClips
@@ -13,9 +15,7 @@ import VideoService from "../base/services/videoService";
  *   clipStates         – { [phaseIndex]: { status, clip_url } }
  */
 export default function SalesMomentClips({ videoData, onRequestClip, clipStates = {} }) {
-  const [loading, setLoading] = useState(false);
-  const [data, setData] = useState(null);
-  const [error, setError] = useState(null);
+  const { state, data, error, execute, retry } = useSectionState("SalesMomentClips");
   const [collapsed, setCollapsed] = useState(false);
 
   const formatTime = (seconds) => {
@@ -26,18 +26,16 @@ export default function SalesMomentClips({ videoData, onRequestClip, clipStates 
     return `${m}:${sec.toString().padStart(2, "0")}`;
   };
 
-  const handleFetch = async () => {
+  const handleFetch = () => {
     if (!videoData?.id) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const result = await VideoService.getSalesMomentClips(videoData.id, 5);
-      setData(result);
-    } catch (err) {
-      setError(err?.message || "スパイク検出に失敗しました");
-    } finally {
-      setLoading(false);
-    }
+    execute(
+      () => VideoService.getSalesMomentClips(videoData.id, 5),
+      {
+        videoId: videoData.id,
+        endpoint: `/api/v1/videos/${videoData.id}/sales-moment-clips`,
+        emptyCheck: (d) => !d?.candidates || d.candidates.length === 0,
+      }
+    );
   };
 
   const handleClipRequest = (candidate) => {
@@ -75,6 +73,9 @@ export default function SalesMomentClips({ videoData, onRequestClip, clipStates 
     return clipStates[candidate.phase_index] || null;
   };
 
+  const isLoading = state === "loading";
+  const hasData = state === "success" || state === "empty";
+
   return (
     <div className="mt-6">
       <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
@@ -100,14 +101,14 @@ export default function SalesMomentClips({ videoData, onRequestClip, clipStates 
           </div>
 
           <div className="flex items-center gap-2">
-            {!data ? (
+            {!hasData ? (
               <button
                 type="button"
                 onClick={handleFetch}
-                disabled={loading}
+                disabled={isLoading}
                 className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold text-white bg-gradient-to-r from-red-500 to-orange-500 hover:from-red-600 hover:to-orange-600 shadow-sm hover:shadow-md transition-all disabled:opacity-60"
               >
-                {loading ? (
+                {isLoading ? (
                   <>
                     <svg className="animate-spin" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                       <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
@@ -128,9 +129,10 @@ export default function SalesMomentClips({ videoData, onRequestClip, clipStates 
                 <button
                   type="button"
                   onClick={handleFetch}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-red-600 bg-white border border-red-200 hover:bg-red-50 transition-colors"
+                  disabled={isLoading}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-red-600 bg-white border border-red-200 hover:bg-red-50 transition-colors disabled:opacity-60"
                 >
-                  再検出
+                  {isLoading ? "検出中..." : "再検出"}
                 </button>
                 <button
                   type="button"
@@ -147,118 +149,119 @@ export default function SalesMomentClips({ videoData, onRequestClip, clipStates 
           </div>
         </div>
 
-        {/* エラー表示 */}
-        {error && (
-          <div className="mx-5 mb-4 px-4 py-3 rounded-xl bg-red-50 border border-red-200 text-red-600 text-sm">
-            {error}
+        {/* エラー表示 - SectionStateUI統一 */}
+        {state === "error" && (
+          <div className="mx-5 mb-4">
+            <ErrorState error={error} onRetry={retry} sectionName="Sales Moment Clips" compact />
+          </div>
+        )}
+
+        {/* 空状態 */}
+        {state === "empty" && !collapsed && (
+          <div className="px-5 pb-5">
+            <div className="text-center py-8 text-gray-400 text-sm">
+              <div className="text-3xl mb-2">📊</div>
+              <div>スパイクが検出されませんでした。</div>
+              <div className="mt-1 text-xs">売上データが均一な場合、スパイクは検出されません。</div>
+            </div>
           </div>
         )}
 
         {/* 候補カード一覧 */}
-        {data && !collapsed && (
+        {state === "success" && data && !collapsed && (
           <div className="px-5 pb-5">
-            {data.candidates?.length === 0 ? (
-              <div className="text-center py-8 text-gray-400 text-sm">
-                <div className="text-3xl mb-2">📊</div>
-                <div>スパイクが検出されませんでした。</div>
-                <div className="mt-1 text-xs">売上データが均一な場合、スパイクは検出されません。</div>
-              </div>
-            ) : (
-              <>
-                {/* スパイク統計 */}
-                <div className="flex items-center gap-3 px-3 py-2 rounded-xl bg-orange-50 border border-orange-100 text-xs mb-3">
-                  <span className="text-orange-600 font-semibold">
-                    {data.spike_count} スパイク検出
-                  </span>
-                  <span className="text-gray-400">→</span>
-                  <span className="text-gray-600">
-                    {data.candidates?.length} クリップ候補
-                  </span>
-                </div>
+            {/* スパイク統計 */}
+            <div className="flex items-center gap-3 px-3 py-2 rounded-xl bg-orange-50 border border-orange-100 text-xs mb-3">
+              <span className="text-orange-600 font-semibold">
+                {data.spike_count} スパイク検出
+              </span>
+              <span className="text-gray-400">→</span>
+              <span className="text-gray-600">
+                {data.candidates?.length} クリップ候補
+              </span>
+            </div>
 
-                <div className="space-y-3">
-                  {data.candidates?.map((candidate) => {
-                    const clipState = getClipState(candidate);
+            <div className="space-y-3">
+              {data.candidates?.map((candidate) => {
+                const clipState = getClipState(candidate);
 
-                    return (
-                      <div
-                        key={candidate.rank}
-                        className="rounded-xl border border-gray-200 shadow-sm hover:shadow-md transition-all duration-200 overflow-hidden"
-                      >
-                        {/* カードヘッダー */}
-                        <div className={`bg-gradient-to-r ${metricColor(candidate.primary_metric)} px-4 py-2.5 flex items-center justify-between`}>
-                          <div className="flex items-center gap-2">
-                            <span className="text-white text-lg">{metricIcon(candidate.primary_metric)}</span>
-                            <span className="text-white font-bold text-sm">{candidate.label}</span>
-                            <span className="text-white/80 text-xs">
-                              {formatTime(candidate.time_start)} – {formatTime(candidate.time_end)}
-                            </span>
-                          </div>
-                          <span className="bg-white/20 text-white text-xs font-bold px-2 py-0.5 rounded-full">
-                            {candidate.score.toFixed(1)}pt
-                          </span>
-                        </div>
-
-                        {/* カードボディ */}
-                        <div className="p-3">
-                          {/* サマリー */}
-                          <p className="text-sm text-gray-700 font-medium mb-2">
-                            {candidate.summary}
-                          </p>
-
-                          {/* スパイクイベント */}
-                          {candidate.spike_events?.length > 0 && (
-                            <div className="flex flex-wrap gap-1.5 mb-3">
-                              {candidate.spike_events.map((se, i) => (
-                                <span
-                                  key={i}
-                                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-white border border-gray-200 text-gray-600"
-                                >
-                                  {metricIcon(se.metric)}
-                                  {formatTime(se.video_sec)} ({se.spike_ratio}x)
-                                </span>
-                              ))}
-                            </div>
-                          )}
-
-                          {/* アクションボタン */}
-                          <div className="flex items-center justify-end gap-2">
-                            {clipState?.status === "completed" && clipState?.clip_url ? (
-                              <a
-                                href={clipState.clip_url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-500 text-white text-xs font-medium hover:bg-green-600 transition-colors"
-                              >
-                                ダウンロード
-                              </a>
-                            ) : clipState?.status === "requesting" || clipState?.status === "pending" || clipState?.status === "processing" ? (
-                              <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-100 text-gray-500 text-xs font-medium cursor-not-allowed">
-                                <svg className="animate-spin" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                                  <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
-                                </svg>
-                                生成中...
-                              </span>
-                            ) : (
-                              <button
-                                type="button"
-                                onClick={() => handleClipRequest(candidate)}
-                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-red-500 to-orange-500 text-white text-xs font-medium hover:from-red-600 hover:to-orange-600 transition-all shadow-sm hover:shadow-md"
-                              >
-                                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                                  <polygon points="5 3 19 12 5 21 5 3"/>
-                                </svg>
-                                クリップ生成
-                              </button>
-                            )}
-                          </div>
-                        </div>
+                return (
+                  <div
+                    key={candidate.rank}
+                    className="rounded-xl border border-gray-200 shadow-sm hover:shadow-md transition-all duration-200 overflow-hidden"
+                  >
+                    {/* カードヘッダー */}
+                    <div className={`bg-gradient-to-r ${metricColor(candidate.primary_metric)} px-4 py-2.5 flex items-center justify-between`}>
+                      <div className="flex items-center gap-2">
+                        <span className="text-white text-lg">{metricIcon(candidate.primary_metric)}</span>
+                        <span className="text-white font-bold text-sm">{candidate.label}</span>
+                        <span className="text-white/80 text-xs">
+                          {formatTime(candidate.time_start)} – {formatTime(candidate.time_end)}
+                        </span>
                       </div>
-                    );
-                  })}
-                </div>
-              </>
-            )}
+                      <span className="bg-white/20 text-white text-xs font-bold px-2 py-0.5 rounded-full">
+                        {candidate.score.toFixed(1)}pt
+                      </span>
+                    </div>
+
+                    {/* カードボディ */}
+                    <div className="p-3">
+                      {/* サマリー */}
+                      <p className="text-sm text-gray-700 font-medium mb-2">
+                        {candidate.summary}
+                      </p>
+
+                      {/* スパイクイベント */}
+                      {candidate.spike_events?.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5 mb-3">
+                          {candidate.spike_events.map((se, i) => (
+                            <span
+                              key={i}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-white border border-gray-200 text-gray-600"
+                            >
+                              {metricIcon(se.metric)}
+                              {formatTime(se.video_sec)} ({se.spike_ratio}x)
+                            </span>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* アクションボタン */}
+                      <div className="flex items-center justify-end gap-2">
+                        {clipState?.status === "completed" && clipState?.clip_url ? (
+                          <a
+                            href={clipState.clip_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-500 text-white text-xs font-medium hover:bg-green-600 transition-colors"
+                          >
+                            ダウンロード
+                          </a>
+                        ) : clipState?.status === "requesting" || clipState?.status === "pending" || clipState?.status === "processing" ? (
+                          <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-100 text-gray-500 text-xs font-medium cursor-not-allowed">
+                            <svg className="animate-spin" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                              <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+                            </svg>
+                            生成中...
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => handleClipRequest(candidate)}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-red-500 to-orange-500 text-white text-xs font-medium hover:from-red-600 hover:to-orange-600 transition-all shadow-sm hover:shadow-md"
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                              <polygon points="5 3 19 12 5 21 5 3"/>
+                            </svg>
+                            クリップ生成
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
       </div>

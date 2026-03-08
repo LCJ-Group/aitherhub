@@ -1284,3 +1284,234 @@ async def recalc_all_videos(
         "errors": sum(1 for r in results if r["status"] == "error"),
         "results": results,
     }
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Frontend Diagnostics endpoints
+# ──────────────────────────────────────────────────────────────────────
+
+@router.post("/frontend-diagnostics")
+async def report_frontend_error(
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Frontend からセクションエラーを受信して DB に保存する。
+    認証不要（エラー報告はログイン失敗時にも送れる必要がある）。
+
+    Payload:
+        video_id      - 動画ID
+        section_name  - セクション名 (e.g., "MomentClips")
+        endpoint      - APIエンドポイント
+        error_type    - エラータイプ (auth/not_found/timeout/server/network/parse/unknown)
+        error_message - エラーメッセージ
+        http_status   - HTTPステータスコード
+        request_id    - X-Request-Id
+        page_url      - ページURL
+        user_agent    - ブラウザUA
+    """
+    try:
+        sql = text("""
+            INSERT INTO frontend_diagnostics
+                (video_id, section_name, endpoint, error_type, error_message,
+                 http_status, request_id, page_url, user_agent)
+            VALUES
+                (:video_id, :section_name, :endpoint, :error_type, :error_message,
+                 :http_status, :request_id, :page_url, :user_agent)
+        """)
+        await db.execute(sql, {
+            "video_id": payload.get("video_id", ""),
+            "section_name": payload.get("section_name", "unknown"),
+            "endpoint": payload.get("endpoint", ""),
+            "error_type": payload.get("error_type", "unknown"),
+            "error_message": str(payload.get("error_message", ""))[:2000],
+            "http_status": payload.get("http_status"),
+            "request_id": payload.get("request_id", ""),
+            "page_url": str(payload.get("page_url", ""))[:1000],
+            "user_agent": str(payload.get("user_agent", ""))[:500],
+        })
+        await db.commit()
+        return {"status": "ok"}
+    except Exception as e:
+        logger.warning(f"Failed to save frontend diagnostic: {e}")
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+        # エラー報告の保存失敗はフロントに影響させない
+        return {"status": "ok", "note": "save_failed"}
+
+
+@router.get("/frontend-diagnostics")
+async def get_frontend_diagnostics(
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    db: AsyncSession = Depends(get_db),
+    video_id: Optional[str] = None,
+    section_name: Optional[str] = None,
+    error_type: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+):
+    """
+    Admin 用: Frontend エラーログを取得する。
+    フィルタ: video_id, section_name, error_type
+    """
+    expected_key = f"{ADMIN_ID}:{ADMIN_PASS}"
+    if x_admin_key != expected_key:
+        raise HTTPException(status_code=403, detail="Invalid admin credentials")
+
+    try:
+        conditions = []
+        params = {"lim": limit, "off": offset}
+
+        if video_id:
+            conditions.append("video_id = :vid")
+            params["vid"] = video_id
+        if section_name:
+            conditions.append("section_name = :sn")
+            params["sn"] = section_name
+        if error_type:
+            conditions.append("error_type = :et")
+            params["et"] = error_type
+
+        where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+        # 集計
+        count_sql = text(f"SELECT COUNT(*) FROM frontend_diagnostics {where_clause}")
+        total = (await db.execute(count_sql, params)).scalar() or 0
+
+        # エラーログ一覧
+        sql = text(f"""
+            SELECT id, video_id, section_name, endpoint, error_type,
+                   error_message, http_status, request_id, page_url,
+                   user_agent, created_at
+            FROM frontend_diagnostics
+            {where_clause}
+            ORDER BY created_at DESC
+            LIMIT :lim OFFSET :off
+        """)
+        result = await db.execute(sql, params)
+        rows = result.fetchall()
+
+        errors = []
+        for r in rows:
+            errors.append({
+                "id": r.id,
+                "video_id": r.video_id,
+                "section_name": r.section_name,
+                "endpoint": r.endpoint,
+                "error_type": r.error_type,
+                "error_message": r.error_message,
+                "http_status": r.http_status,
+                "request_id": r.request_id,
+                "page_url": r.page_url,
+                "created_at": str(r.created_at) if r.created_at else None,
+            })
+
+        # セクション別集計
+        summary_sql = text("""
+            SELECT section_name, error_type, COUNT(*) as cnt
+            FROM frontend_diagnostics
+            WHERE created_at >= NOW() - INTERVAL '24 hours'
+            GROUP BY section_name, error_type
+            ORDER BY cnt DESC
+        """)
+        summary_result = await db.execute(summary_sql)
+        summary_rows = summary_result.fetchall()
+
+        section_summary = {}
+        for sr in summary_rows:
+            sn = sr.section_name
+            if sn not in section_summary:
+                section_summary[sn] = {"total": 0, "by_type": {}}
+            section_summary[sn]["total"] += sr.cnt
+            section_summary[sn]["by_type"][sr.error_type] = sr.cnt
+
+        return {
+            "total": total,
+            "errors": errors,
+            "section_summary_24h": section_summary,
+        }
+    except Exception as e:
+        logger.exception(f"Failed to fetch frontend diagnostics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/frontend-diagnostics/summary")
+async def get_frontend_diagnostics_summary(
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    db: AsyncSession = Depends(get_db),
+    hours: int = 24,
+):
+    """
+    Admin 用: Frontend エラーのサマリーを取得する。
+    - セクション別エラー件数
+    - エラータイプ別件数
+    - 直近のエラー傾向
+    """
+    expected_key = f"{ADMIN_ID}:{ADMIN_PASS}"
+    if x_admin_key != expected_key:
+        raise HTTPException(status_code=403, detail="Invalid admin credentials")
+
+    try:
+        interval = f"{hours} hours"
+
+        # セクション別
+        by_section_sql = text(f"""
+            SELECT section_name, COUNT(*) as cnt
+            FROM frontend_diagnostics
+            WHERE created_at >= NOW() - INTERVAL '{interval}'
+            GROUP BY section_name
+            ORDER BY cnt DESC
+        """)
+        by_section = await db.execute(by_section_sql)
+        section_counts = {r.section_name: r.cnt for r in by_section.fetchall()}
+
+        # エラータイプ別
+        by_type_sql = text(f"""
+            SELECT error_type, COUNT(*) as cnt
+            FROM frontend_diagnostics
+            WHERE created_at >= NOW() - INTERVAL '{interval}'
+            GROUP BY error_type
+            ORDER BY cnt DESC
+        """)
+        by_type = await db.execute(by_type_sql)
+        type_counts = {r.error_type: r.cnt for r in by_type.fetchall()}
+
+        # 総件数
+        total_sql = text(f"""
+            SELECT COUNT(*) FROM frontend_diagnostics
+            WHERE created_at >= NOW() - INTERVAL '{interval}'
+        """)
+        total = (await db.execute(total_sql)).scalar() or 0
+
+        # 直近10件
+        recent_sql = text(f"""
+            SELECT video_id, section_name, error_type, request_id, created_at
+            FROM frontend_diagnostics
+            WHERE created_at >= NOW() - INTERVAL '{interval}'
+            ORDER BY created_at DESC
+            LIMIT 10
+        """)
+        recent_result = await db.execute(recent_sql)
+        recent = [
+            {
+                "video_id": r.video_id,
+                "section_name": r.section_name,
+                "error_type": r.error_type,
+                "request_id": r.request_id,
+                "created_at": str(r.created_at) if r.created_at else None,
+            }
+            for r in recent_result.fetchall()
+        ]
+
+        return {
+            "period_hours": hours,
+            "total_errors": total,
+            "by_section": section_counts,
+            "by_error_type": type_counts,
+            "recent_errors": recent,
+        }
+    except Exception as e:
+        logger.exception(f"Failed to fetch diagnostics summary: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import VideoService from "../base/services/videoService";
+import { useSectionState } from "../base/hooks/useSectionState";
+import { ErrorState } from "./SectionStateUI";
 import LightningClipEditor from "./LightningClipEditor";
 import ClipFeedbackPanel from "./ClipFeedbackPanel";
 
@@ -15,9 +17,7 @@ import ClipFeedbackPanel from "./ClipFeedbackPanel";
  *   clipStates         – { [phaseIndex]: { status, clip_url } }
  */
 export default function SalesClipCandidates({ videoData, onRequestClip, clipStates = {} }) {
-  const [loading, setLoading] = useState(false);
-  const [candidates, setCandidates] = useState(null);  // null = 未取得
-  const [error, setError] = useState(null);
+  const { state, data: candidates, error, execute, retry, setData: setCandidates } = useSectionState("SalesClipCandidates");
   const [collapsed, setCollapsed] = useState(false);
   // feedbackMap: { [phaseIndex]: "adopted" | "rejected" | "submitting" }
   const [feedbackMap, setFeedbackMap] = useState({});
@@ -52,20 +52,20 @@ export default function SalesClipCandidates({ videoData, onRequestClip, clipStat
     return `${s}秒`;
   };
 
-  const handleFetch = useCallback(async () => {
+  const handleFetch = useCallback(() => {
     if (!videoData?.id) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await VideoService.getSalesClipCandidates(videoData.id, 5);
-      setCandidates(res.candidates || []);
-    } catch (err) {
-      setError("候補の取得に失敗しました。再試行してください。");
-      console.error("[SalesClipCandidates] fetch error:", err);
-    } finally {
-      setLoading(false);
-    }
-  }, [videoData?.id]);
+    execute(
+      async () => {
+        const res = await VideoService.getSalesClipCandidates(videoData.id, 5);
+        return res.candidates || [];
+      },
+      {
+        videoId: videoData.id,
+        endpoint: `/api/v1/videos/${videoData.id}/sales-clip-candidates`,
+        emptyCheck: (d) => !d || d.length === 0,
+      }
+    );
+  }, [videoData?.id, execute]);
 
   const handleClipRequest = useCallback((candidate) => {
     if (onRequestClip) {
@@ -139,13 +139,13 @@ export default function SalesClipCandidates({ videoData, onRequestClip, clipStat
   };
 
   const renderClipButton = (candidate) => {
-    const state = getClipState(candidate);
+    const clipState = getClipState(candidate);
 
-    if (state?.status === "completed" && state?.clip_url) {
+    if (clipState?.status === "completed" && clipState?.clip_url) {
       return (
         <div className="flex items-center gap-1.5">
           <a
-            href={state.clip_url}
+            href={clipState.clip_url}
             target="_blank"
             rel="noopener noreferrer"
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-500 text-white text-xs font-medium hover:bg-green-600 transition-colors"
@@ -158,8 +158,8 @@ export default function SalesClipCandidates({ videoData, onRequestClip, clipStat
           <button
             type="button"
             onClick={() => setEditorClip({
-              clip_id: state.clip_id,
-              clip_url: state.clip_url,
+              clip_id: clipState.clip_id,
+              clip_url: clipState.clip_url,
               phase_index: candidate.phase_index,
               time_start: candidate.time_start,
               time_end: candidate.time_end,
@@ -174,7 +174,7 @@ export default function SalesClipCandidates({ videoData, onRequestClip, clipStat
       );
     }
 
-    if (state?.status === "requesting" || state?.status === "pending" || state?.status === "processing") {
+    if (clipState?.status === "requesting" || clipState?.status === "pending" || clipState?.status === "processing") {
       return (
         <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-100 text-gray-500 text-xs font-medium cursor-not-allowed">
           <svg className="animate-spin" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
@@ -260,13 +260,16 @@ export default function SalesClipCandidates({ videoData, onRequestClip, clipStat
     );
   };
 
+  const isLoading = state === "loading";
+  const hasData = state === "success" || state === "empty";
+
   return (
     <div className="w-full mt-4 mx-auto">
       <div className="rounded-2xl bg-gradient-to-br from-indigo-50 to-purple-50 border border-indigo-200">
         {/* ヘッダー */}
         <div
           className="flex items-center justify-between p-5 cursor-pointer hover:bg-indigo-100/50 transition-all duration-200 rounded-t-2xl"
-          onClick={() => candidates !== null && setCollapsed(s => !s)}
+          onClick={() => hasData && setCollapsed(s => !s)}
         >
           <div className="flex items-center gap-4">
             {/* アイコン */}
@@ -282,9 +285,9 @@ export default function SalesClipCandidates({ videoData, onRequestClip, clipStat
                 <span className="inline-flex items-center justify-center px-2 py-0.5 rounded-md text-xs font-bold bg-orange-100 text-orange-600 border border-orange-300 tracking-wide">
                   Beta
                 </span>
-                {candidates !== null && (
+                {hasData && candidates && (
                   <span className="inline-flex items-center justify-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gradient-to-r from-indigo-500 to-purple-600 text-white">
-                    {candidates.length}件
+                    {Array.isArray(candidates) ? candidates.length : 0}件
                   </span>
                 )}
               </div>
@@ -296,18 +299,18 @@ export default function SalesClipCandidates({ videoData, onRequestClip, clipStat
 
           <div className="flex items-center gap-2">
             {/* 生成ボタン */}
-            {candidates === null ? (
+            {!hasData ? (
               <button
                 type="button"
                 onClick={(e) => { e.stopPropagation(); handleFetch(); }}
-                disabled={loading}
+                disabled={isLoading}
                 className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all shadow-sm
-                  ${loading
+                  ${isLoading
                     ? "bg-gray-100 text-gray-400 cursor-not-allowed"
                     : "bg-gradient-to-r from-indigo-500 to-purple-600 text-white hover:from-indigo-600 hover:to-purple-700 hover:shadow-md"
                   }`}
               >
-                {loading ? (
+                {isLoading ? (
                   <>
                     <svg className="animate-spin" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                       <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
@@ -328,12 +331,13 @@ export default function SalesClipCandidates({ videoData, onRequestClip, clipStat
                 <button
                   type="button"
                   onClick={(e) => { e.stopPropagation(); handleFetch(); }}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-indigo-600 bg-white border border-indigo-200 hover:bg-indigo-50 transition-colors"
+                  disabled={isLoading}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-indigo-600 bg-white border border-indigo-200 hover:bg-indigo-50 transition-colors disabled:opacity-60"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                     <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-.08-4.56"/>
                   </svg>
-                  再分析
+                  {isLoading ? "分析中..." : "再分析"}
                 </button>
                 <button
                   type="button"
@@ -350,134 +354,135 @@ export default function SalesClipCandidates({ videoData, onRequestClip, clipStat
           </div>
         </div>
 
-        {/* エラー表示 */}
-        {error && (
-          <div className="mx-5 mb-4 px-4 py-3 rounded-xl bg-red-50 border border-red-200 text-red-600 text-sm">
-            {error}
+        {/* エラー表示 - SectionStateUI統一 */}
+        {state === "error" && (
+          <div className="mx-5 mb-4">
+            <ErrorState error={error} onRetry={retry} sectionName="AIおすすめクリップ" compact />
+          </div>
+        )}
+
+        {/* 空状態 */}
+        {state === "empty" && !collapsed && (
+          <div className="px-5 pb-5">
+            <div className="text-center py-8 text-gray-400 text-sm">
+              <div className="text-3xl mb-2">📊</div>
+              <div>売上データが不足しているため候補を生成できませんでした。</div>
+              <div className="mt-1 text-xs">動画に売上・注文データが紐付いている場合に候補が表示されます。</div>
+            </div>
           </div>
         )}
 
         {/* 候補カード一覧 */}
-        {candidates !== null && !collapsed && (
+        {state === "success" && candidates && !collapsed && (
           <div className="px-5 pb-5">
-            {candidates.length === 0 ? (
-              <div className="text-center py-8 text-gray-400 text-sm">
-                <div className="text-3xl mb-2">📊</div>
-                <div>売上データが不足しているため候補を生成できませんでした。</div>
-                <div className="mt-1 text-xs">動画に売上・注文データが紐付いている場合に候補が表示されます。</div>
-              </div>
-            ) : (
-              <>
-                {/* フィードバック集計バー */}
-                <FeedbackSummaryBar feedbackMap={feedbackMap} total={candidates.length} />
+            {/* フィードバック集計バー */}
+            <FeedbackSummaryBar feedbackMap={feedbackMap} total={Array.isArray(candidates) ? candidates.length : 0} />
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-3">
-                  {candidates.map((candidate) => {
-                    const fb = feedbackMap[candidate.phase_index];
-                    const isAdopted = fb === "adopted";
-                    const isRejected = fb === "rejected";
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-3">
+              {(Array.isArray(candidates) ? candidates : []).map((candidate) => {
+                const fb = feedbackMap[candidate.phase_index];
+                const isAdopted = fb === "adopted";
+                const isRejected = fb === "rejected";
 
-                    return (
-                      <div
-                        key={candidate.rank}
-                        className={`rounded-xl border shadow-sm hover:shadow-md transition-all duration-200 overflow-hidden
-                          ${isAdopted ? "ring-2 ring-green-400 ring-offset-1" : ""}
-                          ${isRejected ? "opacity-60" : ""}
-                          ${rankBg(candidate.rank)}
-                        `}
-                      >
-                        {/* カードヘッダー */}
-                        <div className={`bg-gradient-to-r ${rankStyle(candidate.rank)} px-4 py-2.5 flex items-center justify-between`}>
-                          <div className="flex items-center gap-2">
-                            <span className="text-white font-bold text-sm">{candidate.label}</span>
-                            <span className="text-white/80 text-xs">
-                              {formatTime(candidate.time_start)} – {formatTime(candidate.time_end)}
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-white/90 text-xs font-medium">
-                              {formatDuration(candidate.duration)}
-                            </span>
-                            {/* スコアバッジ */}
-                            <span className="bg-white/20 text-white text-xs font-bold px-2 py-0.5 rounded-full">
-                              {Math.round(candidate.sales_score)}pt
-                            </span>
-                            {/* フィードバック状態バッジ */}
-                            {isAdopted && (
-                              <span className="bg-green-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">
-                                ✓ 採用
-                              </span>
-                            )}
-                            {isRejected && (
-                              <span className="bg-red-400 text-white text-xs font-bold px-2 py-0.5 rounded-full">
-                                ✕ 却下
-                              </span>
-                            )}
-                          </div>
+                return (
+                  <div
+                    key={candidate.rank}
+                    className={`rounded-xl border shadow-sm hover:shadow-md transition-all duration-200 overflow-hidden
+                      ${isAdopted ? "ring-2 ring-green-400 ring-offset-1" : ""}
+                      ${isRejected ? "opacity-60" : ""}
+                      ${rankBg(candidate.rank)}
+                    `}
+                  >
+                    {/* カードヘッダー */}
+                    <div className={`bg-gradient-to-r ${rankStyle(candidate.rank)} px-4 py-2.5 flex items-center justify-between`}>
+                      <div className="flex items-center gap-2">
+                        <span className="text-white font-bold text-sm">{candidate.label}</span>
+                        <span className="text-white/80 text-xs">
+                          {formatTime(candidate.time_start)} – {formatTime(candidate.time_end)}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-white/90 text-xs font-medium">
+                          {formatDuration(candidate.duration)}
+                        </span>
+                        {/* スコアバッジ */}
+                        <span className="bg-white/20 text-white text-xs font-bold px-2 py-0.5 rounded-full">
+                          {Math.round(candidate.sales_score)}pt
+                        </span>
+                        {/* フィードバック状態バッジ */}
+                        {isAdopted && (
+                          <span className="bg-green-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">
+                            ✓ 採用
+                          </span>
+                        )}
+                        {isRejected && (
+                          <span className="bg-red-400 text-white text-xs font-bold px-2 py-0.5 rounded-full">
+                            ✕ 却下
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* カードボディ */}
+                    <div className="p-3">
+                      {/* スコアバー */}
+                      <div className="mb-3">
+                        <div className="flex justify-between items-center mb-1">
+                          <span className="text-xs text-gray-500">Sales Score</span>
+                          <span className="text-xs font-bold text-gray-700">{candidate.sales_score.toFixed(1)} / 100</span>
                         </div>
-
-                        {/* カードボディ */}
-                        <div className="p-3">
-                          {/* スコアバー */}
-                          <div className="mb-3">
-                            <div className="flex justify-between items-center mb-1">
-                              <span className="text-xs text-gray-500">Sales Score</span>
-                              <span className="text-xs font-bold text-gray-700">{candidate.sales_score.toFixed(1)} / 100</span>
-                            </div>
-                            <div className="w-full bg-gray-200 rounded-full h-1.5">
-                              <div
-                                className={`h-1.5 rounded-full bg-gradient-to-r ${rankStyle(candidate.rank)}`}
-                                style={{ width: `${Math.min(candidate.sales_score, 100)}%` }}
-                              />
-                            </div>
-                          </div>
-
-                          {/* 理由タグ */}
-                          {candidate.reasons && candidate.reasons.length > 0 && (
-                            <div className="flex flex-wrap gap-1.5 mb-3">
-                              {candidate.reasons.map((reason, i) => (
-                                <span
-                                  key={i}
-                                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-white border border-gray-200 text-gray-600"
-                                >
-                                  {i === 0 && "🏆"}
-                                  {i === 1 && "📈"}
-                                  {i === 2 && "👆"}
-                                  {i === 3 && "👁️"}
-                                  {reason}
-                                </span>
-                              ))}
-                            </div>
-                          )}
-
-                          {/* スコア内訳（折りたたみ） */}
-                          <ScoreBreakdown breakdown={candidate.score_breakdown} />
-
-                          {/* アクションボタン行 */}
-                          <div className="mt-3 flex items-center justify-between gap-2">
-                            {/* 採用/却下ボタン */}
-                            {renderFeedbackButtons(candidate)}
-                            {/* クリップ生成ボタン */}
-                            {renderClipButton(candidate)}
-                          </div>
-
-                          {/* クリップ評価（コンパクト版） */}
-                          <ClipFeedbackPanel
-                            videoId={videoData?.id}
-                            phaseIndex={candidate.phase_index}
-                            timeStart={candidate.start_sec}
-                            timeEnd={candidate.end_sec}
-                            aiScore={candidate.score}
-                            scoreBreakdown={candidate.score_breakdown}
-                            compact={true}
+                        <div className="w-full bg-gray-200 rounded-full h-1.5">
+                          <div
+                            className={`h-1.5 rounded-full bg-gradient-to-r ${rankStyle(candidate.rank)}`}
+                            style={{ width: `${Math.min(candidate.sales_score, 100)}%` }}
                           />
                         </div>
                       </div>
-                    );
-                  })}
-                </div>
-              </>
-            )}
+
+                      {/* 理由タグ */}
+                      {candidate.reasons && candidate.reasons.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5 mb-3">
+                          {candidate.reasons.map((reason, i) => (
+                            <span
+                              key={i}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-white border border-gray-200 text-gray-600"
+                            >
+                              {i === 0 && "🏆"}
+                              {i === 1 && "📈"}
+                              {i === 2 && "👆"}
+                              {i === 3 && "👁️"}
+                              {reason}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* スコア内訳（折りたたみ） */}
+                      <ScoreBreakdown breakdown={candidate.score_breakdown} />
+
+                      {/* アクションボタン行 */}
+                      <div className="mt-3 flex items-center justify-between gap-2">
+                        {/* 採用/却下ボタン */}
+                        {renderFeedbackButtons(candidate)}
+                        {/* クリップ生成ボタン */}
+                        {renderClipButton(candidate)}
+                      </div>
+
+                      {/* クリップ評価（コンパクト版） */}
+                      <ClipFeedbackPanel
+                        videoId={videoData?.id}
+                        phaseIndex={candidate.phase_index}
+                        timeStart={candidate.start_sec}
+                        timeEnd={candidate.end_sec}
+                        aiScore={candidate.score}
+                        scoreBreakdown={candidate.score_breakdown}
+                        compact={true}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
       </div>

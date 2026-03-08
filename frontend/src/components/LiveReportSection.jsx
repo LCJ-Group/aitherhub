@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import VideoService from "../base/services/videoService";
+import { useSectionState } from "../base/hooks/useSectionState";
+import { ErrorState } from "./SectionStateUI";
 
 /**
  * LiveReportSection – AitherHub Live Report v1
@@ -40,44 +42,38 @@ const SIGNAL_BADGES = {
 };
 
 export default function LiveReportSection({ videoData }) {
-  const [report, setReport] = useState(null);
-  const [loading, setLoading] = useState(false);
+  // useSectionState for initial fetch (GET existing report)
+  const { state: fetchState, data: report, error: fetchError, execute, retry, setData: setReport } = useSectionState("LiveReport");
   const [generating, setGenerating] = useState(false);
-  const [error, setError] = useState(null);
+  const [genError, setGenError] = useState(null);
   const [version, setVersion] = useState(0);
 
   const videoId = videoData?.id;
 
   // Fetch existing report on mount
-  const fetchReport = useCallback(async () => {
+  useEffect(() => {
     if (!videoId) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await VideoService.getLiveReport(videoId);
-      if (res?.report) {
-        setReport(res.report);
-        setVersion(res.version || 0);
+    execute(
+      async () => {
+        const res = await VideoService.getLiveReport(videoId);
+        if (res?.report) {
+          setVersion(res.version || 0);
+          return res.report;
+        }
+        return null;
+      },
+      {
+        videoId,
+        endpoint: `/api/v1/videos/${videoId}/live-report`,
       }
-    } catch (err) {
-      // No report yet is OK
-      if (err?.response?.status !== 404) {
-        console.error("Failed to fetch report:", err);
-      }
-    } finally {
-      setLoading(false);
-    }
+    );
   }, [videoId]);
 
-  useEffect(() => {
-    fetchReport();
-  }, [fetchReport]);
-
-  // Generate report
+  // Generate report (separate from useSectionState since it's a POST action)
   const handleGenerate = async () => {
     if (!videoId) return;
     setGenerating(true);
-    setError(null);
+    setGenError(null);
     try {
       const res = await VideoService.generateLiveReport(videoId);
       if (res?.report) {
@@ -86,7 +82,7 @@ export default function LiveReportSection({ videoData }) {
       }
     } catch (err) {
       console.error("Failed to generate report:", err);
-      setError(err?.response?.data?.detail || "レポート生成に失敗しました");
+      setGenError(err?.response?.data?.detail || "レポート生成に失敗しました");
     } finally {
       setGenerating(false);
     }
@@ -314,6 +310,8 @@ export default function LiveReportSection({ videoData }) {
     );
   };
 
+  const isLoading = fetchState === "loading";
+
   // ── Main render ──
   return (
     <div className="mt-6">
@@ -327,7 +325,7 @@ export default function LiveReportSection({ videoData }) {
         </div>
         <button
           onClick={handleGenerate}
-          disabled={generating || loading}
+          disabled={generating || isLoading}
           className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
             generating
               ? "bg-gray-200 text-gray-500 cursor-not-allowed"
@@ -346,25 +344,29 @@ export default function LiveReportSection({ videoData }) {
         </button>
       </div>
 
-      {/* Error */}
-      {error && (
+      {/* Fetch Error - SectionStateUI統一 */}
+      {fetchState === "error" && (
+        <div className="mb-4">
+          <ErrorState error={fetchError} onRetry={retry} sectionName="Live Report" compact />
+        </div>
+      )}
+
+      {/* Generation Error */}
+      {genError && (
         <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-4 text-sm text-red-700">
-          {error}
+          {genError}
         </div>
       )}
 
       {/* Loading */}
-      {loading && !report && (
+      {isLoading && !report && (
         <div className="flex items-center justify-center py-12">
-          <svg className="animate-spin h-8 w-8 text-indigo-500" viewBox="0 0 24 24">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-          </svg>
+          <div className="w-8 h-8 border-3 border-purple-200 border-t-purple-600 rounded-full animate-spin" />
         </div>
       )}
 
-      {/* No report yet */}
-      {!loading && !report && !error && (
+      {/* No report yet (empty or not_found) */}
+      {(fetchState === "empty" || (fetchState === "success" && !report)) && !isLoading && (
         <div className="bg-gray-50 rounded-xl p-8 text-center border border-dashed border-gray-300">
           <div className="text-gray-400 text-4xl mb-3">&#128202;</div>
           <p className="text-gray-500 text-sm">

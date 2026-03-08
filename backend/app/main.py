@@ -5,6 +5,7 @@ from starlette.middleware.cors import CORSMiddleware
 from app.api.v1.routes import routers as v1_routers
 from app.core.config import configs
 from app.core.container import Container
+from app.core.request_id_middleware import RequestIdMiddleware
 from app.utils.class_object import singleton
 
 logger = logging.getLogger(__name__)
@@ -24,6 +25,9 @@ class AppCreator:
         self.container.wire(modules=[__name__])
         self.db = self.container.db()
         # self.db.create_database()
+
+        # Request ID middleware (must be added before CORS)
+        self.app.add_middleware(RequestIdMiddleware)
 
         # CORS
         if configs.BACKEND_CORS_ORIGINS:

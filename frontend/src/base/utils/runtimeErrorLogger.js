@@ -50,6 +50,31 @@ function saveErrorLog(entry, storageKey = STORAGE_KEY) {
 }
 
 /**
+ * バックエンドにエラーログを非同期送信する
+ * 失敗してもユーザー体験に影響しない（fire-and-forget）
+ */
+function reportToBackend(entry) {
+  try {
+    const apiBase = import.meta.env.VITE_API_URL || "";
+    fetch(`${apiBase}/api/v1/admin/frontend-diagnostics`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        video_id: entry.videoId || "",
+        section_name: entry.sectionName || "",
+        endpoint: entry.endpoint || "",
+        error_type: entry.errorType || "unknown",
+        error_message: entry.errorMessage || entry.error || "",
+        http_status: entry.httpStatus || null,
+        request_id: entry.requestId || "",
+        page_url: entry.url || window.location.href,
+        user_agent: navigator.userAgent,
+      }),
+    }).catch(() => { /* 送信失敗は無視 */ });
+  } catch { /* ignore */ }
+}
+
+/**
  * logSectionError - セクション単位のAPIエラーを構造化ログとして記録
  *
  * @param {Object} params
@@ -96,6 +121,9 @@ export function logSectionError({
   saveErrorLog(entry, SECTION_ERROR_KEY);
   // 汎用エラーログにも保存
   saveErrorLog(entry, STORAGE_KEY);
+
+  // バックエンドに非同期送信（失敗しても無視）
+  reportToBackend(entry);
 }
 
 /**

@@ -15,7 +15,8 @@ import React from "react";
  *   compact      - コンパクト表示モード（デフォルト: false）
  */
 
-// エラータイプ別の表示設定
+// ── エラータイプ別の表示設定 ──
+// 各タイプに: ユーザー向けメッセージ / アクションラベル / アクション関数 / 色設定
 const ERROR_STYLES = {
   network: {
     bg: "bg-yellow-50", border: "border-yellow-200",
@@ -23,6 +24,9 @@ const ERROR_STYLES = {
     icon: "wifi_off", iconBg: "bg-yellow-100", iconColor: "text-yellow-500",
     btn: "text-yellow-600 bg-yellow-100 hover:bg-yellow-200",
     label: "ネットワーク",
+    userMessage: "インターネット接続を確認してください。",
+    actionLabel: "再試行",
+    actionType: "retry",
   },
   timeout: {
     bg: "bg-yellow-50", border: "border-yellow-200",
@@ -30,6 +34,9 @@ const ERROR_STYLES = {
     icon: "schedule", iconBg: "bg-yellow-100", iconColor: "text-yellow-500",
     btn: "text-yellow-600 bg-yellow-100 hover:bg-yellow-200",
     label: "タイムアウト",
+    userMessage: "サーバーの応答に時間がかかっています。しばらくしてから再試行してください。",
+    actionLabel: "再試行",
+    actionType: "retry",
   },
   auth: {
     bg: "bg-orange-50", border: "border-orange-200",
@@ -37,6 +44,9 @@ const ERROR_STYLES = {
     icon: "lock", iconBg: "bg-orange-100", iconColor: "text-orange-500",
     btn: "text-orange-600 bg-orange-100 hover:bg-orange-200",
     label: "認証エラー",
+    userMessage: "ログインセッションが切れました。再ログインしてください。",
+    actionLabel: "再ログイン",
+    actionType: "relogin",
   },
   not_found: {
     bg: "bg-gray-50", border: "border-gray-200",
@@ -44,6 +54,9 @@ const ERROR_STYLES = {
     icon: "search_off", iconBg: "bg-gray-100", iconColor: "text-gray-400",
     btn: "text-gray-600 bg-gray-100 hover:bg-gray-200",
     label: "未生成",
+    userMessage: null, // sectionNameで動的生成
+    actionLabel: "再読込",
+    actionType: "retry",
   },
   server: {
     bg: "bg-red-50", border: "border-red-200",
@@ -51,6 +64,9 @@ const ERROR_STYLES = {
     icon: "error", iconBg: "bg-red-100", iconColor: "text-red-500",
     btn: "text-red-600 bg-red-100 hover:bg-red-200",
     label: "サーバーエラー",
+    userMessage: "サーバーで一時的な障害が発生しています。しばらくしてから再試行してください。",
+    actionLabel: "再試行",
+    actionType: "retry",
   },
   rate_limit: {
     bg: "bg-yellow-50", border: "border-yellow-200",
@@ -58,6 +74,9 @@ const ERROR_STYLES = {
     icon: "speed", iconBg: "bg-yellow-100", iconColor: "text-yellow-500",
     btn: "text-yellow-600 bg-yellow-100 hover:bg-yellow-200",
     label: "レート制限",
+    userMessage: "リクエストが多すぎます。30秒ほど待ってから再試行してください。",
+    actionLabel: "再試行",
+    actionType: "retry",
   },
   parse: {
     bg: "bg-red-50", border: "border-red-200",
@@ -65,6 +84,9 @@ const ERROR_STYLES = {
     icon: "code_off", iconBg: "bg-red-100", iconColor: "text-red-500",
     btn: "text-red-600 bg-red-100 hover:bg-red-200",
     label: "データエラー",
+    userMessage: "データの読み取りに失敗しました。再試行しても改善しない場合はサポートにお問い合わせください。",
+    actionLabel: "再試行",
+    actionType: "retry",
   },
   unknown: {
     bg: "bg-gray-50", border: "border-gray-200",
@@ -72,10 +94,13 @@ const ERROR_STYLES = {
     icon: "help", iconBg: "bg-gray-100", iconColor: "text-gray-400",
     btn: "text-gray-600 bg-gray-100 hover:bg-gray-200",
     label: "エラー",
+    userMessage: "予期しないエラーが発生しました。再試行してください。",
+    actionLabel: "再試行",
+    actionType: "retry",
   },
 };
 
-// SVGアイコン（Material Design風）
+// ── SVGアイコン（Material Design風） ──
 function ErrorIcon({ type }) {
   const iconMap = {
     network: (
@@ -122,7 +147,7 @@ function ErrorIcon({ type }) {
   return iconMap[type] || iconMap.unknown;
 }
 
-// ローディングスピナー
+// ── ローディングスピナー ──
 function LoadingSpinner({ text = "読み込み中...", compact = false }) {
   if (compact) {
     return (
@@ -140,7 +165,7 @@ function LoadingSpinner({ text = "読み込み中...", compact = false }) {
   );
 }
 
-// 空状態表示
+// ── 空状態表示 ──
 function EmptyState({ text = "データがありません", icon = null, compact = false }) {
   if (compact) {
     return (
@@ -158,13 +183,28 @@ function EmptyState({ text = "データがありません", icon = null, compact
   );
 }
 
-// エラー表示
+/**
+ * エラータイプ別のアクションを実行する
+ */
+function handleErrorAction(actionType, onRetry) {
+  switch (actionType) {
+    case "relogin":
+      // ログインページへリダイレクト（SPA対応）
+      window.location.href = "/login";
+      break;
+    case "retry":
+    default:
+      if (onRetry) onRetry();
+      break;
+  }
+}
+
+// ── エラー表示 ──
 function ErrorState({ error, onRetry, sectionName, compact = false }) {
   const errorType = error?.type || "unknown";
   const s = ERROR_STYLES[errorType] || ERROR_STYLES.unknown;
-  const retryable = errorType !== "auth";
 
-  // not_found は「未生成」として自然に表示
+  // not_found は「未生成」として自然に表示（赤エラーにしない）
   if (errorType === "not_found") {
     return (
       <div className={`rounded-xl ${s.bg} border ${s.border} p-3`}>
@@ -177,6 +217,9 @@ function ErrorState({ error, onRetry, sectionName, compact = false }) {
               <span className={`${s.text} text-sm`}>
                 {sectionName ? `${sectionName}はまだ生成されていません` : "データが未生成です"}
               </span>
+              <div className={`${s.subtext} text-xs mt-0.5`}>
+                分析ボタンを押して生成を開始してください
+              </div>
             </div>
           </div>
           {onRetry && (
@@ -184,7 +227,7 @@ function ErrorState({ error, onRetry, sectionName, compact = false }) {
               onClick={onRetry}
               className={`px-3 py-1 text-xs font-medium ${s.btn} rounded-lg transition-colors`}
             >
-              再読込
+              {s.actionLabel}
             </button>
           )}
         </div>
@@ -192,17 +235,82 @@ function ErrorState({ error, onRetry, sectionName, compact = false }) {
     );
   }
 
+  // auth は再ログイン導線を明確に
+  if (errorType === "auth") {
+    if (compact) {
+      return (
+        <div className={`rounded-lg ${s.bg} border ${s.border} px-3 py-2 flex items-center justify-between`}>
+          <div className="flex items-center gap-2">
+            <span className={`${s.iconColor}`}><ErrorIcon type={errorType} /></span>
+            <span className={`${s.text} text-xs`}>{s.userMessage}</span>
+            <span className={`${s.subtext} text-[10px] px-1.5 py-0.5 rounded ${s.iconBg}`}>{s.label}</span>
+          </div>
+          <button
+            onClick={() => handleErrorAction("relogin")}
+            className={`px-2.5 py-1 text-xs font-medium ${s.btn} rounded-lg transition-colors flex items-center gap-1`}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/>
+            </svg>
+            {s.actionLabel}
+          </button>
+        </div>
+      );
+    }
+    return (
+      <div className={`rounded-xl ${s.bg} border ${s.border} p-4`}>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className={`flex items-center justify-center w-8 h-8 rounded-full ${s.iconBg} ${s.iconColor}`}>
+              <ErrorIcon type={errorType} />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className={`${s.text} text-sm font-medium`}>
+                  {sectionName || "セクション"}
+                </span>
+                <span className={`${s.subtext} text-[10px] px-1.5 py-0.5 rounded ${s.iconBg}`}>
+                  {s.label}
+                </span>
+              </div>
+              <div className={`${s.subtext} text-xs mt-0.5`}>
+                {s.userMessage}
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={() => handleErrorAction("relogin")}
+            className={`px-3 py-1.5 text-xs font-medium ${s.btn} rounded-lg transition-colors flex items-center gap-1.5`}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/>
+            </svg>
+            {s.actionLabel}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // server は一時的障害として案内
+  // timeout / network は再試行を促す
+  // rate_limit は待機を促す
+  // parse / unknown は汎用エラー
+
   if (compact) {
     return (
       <div className={`rounded-lg ${s.bg} border ${s.border} px-3 py-2 flex items-center justify-between`}>
         <div className="flex items-center gap-2">
           <span className={`${s.iconColor}`}><ErrorIcon type={errorType} /></span>
-          <span className={`${s.text} text-xs`}>{error?.message || "エラーが発生しました"}</span>
+          <span className={`${s.text} text-xs`}>{s.userMessage || error?.message || "エラーが発生しました"}</span>
           <span className={`${s.subtext} text-[10px] px-1.5 py-0.5 rounded ${s.iconBg}`}>{s.label}</span>
         </div>
-        {retryable && onRetry && (
-          <button onClick={onRetry} className={`px-2 py-0.5 text-[10px] font-medium ${s.btn} rounded transition-colors`}>
-            再試行
+        {onRetry && (
+          <button
+            onClick={() => handleErrorAction(s.actionType, onRetry)}
+            className={`px-2 py-0.5 text-[10px] font-medium ${s.btn} rounded transition-colors`}
+          >
+            {s.actionLabel}
           </button>
         )}
       </div>
@@ -226,7 +334,7 @@ function ErrorState({ error, onRetry, sectionName, compact = false }) {
               </span>
             </div>
             <div className={`${s.subtext} text-xs mt-0.5`}>
-              {error?.message || "エラーが発生しました"}
+              {s.userMessage || error?.message || "エラーが発生しました"}
             </div>
             {error?.status && (
               <div className={`${s.subtext} text-[10px] mt-0.5 opacity-60`}>
@@ -235,20 +343,12 @@ function ErrorState({ error, onRetry, sectionName, compact = false }) {
             )}
           </div>
         </div>
-        {retryable && onRetry && (
+        {onRetry && (
           <button
-            onClick={onRetry}
+            onClick={() => handleErrorAction(s.actionType, onRetry)}
             className={`px-3 py-1.5 text-xs font-medium ${s.btn} rounded-lg transition-colors`}
           >
-            再試行
-          </button>
-        )}
-        {errorType === "auth" && (
-          <button
-            onClick={() => window.location.reload()}
-            className={`px-3 py-1.5 text-xs font-medium ${s.btn} rounded-lg transition-colors`}
-          >
-            再ログイン
+            {s.actionLabel}
           </button>
         )}
       </div>

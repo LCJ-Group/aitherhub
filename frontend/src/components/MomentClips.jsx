@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from "react";
 import VideoService from "../base/services/videoService";
+import { useSectionState } from "../base/hooks/useSectionState";
+import { ErrorState } from "./SectionStateUI";
 import AutoZoomPreview from "./AutoZoomPreview";
 
 /**
@@ -85,9 +87,7 @@ const CATEGORY_CONFIG = {
 };
 
 export default function MomentClips({ videoData, onRequestClip, clipStates = {} }) {
-  const [loading, setLoading] = useState(false);
-  const [data, setData] = useState(null);
-  const [error, setError] = useState(null);
+  const { state, data, error, execute, retry, setData } = useSectionState("MomentClips");
   const [activeTab, setActiveTab] = useState(null);
   const [collapsed, setCollapsed] = useState(false);
   const [autoLoaded, setAutoLoaded] = useState(false);
@@ -105,6 +105,22 @@ export default function MomentClips({ videoData, onRequestClip, clipStates = {} 
     return `${Math.round(Number(seconds))}s`;
   };
 
+  const handleFetch = () => {
+    if (!videoData?.id) return;
+    execute(
+      () => VideoService.getMomentClips(videoData.id),
+      {
+        videoId: videoData.id,
+        endpoint: `/api/v1/videos/${videoData.id}/moment-clips`,
+        emptyCheck: (d) => !d?.categories || d.categories.length === 0,
+      }
+    ).then(({ data: result }) => {
+      if (result?.categories?.length > 0) {
+        setActiveTab(result.categories[0].category);
+      }
+    });
+  };
+
   // 画面収録の場合は自動ロード
   useEffect(() => {
     if (videoData?.id && videoData?.upload_type === "screen_recording" && !autoLoaded) {
@@ -112,24 +128,6 @@ export default function MomentClips({ videoData, onRequestClip, clipStates = {} 
       handleFetch();
     }
   }, [videoData?.id, videoData?.upload_type]);
-
-  const handleFetch = async () => {
-    if (!videoData?.id) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const result = await VideoService.getMomentClips(videoData.id);
-      setData(result);
-      // 最初のカテゴリをアクティブに
-      if (result?.categories?.length > 0) {
-        setActiveTab(result.categories[0].category);
-      }
-    } catch (err) {
-      setError(err?.message || "モーメント検出に失敗しました");
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleClipRequest = (clip, category) => {
     if (onRequestClip) {
@@ -147,6 +145,8 @@ export default function MomentClips({ videoData, onRequestClip, clipStates = {} 
   const getClipKey = (clip, category) => `moment_${category}_${clip.id}`;
 
   const activeCategory = data?.categories?.find((c) => c.category === activeTab);
+  const isLoading = state === "loading";
+  const hasData = state === "success" || state === "empty";
 
   return (
     <div className="mt-6">
@@ -174,14 +174,14 @@ export default function MomentClips({ videoData, onRequestClip, clipStates = {} 
           </div>
 
           <div className="flex items-center gap-2">
-            {!data ? (
+            {!hasData ? (
               <button
                 type="button"
                 onClick={handleFetch}
-                disabled={loading}
+                disabled={isLoading}
                 className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold text-white bg-gradient-to-r from-violet-500 to-fuchsia-500 hover:from-violet-600 hover:to-fuchsia-600 shadow-sm hover:shadow-md transition-all disabled:opacity-60"
               >
-                {loading ? (
+                {isLoading ? (
                   <>
                     <svg className="animate-spin" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                       <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
@@ -203,10 +203,10 @@ export default function MomentClips({ videoData, onRequestClip, clipStates = {} 
                 <button
                   type="button"
                   onClick={handleFetch}
-                  disabled={loading}
+                  disabled={isLoading}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-violet-600 bg-white border border-violet-200 hover:bg-violet-50 transition-colors disabled:opacity-60"
                 >
-                  {loading ? "検出中..." : "再検出"}
+                  {isLoading ? "検出中..." : "再検出"}
                 </button>
                 <button
                   type="button"
@@ -223,198 +223,199 @@ export default function MomentClips({ videoData, onRequestClip, clipStates = {} 
           </div>
         </div>
 
-        {/* エラー表示 */}
-        {error && (
-          <div className="mx-5 mb-4 px-4 py-3 rounded-xl bg-red-50 border border-red-200 text-red-600 text-sm">
-            {error}
+        {/* エラー表示 - SectionStateUI統一 */}
+        {state === "error" && (
+          <div className="mx-5 mb-4">
+            <ErrorState error={error} onRetry={retry} sectionName="Moment Clips" compact />
+          </div>
+        )}
+
+        {/* 空状態 */}
+        {state === "empty" && !collapsed && (
+          <div className="px-5 pb-5">
+            <div className="text-center py-8 text-gray-400 text-sm">
+              <div className="text-3xl mb-2">🔍</div>
+              <div>モーメントが検出されませんでした。</div>
+              <div className="mt-1 text-xs">画面収録の解析が完了していない可能性があります。</div>
+            </div>
           </div>
         )}
 
         {/* メインコンテンツ */}
-        {data && !collapsed && (
+        {state === "success" && data && !collapsed && (
           <div className="px-5 pb-5">
-            {data.categories?.length === 0 ? (
-              <div className="text-center py-8 text-gray-400 text-sm">
-                <div className="text-3xl mb-2">🔍</div>
-                <div>モーメントが検出されませんでした。</div>
-                <div className="mt-1 text-xs">画面収録の解析が完了していない可能性があります。</div>
-              </div>
-            ) : (
-              <>
-                {/* サマリー統計 */}
-                <div className="flex items-center gap-3 px-3 py-2 rounded-xl bg-violet-50 border border-violet-100 text-xs mb-4">
-                  <span className="text-violet-600 font-semibold">
-                    {data.total_moments} モーメント検出
-                  </span>
+            {/* サマリー統計 */}
+            <div className="flex items-center gap-3 px-3 py-2 rounded-xl bg-violet-50 border border-violet-100 text-xs mb-4">
+              <span className="text-violet-600 font-semibold">
+                {data.total_moments} モーメント検出
+              </span>
+              <span className="text-gray-400">|</span>
+              <span className="text-gray-600">
+                {data.categories?.length} カテゴリ
+              </span>
+              <span className="text-gray-400">|</span>
+              <span className="text-gray-600">
+                {data.categories?.reduce((sum, c) => sum + c.count, 0)} クリップ候補
+              </span>
+              {data.auto_zoom_data?.length > 0 && (
+                <>
                   <span className="text-gray-400">|</span>
-                  <span className="text-gray-600">
-                    {data.categories?.length} カテゴリ
+                  <span className="text-emerald-600 font-medium">
+                    Auto Zoom対応
                   </span>
-                  <span className="text-gray-400">|</span>
-                  <span className="text-gray-600">
-                    {data.categories?.reduce((sum, c) => sum + c.count, 0)} クリップ候補
-                  </span>
-                  {data.auto_zoom_data?.length > 0 && (
-                    <>
-                      <span className="text-gray-400">|</span>
-                      <span className="text-emerald-600 font-medium">
-                        Auto Zoom対応
-                      </span>
-                    </>
-                  )}
+                </>
+              )}
+            </div>
+
+            {/* カテゴリタブ */}
+            <div className="flex flex-wrap gap-2 mb-4">
+              {data.categories?.map((cat) => {
+                const config = CATEGORY_CONFIG[cat.category] || CATEGORY_CONFIG.product_viewers_popup;
+                const isActive = activeTab === cat.category;
+                return (
+                  <button
+                    key={cat.category}
+                    type="button"
+                    onClick={() => setActiveTab(cat.category)}
+                    className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all duration-200 ${
+                      isActive
+                        ? `bg-gradient-to-r ${config.gradient} text-white shadow-md`
+                        : `${config.bg} ${config.border} border ${config.text} hover:shadow-sm`
+                    }`}
+                  >
+                    <span>{config.icon}</span>
+                    <span>{cat.label}</span>
+                    <span className={`ml-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
+                      isActive ? "bg-white/20 text-white" : config.badge
+                    }`}>
+                      {cat.count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* アクティブカテゴリのクリップ一覧 */}
+            {activeCategory && (
+              <div className="space-y-3">
+                {/* カテゴリ説明 */}
+                <div className={`px-3 py-2 rounded-lg ${CATEGORY_CONFIG[activeCategory.category]?.bg || "bg-gray-50"} ${CATEGORY_CONFIG[activeCategory.category]?.border || "border-gray-200"} border text-xs ${CATEGORY_CONFIG[activeCategory.category]?.text || "text-gray-600"}`}>
+                  {activeCategory.description}
                 </div>
 
-                {/* カテゴリタブ */}
-                <div className="flex flex-wrap gap-2 mb-4">
-                  {data.categories?.map((cat) => {
-                    const config = CATEGORY_CONFIG[cat.category] || CATEGORY_CONFIG.product_viewers_popup;
-                    const isActive = activeTab === cat.category;
-                    return (
-                      <button
-                        key={cat.category}
-                        type="button"
-                        onClick={() => setActiveTab(cat.category)}
-                        className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all duration-200 ${
-                          isActive
-                            ? `bg-gradient-to-r ${config.gradient} text-white shadow-md`
-                            : `${config.bg} ${config.border} border ${config.text} hover:shadow-sm`
-                        }`}
-                      >
-                        <span>{config.icon}</span>
-                        <span>{cat.label}</span>
-                        <span className={`ml-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
-                          isActive ? "bg-white/20 text-white" : config.badge
-                        }`}>
-                          {cat.count}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
+                {/* クリップカード */}
+                {activeCategory.clips?.map((clip) => {
+                  const config = CATEGORY_CONFIG[activeCategory.category] || CATEGORY_CONFIG.product_viewers_popup;
+                  const clipKey = getClipKey(clip, activeCategory.category);
+                  const clipState = clipStates[clipKey] || null;
 
-                {/* アクティブカテゴリのクリップ一覧 */}
-                {activeCategory && (
-                  <div className="space-y-3">
-                    {/* カテゴリ説明 */}
-                    <div className={`px-3 py-2 rounded-lg ${CATEGORY_CONFIG[activeCategory.category]?.bg || "bg-gray-50"} ${CATEGORY_CONFIG[activeCategory.category]?.border || "border-gray-200"} border text-xs ${CATEGORY_CONFIG[activeCategory.category]?.text || "text-gray-600"}`}>
-                      {activeCategory.description}
-                    </div>
-
-                    {/* クリップカード */}
-                    {activeCategory.clips?.map((clip) => {
-                      const config = CATEGORY_CONFIG[activeCategory.category] || CATEGORY_CONFIG.product_viewers_popup;
-                      const clipKey = getClipKey(clip, activeCategory.category);
-                      const clipState = clipStates[clipKey] || null;
-
-                      return (
-                        <div
-                          key={clip.id}
-                          className="rounded-xl border border-gray-200 shadow-sm hover:shadow-md transition-all duration-200 overflow-hidden"
-                        >
-                          {/* クリップヘッダー */}
-                          <div className={`bg-gradient-to-r ${config.gradient} px-4 py-2.5 flex items-center justify-between`}>
-                            <div className="flex items-center gap-2">
-                              <span className="text-white text-lg">{config.icon}</span>
-                              <span className="text-white font-bold text-sm">
-                                #{clip.id}
-                              </span>
-                              <span className="text-white/80 text-xs">
-                                {formatTime(clip.time_start)} – {formatTime(clip.time_end)}
-                              </span>
-                              <span className="text-white/70 text-xs">
-                                ({formatDuration(clip.duration)})
-                              </span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              {clip.moment_count > 1 && (
-                                <span className="bg-white/20 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">
-                                  {clip.moment_count}件
-                                </span>
-                              )}
-                              <span className="bg-white/20 text-white text-xs font-bold px-2 py-0.5 rounded-full">
-                                {(clip.confidence * 100).toFixed(0)}%
-                              </span>
-                            </div>
-                          </div>
-
-                          {/* クリップボディ */}
-                          <div className="p-3">
-                            {/* メトリクス */}
-                            <div className="flex flex-wrap gap-2 mb-2">
-                              {clip.order_value > 0 && (
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-50 border border-amber-200 text-amber-700">
-                                  🛒 購入 {clip.order_value}件
-                                </span>
-                              )}
-                              {clip.click_value > 0 && (
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-50 border border-blue-200 text-blue-700">
-                                  👆 クリック {clip.click_value}
-                                </span>
-                              )}
-                              {clip.frame_meta?.face_region && (
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-50 border border-green-200 text-green-700">
-                                  🎯 Auto Zoom対応
-                                </span>
-                              )}
-                            </div>
-
-                            {/* 理由 */}
-                            {clip.reasons?.length > 0 && (
-                              <div className="flex flex-wrap gap-1.5 mb-3">
-                                {clip.reasons.map((reason, i) => (
-                                  <span
-                                    key={i}
-                                    className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-white border border-gray-200 text-gray-600"
-                                  >
-                                    {reason}
-                                  </span>
-                                ))}
-                              </div>
-                            )}
-
-                            {/* アクションボタン */}
-                            <div className="flex items-center justify-end gap-2">
-                              {clipState?.status === "completed" && clipState?.clip_url ? (
-                                <a
-                                  href={clipState.clip_url}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-500 text-white text-xs font-medium hover:bg-green-600 transition-colors"
-                                >
-                                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                                    <polyline points="7 10 12 15 17 10"/>
-                                    <line x1="12" y1="15" x2="12" y2="3"/>
-                                  </svg>
-                                  ダウンロード
-                                </a>
-                              ) : clipState?.status === "requesting" || clipState?.status === "pending" || clipState?.status === "processing" ? (
-                                <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-100 text-gray-500 text-xs font-medium cursor-not-allowed">
-                                  <svg className="animate-spin" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                                    <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
-                                  </svg>
-                                  生成中...
-                                </span>
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => handleClipRequest(clip, activeCategory.category)}
-                                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r ${config.gradient} text-white text-xs font-medium hover:shadow-md transition-all shadow-sm`}
-                                >
-                                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                                    <polygon points="5 3 19 12 5 21 5 3"/>
-                                  </svg>
-                                  クリップ生成
-                                </button>
-                              )}
-                            </div>
-                          </div>
+                  return (
+                    <div
+                      key={clip.id}
+                      className="rounded-xl border border-gray-200 shadow-sm hover:shadow-md transition-all duration-200 overflow-hidden"
+                    >
+                      {/* クリップヘッダー */}
+                      <div className={`bg-gradient-to-r ${config.gradient} px-4 py-2.5 flex items-center justify-between`}>
+                        <div className="flex items-center gap-2">
+                          <span className="text-white text-lg">{config.icon}</span>
+                          <span className="text-white font-bold text-sm">
+                            #{clip.id}
+                          </span>
+                          <span className="text-white/80 text-xs">
+                            {formatTime(clip.time_start)} – {formatTime(clip.time_end)}
+                          </span>
+                          <span className="text-white/70 text-xs">
+                            ({formatDuration(clip.duration)})
+                          </span>
                         </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </>
+                        <div className="flex items-center gap-2">
+                          {clip.moment_count > 1 && (
+                            <span className="bg-white/20 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+                              {clip.moment_count}件
+                            </span>
+                          )}
+                          <span className="bg-white/20 text-white text-xs font-bold px-2 py-0.5 rounded-full">
+                            {(clip.confidence * 100).toFixed(0)}%
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* クリップボディ */}
+                      <div className="p-3">
+                        {/* メトリクス */}
+                        <div className="flex flex-wrap gap-2 mb-2">
+                          {clip.order_value > 0 && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-50 border border-amber-200 text-amber-700">
+                              🛒 購入 {clip.order_value}件
+                            </span>
+                          )}
+                          {clip.click_value > 0 && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-50 border border-blue-200 text-blue-700">
+                              👆 クリック {clip.click_value}
+                            </span>
+                          )}
+                          {clip.frame_meta?.face_region && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-50 border border-green-200 text-green-700">
+                              🎯 Auto Zoom対応
+                            </span>
+                          )}
+                        </div>
+
+                        {/* 理由 */}
+                        {clip.reasons?.length > 0 && (
+                          <div className="flex flex-wrap gap-1.5 mb-3">
+                            {clip.reasons.map((reason, i) => (
+                              <span
+                                key={i}
+                                className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-white border border-gray-200 text-gray-600"
+                              >
+                                {reason}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* アクションボタン */}
+                        <div className="flex items-center justify-end gap-2">
+                          {clipState?.status === "completed" && clipState?.clip_url ? (
+                            <a
+                              href={clipState.clip_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-500 text-white text-xs font-medium hover:bg-green-600 transition-colors"
+                            >
+                              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                                <polyline points="7 10 12 15 17 10"/>
+                                <line x1="12" y1="15" x2="12" y2="3"/>
+                              </svg>
+                              ダウンロード
+                            </a>
+                          ) : clipState?.status === "requesting" || clipState?.status === "pending" || clipState?.status === "processing" ? (
+                            <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-100 text-gray-500 text-xs font-medium cursor-not-allowed">
+                              <svg className="animate-spin" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                                <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+                              </svg>
+                              生成中...
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => handleClipRequest(clip, activeCategory.category)}
+                              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r ${config.gradient} text-white text-xs font-medium hover:shadow-md transition-all shadow-sm`}
+                            >
+                              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                <polygon points="5 3 19 12 5 21 5 3"/>
+                              </svg>
+                              クリップ生成
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             )}
           </div>
         )}
