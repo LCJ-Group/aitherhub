@@ -705,11 +705,14 @@ export default function MainContent({
         },
       );
       setMessageType("success");
-      setSelectedFile(null);
-      setResumeUploadId(null);
 
       // Record upload duration
-      setUploadDurationMs(Date.now() - (uploadStartTime || Date.now()));
+      const duration = Date.now() - (uploadStartTime || Date.now());
+      setUploadDurationMs(duration);
+      console.log(`[Upload] Upload completed: video_id=${video_id}, file=${selectedFile?.name}, size=${((selectedFile?.size || 0) / (1024*1024)).toFixed(1)}MB, duration=${(duration/1000).toFixed(1)}s`);
+
+      setSelectedFile(null);
+      setResumeUploadId(null);
       // Set uploaded video ID to start processing tracking
       setUploadedVideoId(video_id);
 

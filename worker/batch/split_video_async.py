@@ -5,6 +5,7 @@ import argparse
 import subprocess
 import logging
 import shutil
+import time
 from urllib.parse import urlparse, unquote
 from dotenv import load_dotenv
 
@@ -197,6 +198,13 @@ def cut_segment(
     preset="ultrafast",
     safe_seek=False,
 ):
+    """Cut a segment from the source video.
+
+    Strategy (fast → slow fallback):
+      1. Stream-copy with -ss before -i  (fastest, ~seconds)
+      2. Stream-copy with -ss after  -i  (slower seek but still no re-encode)
+      3. Re-encode with libx264           (slowest, only if copy fails)
+    """
     logger.info(
         "[CUT] %s | %.2f -> %.2f | out=%s | safe_seek=%s",
         input_path,
@@ -210,65 +218,103 @@ def cut_segment(
     if duration <= 0:
         return False
 
-    if safe_seek:
-        # SAFE: -ss sau -i (phase cuối)
-        cmd = [
-            FFMPEG,
-            "-y",
-            "-i", input_path,
-            "-ss", str(start_sec),
-            "-t", str(duration),
-        ]
-    else:
-        # FAST: -ss trước -i (phase thường)
-        cmd = [
-            FFMPEG,
-            "-y",
-            "-ss", str(start_sec),
-            "-i", input_path,
-            "-t", str(duration),
-        ]
-
-    # cmd += [
-    #     "-map", "0:v:0",
-    #     "-map", "0:a?",
-    #     "-c:v", "libx264",
-    #     "-preset", preset,
-    #     "-crf", str(crf),
-    #     "-c:a", "aac",
-    #     "-movflags", "+faststart",
-    #     out_path,
-    # ]
-
-    audio_codec = "aac" if safe_seek else "copy"
-
-    cmd += [
+    # --- Attempt 1: Fast stream-copy (-ss before -i) ---
+    fast_copy_cmd = [
+        FFMPEG, "-y",
+        "-ss", str(start_sec),
+        "-i", input_path,
+        "-t", str(duration),
         "-map", "0:v:0",
         "-map", "0:a?",
-        "-c:v", "libx264",
-        "-preset", preset,
-        "-crf", str(crf),
-        "-c:a", audio_codec,
+        "-c", "copy",
         "-movflags", "+faststart",
         out_path,
     ]
 
     try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        subprocess.run(fast_copy_cmd, check=True, capture_output=True, text=True)
+        if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+            logger.info(
+                "[CUT OK] stream-copy (fast): %s (%.2f MB)",
+                out_path,
+                os.path.getsize(out_path) / 1024 / 1024,
+            )
+            return True
+    except subprocess.CalledProcessError as e:
+        logger.warning("[CUT] stream-copy (fast) failed, trying slow copy: %s", e.stderr[:200] if e.stderr else "")
+        if os.path.exists(out_path):
+            os.remove(out_path)
 
+    # --- Attempt 2: Slow stream-copy (-ss after -i, more accurate) ---
+    slow_copy_cmd = [
+        FFMPEG, "-y",
+        "-i", input_path,
+        "-ss", str(start_sec),
+        "-t", str(duration),
+        "-map", "0:v:0",
+        "-map", "0:a?",
+        "-c", "copy",
+        "-movflags", "+faststart",
+        out_path,
+    ]
+
+    try:
+        subprocess.run(slow_copy_cmd, check=True, capture_output=True, text=True)
+        if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+            logger.info(
+                "[CUT OK] stream-copy (slow): %s (%.2f MB)",
+                out_path,
+                os.path.getsize(out_path) / 1024 / 1024,
+            )
+            return True
+    except subprocess.CalledProcessError as e:
+        logger.warning("[CUT] stream-copy (slow) failed, falling back to re-encode: %s", e.stderr[:200] if e.stderr else "")
+        if os.path.exists(out_path):
+            os.remove(out_path)
+
+    # --- Attempt 3: Re-encode fallback (slowest but most compatible) ---
+    logger.info("[CUT] Falling back to re-encode for %.2f-%.2f", start_sec, end_sec)
+
+    if safe_seek:
+        reencode_cmd = [
+            FFMPEG, "-y",
+            "-i", input_path,
+            "-ss", str(start_sec),
+            "-t", str(duration),
+        ]
+    else:
+        reencode_cmd = [
+            FFMPEG, "-y",
+            "-ss", str(start_sec),
+            "-i", input_path,
+            "-t", str(duration),
+        ]
+
+    reencode_cmd += [
+        "-map", "0:v:0",
+        "-map", "0:a?",
+        "-c:v", "libx264",
+        "-preset", preset,
+        "-crf", str(crf),
+        "-c:a", "aac",
+        "-movflags", "+faststart",
+        out_path,
+    ]
+
+    try:
+        subprocess.run(reencode_cmd, check=True, capture_output=True, text=True)
         if os.path.exists(out_path):
             logger.info(
-                "[CUT OK] file created: %s (%.2f MB)",
+                "[CUT OK] re-encode: %s (%.2f MB)",
                 out_path,
                 os.path.getsize(out_path) / 1024 / 1024,
             )
         else:
             logger.error("[CUT FAIL] ffmpeg returned but file not found: %s", out_path)
-
         return True
 
     except subprocess.CalledProcessError as e:
-        logger.error("ffmpeg failed (safe_seek=%s)", safe_seek)
+        logger.error("ffmpeg re-encode failed (safe_seek=%s)", safe_seek)
         logger.error("stdout: %s", e.stdout)
         logger.error("stderr: %s", e.stderr)
         if os.path.exists(out_path):
@@ -490,18 +536,22 @@ def main():
         #         break
 
         total_phases = len(phases)
-        for p in phases:
-            idx = p["phase_index"]
-            if idx < start_phase:
-                continue
+        split_start_time = time.time()
+        phases_to_process = [p for p in phases if p["phase_index"] >= start_phase]
+        logger.info("[SPLIT] Starting: %d phases to process (total=%d, start_phase=%d)",
+                    len(phases_to_process), total_phases, start_phase)
 
+        for i, p in enumerate(phases_to_process):
+            idx = p["phase_index"]
             time_start = p["time_start"]
             time_end = p["time_end"]
 
             out_name = f"{time_start}_{time_end}.mp4"
             out_path = os.path.join(out_dir, out_name)
 
-            logger.info("[CUT] phase=%s out=%s", idx, out_path)
+            phase_start = time.time()
+            logger.info("[CUT] phase=%s/%s out=%s (%.1fs segment)",
+                        idx, total_phases, out_path, time_end - time_start)
 
             is_last_phase = (idx == total_phases)
 
@@ -519,9 +569,12 @@ def main():
                 logger.error("[CUT NO FILE] %s", out_path)
                 break
             else:
-                logger.info("[CUT OK] %s (%.2f MB)", out_path, os.path.getsize(out_path) / 1024 / 1024)
+                cut_elapsed = time.time() - phase_start
+                logger.info("[CUT OK] %s (%.2f MB, cut took %.1fs)",
+                            out_path, os.path.getsize(out_path) / 1024 / 1024, cut_elapsed)
 
             if blob_info:
+                upload_start = time.time()
                 logger.info("[UPLOAD] start upload %s", out_path)
 
                 dest = f"{blob_info['parent_path']}/reportvideo/{out_name}"
@@ -529,14 +582,27 @@ def main():
                     logger.error("[UPLOAD FAIL] %s", out_path)
                     break
 
-                logger.info("[UPLOAD OK] %s", out_path)
+                upload_elapsed = time.time() - upload_start
+                logger.info("[UPLOAD OK] %s (%.1fs)", out_path, upload_elapsed)
+
+            # Clean up local file after upload to save disk space
+            if os.path.exists(out_path):
+                try:
+                    os.remove(out_path)
+                except Exception:
+                    pass
 
             update_video_split_status_sync(video_id, str(idx))
-            logger.info("split_status = %d", idx)
+            total_elapsed = time.time() - split_start_time
+            logger.info("[PROGRESS] phase %d/%d done (total elapsed: %.1fs)",
+                        i + 1, len(phases_to_process), total_elapsed)
 
         else:
+            total_elapsed = time.time() - split_start_time
             update_video_split_status_sync(video_id, "done")
-            logger.info("Split DONE")
+            logger.info("[SPLIT DONE] %d phases in %.1fs (avg %.1fs/phase)",
+                        len(phases_to_process), total_elapsed,
+                        total_elapsed / max(len(phases_to_process), 1))
 
     finally:
         close_db_sync()

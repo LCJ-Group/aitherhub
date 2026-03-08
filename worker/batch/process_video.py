@@ -1531,17 +1531,25 @@ def main():
 
         if start_step <= 15:  # index 15 in STEP_ORDER (shifted +1)
             update_video_status_sync(video_id, VideoStatus.STEP_14_FINALIZE)
-            logger.info("=== STEP 14 – FINALIZE PIPELINE (WAIT SPLIT) ===")
+            update_video_step_progress_sync(video_id, 0)
+            logger.info("=== STEP 14 \u2013 FINALIZE PIPELINE (WAIT SPLIT) ===")
 
             MAX_WAIT_SEC = 60 * 120   
             CHECK_INTERVAL = 5     
+
+            # Count total phases for progress calculation
+            try:
+                total_split_phases = len(load_video_phases_sync(video_id, user_id))
+            except Exception:
+                total_split_phases = 0
 
             waited = 0
             while True:
                 split_status = get_video_split_status_sync(video_id)
 
                 if split_status == "done":
-                    logger.info("[FINALIZE] Split DONE → mark video DONE")
+                    logger.info("[FINALIZE] Split DONE \u2192 mark video DONE")
+                    update_video_step_progress_sync(video_id, 100)
                     update_video_status_sync(video_id, VideoStatus.DONE)
                     break
 
@@ -1550,7 +1558,15 @@ def main():
                         f"Wait split timeout after {MAX_WAIT_SEC}s (split_status={split_status})"
                     )
 
-                # logger.info(f"[FINALIZE] Waiting split... current={split_status}")
+                # Update step_progress based on split_status (phase number)
+                if total_split_phases > 0 and split_status and split_status not in ("new", ""):
+                    try:
+                        completed_phases = int(split_status)
+                        pct = min(int(completed_phases / total_split_phases * 100), 99)
+                        update_video_step_progress_sync(video_id, pct)
+                    except (ValueError, TypeError):
+                        pass
+
                 logger.info("[FINALIZE] Waiting split... current=%s", split_status)
                 time.sleep(CHECK_INTERVAL)
                 waited += CHECK_INTERVAL
