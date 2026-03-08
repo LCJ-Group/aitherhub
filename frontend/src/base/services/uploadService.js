@@ -16,6 +16,31 @@ class UploadService extends BaseApiService {
   constructor() {
     super(import.meta.env.VITE_API_BASE_URL);
     this.db = null;
+    // In-memory file handle cache (survives within same session/tab)
+    this._fileHandleCache = new Map(); // uploadId -> File object
+  }
+
+  /**
+   * Cache a File reference in memory for same-session resume
+   */
+  cacheFileHandle(uploadId, file) {
+    if (uploadId && file) {
+      this._fileHandleCache.set(uploadId, file);
+    }
+  }
+
+  /**
+   * Get cached File reference (only works within same browser session)
+   */
+  getCachedFileHandle(uploadId) {
+    return this._fileHandleCache.get(uploadId) || null;
+  }
+
+  /**
+   * Clear cached File reference
+   */
+  clearCachedFileHandle(uploadId) {
+    this._fileHandleCache.delete(uploadId);
   }
 
   /**
@@ -73,6 +98,42 @@ class UploadService extends BaseApiService {
   async clearUploadMetadata(uploadId) {
     const db = await this.initDB();
     await db.delete(STORE_NAME, uploadId);
+    this.clearCachedFileHandle(uploadId);
+  }
+
+  /**
+   * Get all upload metadata from IndexedDB
+   * @returns {Promise<Array>}
+   */
+  async getAllUploads() {
+    const db = await this.initDB();
+    return await db.getAll(STORE_NAME);
+  }
+
+  /**
+   * Get resume info for display: file_name, file_size, progress %, created_at, hasFileHandle
+   * @param {string} uploadId
+   * @returns {Promise<{fileName, fileSize, progress, createdAt, totalBlocks, uploadedBlocks, hasFileHandle}|null>}
+   */
+  async getResumeInfo(uploadId) {
+    const metadata = await this.getUploadMetadata(uploadId);
+    if (!metadata) return null;
+
+    const totalBlocks = metadata.blockIds?.length || Math.ceil((metadata.fileSize || 0) / BLOCK_SIZE) || 1;
+    const uploadedBlocks = metadata.uploadedBlocks?.length || 0;
+    const progress = Math.round((uploadedBlocks / totalBlocks) * 100);
+    const hasFileHandle = this._fileHandleCache.has(uploadId);
+
+    return {
+      fileName: metadata.fileName || 'Unknown',
+      fileSize: metadata.fileSize || 0,
+      progress,
+      createdAt: metadata.timestamp ? new Date(metadata.timestamp) : null,
+      totalBlocks,
+      uploadedBlocks,
+      hasFileHandle,
+      videoId: metadata.videoId,
+    };
   }
 
   /**
@@ -427,6 +488,9 @@ class UploadService extends BaseApiService {
       onUploadInit({ uploadId: upload_id, videoId: video_id });
     }
 
+    // Cache file handle for same-session resume
+    this.cacheFileHandle(upload_id, file);
+
     // Save initial metadata with video_id for potential resume
     await this.saveUploadMetadata({
       uploadId: upload_id,
@@ -464,6 +528,9 @@ class UploadService extends BaseApiService {
     if (onUploadInit) {
       onUploadInit({ uploadId: upload_id, videoId: video_id });
     }
+
+    // Cache file handle for same-session resume
+    this.cacheFileHandle(upload_id, videoFile);
 
     // Save initial metadata
     await this.saveUploadMetadata({
@@ -548,6 +615,9 @@ class UploadService extends BaseApiService {
       if (i === 0 && onUploadInit) {
         onUploadInit({ uploadId: upload_id, videoId: video_id });
       }
+
+      // Cache file handle for same-session resume
+      this.cacheFileHandle(upload_id, file);
 
       await this.saveUploadMetadata({
         uploadId: upload_id,

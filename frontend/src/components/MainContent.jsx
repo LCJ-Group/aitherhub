@@ -11,6 +11,34 @@ import VideoDetail from "./VideoDetail";
 import FeedbackPage from "./FeedbackPage";
 // LiveDashboard is now at /live/:sessionId route (LivePage.jsx)
 
+/**
+ * Format file size in human-readable format
+ */
+function formatFileSize(bytes) {
+  if (!bytes || bytes === 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const k = 1024;
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + units[i];
+}
+
+/**
+ * Format relative time
+ */
+function formatRelativeTime(date) {
+  if (!date) return '';
+  const now = new Date();
+  const diffMs = now - date;
+  const diffMin = Math.floor(diffMs / 60000);
+  const diffHour = Math.floor(diffMs / 3600000);
+  const diffDay = Math.floor(diffMs / 86400000);
+  if (diffMin < 1) return 'たった今';
+  if (diffMin < 60) return `${diffMin}分前`;
+  if (diffHour < 24) return `${diffHour}時間前`;
+  if (diffDay < 7) return `${diffDay}日前`;
+  return date.toLocaleDateString('ja-JP');
+}
+
 export default function MainContent({
   children,
   onOpenSidebar,
@@ -47,6 +75,7 @@ export default function MainContent({
   const [messageType, setMessageType] = useState("");
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [resumeUploadId, setResumeUploadId] = useState(null);
+  const [resumeInfo, setResumeInfo] = useState(null); // {fileName, fileSize, progress, createdAt, hasFileHandle}
   // Clean video upload states
   const [uploadMode, setUploadMode] = useState(null); // null | 'screen_recording' | 'clean_video'
   const [cleanVideoFile, setCleanVideoFile] = useState(null);
@@ -157,12 +186,22 @@ export default function MainContent({
       const result = await UploadService.checkUploadResume(user.id);
       if (result?.upload_resume && result?.upload_id) {
         setResumeUploadId(result.upload_id);
+        // Fetch detailed resume info from IndexedDB
+        try {
+          const info = await UploadService.getResumeInfo(result.upload_id);
+          setResumeInfo(info);
+        } catch (e) {
+          console.warn('Failed to get resume info from IndexedDB:', e);
+          setResumeInfo(null);
+        }
       } else {
         setResumeUploadId(null);
+        setResumeInfo(null);
       }
     } catch (error) {
       console.error("Failed to check upload resume:", error);
       setResumeUploadId(null);
+      setResumeInfo(null);
     } finally {
       setCheckingResume(false);
     }
@@ -371,15 +410,41 @@ export default function MainContent({
 
   const handleResumeUpload = async () => {
     if (!resumeUploadId || processingResume) return;
-    // Prevent multiple clicks while opening picker
+
+    // Check if we have a cached file handle (same session)
+    const cachedFile = UploadService.getCachedFileHandle(resumeUploadId);
+    if (cachedFile) {
+      // Resume directly without file picker
+      await executeResume(cachedFile);
+      return;
+    }
+
+    // No cached file - need user to re-select
     setProcessingResume(true);
     try {
-      // Trigger file input click to open file picker
       resumeFileInputRef.current?.click();
     } finally {
-      // keep processingResume true until user selects file; clear after small delay
-      // (the real processing state is handled in handleResumeFileSelect)
       setTimeout(() => setProcessingResume(false), 300);
+    }
+  };
+
+  const handleResumeWithNewFile = async () => {
+    if (!resumeUploadId || !user?.id || processingResume) return;
+    setProcessingResume(true);
+    try {
+      // Clear existing upload record
+      await UploadService.clearUserUploads(user.id);
+      await UploadService.clearUploadMetadata(resumeUploadId);
+      // Reset state to go back to normal upload mode
+      setResumeUploadId(null);
+      setResumeInfo(null);
+      toast.info('前回のアップロードを削除しました。新しい動画を選択してください。');
+    } catch (error) {
+      console.error('Failed to clear resume for new file:', error);
+      setResumeUploadId(null);
+      setResumeInfo(null);
+    } finally {
+      setProcessingResume(false);
     }
   };
 
@@ -406,9 +471,11 @@ export default function MainContent({
     }
   };
 
-  const handleResumeFileSelect = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file || !resumeUploadId || uploading || processingResume) return;
+  /**
+   * Core resume execution - shared by both cached file handle and file picker resume
+   */
+  const executeResume = async (file) => {
+    if (!file || !resumeUploadId || uploading) return;
 
     setProcessingResume(true);
     setUploading(true);
@@ -424,22 +491,17 @@ export default function MainContent({
       // Get metadata from IndexedDB
       const metadata = await UploadService.getUploadMetadata(resumeUploadId);
       if (!metadata) {
-        throw new Error('Upload metadata not found. Please start a new upload.');
+        throw new Error('アップロード情報が見つかりません。新しいアップロードを開始してください。');
       }
 
       // Validate that the selected file is the same as the original file
-      if (file.name !== metadata.fileName) {
-        throw new Error(`選択したファイルが一致しません。再度ファイルを選択してください。`);
-      }
-
-      if (file.size !== metadata.fileSize) {
-        throw new Error(`選択したファイルが一致しません。再度ファイルを選択してください。`);
+      if (file.name !== metadata.fileName || file.size !== metadata.fileSize) {
+        throw new Error(`選択したファイルが元のファイルと一致しません。\nファイル名: ${metadata.fileName}\nサイズ: ${formatFileSize(metadata.fileSize)}`);
       }
 
       const uploadedBlockIds = metadata.uploadedBlocks || [];
       const maxUploadedIndex = uploadedBlockIds.length > 0
         ? Math.max(...uploadedBlockIds.map(id => {
-          // Decode base64 block ID to get original index
           const decoded = atob(id);
           return parseInt(decoded, 10);
         }))
@@ -454,16 +516,14 @@ export default function MainContent({
         (percentage) => {
           setProgress(percentage);
         },
-        startFrom // Pass startFrom index to resume from
+        startFrom
       );
 
-      // Use the video_id from metadata (created during initial upload)
       const video_id = metadata.videoId;
       if (!video_id) {
         throw new Error('Video ID not found in metadata. Please start a new upload.');
       }
 
-      // Notify backend of completion
       await UploadService.uploadComplete(
         user.email,
         video_id,
@@ -471,32 +531,36 @@ export default function MainContent({
         resumeUploadId
       );
 
-      // Clear upload metadata from IndexedDB
       await UploadService.clearUploadMetadata(resumeUploadId);
 
       setMessageType("success");
       setSelectedFile(null);
       setResumeUploadId(null);
-
-      // Set uploaded video ID to start processing tracking
+      setResumeInfo(null);
       setUploadedVideoId(video_id);
 
-      // Trigger refresh sidebar
       if (onUploadSuccess) {
         onUploadSuccess(video_id);
       }
     } catch (error) {
-      logUploadError('handleResumeFileSelect', error);
+      logUploadError('executeResume', error);
       toast.error(formatUploadError(error));
     } finally {
       clearActiveResumeUploadStorageKey();
       setUploading(false);
       setProcessingResume(false);
-      // Reset file input
       if (resumeFileInputRef.current) {
         resumeFileInputRef.current.value = '';
       }
     }
+  };
+
+  const handleResumeFileSelect = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    // Cache the newly selected file for potential future resume
+    UploadService.cacheFileHandle(resumeUploadId, file);
+    await executeResume(file);
   };
 
   const handleUpload = async () => {
@@ -1140,31 +1204,82 @@ export default function MainContent({
                         </>
                       ) : resumeUploadId ? (
                         <>
-                          <div className="flex flex-col items-center text-center space-y-6">
+                          <div className="flex flex-col items-center text-center space-y-4 w-full max-w-sm">
                             <div className="text-4xl">⏸️</div>
                             <div>
                               <p className="text-sm font-semibold">
-                                {window.__t('resumeUploadTitle') || 'Resumable Upload Found'}
+                                {window.__t('resumeUploadTitle') || 'アップロードを再開できます'}
                               </p>
-                              <p className="text-xs text-gray-500">
-                                {window.__t('resumeUploadDesc') || 'You have an incomplete upload. Continue uploading?'}
+                              <p className="text-xs text-gray-500 mt-1">
+                                {window.__t('resumeUploadDesc') || '前回のアップロードが途中で止まっています。続きから再開しますか？'}
                               </p>
                             </div>
-                            <div className="flex gap-2">
+                            {/* File info card */}
+                            {resumeInfo && (
+                              <div className="w-full bg-gray-50 rounded-lg p-3 text-left">
+                                <div className="flex items-start gap-3">
+                                  <div className="w-8 h-8 rounded bg-purple-100 flex items-center justify-center flex-shrink-0 mt-0.5">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#7D01FF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+                                  </div>
+                                  <div className="flex-1 min-w-0">
+                                    <p className="text-xs font-medium text-gray-800 truncate" title={resumeInfo.fileName}>
+                                      {resumeInfo.fileName || '不明なファイル'}
+                                    </p>
+                                    <div className="flex items-center gap-2 mt-1">
+                                      <span className="text-[10px] text-gray-500">
+                                        {formatFileSize(resumeInfo.fileSize)}
+                                      </span>
+                                      {resumeInfo.createdAt && (
+                                        <span className="text-[10px] text-gray-400">
+                                          {formatRelativeTime(resumeInfo.createdAt)}
+                                        </span>
+                                      )}
+                                    </div>
+                                    {/* Progress bar */}
+                                    <div className="mt-2">
+                                      <div className="flex justify-between text-[10px] text-gray-500 mb-0.5">
+                                        <span>アップロード済み</span>
+                                        <span>{resumeInfo.progress}%</span>
+                                      </div>
+                                      <div className="w-full bg-gray-200 rounded-full h-1.5">
+                                        <div
+                                          className="bg-[#7D01FF] h-1.5 rounded-full transition-all"
+                                          style={{ width: `${resumeInfo.progress}%` }}
+                                        />
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+                            {/* Action buttons */}
+                            <div className="flex flex-col gap-2 w-full">
                               <button
                                 onClick={handleResumeUpload}
                                 disabled={uploading || processingResume}
-                                className="w-[143px] h-[41px] flex items-center justify-center bg-white text-[#7D01FF] border border-[#7D01FF] rounded-md leading-[28px] hover:bg-gray-100"
+                                className="w-full h-[41px] flex items-center justify-center bg-[#7D01FF] text-white rounded-md text-sm font-medium hover:bg-[#6a01d9] transition-colors"
                               >
-                                {window.__t('resumeButton') || 'Resume'}
+                                {resumeInfo?.hasFileHandle
+                                  ? '続きから再開'
+                                  : 'ファイルを選んで再開'
+                                }
                               </button>
-                              <button
-                                onClick={handleSkipResume}
-                                disabled={uploading || processingResume}
-                                className="w-[143px] h-[41px] bg-gray-300 text-gray-700 rounded-md text-sm hover:bg-gray-100"
-                              >
-                                {window.__t('skipButton') || 'Skip'}
-                              </button>
+                              <div className="flex gap-2">
+                                <button
+                                  onClick={handleResumeWithNewFile}
+                                  disabled={uploading || processingResume}
+                                  className="flex-1 h-[36px] flex items-center justify-center bg-white text-gray-600 border border-gray-300 rounded-md text-xs hover:bg-gray-50 transition-colors"
+                                >
+                                  別の動画を選ぶ
+                                </button>
+                                <button
+                                  onClick={handleSkipResume}
+                                  disabled={uploading || processingResume}
+                                  className="flex-1 h-[36px] flex items-center justify-center bg-white text-red-500 border border-red-200 rounded-md text-xs hover:bg-red-50 transition-colors"
+                                >
+                                  削除
+                                </button>
+                              </div>
                             </div>
                           </div>
                         </>
