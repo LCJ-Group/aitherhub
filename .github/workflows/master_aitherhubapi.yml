@@ -47,3 +47,24 @@ jobs:
           app-name: aitherhubAPI
           slot-name: Production
           package: backend
+
+  verify_deploy:
+    needs: build_and_deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for deployment propagation
+        run: sleep 60
+
+      - name: Verify API deployment
+        run: |
+          echo "Checking aitherhubAPI version..."
+          for i in 1 2 3; do
+            RESPONSE=$(curl -sf https://aitherhubapi.azurewebsites.net/version || echo "FAIL")
+            echo "Attempt $i: $RESPONSE"
+            if [ "$RESPONSE" != "FAIL" ]; then
+              DEPLOYED_COMMIT=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('commit',''))" 2>/dev/null || echo "")
+              echo "Deployed commit: $DEPLOYED_COMMIT"
+              break
+            fi
+            sleep 15
+          done
