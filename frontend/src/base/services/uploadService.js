@@ -7,10 +7,11 @@ import { UPLOAD_STAGES, UploadStageError, wrapStageError } from './uploadErrors'
 
 const DB_NAME = 'VideoUploadDB';
 const STORE_NAME = 'uploads';
-const BLOCK_SIZE = 4 * 1024 * 1024; // 4MB blocks
-const MAX_CONCURRENT_UPLOADS = 4;
+const BLOCK_SIZE = 8 * 1024 * 1024; // 8MB blocks (doubled from 4MB for large video performance)
+const MAX_CONCURRENT_UPLOADS = 8; // 8 concurrent uploads (doubled from 4 for large video performance)
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 2000; // 2 seconds base delay
+const FINALIZE_TIMEOUT_MS = 120_000; // 2 minute timeout for commitBlockList on large files
 
 class UploadService extends BaseApiService {
   constructor() {
@@ -156,6 +157,10 @@ class UploadService extends BaseApiService {
           error.message?.includes('fetch') ||
           error.message?.includes('ECONNRESET') ||
           error.message?.includes('timeout') ||
+          error.message?.includes('Timeout') ||
+          error.message?.includes('AbortError') ||
+          error.name === 'AbortError' ||
+          error.name === 'TimeoutError' ||
           error.code === 'ERR_NETWORK'
         );
 
@@ -199,6 +204,8 @@ class UploadService extends BaseApiService {
    * @returns {Promise<void>}
    */
   async uploadToAzure(file, uploadUrl, uploadId, onProgress, startFrom = 0) {
+    const uploadStartTime = Date.now();
+    console.log(`[UploadService] Starting upload: ${file.name} (${(file.size / (1024*1024)).toFixed(1)} MB), blockSize=${BLOCK_SIZE / (1024*1024)}MB, concurrency=${MAX_CONCURRENT_UPLOADS}`);
     const blockBlobClient = new BlockBlobClient(uploadUrl);
 
     // Determine proper content type for video files
@@ -312,9 +319,12 @@ class UploadService extends BaseApiService {
           try {
             await this.retryWithBackoff(async () => {
               const blockSize = block.end - block.start;
-              await blockBlobClient.stageBlock(block.id, block.data, blockSize);
+              await blockBlobClient.stageBlock(block.id, block.data, blockSize, {
+                abortSignal: AbortSignal.timeout(60_000), // 60s timeout per block
+              });
             }, MAX_RETRIES, `stageBlock[${block.index}]`);
           } catch (error) {
+            console.error(`[UploadService] Block ${block.index}/${totalBlocks} failed permanently`, error);
             throw wrapStageError(UPLOAD_STAGES.BLOB_PUT, error);
           }
 
@@ -329,7 +339,12 @@ class UploadService extends BaseApiService {
       await Promise.all(Array.from({ length: workerCount }, uploadWorker));
     }
 
-    // 4. Commit all blocks (with retry)
+    const blockUploadDuration = ((Date.now() - uploadStartTime) / 1000).toFixed(1);
+    const avgSpeedMBps = (file.size / (1024 * 1024)) / (blockUploadDuration || 1);
+    console.log(`[UploadService] All ${totalBlocks} blocks uploaded in ${blockUploadDuration}s (avg ${avgSpeedMBps.toFixed(1)} MB/s)`);
+
+    // 4. Commit all blocks (with retry + extended timeout for large files)
+    console.log(`[UploadService] Committing ${blockIds.length} blocks (${(file.size / (1024*1024)).toFixed(1)} MB)...`);
     try {
       await this.retryWithBackoff(async () => {
         await blockBlobClient.commitBlockList(blockIds, {
@@ -337,9 +352,12 @@ class UploadService extends BaseApiService {
             blobContentType: contentType,
             blobCacheControl: 'public, max-age=3600',
           },
+          abortSignal: AbortSignal.timeout(FINALIZE_TIMEOUT_MS),
         });
       }, MAX_RETRIES, 'commitBlockList');
+      console.log(`[UploadService] Block commit successful for ${file.name}`);
     } catch (error) {
+      console.error(`[UploadService] Block commit FAILED for ${file.name}`, error);
       throw wrapStageError(UPLOAD_STAGES.BLOCK_COMMIT, error);
     }
     

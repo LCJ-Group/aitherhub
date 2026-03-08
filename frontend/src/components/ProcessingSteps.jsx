@@ -570,7 +570,14 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
     }
   }, [currentStatus, videoId]);
 
-  const uploadStep = { key: 'uploaded', label: window.__t('statusUploaded') || 'アップロード完了' };
+  // Dynamic upload step label: show "アップロード中..." during upload, "アップロード完了" when done
+  const uploadStepLabel = (() => {
+    if (currentStatus === 'UPLOADING' || (externalProgress !== undefined && externalProgress < 100 && externalProgress >= 0)) {
+      return window.__t('statusUploading') || 'アップロード中...';
+    }
+    return window.__t('statusUploaded') || 'アップロード完了';
+  })();
+  const uploadStep = { key: 'uploaded', label: uploadStepLabel };
 
   // Derive queue/worker status label for display between upload and compress
   const getQueueStatusLabel = () => {
@@ -716,7 +723,7 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
     (step) => getAnalysisStepStatus(step.key) === 'current',
   )?.label;
   const progressLabel = uploadStepStatus === 'current'
-    ? (window.__t('statusNew') || 'ファイルをアップロードしています')
+    ? (window.__t('statusUploading') || 'アップロード中...')
     : (currentAnalysisLabel || (window.__t('statusAnalyzing') || '解析中...'));
   const videoTitleNode = useMemo(() => {
     if (!videoTitle) return null;
