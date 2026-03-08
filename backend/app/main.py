@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
@@ -17,6 +18,12 @@ logger = logging.getLogger(__name__)
 
 # Track startup time for diagnostics
 _startup_time = time.time()
+
+# Build-time version info (injected by CI/CD)
+_GIT_COMMIT = os.environ.get("GIT_COMMIT_SHA", "unknown")
+_GIT_BRANCH = os.environ.get("GIT_BRANCH", "unknown")
+_BUILD_TIME = os.environ.get("BUILD_TIME", "unknown")
+_DEPLOY_TIME = os.environ.get("DEPLOY_TIME", "unknown")
 
 
 @singleton
@@ -53,6 +60,18 @@ class AppCreator:
         @self.app.get("/")
         async def root():
             return {"status": "service is working"}
+
+        @self.app.get("/version")
+        async def version():
+            """Return current deployment version info for verification."""
+            return {
+                "app": "aitherhub-api",
+                "commit": _GIT_COMMIT,
+                "branch": _GIT_BRANCH,
+                "built_at": _BUILD_TIME,
+                "deployed_at": _DEPLOY_TIME,
+                "uptime_seconds": round(time.time() - _startup_time, 1),
+            }
 
         @self.app.get("/health/ready")
         async def health_ready():
