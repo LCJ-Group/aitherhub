@@ -2425,7 +2425,7 @@ async def get_event_scores(
                 COALESCE(vp.importance_score, 0) as importance_score
             FROM video_phases vp
             WHERE vp.video_id = :video_id
-              AND vp.user_id = :user_id
+              AND (vp.user_id = :user_id OR vp.user_id IS NULL)
             ORDER BY vp.phase_index
         """)
 
@@ -2899,7 +2899,7 @@ async def get_sales_clip_candidates(
                 vp.human_sales_tags
             FROM video_phases vp
             WHERE vp.video_id = :video_id
-              AND vp.user_id = :user_id
+              AND (vp.user_id = :user_id OR vp.user_id IS NULL)
             ORDER BY vp.phase_index ASC
         """)
         phases_result = await db.execute(sql_phases, {
@@ -3200,7 +3200,7 @@ async def get_sales_moment_clips(
                 COALESCE(vp.cta_score, 0) as cta_score
             FROM video_phases vp
             WHERE vp.video_id = :video_id
-              AND vp.user_id = :user_id
+              AND (vp.user_id = :user_id OR vp.user_id IS NULL)
             ORDER BY vp.phase_index ASC
         """)
         phases_result = await db.execute(sql_phases, {
@@ -3305,7 +3305,7 @@ async def detect_hooks_for_video(
                 vp.audio_text
             FROM video_phases vp
             WHERE vp.video_id = :video_id
-              AND vp.user_id = :user_id
+              AND (vp.user_id = :user_id OR vp.user_id IS NULL)
             ORDER BY vp.phase_index ASC
         """)
         phases_result = await db.execute(sql_phases, {

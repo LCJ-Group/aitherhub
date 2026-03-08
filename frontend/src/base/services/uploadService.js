@@ -532,7 +532,7 @@ class UploadService extends BaseApiService {
     // Cache file handle for same-session resume
     this.cacheFileHandle(upload_id, videoFile);
 
-    // Save initial metadata
+    // Save initial metadata (include uploadMode for resume support)
     await this.saveUploadMetadata({
       uploadId: upload_id,
       uploadUrl: upload_url,
@@ -543,6 +543,7 @@ class UploadService extends BaseApiService {
       uploadedBlocks: [],
       contentType: 'video/mp4',
       timestamp: Date.now(),
+      uploadMode: 'clean_video',
     });
 
     // Step 2: Upload video (0-80% of progress)
@@ -573,6 +574,20 @@ class UploadService extends BaseApiService {
       trend_blob_url = excelUrls.trend_blob_url;
 
       if (onProgress) onProgress(95);
+
+      // Save Excel blob URLs to metadata for resume support
+      await this.saveUploadMetadata({
+        uploadId: upload_id,
+        uploadUrl: upload_url,
+        videoId: video_id,
+        fileName: videoFile.name,
+        fileSize: videoFile.size,
+        contentType: 'video/mp4',
+        timestamp: Date.now(),
+        uploadMode: 'clean_video',
+        excelProductBlobUrl: product_blob_url,
+        excelTrendBlobUrl: trend_blob_url,
+      });
     }
 
     // Step 5: Notify backend of completion with upload_type and excel URLs
@@ -629,6 +644,7 @@ class UploadService extends BaseApiService {
         uploadedBlocks: [],
         contentType: 'video/mp4',
         timestamp: Date.now(),
+        uploadMode: 'clean_video',
       });
 
       const baseProgress = (i / totalVideos) * videoProgressShare;
