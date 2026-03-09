@@ -8,6 +8,7 @@ on:
       - 'worker/**'
       - 'shared/**'
       - 'deploy/**'
+      - 'requirements.txt'
       - '.github/workflows/deploy_worker.yml'
   workflow_dispatch:
 
@@ -41,6 +42,7 @@ jobs:
             echo "=== AitherHub Worker Deploy ==="
             echo "Time: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
+            # --- Repo update ---
             cd /opt/aitherhub
             git config --global --add safe.directory /opt/aitherhub
             echo "Before: $(git rev-parse HEAD)"
@@ -48,20 +50,49 @@ jobs:
             git reset --hard origin/master
             echo "After:  $(git rev-parse HEAD)"
 
-            if [ -f requirements.txt ]; then
-              echo ""
-              echo "=== Installing dependencies ==="
-              pip install -r requirements.txt --quiet
+            # --- venv setup ---
+            echo ""
+            echo "=== Setting up virtual environment ==="
+            if [ ! -d ".venv" ]; then
+              echo "Creating new .venv ..."
+              python3 -m venv .venv
+            else
+              echo "Reusing existing .venv"
             fi
 
+            # --- Install dependencies ---
+            echo ""
+            echo "=== Installing dependencies ==="
+            .venv/bin/python -m pip install --upgrade pip --quiet
+            .venv/bin/pip install -r requirements.txt --quiet
+            echo "Dependencies installed successfully"
+
+            # --- Restart worker ---
             echo ""
             echo "=== Restarting worker ==="
             sudo systemctl restart aither-worker
             sleep 5
 
+            # --- Status check (with retry) ---
             echo ""
             echo "=== Worker status ==="
-            sudo systemctl is-active aither-worker
+            for i in 1 2 3; do
+              STATUS=$(sudo systemctl is-active aither-worker 2>&1 || true)
+              if [ "$STATUS" = "active" ]; then
+                break
+              fi
+              echo "Attempt $i: status=$STATUS, waiting 5s..."
+              sleep 5
+            done
+
+            if [ "$STATUS" != "active" ]; then
+              echo "FATAL: Worker failed to start (status=$STATUS)"
+              echo "--- Last 20 journal lines ---"
+              sudo journalctl -u aither-worker --no-pager -n 20 2>&1 || true
+              exit 1
+            fi
+
+            echo "Worker is active"
             echo "Worker PID: $(systemctl show aither-worker --property=MainPID --value)"
 
             echo ""
@@ -91,13 +122,14 @@ jobs:
           SSH_HOST: ${{ secrets.WORKER_SSH_HOST }}
           SSH_USER: ${{ secrets.WORKER_SSH_USER }}
         run: |
-          HEALTH=$(ssh -i ~/.ssh/worker_key -o StrictHostKeyChecking=no ${SSH_USER}@${SSH_HOST} \
-            "curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/health || echo 'no_health_endpoint'")
-          echo "Health check result: ${HEALTH}"
-          if [ "${HEALTH}" = "200" ]; then
-            echo "SUCCESS: Worker health OK"
+          STATUS=$(ssh -i ~/.ssh/worker_key -o StrictHostKeyChecking=no ${SSH_USER}@${SSH_HOST} \
+            "sudo systemctl is-active aither-worker")
+          echo "Worker status: ${STATUS}"
+          if [ "${STATUS}" = "active" ]; then
+            echo "SUCCESS: Worker is running"
           else
-            echo "INFO: Health endpoint returned ${HEALTH} (worker may not have health endpoint yet)"
+            echo "FAIL: Worker is not active (status=${STATUS})"
+            exit 1
           fi
 
       - name: Cleanup SSH key
