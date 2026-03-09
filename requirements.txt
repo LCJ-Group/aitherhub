@@ -1,0 +1,27 @@
+# =============================================================================
+# AitherHub Worker Dependencies
+# =============================================================================
+# Install: pip install -r requirements.txt
+
+# --- Azure ---
+azure-storage-queue>=12.9.0
+azure-storage-blob>=12.19.0
+
+# --- Database ---
+sqlalchemy>=2.0
+asyncpg>=0.29.0
+
+# --- HTTP / API ---
+httpx>=0.25.0
+requests>=2.31.0
+openai>=1.0.0
+
+# --- Data / ML ---
+numpy>=1.26.0
+opencv-python-headless>=4.8.0
+pyyaml>=6.0
+
+# --- Utilities ---
+python-decouple>=3.8
+python-dotenv>=1.0.0
+loguru>=0.7.0
