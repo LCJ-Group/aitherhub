@@ -202,19 +202,30 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
     const nextStatus = normalizeProcessingStatus(data.status);
     const prevStatus = prevStatusRef.current;
 
+    // Use server updated_at as step start time (survives page reload)
+    const serverUpdatedMs = data.updated_at ? Date.parse(data.updated_at) : null;
+    const adjustedStepStart = (serverUpdatedMs && !isNaN(serverUpdatedMs)) ? serverUpdatedMs + skew : now;
+
     if (prevStatus && prevStatus !== nextStatus && prevStatusStartMsRef.current) {
       // Record duration of the previous phase
-      const phaseDuration = now - prevStatusStartMsRef.current;
-      phaseDurationsRef.current = {
-        ...phaseDurationsRef.current,
-        [prevStatus]: (phaseDurationsRef.current[prevStatus] || 0) + phaseDuration,
-      };
-      setPhaseDurations({ ...phaseDurationsRef.current });
+      const phaseDuration = adjustedStepStart - prevStatusStartMsRef.current;
+      if (phaseDuration > 0) {
+        phaseDurationsRef.current = {
+          ...phaseDurationsRef.current,
+          [prevStatus]: phaseDuration,
+        };
+        setPhaseDurations({ ...phaseDurationsRef.current });
+      }
     }
 
     if (prevStatus !== nextStatus) {
       prevStatusRef.current = nextStatus;
-      prevStatusStartMsRef.current = now;
+      // Use server-based time so it persists across reloads
+      prevStatusStartMsRef.current = adjustedStepStart;
+    } else if (!prevStatusStartMsRef.current && serverUpdatedMs && !isNaN(serverUpdatedMs)) {
+      // First SSE message after reload - restore step start from server time
+      prevStatusRef.current = nextStatus;
+      prevStatusStartMsRef.current = adjustedStepStart;
     }
 
     // 4) Compute elapsed time
