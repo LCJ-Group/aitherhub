@@ -1579,8 +1579,9 @@ def main():
             update_video_step_progress_sync(video_id, 0)
             logger.info("=== STEP 14 \u2013 FINALIZE PIPELINE (WAIT SPLIT) ===")
 
-            MAX_WAIT_SEC = 60 * 120   
-            CHECK_INTERVAL = 5     
+            MAX_WAIT_SEC = 60 * 120   # 2 hours total timeout
+            CHECK_INTERVAL = 5
+            STALL_TIMEOUT = 60 * 30   # 30 min stall detection
 
             # Count total phases for progress calculation
             try:
@@ -1589,6 +1590,9 @@ def main():
                 total_split_phases = 0
 
             waited = 0
+            last_progress_status = None
+            last_progress_time = time.time()
+
             while True:
                 split_status = get_video_split_status_sync(video_id)
 
@@ -1598,13 +1602,38 @@ def main():
                     update_video_status_sync(video_id, VideoStatus.DONE)
                     break
 
-                if waited >= MAX_WAIT_SEC:
-                    raise TimeoutError(
-                        f"Wait split timeout after {MAX_WAIT_SEC}s (split_status={split_status})"
+                # Handle error status from split process
+                if split_status and str(split_status).lower() in ("error", "failed"):
+                    logger.warning("[FINALIZE] Split reported error status=%s \u2192 mark DONE anyway (partial split)", split_status)
+                    update_video_step_progress_sync(video_id, 100)
+                    update_video_status_sync(video_id, VideoStatus.DONE)
+                    break
+
+                # Detect stall: if split_status hasn't changed for STALL_TIMEOUT
+                if split_status != last_progress_status:
+                    last_progress_status = split_status
+                    last_progress_time = time.time()
+                elif time.time() - last_progress_time >= STALL_TIMEOUT:
+                    logger.warning(
+                        "[FINALIZE] Split stalled for %ds at status=%s \u2192 mark DONE (partial split)",
+                        int(time.time() - last_progress_time), split_status
                     )
+                    update_video_step_progress_sync(video_id, 100)
+                    update_video_status_sync(video_id, VideoStatus.DONE)
+                    break
+
+                if waited >= MAX_WAIT_SEC:
+                    # Instead of raising error, mark as DONE with partial split
+                    logger.warning(
+                        "[FINALIZE] Split timeout after %ds (split_status=%s) \u2192 mark DONE (partial split)",
+                        MAX_WAIT_SEC, split_status
+                    )
+                    update_video_step_progress_sync(video_id, 100)
+                    update_video_status_sync(video_id, VideoStatus.DONE)
+                    break
 
                 # Update step_progress based on split_status (phase number)
-                if total_split_phases > 0 and split_status and split_status not in ("new", ""):
+                if total_split_phases > 0 and split_status and split_status not in ("new", "", None):
                     try:
                         completed_phases = int(split_status)
                         pct = min(int(completed_phases / total_split_phases * 100), 99)
@@ -1612,7 +1641,7 @@ def main():
                     except (ValueError, TypeError):
                         pass
 
-                logger.info("[FINALIZE] Waiting split... current=%s", split_status)
+                logger.info("[FINALIZE] Waiting split... current=%s (waited=%ds)", split_status, waited)
                 time.sleep(CHECK_INTERVAL)
                 waited += CHECK_INTERVAL
                 

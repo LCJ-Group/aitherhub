@@ -2450,10 +2450,15 @@ async def get_event_scores(
             return {"model_version": None, "score_source": "none", "scores": []}
 
         # Fetch video duration for position normalization
-        dur_sql = text("SELECT duration_seconds FROM videos WHERE video_id = :vid")
+        # Use MAX(time_end) from video_phases as duration (duration_seconds column may not exist)
+        dur_sql = text("""
+            SELECT COALESCE(MAX(time_end), 0) as max_time_end
+            FROM video_phases
+            WHERE video_id = :vid
+        """)
         dur_result = await db.execute(dur_sql, {"vid": video_id})
         dur_row = dur_result.fetchone()
-        video_duration = float(dur_row.duration_seconds) if dur_row and dur_row.duration_seconds else 0
+        video_duration = float(dur_row.max_time_end) if dur_row and dur_row.max_time_end else 0
 
         # Fetch sales moments
         moments = []
