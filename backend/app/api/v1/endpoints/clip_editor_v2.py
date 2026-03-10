@@ -415,42 +415,76 @@ async def get_timeline_data(
     except ValueError:
         raise HTTPException(status_code=422, detail="Invalid video_id UUID")
 
-    # 1. Phases
-    phases_sql = text("""
-        SELECT vp.phase_index, vp.time_start, vp.time_end,
-               vp.phase_description,
-               pi.hook_score, pi.viral_score,
-               pi.engagement_score, pi.speech_energy,
-               pi.key_actions
-        FROM video_phases vp
-        LEFT JOIN phase_insights pi
-            ON pi.video_id = vp.video_id AND pi.phase_index = vp.phase_index
-        WHERE vp.video_id = :video_id
-        ORDER BY vp.phase_index ASC
-    """)
-    phases_result = await db.execute(phases_sql, {"video_id": video_id})
-    phases_rows = phases_result.fetchall()
-
+    # 1. Phases (with phase_insights JOIN, fallback to phases-only)
     phases = []
-    for r in phases_rows:
-        key_actions = r.key_actions
-        if isinstance(key_actions, str):
-            try:
-                key_actions = json.loads(key_actions)
-            except Exception:
-                key_actions = None
+    try:
+        phases_sql = text("""
+            SELECT vp.phase_index, vp.time_start, vp.time_end,
+                   vp.phase_description,
+                   pi.hook_score, pi.viral_score,
+                   pi.engagement_score, pi.speech_energy,
+                   pi.key_actions
+            FROM video_phases vp
+            LEFT JOIN phase_insights pi
+                ON pi.video_id = vp.video_id AND pi.phase_index = vp.phase_index
+            WHERE vp.video_id = :video_id
+            ORDER BY vp.phase_index ASC
+        """)
+        phases_result = await db.execute(phases_sql, {"video_id": video_id})
+        phases_rows = phases_result.fetchall()
 
-        phases.append({
-            "phase_index": r.phase_index,
-            "time_start": r.time_start,
-            "time_end": r.time_end,
-            "description": r.phase_description,
-            "hook_score": r.hook_score,
-            "viral_score": r.viral_score,
-            "engagement_score": r.engagement_score,
-            "speech_energy": r.speech_energy,
-            "key_actions": key_actions,
-        })
+        for r in phases_rows:
+            key_actions = r.key_actions
+            if isinstance(key_actions, str):
+                try:
+                    key_actions = json.loads(key_actions)
+                except Exception:
+                    key_actions = None
+
+            phases.append({
+                "phase_index": r.phase_index,
+                "time_start": r.time_start,
+                "time_end": r.time_end,
+                "description": r.phase_description,
+                "hook_score": r.hook_score,
+                "viral_score": r.viral_score,
+                "engagement_score": r.engagement_score,
+                "speech_energy": r.speech_energy,
+                "key_actions": key_actions,
+            })
+    except Exception as e:
+        logger.warning(f"[timeline] phases+insights query failed, trying phases-only: {e}")
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+        try:
+            phases_sql = text("""
+                SELECT phase_index, time_start, time_end, phase_description
+                FROM video_phases
+                WHERE video_id = :video_id
+                ORDER BY phase_index ASC
+            """)
+            phases_result = await db.execute(phases_sql, {"video_id": video_id})
+            phases_rows = phases_result.fetchall()
+            for r in phases_rows:
+                phases.append({
+                    "phase_index": r.phase_index,
+                    "time_start": r.time_start,
+                    "time_end": r.time_end,
+                    "description": r.phase_description,
+                    "hook_score": None,
+                    "viral_score": None,
+                    "engagement_score": None,
+                    "speech_energy": None,
+                    "key_actions": None,
+                })
+        except Exception as e2:
+            logger.warning(f"[timeline] phases-only query also failed: {e2}")
+            try:
+                await db.rollback()
+            except Exception:
+                pass
 
     # 2. Sales moments (AI markers)
     markers = []
