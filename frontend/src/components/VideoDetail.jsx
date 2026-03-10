@@ -808,8 +808,26 @@ export default function VideoDetail({ videoData }) {
       {/* Video Header */}
       <div className="flex flex-col overflow-hidden md:overflow-auto h-full w-full mx-auto">
         <div className="flex flex-col gap-2 items-center">
-          <div className="px-4 py-2 rounded-full border border-gray-200 bg-gray-50 text-gray-700 text-xs">
-            {videoData?.original_filename}
+          <div className="px-4 py-2 rounded-full border border-gray-200 bg-gray-50 text-gray-700 text-xs flex items-center gap-2">
+            <span>{videoData?.original_filename}</span>
+            {(() => {
+              // Calculate total video duration from phases
+              const phases = videoData?.reports_1 || videoData?.reports_2 || [];
+              if (phases.length === 0) return null;
+              const maxEnd = Math.max(...phases.map(p => p.time_end || 0));
+              if (!maxEnd || maxEnd <= 0) return null;
+              const h = Math.floor(maxEnd / 3600);
+              const m = Math.floor((maxEnd % 3600) / 60);
+              const s = Math.floor(maxEnd % 60);
+              const durStr = h > 0
+                ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+                : `${m}:${String(s).padStart(2, '0')}`;
+              return (
+                <span className="text-gray-400 whitespace-nowrap" title="\u52d5\u753b\u306e\u518d\u751f\u6642\u9593">
+                  \ud83c\udfac {durStr}
+                </span>
+              );
+            })()}
           </div>
         </div>
         {/* SCROLL AREA */}

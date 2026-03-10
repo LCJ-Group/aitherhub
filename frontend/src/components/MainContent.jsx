@@ -25,6 +25,34 @@ function formatFileSize(bytes) {
 }
 
 /**
+ * Get video duration from a File object using HTML5 Video API
+ * Returns a Promise<number> (seconds)
+ */
+function getVideoDuration(file) {
+  return new Promise((resolve) => {
+    try {
+      const video = document.createElement('video');
+      video.preload = 'metadata';
+      const url = URL.createObjectURL(file);
+      video.src = url;
+      video.onloadedmetadata = () => {
+        const dur = video.duration;
+        URL.revokeObjectURL(url);
+        resolve(isFinite(dur) ? dur : null);
+      };
+      video.onerror = () => {
+        URL.revokeObjectURL(url);
+        resolve(null);
+      };
+      // Timeout fallback
+      setTimeout(() => resolve(null), 5000);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+/**
  * Format relative time
  */
 function formatRelativeTime(date) {
@@ -67,6 +95,7 @@ export default function MainContent({
   const [uploading, setUploading] = useState(false);
   const [uploadStartTime, setUploadStartTime] = useState(null);
   const [uploadDurationMs, setUploadDurationMs] = useState(null);
+  const [videoDurationSec, setVideoDurationSec] = useState(null);
   const [processingResume, setProcessingResume] = useState(false);
   const [checkingResume, setCheckingResume] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -265,6 +294,8 @@ export default function MainContent({
     setVideoData(null);
     setMessage("");
     setProgress(0);
+    // Get video duration
+    getVideoDuration(file).then(dur => { if (dur) setVideoDurationSec(dur); });
   };
 
   // Clean video file handlers (single file - legacy)
@@ -280,6 +311,8 @@ export default function MainContent({
       }
       setDuplicateVideo(null);
       setCleanVideoFile(file);
+      // Get video duration
+      getVideoDuration(file).then(dur => { if (dur) setVideoDurationSec(dur); });
     }
   };
 
@@ -293,6 +326,8 @@ export default function MainContent({
       setCleanVideoFiles(videoFiles);
       setCleanVideoFile(videoFiles[0]); // set first for compatibility
       setDuplicateVideo(null);
+      // Get duration of first video
+      getVideoDuration(videoFiles[0]).then(dur => { if (dur) setVideoDurationSec(dur); });
     }
   };
 
@@ -351,6 +386,8 @@ export default function MainContent({
     if (filesToUpload.length === 0) return;
 
     setUploading(true);
+    setUploadStartTime(Date.now());
+    setUploadDurationMs(null);
     setMessage("");
     setProgress(0);
 
@@ -374,6 +411,7 @@ export default function MainContent({
           },
         );
         setMessageType("success");
+        setUploadDurationMs(Date.now() - (uploadStartTime || Date.now()));
         setCleanVideoFile(null);
         setCleanVideoFiles([]);
         setProductExcelFile(null);
@@ -411,6 +449,7 @@ export default function MainContent({
           },
         );
         setMessageType("success");
+        setUploadDurationMs(Date.now() - (uploadStartTime || Date.now()));
         setCleanVideoFile(null);
         setCleanVideoFiles([]);
         setProductExcelFile(null);
@@ -570,6 +609,8 @@ export default function MainContent({
 
     setProcessingResume(true);
     setUploading(true);
+    setUploadStartTime(Date.now());
+    setUploadDurationMs(null);
     setMessage("");
     setProgress(0);
 
@@ -641,6 +682,7 @@ export default function MainContent({
       await UploadService.clearUploadMetadata(resumeUploadId);
 
       setMessageType("success");
+      setUploadDurationMs(Date.now() - (uploadStartTime || Date.now()));
       setSelectedFile(null);
       setResumeUploadId(null);
       setResumeInfo(null);
@@ -1122,6 +1164,7 @@ export default function MainContent({
                       onProcessingComplete={handleProcessingComplete}
                       uploadDurationMs={uploadDurationMs}
                       uploadStartTime={uploading ? uploadStartTime : null}
+                      videoDurationSec={videoDurationSec}
                     />
                   </div>
                   {/* Allow uploading another video or starting live analysis while current one is processing */}

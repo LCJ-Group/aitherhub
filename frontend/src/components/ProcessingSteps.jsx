@@ -43,7 +43,7 @@ function emaSmooth(prev, next, alpha = 0.3) {
   return alpha * next + (1 - alpha) * prev;
 }
 
-function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingComplete, externalProgress, uploadDurationMs, uploadStartTime }) {
+function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingComplete, externalProgress, uploadDurationMs, uploadStartTime, videoDurationSec }) {
   // Upload elapsed time (live counter during upload)
   const [uploadElapsedMs, setUploadElapsedMs] = useState(0);
   const [currentStatus, setCurrentStatus] = useState(initialStatus || 'NEW');
@@ -727,18 +727,56 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
   const progressLabel = uploadStepStatus === 'current'
     ? (window.__t('statusUploading') || 'アップロード中...')
     : (currentAnalysisLabel || (window.__t('statusAnalyzing') || '解析中...'));
+  // Format video duration (seconds) to HH:MM:SS or MM:SS
+  const formatVideoDuration = (sec) => {
+    if (!sec || !isFinite(sec)) return null;
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = Math.floor(sec % 60);
+    if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    return `${m}:${String(s).padStart(2, '0')}`;
+  };
+
+  // Format upload duration (ms) to human-readable
+  const formatUploadDur = (ms) => {
+    if (!ms || ms < 1000) return null;
+    const totalSec = Math.floor(ms / 1000);
+    if (totalSec < 60) return `${totalSec}秒`;
+    const m = Math.floor(totalSec / 60);
+    const s = totalSec % 60;
+    return s > 0 ? `${m}分${s}秒` : `${m}分`;
+  };
+
   const videoTitleNode = useMemo(() => {
     if (!videoTitle) return null;
+    const durLabel = formatVideoDuration(videoDurationSec);
+    const uploadDurLabel = formatUploadDur(uploadDurationMs);
+    const hasInfo = durLabel || uploadDurLabel;
     return (
       <div className="flex justify-center mb-5">
-        <div className="inline-flex items-center px-4 py-2 rounded-full border border-gray-200 bg-gray-50">
-          <div className="text-sm font-medium whitespace-nowrap text-gray-700">
-            {videoTitle}
+        <div className="inline-flex flex-col items-center px-4 py-2 rounded-full border border-gray-200 bg-gray-50">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium whitespace-nowrap text-gray-700">
+              {videoTitle}
+            </span>
+            {hasInfo && (
+              <span className="text-[11px] text-gray-400 whitespace-nowrap">
+                {durLabel && (
+                  <span title="動画の再生時間">🎬 {durLabel}</span>
+                )}
+                {durLabel && uploadDurLabel && (
+                  <span className="mx-1">|</span>
+                )}
+                {uploadDurLabel && (
+                  <span title="アップロード所要時間">⬆ {uploadDurLabel}</span>
+                )}
+              </span>
+            )}
           </div>
         </div>
       </div>
     );
-  }, [videoTitle]);
+  }, [videoTitle, videoDurationSec, uploadDurationMs]);
 
   // ── Determine if we should show timing info ──
   const showTiming = elapsedMs > 0 && currentStatus !== 'NEW' && currentStatus !== 'UPLOADING';
@@ -949,6 +987,7 @@ const areProcessingStepsPropsEqual = (prevProps, nextProps) =>
   prevProps.externalProgress === nextProps.externalProgress &&
   prevProps.onProcessingComplete === nextProps.onProcessingComplete &&
   prevProps.uploadDurationMs === nextProps.uploadDurationMs &&
-  prevProps.uploadStartTime === nextProps.uploadStartTime;
+  prevProps.uploadStartTime === nextProps.uploadStartTime &&
+  prevProps.videoDurationSec === nextProps.videoDurationSec;
 
 export default memo(ProcessingSteps, areProcessingStepsPropsEqual);
