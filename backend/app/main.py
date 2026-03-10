@@ -121,6 +121,22 @@ container = app_creator.container
 
 
 @app.on_event("startup")
+async def ensure_tables_exist():
+    """Ensure all ORM tables exist in the database (creates missing ones)."""
+    try:
+        from app.core.db import engine
+        from app.models.orm.base import Base
+        # Import all models so they are registered with Base.metadata
+        import app.models.orm  # noqa: F401
+
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        logger.info("Database tables verified/created successfully")
+    except Exception as e:
+        logger.warning(f"Failed to ensure tables exist on startup: {e}")
+
+
+@app.on_event("startup")
 async def restore_live_sessions():
     """Restore active live sessions from DB on startup."""
     try:
