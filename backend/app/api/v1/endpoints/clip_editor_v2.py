@@ -668,8 +668,59 @@ async def transcribe_clip(
     video_path = os.path.join(tmp_dir, "clip.mp4")
 
     try:
+        download_url = req.clip_url
+
+        # If clip_url has no SAS token, generate one on the backend
+        if "?" not in download_url or "sig=" not in download_url:
+            logger.info(f"[transcribe] clip_url has no SAS token, generating one")
+            try:
+                from app.services.storage_service import (
+                    _parse_account_key,
+                    CONNECTION_STRING,
+                    ACCOUNT_NAME,
+                    CONTAINER_NAME,
+                )
+                from azure.storage.blob import BlobSasPermissions, generate_blob_sas
+                from datetime import datetime, timedelta, timezone
+
+                # Extract blob name from clip_url
+                # URL formats:
+                #   https://cdn.aitherhub.com/videos/email/video_id/clips/clip_xxx.mp4
+                #   https://account.blob.core.windows.net/videos/email/video_id/clips/clip_xxx.mp4
+                from urllib.parse import urlparse, unquote
+                parsed_url = urlparse(download_url)
+                url_path = unquote(parsed_url.path)
+
+                # Remove leading /videos/ or /container_name/ prefix
+                if url_path.startswith(f"/{CONTAINER_NAME}/"):
+                    blob_name = url_path[len(f"/{CONTAINER_NAME}/"):]
+                elif url_path.startswith("/videos/"):
+                    blob_name = url_path[len("/videos/"):]
+                else:
+                    blob_name = url_path.lstrip("/")
+
+                logger.info(f"[transcribe] Extracted blob_name: {blob_name}")
+
+                account_key = _parse_account_key(CONNECTION_STRING)
+                expiry = datetime.now(timezone.utc) + timedelta(minutes=60)
+
+                sas_token = generate_blob_sas(
+                    account_name=ACCOUNT_NAME,
+                    container_name=CONTAINER_NAME,
+                    blob_name=blob_name,
+                    account_key=account_key,
+                    permission=BlobSasPermissions(read=True),
+                    expiry=expiry,
+                )
+
+                # Build download URL with SAS token using actual blob storage URL
+                download_url = f"https://{ACCOUNT_NAME}.blob.core.windows.net/{CONTAINER_NAME}/{blob_name}?{sas_token}"
+                logger.info(f"[transcribe] Generated SAS download URL (expires in 60 min)")
+            except Exception as sas_err:
+                logger.warning(f"[transcribe] Failed to generate SAS token: {sas_err}, trying original URL")
+
         async with httpx.AsyncClient(timeout=120.0) as client:
-            resp = await client.get(req.clip_url)
+            resp = await client.get(download_url)
             resp.raise_for_status()
             with open(video_path, "wb") as f:
                 f.write(resp.content)
