@@ -1,5 +1,9 @@
-import { memo, useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react';
 import VideoService from '../base/services/videoService';
+
+// ── Stall detection config ──────────────────────────────────────────
+const STALL_DETECT_MINUTES = 10;  // Minutes without progress change → show stall warning
+const STALL_DETECT_MS = STALL_DETECT_MINUTES * 60 * 1000;
 
 const normalizeProcessingStatus = (status) => {
   if (status === 'uploaded') {
@@ -56,6 +60,12 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
   const [enqueueStatus, setEnqueueStatus] = useState(null);
   const [workerClaimedAt, setWorkerClaimedAt] = useState(null);
   const [enqueueError, setEnqueueError] = useState(null);
+
+  // ── Stall detection state ──
+  const [isStalled, setIsStalled] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const lastProgressRef = useRef(null);       // { progress, timestamp }
+  const stallCheckTimerRef = useRef(null);
 
   // ── Timing state ──
   const [elapsedMs, setElapsedMs] = useState(0);
@@ -328,6 +338,77 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
       onProcessingComplete();
     }
   }, [onProcessingComplete]);
+
+  // ── Retry analysis handler ──
+  const handleRetryAnalysis = useCallback(async () => {
+    if (!videoId || isRetrying) return;
+    setIsRetrying(true);
+    try {
+      await VideoService.retryAnalysis(videoId);
+      // Reset state for fresh processing
+      setIsStalled(false);
+      setErrorMessage(null);
+      setCurrentStatus('STEP_COMPRESS_1080P');
+      setSmoothProgress(0);
+      maxProgressRef.current = 0;
+      setStepProgress(0);
+      setElapsedMs(0);
+      setEstimatedRemainingMs(null);
+      lastProgressRef.current = null;
+      retryCountRef.current = 0;
+      lastInitializedVideoIdRef.current = null; // Force SSE re-init
+      // Trigger re-render which will re-establish SSE
+    } catch (err) {
+      console.error('Retry analysis failed:', err);
+      setErrorMessage('再試行に失敗しました。しばらく待ってからもう一度お試しください。');
+    } finally {
+      setIsRetrying(false);
+    }
+  }, [videoId, isRetrying]);
+
+  // ── Stall detection: track progress changes ──
+  useEffect(() => {
+    const isProcessing = currentStatus !== 'NEW' && currentStatus !== 'UPLOADING'
+      && currentStatus !== 'DONE' && currentStatus !== 'ERROR';
+
+    if (!isProcessing) {
+      // Not processing → clear stall state
+      setIsStalled(false);
+      lastProgressRef.current = null;
+      if (stallCheckTimerRef.current) {
+        clearInterval(stallCheckTimerRef.current);
+        stallCheckTimerRef.current = null;
+      }
+      return;
+    }
+
+    // Record progress change
+    const currentProgress = smoothProgress;
+    const now = Date.now();
+    if (!lastProgressRef.current || lastProgressRef.current.progress !== currentProgress) {
+      lastProgressRef.current = { progress: currentProgress, timestamp: now };
+      setIsStalled(false); // Progress moved, clear stall
+    }
+
+    // Start periodic stall check if not already running
+    if (!stallCheckTimerRef.current) {
+      stallCheckTimerRef.current = setInterval(() => {
+        if (lastProgressRef.current) {
+          const elapsed = Date.now() - lastProgressRef.current.timestamp;
+          if (elapsed >= STALL_DETECT_MS) {
+            setIsStalled(true);
+          }
+        }
+      }, 30000); // Check every 30 seconds
+    }
+
+    return () => {
+      if (stallCheckTimerRef.current) {
+        clearInterval(stallCheckTimerRef.current);
+        stallCheckTimerRef.current = null;
+      }
+    };
+  }, [currentStatus, smoothProgress]);
 
   // Polling fallback
   const startPolling = useCallback(() => {
@@ -965,14 +1046,39 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
               {errorMessage}
             </p>
           )}
+
+          {/* ── Stall warning + retry button ── */}
+          {isStalled && !isDone && !isError && (
+            <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-center">
+              <p className="text-sm text-amber-700 mb-2">
+                解析が停止している可能性があります（{STALL_DETECT_MINUTES}分以上進捗なし）
+              </p>
+              <button
+                onClick={handleRetryAnalysis}
+                disabled={isRetrying}
+                className="px-4 py-1.5 text-sm font-medium text-white bg-amber-500 hover:bg-amber-600 disabled:bg-amber-300 rounded-md transition-colors"
+              >
+                {isRetrying ? '再試行中...' : '解析を再試行'}
+              </button>
+            </div>
+          )}
         </>
       )}
 
-      {/* Error message */}
+      {/* Error message + retry button */}
       {isError && (
-        <p className="text-sm text-red-400 mt-2">
-          {window.__t('errorAnalysisMessage') || '解析中にエラーが発生しました。'}
-        </p>
+        <div className="mt-2 text-center">
+          <p className="text-sm text-red-400 mb-2">
+            {window.__t('errorAnalysisMessage') || '解析中にエラーが発生しました。'}
+          </p>
+          <button
+            onClick={handleRetryAnalysis}
+            disabled={isRetrying}
+            className="px-4 py-1.5 text-sm font-medium text-white bg-red-500 hover:bg-red-600 disabled:bg-red-300 rounded-md transition-colors"
+          >
+            {isRetrying ? '再試行中...' : '解析を再試行'}
+          </button>
+        </div>
       )}
     </div>
   );

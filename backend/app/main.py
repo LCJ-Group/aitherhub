@@ -142,3 +142,10 @@ async def restore_live_sessions():
         start_cleanup_task()
     except Exception as e:
         logger.warning(f"Failed to start cleanup task: {e}")
+
+    # Start background monitor for stuck videos (auto-requeue)
+    try:
+        from app.services.stuck_video_monitor import start_stuck_video_monitor
+        start_stuck_video_monitor()
+    except Exception as e:
+        logger.warning(f"Failed to start stuck video monitor: {e}")
