@@ -122,16 +122,17 @@ container = app_creator.container
 
 @app.on_event("startup")
 async def ensure_tables_exist():
-    """Ensure all ORM tables exist in the database (creates missing ones)."""
+    """Ensure live_analysis_jobs table exists in the database."""
     try:
         from app.core.db import engine
-        from app.models.orm.base import Base
-        # Import all models so they are registered with Base.metadata
-        import app.models.orm  # noqa: F401
+        from app.models.orm.live_analysis_job import LiveAnalysisJob
 
         async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        logger.info("Database tables verified/created successfully")
+            await conn.run_sync(
+                LiveAnalysisJob.__table__.create,
+                checkfirst=True,
+            )
+        logger.info("live_analysis_jobs table verified/created successfully")
     except Exception as e:
         logger.warning(f"Failed to ensure tables exist on startup: {e}")
 

@@ -51,17 +51,18 @@ router = APIRouter(
 @router.post("/migrate")
 async def migrate_tables():
     """
-    One-time endpoint to create missing tables.
+    One-time endpoint to create the live_analysis_jobs table.
     Safe to call multiple times (CREATE IF NOT EXISTS).
     """
     try:
         from app.core.db import engine
-        from app.models.orm.base import Base
-        import app.models.orm  # noqa: F401
 
         async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        return {"status": "ok", "message": "Tables verified/created successfully"}
+            await conn.run_sync(
+                LiveAnalysisJob.__table__.create,
+                checkfirst=True,
+            )
+        return {"status": "ok", "message": "live_analysis_jobs table verified/created successfully"}
     except Exception as e:
         logger.error(f"Migration failed: {e}")
         raise HTTPException(status_code=500, detail=f"Migration failed: {str(e)}")
