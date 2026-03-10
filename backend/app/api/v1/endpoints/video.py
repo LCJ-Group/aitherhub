@@ -945,6 +945,8 @@ async def request_clip_generation(
 
         if phase_index is None or time_start is None or time_end is None:
             raise HTTPException(status_code=400, detail="phase_index, time_start, time_end are required")
+        # Ensure phase_index is always a string (DB column is text)
+        phase_index = str(phase_index)
 
         # Clamp speed_factor to safe range
         speed_factor = max(0.5, min(2.0, speed_factor))
@@ -959,7 +961,7 @@ async def request_clip_generation(
         existing_sql = text("""
             SELECT id, status, clip_url
             FROM video_clips
-            WHERE video_id = :video_id AND phase_index = :phase_index
+            WHERE video_id = :video_id AND phase_index = CAST(:phase_index AS text)
             ORDER BY created_at DESC
             LIMIT 1
         """)
@@ -1059,7 +1061,7 @@ async def request_clip_generation(
 @router.get("/{video_id}/clips/{phase_index}")
 async def get_clip_status(
     video_id: str,
-    phase_index: int,
+    phase_index: str,
     db: AsyncSession = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -1070,11 +1072,11 @@ async def get_clip_status(
         sql = text("""
             SELECT id, status, clip_url, sas_token, sas_expireddate, error_message, created_at
             FROM video_clips
-            WHERE video_id = :video_id AND phase_index = :phase_index
+            WHERE video_id = :video_id AND phase_index = CAST(:phase_index AS text)
             ORDER BY created_at DESC
             LIMIT 1
         """)
-        result = await db.execute(sql, {"video_id": video_id, "phase_index": phase_index})
+        result = await db.execute(sql, {"video_id": video_id, "phase_index": str(phase_index)})
         row = result.fetchone()
 
         if not row:
