@@ -475,6 +475,10 @@ async def get_timeline_data(
             })
     except Exception as e:
         logger.warning(f"[timeline] sales_moments query failed: {e}")
+        try:
+            await db.rollback()
+        except Exception:
+            pass
 
     # 3. Event scores
     event_scores = []
@@ -496,6 +500,10 @@ async def get_timeline_data(
             })
     except Exception as e:
         logger.warning(f"[timeline] event_scores query failed: {e}")
+        try:
+            await db.rollback()
+        except Exception:
+            pass
 
     # 4. Segment feedback
     feedback = []
@@ -519,6 +527,10 @@ async def get_timeline_data(
             })
     except Exception as e:
         logger.warning(f"[timeline] segment_feedback query failed: {e}")
+        try:
+            await db.rollback()
+        except Exception:
+            pass
 
     return {
         "phases": phases,
