@@ -730,7 +730,7 @@ async def transcribe_clip(
         _cleanup_tmp(tmp_dir)
         raise HTTPException(status_code=400, detail=f"Failed to download clip video: {str(e)}")
 
-    # Step 2: Send to Azure OpenAI Whisper API
+    # Step 2: Extract audio and send to Azure OpenAI Whisper API
     try:
         import openai
 
@@ -739,9 +739,9 @@ async def transcribe_clip(
         azure_key = os.getenv("AZURE_OPENAI_KEY", "")
 
         # Clean up endpoint URL - remove any path/query params, keep just base URL
-        from urllib.parse import urlparse
-        parsed = urlparse(azure_endpoint)
-        clean_endpoint = f"{parsed.scheme}://{parsed.netloc}/"
+        from urllib.parse import urlparse as _urlparse
+        _parsed = _urlparse(azure_endpoint)
+        clean_endpoint = f"{_parsed.scheme}://{_parsed.netloc}/"
 
         logger.info(f"[transcribe] Using Azure OpenAI endpoint: {clean_endpoint}")
 
@@ -753,10 +753,12 @@ async def transcribe_clip(
 
         file_size = os.path.getsize(video_path)
         max_size = 25 * 1024 * 1024  # 25MB Whisper API limit
-        logger.info(f"[transcribe] File size: {file_size} bytes (max: {max_size})")
+        logger.info(f"[transcribe] Video file size: {file_size} bytes ({file_size/1024/1024:.1f} MB, max: 25 MB)")
 
         async def _call_whisper(file_path: str) -> list:
             """Call Azure OpenAI Whisper and return segments."""
+            fsize = os.path.getsize(file_path)
+            logger.info(f"[transcribe] Sending to Whisper: {file_path} ({fsize/1024/1024:.1f} MB)")
             with open(file_path, "rb") as f:
                 response = await openai_client.audio.transcriptions.create(
                     model="whisper",
@@ -778,28 +780,59 @@ async def transcribe_clip(
                 segs.append({"start": 0.0, "end": duration, "text": response.text.strip()})
             return segs
 
-        if file_size <= max_size:
-            segments = await _call_whisper(video_path)
-        else:
-            # File too large - try extracting audio with ffmpeg first
-            audio_path = os.path.join(tmp_dir, "audio.wav")
+        # Always extract audio first to reduce file size (video track is not needed)
+        # Use mp3 compression for much smaller files
+        audio_path = os.path.join(tmp_dir, "audio.mp3")
+        whisper_file = video_path  # fallback
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "ffmpeg", "-y", "-i", video_path,
+                "-vn",  # no video
+                "-acodec", "libmp3lame",  # mp3 encoding
+                "-ar", "16000",  # 16kHz sample rate (optimal for Whisper)
+                "-ac", "1",  # mono
+                "-b:a", "64k",  # 64kbps bitrate (good enough for speech)
+                audio_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+            if proc.returncode == 0 and os.path.exists(audio_path):
+                audio_size = os.path.getsize(audio_path)
+                logger.info(f"[transcribe] Extracted audio: {audio_size/1024/1024:.1f} MB (from {file_size/1024/1024:.1f} MB video)")
+                whisper_file = audio_path
+            else:
+                logger.warning(f"[transcribe] ffmpeg failed (rc={proc.returncode}), stderr: {stderr.decode()[:500]}")
+        except FileNotFoundError:
+            logger.warning("[transcribe] ffmpeg not found, trying WAV extraction with Python")
+            # Fallback: try extracting audio with Python (moviepy or raw approach)
             try:
-                proc = await asyncio.create_subprocess_exec(
-                    "ffmpeg", "-y", "-i", video_path,
-                    "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
-                    audio_path,
+                wav_path = os.path.join(tmp_dir, "audio.wav")
+                proc2 = await asyncio.create_subprocess_exec(
+                    "python3", "-c",
+                    f"from moviepy.editor import VideoFileClip; "
+                    f"clip = VideoFileClip('{video_path}'); "
+                    f"clip.audio.write_audiofile('{wav_path}', fps=16000, nbytes=2, codec='pcm_s16le'); "
+                    f"clip.close()",
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
-                await proc.communicate()
-                if proc.returncode == 0 and os.path.exists(audio_path):
-                    segments = await _call_whisper(audio_path)
-                else:
-                    raise RuntimeError("ffmpeg not available or failed")
-            except Exception:
-                # ffmpeg not available - try sending mp4 directly
-                segments = await _call_whisper(video_path)
+                await proc2.communicate()
+                if proc2.returncode == 0 and os.path.exists(wav_path):
+                    whisper_file = wav_path
+                    logger.info(f"[transcribe] Extracted WAV audio: {os.path.getsize(wav_path)/1024/1024:.1f} MB")
+            except Exception as py_err:
+                logger.warning(f"[transcribe] Python audio extraction failed: {py_err}")
+        except Exception as ffmpeg_err:
+            logger.warning(f"[transcribe] ffmpeg error: {ffmpeg_err}")
 
+        # Check final file size
+        final_size = os.path.getsize(whisper_file)
+        if final_size > max_size:
+            logger.warning(f"[transcribe] File still too large ({final_size/1024/1024:.1f} MB), Whisper may reject it")
+
+        segments = await _call_whisper(whisper_file)
         logger.info(f"[transcribe] Got {len(segments)} segments from Azure OpenAI Whisper")
 
     except Exception as e:
