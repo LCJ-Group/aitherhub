@@ -1396,7 +1396,10 @@ class VideoService extends BaseApiService {
    */
   async transcribeClip(videoId, data) {
     try {
-      const response = await this.post(`/api/v1/editor/${videoId}/transcribe`, data);
+      // Whisper transcription can take 2-3 minutes (download + audio extraction + API)
+      const response = await this.post(`/api/v1/editor/${videoId}/transcribe`, data, {
+        timeout: 300000, // 5 minutes
+      });
       return response;
     } catch (error) {
       console.error('Failed to transcribe clip:', error);
