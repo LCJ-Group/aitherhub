@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 
 import logo from "../assets/logo/logo.svg";
@@ -106,56 +106,78 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
     })();
 
   // ===== fetch videos =====
-  useEffect(() => {
-    const fetchVideos = async () => {
-      if (!effectiveUser?.isLoggedIn) {
-        setVideos([]);
-        setSelectedVideoId(null);
-        return;
-      }
+  const fetchVideosRef = useRef(null);
+  const loadingTimeoutRef = useRef(null);
 
-      // Use id if available, otherwise use email
-      const userId = effectiveUser.id || effectiveUser.email;
-      if (!userId) {
-        setVideos([]);
-        return;
-      }
+  const doFetchVideos = useCallback(async () => {
+    const userId = effectiveUser?.id || effectiveUser?.email;
+    if (!effectiveUser?.isLoggedIn || !userId) {
+      setVideos([]);
+      setSelectedVideoId(null);
+      setLoadingVideos(false);
+      return;
+    }
 
-      setLoadingVideos(true);
-      setVideoListError(null);
-      try {
-        const videoList = await VideoService.getVideosByUser(userId);
-        // Deduplicate: keep only the latest video per original_filename
-        const seen = new Map();
-        const deduped = [];
-        for (const v of (videoList || [])) {
-          const key = v.original_filename || v.id;
-          if (!seen.has(key)) {
-            seen.set(key, true);
-            deduped.push(v);
-          }
-        }
-        setVideos(deduped);
-        setVideoListError(null);
-      } catch (error) {
-        console.error("[Sidebar] Error fetching videos:", error);
-        // Distinguish auth errors from general errors
-        const status = error?.response?.status;
-        if (status === 401 || status === 403) {
-          setVideoListError('auth');
-        } else {
+    setLoadingVideos(true);
+    setVideoListError(null);
+
+    // Safety timeout: if API doesn't respond within 20s, show error instead of spinner
+    if (loadingTimeoutRef.current) clearTimeout(loadingTimeoutRef.current);
+    loadingTimeoutRef.current = setTimeout(() => {
+      setLoadingVideos((prev) => {
+        if (prev) {
+          console.warn('[Sidebar] Video list loading timed out after 20s');
           setVideoListError('error');
+          return false;
         }
-        // Keep existing videos if we had some (don't flash empty on transient errors)
-        if (videos.length === 0) {
-          setVideos([]);
+        return prev;
+      });
+    }, 20000);
+
+    try {
+      const videoList = await VideoService.getVideosByUser(userId);
+      // Deduplicate: keep only the latest video per original_filename
+      const seen = new Map();
+      const deduped = [];
+      for (const v of (videoList || [])) {
+        const key = v.original_filename || v.id;
+        if (!seen.has(key)) {
+          seen.set(key, true);
+          deduped.push(v);
         }
-      } finally {
-        setLoadingVideos(false);
+      }
+      setVideos(deduped);
+      setVideoListError(null);
+    } catch (error) {
+      console.error("[Sidebar] Error fetching videos:", error);
+      // Distinguish auth errors from general errors
+      const status = error?.response?.status;
+      if (status === 401 || status === 403) {
+        setVideoListError('auth');
+      } else {
+        setVideoListError('error');
+      }
+      // Keep existing videos if we had some (don't flash empty on transient errors)
+      if (videos.length === 0) {
+        setVideos([]);
+      }
+    } finally {
+      if (loadingTimeoutRef.current) {
+        clearTimeout(loadingTimeoutRef.current);
+        loadingTimeoutRef.current = null;
+      }
+      setLoadingVideos(false);
+    }
+  }, [effectiveUser?.isLoggedIn, effectiveUser?.id, effectiveUser?.email]);
+
+  useEffect(() => {
+    doFetchVideos();
+    return () => {
+      if (loadingTimeoutRef.current) {
+        clearTimeout(loadingTimeoutRef.current);
+        loadingTimeoutRef.current = null;
       }
     };
-
-    fetchVideos();
   }, [effectiveUser?.isLoggedIn, effectiveUser?.id, effectiveUser?.email, refreshKey]);
 
   const filteredVideos = useMemo(() => {
@@ -394,7 +416,7 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
           {effectiveUser?.isLoggedIn && (
             <>
               <div className="flex-1 min-h-0 flex flex-col">
-                {loadingVideos && videos.length === 0 ? (
+                {loadingVideos && videos.length === 0 && !videoListError ? (
                   <div className="flex items-center justify-center py-4">
                     <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-gray-400"></div>
                   </div>
@@ -672,23 +694,7 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
                       {window.__t("videoListError") || "Failed to load video list"}
                     </span>
                     <button
-                      onClick={() => {
-                        setVideoListError(null);
-                        setLoadingVideos(true);
-                        VideoService.getVideosByUser(effectiveUser?.id || effectiveUser?.email).then((list) => {
-                          const seen = new Map();
-                          const deduped = [];
-                          for (const v of (list || [])) {
-                            const key = v.original_filename || v.id;
-                            if (!seen.has(key)) { seen.set(key, true); deduped.push(v); }
-                          }
-                          setVideos(deduped);
-                          setVideoListError(null);
-                        }).catch((err) => {
-                          console.error("[Sidebar] Retry failed:", err);
-                          setVideoListError(err?.response?.status === 401 || err?.response?.status === 403 ? 'auth' : 'error');
-                        }).finally(() => setLoadingVideos(false));
-                      }}
+                      onClick={() => doFetchVideos()}
                       className="px-3 py-1.5 text-xs font-medium text-white bg-red-500 hover:bg-red-600 rounded-lg transition-colors"
                     >
                       {window.__t("videoListRetry") || "Retry"}

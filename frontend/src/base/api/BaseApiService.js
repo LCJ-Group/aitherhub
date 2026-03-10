@@ -4,6 +4,18 @@ import AuthService from "../services/userService";
 import { generateRequestId } from "../utils/runtimeErrorLogger";
 
 /**
+ * Default request timeout in milliseconds.
+ * Prevents requests from hanging indefinitely (e.g. Azure cold-start).
+ */
+const DEFAULT_TIMEOUT_MS = 30000; // 30 seconds
+
+/**
+ * Maximum time (ms) a queued request will wait for a token refresh to complete.
+ * Prevents deadlocks when the refresh itself hangs.
+ */
+const REFRESH_QUEUE_TIMEOUT_MS = 15000; // 15 seconds
+
+/**
  * Endpoints that do NOT require authentication (no Bearer token needed).
  * These are the only endpoints where we skip the Authorization header.
  */
@@ -29,6 +41,7 @@ export default class BaseApiService {
   constructor(baseURL) {
     this.client = axios.create({
       baseURL,
+      timeout: DEFAULT_TIMEOUT_MS,
       headers: {
         "Content-Type": "application/json",
       },
@@ -59,6 +72,29 @@ export default class BaseApiService {
     };
 
     /**
+     * Wait for an in-progress token refresh with a timeout.
+     * Returns the new token on success, or null on timeout / failure.
+     */
+    const waitForRefresh = () => {
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          // Remove ourselves from the queue so processQueue won't call stale resolve/reject
+          const idx = failedQueue.findIndex(p => p._timer === timer);
+          if (idx !== -1) failedQueue.splice(idx, 1);
+          console.warn('[BaseApiService] Timed out waiting for token refresh');
+          resolve(null);
+        }, REFRESH_QUEUE_TIMEOUT_MS);
+
+        const entry = {
+          _timer: timer,
+          resolve: (token) => { clearTimeout(timer); resolve(token); },
+          reject: () => { clearTimeout(timer); resolve(null); },
+        };
+        failedQueue.push(entry);
+      });
+    };
+
+    /**
      * Attempt to refresh the access token using the refresh token.
      * Returns the new access token on success, or null on failure.
      */
@@ -70,7 +106,7 @@ export default class BaseApiService {
       try {
         const response = await axios.post(baseURL + "/api/v1/auth/refresh", {
           refresh_token: refreshToken,
-        });
+        }, { timeout: 15000 });
         const { token, refreshToken: newRefreshToken } = response.data;
         const tokenStored = TokenManager.setToken(token);
         if (newRefreshToken) {
@@ -105,20 +141,21 @@ export default class BaseApiService {
           console.info('[BaseApiService] Access token expired, attempting proactive refresh...');
           if (!isRefreshing) {
             isRefreshing = true;
-            const newToken = await tryRefreshToken();
-            isRefreshing = false;
-            if (newToken) {
-              processQueue(null, newToken);
-              token = newToken;
-            } else {
-              processQueue(new Error('Token refresh failed'), null);
-              token = null;
+            try {
+              const newToken = await tryRefreshToken();
+              if (newToken) {
+                processQueue(null, newToken);
+                token = newToken;
+              } else {
+                processQueue(new Error('Token refresh failed'), null);
+                token = null;
+              }
+            } finally {
+              isRefreshing = false;
             }
           } else {
-            // Another refresh is in progress – wait for it
-            token = await new Promise((resolve, reject) => {
-              failedQueue.push({ resolve, reject });
-            }).catch(() => null);
+            // Another refresh is in progress – wait with timeout
+            token = await waitForRefresh();
           }
         }
 
@@ -149,16 +186,16 @@ export default class BaseApiService {
             return Promise.reject(error);
           }
 
-          // If already refreshing, queue this request
+          // If already refreshing, queue this request (with timeout)
           if (isRefreshing) {
-            return new Promise((resolve, reject) => {
-              failedQueue.push({ resolve, reject });
-            }).then(token => {
+            const token = await waitForRefresh();
+            if (token) {
               originalRequest.headers.Authorization = "Bearer " + token;
+              originalRequest._retry = true;
               return this.client(originalRequest);
-            }).catch(err => {
-              return Promise.reject(err);
-            });
+            }
+            // Refresh failed or timed out – propagate original error
+            return Promise.reject(error);
           }
 
           originalRequest._retry = true;
@@ -166,7 +203,6 @@ export default class BaseApiService {
 
           try {
             const newToken = await tryRefreshToken();
-            isRefreshing = false;
 
             if (newToken) {
               processQueue(null, newToken);
@@ -176,10 +212,11 @@ export default class BaseApiService {
               throw new Error('No valid refresh token available');
             }
           } catch (refreshError) {
-            isRefreshing = false;
             processQueue(refreshError, null);
             handleAutoLogout();
             return Promise.reject(refreshError);
+          } finally {
+            isRefreshing = false;
           }
         }
 

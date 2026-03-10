@@ -102,6 +102,8 @@ export default function MainContent({
   const [uploadedVideoId, setUploadedVideoId] = useState(null);
   const [videoData, setVideoData] = useState(null);
   const [loadingVideo, setLoadingVideo] = useState(false);
+  const [videoLoadError, setVideoLoadError] = useState(null); // null | 'timeout' | 'error' | 'auth'
+  const videoLoadTimeoutRef = useRef(null);
   const [message, setMessage] = useState("");
   const [messageType, setMessageType] = useState("");
   const [showLoginModal, setShowLoginModal] = useState(false);
@@ -957,12 +959,25 @@ export default function MainContent({
 
     setVideoData(null);
     setLoadingVideo(true);
+    setVideoLoadError(null);
+
+    // Safety timeout: if API doesn't respond within 20s, show error instead of spinner
+    if (videoLoadTimeoutRef.current) clearTimeout(videoLoadTimeoutRef.current);
+    videoLoadTimeoutRef.current = setTimeout(() => {
+      if (currentRequestId === videoRequestIdRef.current) {
+        console.warn('[MainContent] Video loading timed out after 20s');
+        setLoadingVideo(false);
+        setVideoLoadError('timeout');
+      }
+    }, 20000);
+
     const fetchVideoDetails = async () => {
       try {
         const response = await VideoService.getVideoById(videoId, { signal: controller.signal });
         if (currentRequestId !== videoRequestIdRef.current) return;
         const data = response || {};
         setVideoData(normalizeVideoData(data, videoId));
+        setVideoLoadError(null);
       } catch (err) {
         if (controller.signal.aborted) return;
         if (currentRequestId !== videoRequestIdRef.current) return;
@@ -973,8 +988,18 @@ export default function MainContent({
         }
         console.error('Failed to fetch video details:', err);
         setVideoData(null);
+        const status = err?.response?.status;
+        if (status === 401) {
+          setVideoLoadError('auth');
+        } else {
+          setVideoLoadError('error');
+        }
       } finally {
         if (currentRequestId === videoRequestIdRef.current) {
+          if (videoLoadTimeoutRef.current) {
+            clearTimeout(videoLoadTimeoutRef.current);
+            videoLoadTimeoutRef.current = null;
+          }
           setLoadingVideo(false);
           if (videoAbortControllerRef.current === controller) {
             videoAbortControllerRef.current = null;
@@ -986,6 +1011,10 @@ export default function MainContent({
     fetchVideoDetails();
     return () => {
       controller.abort();
+      if (videoLoadTimeoutRef.current) {
+        clearTimeout(videoLoadTimeoutRef.current);
+        videoLoadTimeoutRef.current = null;
+      }
     };
   }, [uploadedVideoId, selectedVideoId, isLoggedIn]);
 
@@ -1119,6 +1148,62 @@ export default function MainContent({
       <Body>
         {showFeedback ? (
           <FeedbackPage onBack={onCloseFeedback} />
+        ) : videoLoadError ? (
+          <div className="w-full flex flex-col items-center justify-center">
+            <div className="rounded-2xl p-8 border transition-all duration-200 border-red-100 bg-red-50">
+              <div className="flex flex-col items-center text-center space-y-4">
+                <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-red-400">
+                    <circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>
+                  </svg>
+                </div>
+                <p className="text-red-600 text-sm font-medium">
+                  {videoLoadError === 'timeout' ? '読み込みがタイムアウトしました' : videoLoadError === 'auth' ? 'ログイン状態を確認してください' : '動画の読み込みに失敗しました'}
+                </p>
+                <button
+                  onClick={() => {
+                    setVideoLoadError(null);
+                    lastRequestedVideoIdRef.current = null;
+                    const videoId = selectedVideoId || uploadedVideoId;
+                    if (videoId) {
+                      // Force re-fetch by resetting the ref and triggering effect
+                      setLoadingVideo(true);
+                      setVideoLoadError(null);
+                      const reqId = ++videoRequestIdRef.current;
+                      const ctrl = new AbortController();
+                      videoAbortControllerRef.current = ctrl;
+                      lastRequestedVideoIdRef.current = videoId;
+                      if (videoLoadTimeoutRef.current) clearTimeout(videoLoadTimeoutRef.current);
+                      videoLoadTimeoutRef.current = setTimeout(() => {
+                        if (reqId === videoRequestIdRef.current) {
+                          setLoadingVideo(false);
+                          setVideoLoadError('timeout');
+                        }
+                      }, 20000);
+                      VideoService.getVideoById(videoId, { signal: ctrl.signal }).then((response) => {
+                        if (reqId !== videoRequestIdRef.current) return;
+                        setVideoData(normalizeVideoData(response || {}, videoId));
+                        setVideoLoadError(null);
+                      }).catch((err) => {
+                        if (ctrl.signal.aborted || reqId !== videoRequestIdRef.current) return;
+                        setVideoData(null);
+                        setVideoLoadError(err?.response?.status === 401 ? 'auth' : 'error');
+                      }).finally(() => {
+                        if (reqId === videoRequestIdRef.current) {
+                          if (videoLoadTimeoutRef.current) { clearTimeout(videoLoadTimeoutRef.current); videoLoadTimeoutRef.current = null; }
+                          setLoadingVideo(false);
+                          if (videoAbortControllerRef.current === ctrl) videoAbortControllerRef.current = null;
+                        }
+                      });
+                    }
+                  }}
+                  className="px-4 py-2 text-sm font-medium text-white bg-red-500 hover:bg-red-600 rounded-lg transition-colors"
+                >
+                  再試行
+                </button>
+              </div>
+            </div>
+          </div>
         ) : shouldShowGlobalVideoLoading ? (
           <div className="w-full flex flex-col items-center justify-center">
             <div className="rounded-2xl p-8 border transition-all duration-200 border-gray-200 bg-gray-50">
