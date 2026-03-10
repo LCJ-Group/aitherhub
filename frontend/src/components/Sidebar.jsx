@@ -180,6 +180,21 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
     };
   }, [effectiveUser?.isLoggedIn, effectiveUser?.id, effectiveUser?.email, refreshKey]);
 
+  // Auto-refresh sidebar when there are processing videos (QUEUED, STEP_*, UPLOADED)
+  useEffect(() => {
+    const hasProcessing = videos.some(v =>
+      v.status && v.status !== 'DONE' && v.status !== 'ERROR'
+    );
+    const hasError = videos.some(v => v.status === 'ERROR');
+    // Refresh every 30s if processing, every 60s if only errors (may be retried)
+    const interval = hasProcessing ? 30000 : hasError ? 60000 : null;
+    if (!interval) return;
+    const timer = setInterval(() => {
+      doFetchVideos();
+    }, interval);
+    return () => clearInterval(timer);
+  }, [videos, doFetchVideos]);
+
   const filteredVideos = useMemo(() => {
     const query = searchValue.trim().toLowerCase();
     if (!query) return videos;
