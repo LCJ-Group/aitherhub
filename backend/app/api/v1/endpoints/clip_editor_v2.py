@@ -416,8 +416,20 @@ async def get_timeline_data(
         raise HTTPException(status_code=422, detail="Invalid video_id UUID")
 
     # 1. Phases
-    # Try with audio_text column first, fallback without it
+    # Check if audio_text column exists in video_phases table
+    has_audio_text = False
     try:
+        col_check = text("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'video_phases' AND column_name = 'audio_text'
+            LIMIT 1
+        """)
+        col_result = await db.execute(col_check)
+        has_audio_text = col_result.fetchone() is not None
+    except Exception:
+        has_audio_text = False
+
+    if has_audio_text:
         phases_sql = text("""
             SELECT vp.phase_index, vp.time_start, vp.time_end,
                    vp.phase_description, vp.audio_text,
@@ -430,11 +442,7 @@ async def get_timeline_data(
             WHERE vp.video_id = :video_id
             ORDER BY vp.phase_index ASC
         """)
-        phases_result = await db.execute(phases_sql, {"video_id": video_id})
-        phases_rows = phases_result.fetchall()
-        has_audio_text = True
-    except Exception:
-        await db.rollback()
+    else:
         phases_sql = text("""
             SELECT vp.phase_index, vp.time_start, vp.time_end,
                    vp.phase_description,
@@ -447,9 +455,8 @@ async def get_timeline_data(
             WHERE vp.video_id = :video_id
             ORDER BY vp.phase_index ASC
         """)
-        phases_result = await db.execute(phases_sql, {"video_id": video_id})
-        phases_rows = phases_result.fetchall()
-        has_audio_text = False
+    phases_result = await db.execute(phases_sql, {"video_id": video_id})
+    phases_rows = phases_result.fetchall()
 
     phases = []
     for r in phases_rows:
