@@ -11,7 +11,32 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  pre_deploy_check:
+    runs-on: ubuntu-latest
+    name: Pre-deploy smoke test
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run startup smoke test
+        run: python tests/test_startup_smoke.py
+
+      - name: Run import boundary tests
+        run: python tests/test_import_boundaries.py
+
   build_and_deploy:
+    needs: pre_deploy_check
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -53,18 +78,46 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Wait for deployment propagation
-        run: sleep 60
+        run: sleep 90
 
-      - name: Verify API deployment
+      - name: Verify API is responding
         run: |
-          echo "Checking aitherhubAPI version..."
-          for i in 1 2 3; do
-            RESPONSE=$(curl -sf https://aitherhubapi.azurewebsites.net/version || echo "FAIL")
-            echo "Attempt $i: $RESPONSE"
-            if [ "$RESPONSE" != "FAIL" ]; then
-              DEPLOYED_COMMIT=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('commit',''))" 2>/dev/null || echo "")
-              echo "Deployed commit: $DEPLOYED_COMMIT"
+          echo "Checking aitherhubAPI health..."
+          SUCCESS=false
+          for i in 1 2 3 4 5; do
+            HTTP_CODE=$(curl -s -o /tmp/response.json -w "%{http_code}" \
+              --connect-timeout 10 --max-time 30 \
+              https://aitherhubapi.azurewebsites.net/ 2>/dev/null || echo "000")
+            BODY=$(cat /tmp/response.json 2>/dev/null || echo "")
+            echo "Attempt $i: HTTP $HTTP_CODE — $BODY"
+
+            if [ "$HTTP_CODE" = "200" ]; then
+              SUCCESS=true
+              echo "API is healthy!"
               break
             fi
-            sleep 15
+            echo "Waiting 30s before retry..."
+            sleep 30
           done
+
+          if [ "$SUCCESS" != "true" ]; then
+            echo ""
+            echo "::error::DEPLOY VERIFICATION FAILED — API did not return 200 after 5 attempts"
+            echo "The server may have crashed on startup. Check Azure App Service logs."
+            exit 1
+          fi
+
+      - name: Check version endpoint
+        if: success()
+        run: |
+          RESPONSE=$(curl -sf --connect-timeout 10 --max-time 15 \
+            https://aitherhubapi.azurewebsites.net/version 2>/dev/null || echo "{}")
+          echo "Version info: $RESPONSE"
+          echo "$RESPONSE" | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          commit = data.get('commit', 'unknown')
+          uptime = data.get('uptime_seconds', -1)
+          print(f'Deployed commit: {commit}')
+          print(f'Uptime: {uptime}s')
+          " 2>/dev/null || echo "Could not parse version response"
