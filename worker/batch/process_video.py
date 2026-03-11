@@ -640,6 +640,20 @@ def main():
             update_video_status_sync(video_id, VideoStatus.STEP_0_EXTRACT_FRAMES)
             logger.info("=== STEP 0-PRE: GENERATE ANALYSIS VIDEO ===")
             _analysis_out = os.path.join(os.path.dirname(video_path), "analysis.mp4")
+            # Dynamic timeout: scale with video size (min 10min, max 90min)
+            # For 11h video, ~40000 frames at fps=1, needs more time
+            try:
+                import subprocess as _sp
+                _probe = _sp.run(
+                    ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                     "-of", "default=noprint_wrappers=1:nokey=1", video_path],
+                    capture_output=True, text=True, timeout=30
+                )
+                _vid_duration = float(_probe.stdout.strip())
+            except Exception:
+                _vid_duration = 0
+            _analysis_timeout = max(600, min(int(_vid_duration / 60 * 10), 5400))  # 10min-90min
+            logger.info("[ANALYSIS_VIDEO] video_duration=%.0fs, timeout=%ds", _vid_duration, _analysis_timeout)
             try:
                 analysis_video_path = generate_analysis_video(
                     input_path=video_path,
@@ -648,7 +662,7 @@ def main():
                     scale_width=1280,
                     crf=28,
                     preset="veryfast",
-                    timeout=600,  # 10 minute timeout
+                    timeout=_analysis_timeout,
                 )
             except Exception as e:
                 logger.warning("[ANALYSIS_VIDEO] Failed with error: %s", e)

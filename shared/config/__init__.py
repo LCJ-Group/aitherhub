@@ -82,7 +82,7 @@ AZURE_DEAD_LETTER_QUEUE_NAME: str = os.getenv("AZURE_DEAD_LETTER_QUEUE_NAME", "v
 
 WORKER_MAX_CONCURRENT: int = int(os.getenv("WORKER_MAX_CONCURRENT", "2"))
 WORKER_MAX_RETRIES: int = int(os.getenv("WORKER_MAX_RETRIES", "3"))
-WORKER_VIDEO_TIMEOUT: int = int(os.getenv("WORKER_VIDEO_TIMEOUT", str(240 * 60)))  # 4h default for large videos
+WORKER_VIDEO_TIMEOUT: int = int(os.getenv("WORKER_VIDEO_TIMEOUT", str(480 * 60)))  # 8h default for large videos (11h+ recordings)
 WORKER_CLIP_TIMEOUT: int = int(os.getenv("WORKER_CLIP_TIMEOUT", str(10 * 60)))
 
 

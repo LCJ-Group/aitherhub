@@ -99,6 +99,28 @@ def extract_frames(
     duration = _get_video_duration(video_path)
     expected_frames = int(duration * fps) if duration > 0 else 0
 
+    # --- Resume check: if frames already extracted, skip ---
+    existing_frames = len([f for f in os.listdir(out_dir) if f.endswith('.jpg')]) if os.path.exists(out_dir) else 0
+    if existing_frames > 0 and expected_frames > 0:
+        completeness = existing_frames / expected_frames
+        if completeness >= 0.95:  # 95%+ frames already extracted → skip
+            logger.info(
+                "[FRAMES][RESUME] Found %d/%d frames (%.1f%%) already extracted. Skipping.",
+                existing_frames, expected_frames, completeness * 100,
+            )
+            if on_progress:
+                on_progress(100)
+            return out_dir
+        else:
+            # Partial extraction → clean up and re-extract
+            logger.info(
+                "[FRAMES][RESUME] Found %d/%d frames (%.1f%%) — incomplete. Re-extracting.",
+                existing_frames, expected_frames, completeness * 100,
+            )
+            for f in os.listdir(out_dir):
+                if f.endswith('.jpg'):
+                    os.remove(os.path.join(out_dir, f))
+
     # Detect codec and GPU availability
     codec = _detect_video_codec(video_path)
     has_gpu = _check_gpu_available()
@@ -158,7 +180,11 @@ def extract_frames(
 
     # --- Stall detection: if no new frames for STALL_TIMEOUT seconds, kill ffmpeg ---
     # Scale timeout based on video duration: long videos may have slow initial seek
-    STALL_TIMEOUT = max(120, min(int(duration / 10), 300))  # 120s-300s based on duration
+    # For 11h (39600s) video: 39600/10 = 3960 → capped at 600s
+    # For 1h (3600s) video: 3600/10 = 360 → capped at 360s
+    # For short (<20min) video: min 120s
+    STALL_TIMEOUT = max(120, min(int(duration / 10), 600))  # 120s-600s based on duration
+    logger.info("[FRAMES] STALL_TIMEOUT=%ds (duration=%.0fs, expected_frames=%d)", STALL_TIMEOUT, duration, expected_frames)
     _stall_detected = {"value": False}
 
     if on_progress and expected_frames > 0:

@@ -464,8 +464,9 @@ def process_live_capture_job(payload: dict):
         return False
 
 
-# Timeout for video analysis subprocess (120 minutes hard limit)
-VIDEO_PROCESS_TIMEOUT = int(os.getenv("WORKER_VIDEO_TIMEOUT", str(120 * 60)))
+# Timeout for video analysis subprocess
+# Must match shared/config WORKER_VIDEO_TIMEOUT (8h for 11h+ recordings)
+VIDEO_PROCESS_TIMEOUT = int(os.getenv("WORKER_VIDEO_TIMEOUT", str(480 * 60)))
 
 # Timeout for clip generation subprocess (10 minutes)
 CLIP_PROCESS_TIMEOUT = int(os.getenv("WORKER_CLIP_TIMEOUT", str(10 * 60)))

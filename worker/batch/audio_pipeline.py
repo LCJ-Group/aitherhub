@@ -122,28 +122,60 @@ def _get_batched_pipeline():
 # STEP 3.1 – EXTRACT AUDIO (full file, no chunking for batched mode)
 # =========================
 
+def _get_video_duration_seconds(video_path: str) -> float:
+    """Get video duration in seconds using ffprobe. Returns 0 on failure."""
+    try:
+        result = subprocess.run(
+            [FFMPEG_BIN.replace("ffmpeg", "ffprobe"),
+             "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", video_path],
+            capture_output=True, text=True, timeout=30
+        )
+        return float(result.stdout.strip())
+    except Exception:
+        return 0.0
+
+
 def extract_audio_full(video_path: str, out_dir: str) -> str:
     """
     Extract full audio as a single WAV file (for BatchedInferencePipeline).
     WAV, mono, 16kHz – safe for Whisper.
     Returns the path to the full audio file.
+    Timeout scales with video duration (duration * 0.5 + 600s, max 3h).
     """
     os.makedirs(out_dir, exist_ok=True)
     full_audio_path = os.path.join(out_dir, "full_audio.wav")
 
-    subprocess.run(
-        [
-            FFMPEG_BIN, "-y",
-            "-i", video_path,
-            "-map", "0:a:0",
-            "-vn",
-            "-ac", "1",
-            "-ar", "16000",
-            full_audio_path
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL
-    )
+    # Dynamic timeout based on video duration
+    duration = _get_video_duration_seconds(video_path)
+    timeout = min(int(duration * 0.5) + 600, 10800)  # max 3 hours
+    timeout = max(timeout, 600)  # min 10 minutes
+    print(f"[AUDIO] extract_audio_full: duration={duration:.0f}s, timeout={timeout}s")
+
+    try:
+        subprocess.run(
+            [
+                FFMPEG_BIN, "-y",
+                "-i", video_path,
+                "-map", "0:a:0",
+                "-vn",
+                "-ac", "1",
+                "-ar", "16000",
+                full_audio_path
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=timeout
+        )
+    except subprocess.TimeoutExpired:
+        print(f"[AUDIO][WARN] extract_audio_full timed out after {timeout}s")
+        # Clean up partial file
+        if os.path.exists(full_audio_path):
+            try:
+                os.remove(full_audio_path)
+            except Exception:
+                pass
+        return None
 
     if os.path.exists(full_audio_path) and os.path.getsize(full_audio_path) > 100:
         return full_audio_path
@@ -155,27 +187,39 @@ def extract_audio_chunks(video_path: str, out_dir: str) -> str:
     Extract audio chunks into out_dir.
     WAV, mono, 16kHz – safe for Whisper.
     v4: Uses GPU decode if available for faster extraction.
+    Timeout scales with video duration (duration * 0.5 + 600s, max 3h).
     """
     os.makedirs(out_dir, exist_ok=True)
 
     chunk_pattern = os.path.join(out_dir, "chunk_%03d.wav")
 
-    subprocess.run(
-        [
-            FFMPEG_BIN, "-y",
-            "-i", video_path,
-            "-map", "0:a:0",
-            "-vn",
-            "-f", "segment",
-            "-segment_time", str(CHUNK_SECONDS),
-            "-reset_timestamps", "1",
-            "-ac", "1",
-            "-ar", "16000",
-            chunk_pattern
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL
-    )
+    # Dynamic timeout based on video duration
+    duration = _get_video_duration_seconds(video_path)
+    timeout = min(int(duration * 0.5) + 600, 10800)  # max 3 hours
+    timeout = max(timeout, 600)  # min 10 minutes
+    print(f"[AUDIO] extract_audio_chunks: duration={duration:.0f}s, timeout={timeout}s")
+
+    try:
+        subprocess.run(
+            [
+                FFMPEG_BIN, "-y",
+                "-i", video_path,
+                "-map", "0:a:0",
+                "-vn",
+                "-f", "segment",
+                "-segment_time", str(CHUNK_SECONDS),
+                "-reset_timestamps", "1",
+                "-ac", "1",
+                "-ar", "16000",
+                chunk_pattern
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=timeout
+        )
+    except subprocess.TimeoutExpired:
+        print(f"[AUDIO][WARN] extract_audio_chunks timed out after {timeout}s")
+        # Don't delete partial chunks - they may still be usable
 
     return out_dir
 

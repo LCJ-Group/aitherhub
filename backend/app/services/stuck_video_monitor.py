@@ -23,9 +23,14 @@ logger.setLevel(logging.INFO)
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 CHECK_INTERVAL_MINUTES = 5        # How often to check for stuck videos (was 10)
-STUCK_THRESHOLD_MINUTES = 20      # Minutes without update → considered stuck (was 30)
+STUCK_THRESHOLD_MINUTES = 30      # Minutes without update → considered stuck
+                                   # Raised from 20 to 30 to avoid false positives
+                                   # during long video processing (11h+ videos may
+                                   # have slow steps like audio transcription)
 MAX_AUTO_RETRIES = 5              # Max auto-requeue attempts per video (was 3)
-WORKER_GUARD_HOURS = 1            # Hours since worker_claimed_at to consider stale (was 3)
+WORKER_GUARD_HOURS = 2            # Hours since worker_claimed_at to consider stale
+                                   # Raised from 1 to 2 to prevent premature requeue
+                                   # of long-running video analysis jobs (8h timeout)
 
 _monitor_task = None
 
