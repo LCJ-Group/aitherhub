@@ -900,7 +900,14 @@ def poll_and_process(executor: ThreadPoolExecutor):
 
 
 def acquire_lock():
-    """Acquire file lock to prevent duplicate instances."""
+    """Acquire file lock to prevent duplicate instances.
+    
+    Uses fcntl.flock which is automatically released when the process dies
+    (even via SIGKILL), because the kernel releases flock locks when the
+    file descriptor is closed (process termination closes all FDs).
+    
+    Additionally checks for stale PID in the lock file as a safety net.
+    """
     lock_file = Path("/tmp/simple_worker.lock")
     fp = open(lock_file, "w")
     try:
@@ -909,8 +916,27 @@ def acquire_lock():
         fp.flush()
         return fp
     except IOError:
-        print("[worker] Another worker instance is already running. Exiting.")
-        sys.exit(1)
+        # Check if the lock holder is still alive (stale lock detection)
+        try:
+            with open(lock_file, "r") as rf:
+                old_pid = int(rf.read().strip())
+            os.kill(old_pid, 0)  # signal 0 = check existence
+            print(f"[worker] Another worker instance is already running (PID {old_pid}). Exiting.")
+            sys.exit(1)
+        except (ValueError, ProcessLookupError, PermissionError, FileNotFoundError):
+            # PID is invalid or process is dead -> stale lock
+            print(f"[worker] Stale lock detected. Removing and re-acquiring...")
+            fp.close()
+            lock_file.unlink(missing_ok=True)
+            fp = open(lock_file, "w")
+            try:
+                fcntl.flock(fp, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fp.write(str(os.getpid()))
+                fp.flush()
+                return fp
+            except IOError:
+                print("[worker] Failed to acquire lock even after stale removal. Exiting.")
+                sys.exit(1)
 
 
 def periodic_disk_cleanup():
