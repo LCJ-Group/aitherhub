@@ -846,7 +846,9 @@ async def get_video_product_data(
         # Parse product Excel
         if product_blob_url:
             try:
+                logger.info("[PRODUCT-DATA] Parsing product Excel: %s", product_blob_url[:100])
                 products = await _parse_excel(product_blob_url)
+                logger.info("[PRODUCT-DATA] Product parse result: %d items", len(products))
                 response_data["products"] = products
                 response_data["has_product_data"] = len(products) > 0
 
@@ -887,23 +889,34 @@ async def get_video_product_data(
                     except Exception as cache_err:
                         logger.warning(f"Failed to cache top_products: {cache_err}")
             except Exception as e:
-                logger.warning(f"Failed to parse product Excel: {e}")
+                logger.warning(f"Failed to parse product Excel: {e}", exc_info=True)
+
+        else:
+            logger.info("[PRODUCT-DATA] No product_blob_url")
 
         # Parse trend Excel
         if trend_blob_url:
             try:
+                logger.info("[PRODUCT-DATA] Parsing trend Excel: %s", trend_blob_url[:100])
                 trends = await _parse_excel(trend_blob_url)
+                logger.info("[PRODUCT-DATA] Trend parse result: %d items", len(trends))
                 response_data["trends"] = trends
                 response_data["has_trend_data"] = len(trends) > 0
             except Exception as e:
-                logger.warning(f"Failed to parse trend Excel: {e}")
+                logger.warning(f"Failed to parse trend Excel: {e}", exc_info=True)
 
+        response_data["_debug"] = {
+            "product_blob_url_present": product_blob_url is not None,
+            "trend_blob_url_present": trend_blob_url is not None,
+            "product_blob_url_prefix": product_blob_url[:60] if product_blob_url else None,
+            "trend_blob_url_prefix": trend_blob_url[:60] if trend_blob_url else None,
+        }
         return response_data
 
     except HTTPException:
         raise
     except Exception as exc:
-        logger.error(f"Failed to fetch product data: {exc}")
+        logger.error(f"Failed to fetch product data: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to fetch product data: {exc}")
 
 
