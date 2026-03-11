@@ -94,6 +94,9 @@ def test_worker_does_not_import_backend():
         # backfill_phase_metrics.py has a conditional fallback import
         # that will be removed in a future PR
         "worker/batch/backfill_phase_metrics.py",
+        # run_live_analysis.py intentionally imports from backend/app/services/
+        # as it runs as a subprocess with backend/ on sys.path
+        "worker/batch/run_live_analysis.py",
     }
 
     actual_violations = [
