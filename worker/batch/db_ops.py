@@ -1576,7 +1576,8 @@ async def get_video_excel_urls(video_id: str):
     for a given video.
     """
     sql = text("""
-        SELECT upload_type, excel_product_blob_url, excel_trend_blob_url
+        SELECT upload_type, excel_product_blob_url, excel_trend_blob_url,
+               COALESCE(time_offset_seconds, 0) as time_offset_seconds
         FROM videos
         WHERE id = :video_id
     """)
@@ -1589,6 +1590,7 @@ async def get_video_excel_urls(video_id: str):
         "upload_type": row[0],
         "excel_product_blob_url": row[1],
         "excel_trend_blob_url": row[2],
+        "time_offset_seconds": float(row[3]) if row[3] else 0,
     }
 
 

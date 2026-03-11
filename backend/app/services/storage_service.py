@@ -1,6 +1,9 @@
 """Utilities for Azure Blob uploads and SAS generation."""
 
+import logging
 import os
+
+logger = logging.getLogger(__name__)
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Tuple
@@ -12,7 +15,22 @@ from azure.storage.blob import (
 )
 
 CONNECTION_STRING = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
-ACCOUNT_NAME = os.getenv("AZURE_STORAGE_ACCOUNT_NAME")
+
+
+def _parse_account_name(conn_str: str | None) -> str:
+    """Extract AccountName from a connection string (fallback)."""
+    if not conn_str:
+        return ""
+    for part in conn_str.split(";"):
+        if part.startswith("AccountName="):
+            return part.split("=", 1)[1]
+    return ""
+
+
+ACCOUNT_NAME = (
+    os.getenv("AZURE_STORAGE_ACCOUNT_NAME")
+    or _parse_account_name(CONNECTION_STRING)
+)
 CONTAINER_NAME = os.getenv("AZURE_BLOB_CONTAINER", "videos")
 SAS_EXP_MINUTES = int(os.getenv("AZURE_BLOB_SAS_EXP_MINUTES", "1440"))  # default 1 day
 SAS_DOWNLOAD_EXP_MINUTES = int(os.getenv("AZURE_BLOB_SAS_DOWNLOAD_MINUTES", "1440"))  # Default 24 hours
@@ -143,7 +161,8 @@ def generate_read_sas_from_url(
         )
         base_url = blob_url.split("?", 1)[0]  # strip old query
         return f"{base_url}?{sas}"
-    except Exception:
+    except Exception as exc:
+        logger.warning("generate_read_sas_from_url failed for %s: %s", blob_url[:80] if blob_url else None, exc)
         return None
 
 
