@@ -1415,3 +1415,15 @@ for sub in [clips_router, products_router, sales_router, excel_router]:
     for route in sub.routes:
         router.routes.append(route)
 
+
+
+@router.get("/_debug/storage-info")
+async def debug_storage_info(current_user=Depends(get_current_user)):
+    """Temporary debug endpoint to check storage configuration."""
+    from app.services.storage_service import ACCOUNT_NAME, CONNECTION_STRING, CONTAINER_NAME
+    return {
+        "account_name": ACCOUNT_NAME or "(empty)",
+        "has_connection_string": bool(CONNECTION_STRING),
+        "connection_string_len": len(CONNECTION_STRING) if CONNECTION_STRING else 0,
+        "container": CONTAINER_NAME,
+    }
