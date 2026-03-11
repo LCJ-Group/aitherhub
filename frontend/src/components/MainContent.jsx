@@ -44,8 +44,8 @@ function getVideoDuration(file) {
         URL.revokeObjectURL(url);
         resolve(null);
       };
-      // Timeout fallback
-      setTimeout(() => resolve(null), 5000);
+      // Timeout fallback (30s for large files like 11h recordings)
+      setTimeout(() => resolve(null), 30000);
     } catch {
       resolve(null);
     }
@@ -67,6 +67,103 @@ function formatRelativeTime(date) {
   if (diffHour < 24) return `${diffHour}時間前`;
   if (diffDay < 7) return `${diffDay}日前`;
   return date.toLocaleDateString('ja-JP');
+}
+
+/**
+ * ErrorLogPanel - Collapsible error log viewer for video processing errors
+ */
+function ErrorLogPanel({ videoId }) {
+  const [errorLogs, setErrorLogs] = useState([]);
+  const [showLogs, setShowLogs] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [fetched, setFetched] = useState(false);
+
+  const fetchLogs = useCallback(async () => {
+    if (!videoId || loading) return;
+    setLoading(true);
+    try {
+      const res = await VideoService.getErrorLogs(videoId);
+      if (res?.error_logs) setErrorLogs(res.error_logs);
+      setFetched(true);
+    } catch (err) {
+      console.error('Failed to fetch error logs:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, [videoId, loading]);
+
+  // Auto-fetch on first render
+  useEffect(() => {
+    if (videoId && !fetched) fetchLogs();
+  }, [videoId]);
+
+  return (
+    <div className="mt-4 w-full">
+      <button
+        onClick={() => {
+          setShowLogs(!showLogs);
+          if (!showLogs && !fetched) fetchLogs();
+        }}
+        className="flex items-center gap-2 text-xs text-gray-400 hover:text-gray-300 transition-colors mx-auto"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+          <line x1="16" y1="13" x2="8" y2="13"/>
+          <line x1="16" y1="17" x2="8" y2="17"/>
+        </svg>
+        エラーログ {errorLogs.length > 0 ? `(${errorLogs.length}件)` : ''}
+        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+          className={`transition-transform duration-200 ${showLogs ? 'rotate-180' : ''}`}>
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </button>
+
+      {showLogs && (
+        <div className="mt-2 max-h-60 overflow-y-auto space-y-2">
+          {loading && (
+            <p className="text-xs text-gray-400 text-center py-2">読み込み中...</p>
+          )}
+          {!loading && errorLogs.length === 0 && (
+            <p className="text-xs text-gray-500 text-center py-2">エラーログはありません</p>
+          )}
+          {errorLogs.map((log, idx) => (
+            <div key={log.id || idx} className="p-2.5 bg-gray-800/50 border border-gray-700 rounded-md text-left">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="inline-block px-1.5 py-0.5 text-[10px] font-mono font-semibold bg-red-900/50 text-red-400 rounded">
+                  {log.error_code || 'UNKNOWN'}
+                </span>
+                {log.error_step && (
+                  <span className="text-[10px] text-gray-500">@ {log.error_step}</span>
+                )}
+                {log.source && (
+                  <span className="text-[10px] text-gray-600">({log.source})</span>
+                )}
+              </div>
+              <p className="text-[11px] text-gray-400 break-words">{log.error_message}</p>
+              {log.created_at && (
+                <p className="text-[10px] text-gray-600 mt-1">
+                  {new Date(log.created_at).toLocaleString('ja-JP')}
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {showLogs && (
+        <div className="text-center mt-2">
+          <button
+            onClick={fetchLogs}
+            disabled={loading}
+            className="text-[11px] text-gray-500 hover:text-gray-300 underline transition-colors"
+          >
+            {loading ? '読み込み中...' : 'エラーログを更新'}
+          </button>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function MainContent({
@@ -1377,6 +1474,8 @@ export default function MainContent({
                     </button>
                   </div>
                 </div>
+                {/* Error Log Section */}
+                <ErrorLogPanel videoId={videoData.id} />
               </div>
             </div>
           ) : null

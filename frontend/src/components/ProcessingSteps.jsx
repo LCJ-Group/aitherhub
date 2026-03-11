@@ -858,14 +858,15 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
   const progressLabel = uploadStepStatus === 'current'
     ? (window.__t('statusUploading') || 'アップロード中...')
     : (currentAnalysisLabel || (window.__t('statusAnalyzing') || '解析中...'));
-  // Format video duration (seconds) to HH:MM:SS or MM:SS
+  // Format video duration (seconds) to human-readable Japanese format
   const formatVideoDuration = (sec) => {
     if (!sec || !isFinite(sec)) return null;
     const h = Math.floor(sec / 3600);
     const m = Math.floor((sec % 3600) / 60);
     const s = Math.floor(sec % 60);
-    if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-    return `${m}:${String(s).padStart(2, '0')}`;
+    if (h > 0) return `${h}時間${m > 0 ? m + '分' : ''}${s > 0 ? s + '秒' : ''}`;
+    if (m > 0) return `${m}分${s > 0 ? s + '秒' : ''}`;
+    return `${s}秒`;
   };
 
   // Format upload duration (ms) to human-readable
@@ -1148,69 +1149,71 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
             </div>
           </div>
 
-          {/* Error log history toggle */}
-          {errorLogs.length > 0 && (
-            <div className="mt-3">
-              <button
-                onClick={() => {
-                  setShowErrorLogs(!showErrorLogs);
-                  if (!showErrorLogs && errorLogs.length === 0) fetchErrorLogs();
-                }}
-                className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 transition-colors mx-auto"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                  <polyline points="14 2 14 8 20 8"/>
-                  <line x1="16" y1="13" x2="8" y2="13"/>
-                  <line x1="16" y1="17" x2="8" y2="17"/>
-                </svg>
-                エラーログ履歴 ({errorLogs.length}件)
-                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-                  className={`transition-transform duration-200 ${showErrorLogs ? 'rotate-180' : ''}`}>
-                  <polyline points="6 9 12 15 18 9"/>
-                </svg>
-              </button>
+          {/* Error log history toggle - always show button */}
+          <div className="mt-3">
+            <button
+              onClick={() => {
+                setShowErrorLogs(!showErrorLogs);
+                if (!showErrorLogs && errorLogs.length === 0) fetchErrorLogs();
+              }}
+              className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 transition-colors mx-auto"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <line x1="16" y1="13" x2="8" y2="13"/>
+                <line x1="16" y1="17" x2="8" y2="17"/>
+              </svg>
+              エラーログ {errorLogs.length > 0 ? `(${errorLogs.length}件)` : ''}
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                className={`transition-transform duration-200 ${showErrorLogs ? 'rotate-180' : ''}`}>
+                <polyline points="6 9 12 15 18 9"/>
+              </svg>
+            </button>
 
-              {showErrorLogs && (
-                <div className="mt-2 max-h-60 overflow-y-auto space-y-2">
-                  {loadingErrorLogs && (
-                    <p className="text-xs text-gray-400 text-center py-2">読み込み中...</p>
-                  )}
-                  {errorLogs.map((log, idx) => (
-                    <div key={log.id || idx} className="p-2.5 bg-gray-50 border border-gray-200 rounded-md text-left">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="inline-block px-1.5 py-0.5 text-[10px] font-mono font-semibold bg-red-50 text-red-600 rounded">
-                          {log.error_code || 'UNKNOWN'}
-                        </span>
-                        {log.error_step && (
-                          <span className="text-[10px] text-gray-500">@ {log.error_step}</span>
-                        )}
-                        {log.source && (
-                          <span className="text-[10px] text-gray-400">({log.source})</span>
-                        )}
-                      </div>
-                      <p className="text-[11px] text-gray-600 break-words">{log.error_message}</p>
-                      {log.created_at && (
-                        <p className="text-[10px] text-gray-400 mt-1">
-                          {new Date(log.created_at).toLocaleString('ja-JP')}
-                        </p>
+            {showErrorLogs && (
+              <div className="mt-2 max-h-60 overflow-y-auto space-y-2">
+                {loadingErrorLogs && (
+                  <p className="text-xs text-gray-400 text-center py-2">読み込み中...</p>
+                )}
+                {!loadingErrorLogs && errorLogs.length === 0 && (
+                  <p className="text-xs text-gray-400 text-center py-2">エラーログはありません</p>
+                )}
+                {errorLogs.map((log, idx) => (
+                  <div key={log.id || idx} className="p-2.5 bg-gray-50 border border-gray-200 rounded-md text-left">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="inline-block px-1.5 py-0.5 text-[10px] font-mono font-semibold bg-red-50 text-red-600 rounded">
+                        {log.error_code || 'UNKNOWN'}
+                      </span>
+                      {log.error_step && (
+                        <span className="text-[10px] text-gray-500">@ {log.error_step}</span>
+                      )}
+                      {log.source && (
+                        <span className="text-[10px] text-gray-400">({log.source})</span>
                       )}
                     </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
+                    <p className="text-[11px] text-gray-600 break-words">{log.error_message}</p>
+                    {log.created_at && (
+                      <p className="text-[10px] text-gray-400 mt-1">
+                        {new Date(log.created_at).toLocaleString('ja-JP')}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
 
-          {/* Manual refresh button for error logs */}
-          <div className="text-center mt-2">
-            <button
-              onClick={fetchErrorLogs}
-              disabled={loadingErrorLogs}
-              className="text-[11px] text-gray-400 hover:text-gray-600 underline transition-colors"
-            >
-              {loadingErrorLogs ? '読み込み中...' : 'エラーログを更新'}
-            </button>
+            {showErrorLogs && (
+              <div className="text-center mt-2">
+                <button
+                  onClick={fetchErrorLogs}
+                  disabled={loadingErrorLogs}
+                  className="text-[11px] text-gray-400 hover:text-gray-600 underline transition-colors"
+                >
+                  {loadingErrorLogs ? '読み込み中...' : 'エラーログを更新'}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
