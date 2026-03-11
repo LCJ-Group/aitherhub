@@ -36,11 +36,11 @@ class AppCreator:
             openapi_url=f"{configs.API_V1_STR}/openapi.json",
         )
 
-        # Init DI container & DB
+        # Init DI container (legacy — kept for backward compatibility)
         self.container = Container()
         self.container.wire(modules=[__name__])
-        self.db = self.container.db()
-        # self.db.create_database()
+        # NOTE: db provider was removed from Container in b959117.
+        # The project now uses app.core.db (async sessions) directly.
 
         # Request ID middleware (must be added before CORS)
         self.app.add_middleware(RequestIdMiddleware)
