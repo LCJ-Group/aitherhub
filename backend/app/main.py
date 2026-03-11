@@ -136,6 +136,48 @@ async def ensure_tables_exist():
     except Exception as e:
         logger.warning(f"Failed to ensure tables exist on startup: {e}")
 
+    # Subtitle feedback & style migration
+    try:
+        from app.core.db import engine
+        from sqlalchemy import text
+
+        async with engine.begin() as conn:
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS subtitle_feedback (
+                    id SERIAL PRIMARY KEY,
+                    video_id TEXT NOT NULL,
+                    clip_id TEXT NOT NULL,
+                    user_id TEXT,
+                    style_selected TEXT,
+                    ai_recommended_style TEXT,
+                    feedback_type TEXT CHECK (feedback_type IN ('like','dislike')),
+                    tags TEXT[],
+                    comment TEXT,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """))
+            await conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_subtitle_feedback_video
+                ON subtitle_feedback(video_id)
+            """))
+            await conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_subtitle_feedback_user
+                ON subtitle_feedback(user_id)
+            """))
+            # Add subtitle columns to video_clips if not exist
+            for col_sql in [
+                "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS subtitle_style TEXT DEFAULT 'simple'",
+                "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS subtitle_position_x REAL DEFAULT 50",
+                "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS subtitle_position_y REAL DEFAULT 85",
+            ]:
+                try:
+                    await conn.execute(text(col_sql))
+                except Exception:
+                    pass
+        logger.info("subtitle_feedback table & video_clips columns verified/created")
+    except Exception as e:
+        logger.warning(f"Failed to ensure subtitle tables on startup: {e}")
+
 
 @app.on_event("startup")
 async def restore_live_sessions():
