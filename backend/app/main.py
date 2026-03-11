@@ -172,8 +172,8 @@ async def ensure_tables_exist():
             ]:
                 try:
                     await conn.execute(text(col_sql))
-                except Exception:
-                    pass
+                except Exception as _e:
+                    logger.debug(f"DDL skipped (likely already exists): {_e}")
         logger.info("subtitle_feedback table & video_clips columns verified/created")
     except Exception as e:
         logger.warning(f"Failed to ensure subtitle tables on startup: {e}")
@@ -211,8 +211,8 @@ async def ensure_tables_exist():
             ]:
                 try:
                     await conn.execute(_text(col_sql))
-                except Exception:
-                    pass
+                except Exception as _e:
+                    logger.debug(f"DDL skipped (likely already exists): {_e}")
         logger.info("video_error_logs table & videos error columns verified/created")
     except Exception as e:
         logger.warning(f"Failed to ensure video_error_logs table on startup: {e}")

@@ -192,6 +192,6 @@ def _dir_size(path: Path) -> int:
         for f in path.rglob("*"):
             if f.is_file():
                 total += f.stat().st_size
-    except Exception:
-        pass
+    except Exception as _e:
+        logger.debug(f"Suppressed: {_e}")
     return total

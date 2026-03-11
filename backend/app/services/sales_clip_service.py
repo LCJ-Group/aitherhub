@@ -98,8 +98,8 @@ def _parse_tags(tags_raw: Any) -> list[str]:
             parsed = json.loads(tags_raw)
             if isinstance(parsed, list):
                 return [str(t) for t in parsed]
-        except Exception:
-            pass
+        except Exception as _e:
+            print(f"Suppressed: {_e}")
         return [tags_raw]
     return []
 

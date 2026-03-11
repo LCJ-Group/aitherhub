@@ -173,8 +173,8 @@ def extract_audio_full(video_path: str, out_dir: str) -> str:
         if os.path.exists(full_audio_path):
             try:
                 os.remove(full_audio_path)
-            except Exception:
-                pass
+            except Exception as _e:
+                print(f"Suppressed: {_e}")
         return None
 
     if os.path.exists(full_audio_path) and os.path.getsize(full_audio_path) > 100:

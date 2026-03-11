@@ -141,8 +141,8 @@ def _cleanup_video_files(video_id: str):
     if os.path.exists(video_path):
         try:
             os.remove(video_path)
-        except Exception:
-            pass
+        except Exception as _e:
+            logger.debug(f"Suppressed: {_e}")
 
     # Output frames
     output_path = os.path.join("output", video_id)

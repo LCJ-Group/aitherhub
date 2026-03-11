@@ -60,16 +60,16 @@ def _parse_time_to_seconds(val) -> Optional[float]:
     val_str = str(val).strip()
     try:
         return float(val_str)
-    except (ValueError, TypeError):
-        pass
+    except (ValueError, TypeError) as _e:
+        logger.debug(f"Suppressed: {_e}")
     parts = val_str.split(":")
     try:
         if len(parts) == 2:
             return int(parts[0]) * 3600 + int(parts[1]) * 60
         elif len(parts) == 3:
             return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
-    except (ValueError, TypeError):
-        pass
+    except (ValueError, TypeError) as _e:
+        logger.debug(f"Suppressed: {_e}")
     return None
 
 
@@ -599,7 +599,7 @@ async def recalculate_phase_metrics(
                 "duration_ms":   int((time.time() - start_time) * 1000),
             })
             await db.commit()
-        except Exception:
-            pass
+        except Exception as _e:
+            logger.debug(f"Suppressed: {_e}")
 
     return result

@@ -253,8 +253,8 @@ def cut_segment(input_path: str, out_path: str, start_sec: float, end_sec: float
         if os.path.exists(tmp_path):
             try:
                 os.remove(tmp_path)
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug(f"Suppressed: {_e}")
         return False
 
 

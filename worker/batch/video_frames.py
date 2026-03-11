@@ -217,8 +217,8 @@ def extract_frames(
                             _stall_detected["value"] = True
                             proc.kill()
                             return
-                except Exception:
-                    pass
+                except Exception as _e:
+                    logger.debug(f"Suppressed: {_e}")
                 _time.sleep(2)
             if not _stall_detected["value"]:
                 on_progress(100)
@@ -302,8 +302,8 @@ def extract_frames(
                                 _stall_detected2["value"] = True
                                 proc2.kill()
                                 return
-                    except Exception:
-                        pass
+                    except Exception as _e:
+                        logger.debug(f"Suppressed: {_e}")
                     _time.sleep(2)
                 if not _stall_detected2["value"]:
                     on_progress(100)

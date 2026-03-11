@@ -1395,8 +1395,8 @@ def create_vertical_clip_drawtext(
                                    capture_output=True, text=True, timeout=5)
             if result.returncode == 0 and result.stdout.strip():
                 font_file = result.stdout.strip()
-        except Exception:
-            pass
+        except Exception as _e:
+            logger.debug(f"Suppressed: {_e}")
 
     for seg in segments:
         text = seg["text"].replace("'", "'\\''").replace(":", "\\:")
@@ -1532,8 +1532,8 @@ def detect_silence_intervals(video_path: str, noise_threshold: str = "-35dB", mi
             start = float(silence_starts[-1])
             if video_duration - start >= min_silence_duration:
                 intervals.append((start, video_duration))
-        except Exception:
-            pass
+        except Exception as _e:
+            logger.debug(f"Suppressed: {_e}")
 
     logger.info(f"Detected {len(intervals)} silent intervals: {intervals}")
     return intervals
@@ -1750,8 +1750,8 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
             import shutil
             shutil.rmtree(work_dir, ignore_errors=True)
             logger.info(f"Cleaned up work directory: {work_dir}")
-        except Exception:
-            pass
+        except Exception as _e:
+            logger.debug(f"Suppressed: {_e}")
 
         close_db_sync()
 

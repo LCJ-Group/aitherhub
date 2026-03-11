@@ -173,8 +173,8 @@ class LiveAnalysisPipeline:
                     )
                 )
                 await self.db.commit()
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug(f"Suppressed: {_e}")
             raise
 
     # ──────────────────────────────────────────
@@ -467,8 +467,8 @@ class LiveAnalysisPipeline:
                 # Cleanup chunk
                 try:
                     os.remove(chunk_path)
-                except Exception:
-                    pass
+                except Exception as _e:
+                    logger.debug(f"Suppressed: {_e}")
 
             offset += chunk_duration
 

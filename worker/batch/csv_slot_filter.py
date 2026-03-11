@@ -301,8 +301,8 @@ def _parse_time_to_seconds(val) -> float | None:
     # 直接数値の場合
     try:
         return float(val_str)
-    except (ValueError, TypeError):
-        pass
+    except (ValueError, TypeError) as _e:
+        logger.debug(f"Suppressed: {_e}")
 
     # HH:MM:SS or HH:MM or MM:SS
     parts = val_str.split(":")
@@ -316,8 +316,8 @@ def _parse_time_to_seconds(val) -> float | None:
                 return h * 60 + m
         elif len(parts) == 3:
             return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
-    except (ValueError, TypeError):
-        pass
+    except (ValueError, TypeError) as _e:
+        logger.debug(f"Suppressed: {_e}")
 
     return None
 

@@ -158,8 +158,8 @@ def _score_column(col_name: str, metric_config: dict, sample_value=None) -> int:
         try:
             float(sample_value)
             score += SCORE_NUMERIC_BONUS
-        except (ValueError, TypeError):
-            pass
+        except (ValueError, TypeError) as _e:
+            logger.debug(f"Suppressed: {_e}")
 
     return score
 

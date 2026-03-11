@@ -172,8 +172,8 @@ class UploadPipelineService:
             _logger.debug(f"[upload_pipeline] Could not log stage event: {exc}")
             try:
                 await db.rollback()
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug(f"Suppressed: {_e}")
 
     @staticmethod
     async def _update_video_stage(
@@ -198,8 +198,8 @@ class UploadPipelineService:
             _logger.debug(f"[upload_pipeline] Could not update video stage: {exc}")
             try:
                 await db.rollback()
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug(f"Suppressed: {_e}")
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -264,8 +264,8 @@ class UploadPipelineService:
             # Try to log event (may fail if video_id is invalid)
             try:
                 await self._log_stage_event(db, video_id, upload_id, user_id, evt)
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug(f"Suppressed: {_e}")
             raise
 
         # ── Step 2: Create DB record ──────────────────────────────────────
@@ -302,8 +302,8 @@ class UploadPipelineService:
             _logger.error(f"[upload_pipeline] Step 2 FAILED: {exc}")
             try:
                 await self._log_stage_event(db, video_id, upload_id, user_id, evt)
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug(f"Suppressed: {_e}")
             raise
 
         # ── Step 3: Generate download SAS URL ─────────────────────────────
@@ -641,8 +641,8 @@ class UploadPipelineService:
             )
             try:
                 await db.rollback()
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug(f"Suppressed: {_e}")
 
         return enqueue_result
 
@@ -668,8 +668,8 @@ class UploadPipelineService:
                 _logger.warning(f"[upload_pipeline] Step 7: cleanup upload_id failed: {exc}")
                 try:
                     await db.rollback()
-                except Exception:
-                    pass
+                except Exception as _e:
+                    logger.debug(f"Suppressed: {_e}")
 
         # Remove stale upload records for this user (older than 24 hours)
         try:
@@ -685,5 +685,5 @@ class UploadPipelineService:
             _logger.warning(f"[upload_pipeline] Step 7: stale cleanup failed: {exc}")
             try:
                 await db.rollback()
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug(f"Suppressed: {_e}")

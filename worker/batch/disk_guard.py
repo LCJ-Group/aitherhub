@@ -278,5 +278,5 @@ def _rotate_logs():
                 with open(fp, "w") as fh:
                     fh.write(f"[LOG ROTATED] File exceeded {LOG_MAX_SIZE_MB} MB, truncated.\n")
                 logger.info("[LOG-ROTATE] Truncated %s (was %.0f MB)", f, size_mb)
-        except Exception:
-            pass
+        except Exception as _e:
+            logger.debug(f"Suppressed: {_e}")

@@ -596,8 +596,8 @@ def main():
             if os.path.exists(out_path):
                 try:
                     os.remove(out_path)
-                except Exception:
-                    pass
+                except Exception as _e:
+                    logger.debug(f"Suppressed: {_e}")
 
             update_video_split_status_sync(video_id, str(idx))
             total_elapsed = time.time() - split_start_time

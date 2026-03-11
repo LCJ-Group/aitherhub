@@ -334,8 +334,8 @@ def match_sales_to_phase(trends: list[dict], start_sec: float, end_sec: float) -
                 # Try direct seconds
                 entry_time = float(val)
                 break
-            except (ValueError, TypeError):
-                pass
+            except (ValueError, TypeError) as _e:
+                logger.debug(f"Suppressed: {_e}")
             try:
                 # Try MM:SS or HH:MM:SS format
                 val_str = str(val)
@@ -346,8 +346,8 @@ def match_sales_to_phase(trends: list[dict], start_sec: float, end_sec: float) -
                 elif len(parts) == 3:
                     entry_time = int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
                     break
-            except (ValueError, TypeError):
-                pass
+            except (ValueError, TypeError) as _e:
+                logger.debug(f"Suppressed: {_e}")
 
         if entry_time is None:
             continue
@@ -357,13 +357,13 @@ def match_sales_to_phase(trends: list[dict], start_sec: float, end_sec: float) -
             for sk in sales_keys:
                 try:
                     phase_sales += float(t.get(sk, 0) or 0)
-                except (ValueError, TypeError):
-                    pass
+                except (ValueError, TypeError) as _e:
+                    logger.debug(f"Suppressed: {_e}")
             for ok in order_keys:
                 try:
                     phase_orders += int(t.get(ok, 0) or 0)
-                except (ValueError, TypeError):
-                    pass
+                except (ValueError, TypeError) as _e:
+                    logger.debug(f"Suppressed: {_e}")
             for pk in product_keys:
                 pname = t.get(pk)
                 if pname and str(pname).strip():
@@ -506,16 +506,16 @@ def _find_nearest_csv_metrics(
             val = best_entry.get(viewer_key)
             if val is not None:
                 viewer_count = int(float(val))
-        except (ValueError, TypeError):
-            pass
+        except (ValueError, TypeError) as _e:
+            logger.debug(f"Suppressed: {_e}")
 
     if like_key:
         try:
             val = best_entry.get(like_key)
             if val is not None:
                 like_count = int(float(val))
-        except (ValueError, TypeError):
-            pass
+        except (ValueError, TypeError) as _e:
+            logger.debug(f"Suppressed: {_e}")
 
     if viewer_count is not None or like_count is not None:
         return {"viewer_count": viewer_count, "like_count": like_count}

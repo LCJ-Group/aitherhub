@@ -67,8 +67,8 @@ def compare_distribution(a: dict, b: dict):
     for k in keys:
         try:
             dist += abs(float(a.get(k, 0.0)) - float(b.get(k, 0.0)))
-        except Exception:
-            pass
+        except Exception as _e:
+            print(f"Suppressed: {_e}")
     return dist
 
 

@@ -147,8 +147,8 @@ def crash_guard_kill_orphan_ffmpeg():
                 ppid = int(ppid_result.stdout.strip())
                 if ppid == my_pid:
                     continue
-            except Exception:
-                pass
+            except Exception as _e:
+                print(f"Suppressed: {_e}")
 
             # Kill the orphan
             try:
@@ -156,8 +156,8 @@ def crash_guard_kill_orphan_ffmpeg():
                 killed += 1
                 cmd_info = parts[1] if len(parts) > 1 else "unknown"
                 print(f"[worker][crash-guard] Killed orphan ffmpeg pid={pid}: {cmd_info[:100]}")
-            except (ProcessLookupError, PermissionError):
-                pass
+            except (ProcessLookupError, PermissionError) as _e:
+                print(f"Suppressed: {_e}")
 
     except Exception as e:
         print(f"[worker][crash-guard] Error during orphan cleanup: {e}")
@@ -450,8 +450,8 @@ def process_live_capture_job(payload: dict):
         print(f"[worker] Stopping live monitor process group (pid={monitor_proc.pid})")
         try:
             os.killpg(os.getpgid(monitor_proc.pid), signal.SIGKILL)
-        except (ProcessLookupError, OSError):
-            pass
+        except (ProcessLookupError, OSError) as _e:
+            print(f"Suppressed: {_e}")
 
     if result.returncode == 0:
         print(f"[worker] Live capture completed for {video_id}")
@@ -513,8 +513,8 @@ def process_clip_job(payload: dict):
             print(f"[worker] Clip timeout — killing process group (pid={proc.pid})")
             try:
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            except (ProcessLookupError, OSError):
-                pass
+            except (ProcessLookupError, OSError) as _e:
+                print(f"Suppressed: {_e}")
             proc.wait()
             log_error_type(clip_id, "generate_clip", "TIMEOUT_CLIP", f"timeout={CLIP_PROCESS_TIMEOUT}s")
             return False
@@ -561,8 +561,8 @@ def process_video_job(payload: dict):
             print(f"[worker] Video timeout — killing process group (pid={proc.pid})")
             try:
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            except (ProcessLookupError, OSError):
-                pass
+            except (ProcessLookupError, OSError) as _e:
+                print(f"Suppressed: {_e}")
             proc.wait()
             log_error_type(video_id, "video_analysis", "TIMEOUT_VIDEO", f"timeout={VIDEO_PROCESS_TIMEOUT}s")
             update_video_status_to_error(video_id)

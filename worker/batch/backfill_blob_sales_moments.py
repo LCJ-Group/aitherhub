@@ -29,8 +29,8 @@ SQL_QUERY = (
 async def backfill():
     try:
         await ensure_sales_moments_table()
-    except Exception:
-        pass
+    except Exception as _e:
+        print(f"Suppressed: {_e}")
 
     async with AsyncSessionLocal() as session:
         r = await session.execute(

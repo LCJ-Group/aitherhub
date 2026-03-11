@@ -63,8 +63,8 @@ def should_analyze_phase(phase: dict) -> bool:
         try:
             if float(importance) >= IMPORTANCE_SCORE_THRESHOLD:
                 return True
-        except (ValueError, TypeError):
-            pass
+        except (ValueError, TypeError) as _e:
+            print(f"Suppressed: {_e}")
 
     return False
 
@@ -102,8 +102,8 @@ def _extract_phase_audio(video_path: str, start_sec: float, end_sec: float) -> s
     else:
         try:
             os.unlink(tmp.name)
-        except OSError:
-            pass
+        except OSError as _e:
+            print(f"Suppressed: {_e}")
         return None
 
 
@@ -260,8 +260,8 @@ def _process_single_phase(phase: dict, video_path: str) -> dict:
         # Clean up temp file
         try:
             os.unlink(wav_path)
-        except OSError:
-            pass
+        except OSError as _e:
+            print(f"Suppressed: {_e}")
 
 
 def analyze_phase_audio_features(

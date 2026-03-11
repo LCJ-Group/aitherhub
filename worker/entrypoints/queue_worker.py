@@ -143,15 +143,15 @@ def crash_guard_kill_orphan_ffmpeg():
                 ppid = int(ppid_result.stdout.strip())
                 if ppid == my_pid:
                     continue
-            except Exception:
-                pass
+            except Exception as _e:
+                print(f"Suppressed: {_e}")
             try:
                 os.kill(pid, signal.SIGKILL)
                 killed += 1
                 cmd_info = parts[1] if len(parts) > 1 else "unknown"
                 print(f"[worker][crash-guard] Killed orphan ffmpeg pid={pid}: {cmd_info[:100]}")
-            except (ProcessLookupError, PermissionError):
-                pass
+            except (ProcessLookupError, PermissionError) as _e:
+                print(f"Suppressed: {_e}")
     except Exception as e:
         print(f"[worker][crash-guard] Error: {e}")
 
@@ -399,8 +399,8 @@ def _run_clip_job(payload: dict) -> bool:
             print(f"[worker] Clip timeout — killing pid={proc.pid}")
             try:
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            except (ProcessLookupError, OSError):
-                pass
+            except (ProcessLookupError, OSError) as _e:
+                print(f"Suppressed: {_e}")
             proc.wait()
             log_error_type(clip_id, "generate_clip", "TIMEOUT_CLIP", f"timeout={WORKER_CLIP_TIMEOUT}s")
             if metrics:
@@ -479,8 +479,8 @@ def _run_video_job(payload: dict) -> bool:
             print(f"[worker] Video timeout — killing pid={proc.pid}")
             try:
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            except (ProcessLookupError, OSError):
-                pass
+            except (ProcessLookupError, OSError) as _e:
+                print(f"Suppressed: {_e}")
             proc.wait()
             log_error_type(video_id, "video_analysis", "TIMEOUT_VIDEO", f"timeout={WORKER_VIDEO_TIMEOUT}s")
             update_video_status_to_error(video_id)
@@ -709,8 +709,8 @@ def _run_post_analysis_pipeline(video_id: str, blob_url: str):
             tmp = JobTempDir(f"{video_id}-pipeline")
             if tmp.exists:
                 tmp.cleanup()
-        except Exception:
-            pass
+        except Exception as _e:
+            print(f"Suppressed: {_e}")
 
 
 def _run_live_capture_job(payload: dict) -> bool:
@@ -770,8 +770,8 @@ def _run_live_capture_job(payload: dict) -> bool:
     if monitor_proc and monitor_proc.poll() is None:
         try:
             os.killpg(os.getpgid(monitor_proc.pid), signal.SIGKILL)
-        except (ProcessLookupError, OSError):
-            pass
+        except (ProcessLookupError, OSError) as _e:
+            print(f"Suppressed: {_e}")
 
     if result.returncode == 0:
         return True

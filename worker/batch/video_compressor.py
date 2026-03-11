@@ -314,8 +314,8 @@ def compress_to_1080p(
         if "h264_nvenc" in (probe.stdout or ""):
             use_nvenc = True
             logger.info("[COMPRESS] NVENC available → using GPU encoding")
-    except Exception:
-        pass
+    except Exception as _e:
+        logger.debug(f"Suppressed: {_e}")
 
     if use_nvenc:
         cmd = [

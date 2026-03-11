@@ -695,8 +695,8 @@ def main():
                 combined = int(_parallel_progress["frames"] * 0.5 + _parallel_progress["audio"] * 0.5)
                 try:
                     update_video_step_progress_sync(video_id, combined)
-                except Exception:
-                    pass
+                except Exception as _e:
+                    logger.debug(f"Suppressed: {_e}")
 
             def _on_frames_progress(pct):
                 _parallel_progress["frames"] = pct
@@ -755,8 +755,8 @@ def main():
             def _on_frames_only_progress(pct):
                 try:
                     update_video_step_progress_sync(video_id, pct)
-                except Exception:
-                    pass
+                except Exception as _e:
+                    logger.debug(f"Suppressed: {_e}")
             # Try to generate analysis video for faster extraction
             _analysis_out_resume = os.path.join(os.path.dirname(video_path), "analysis.mp4")
             _resume_source = generate_analysis_video(
@@ -774,8 +774,8 @@ def main():
             if _resume_source != video_path and os.path.exists(_resume_source):
                 try:
                     os.remove(_resume_source)
-                except Exception:
-                    pass
+                except Exception as _e:
+                    logger.debug(f"Suppressed: {_e}")
         else:
             logger.info("[SKIP] STEP 0")
 
@@ -794,8 +794,8 @@ def main():
             def _on_step1_progress(pct):
                 try:
                     update_video_step_progress_sync(video_id, pct)
-                except Exception:
-                    pass
+                except Exception as _e:
+                    logger.debug(f"Suppressed: {_e}")
             keyframes, rep_frames, total_frames = detect_phases(
                 frame_dir=frame_dir,
                 model=model,
@@ -920,8 +920,8 @@ def main():
             def _on_step4_progress(pct):
                 try:
                     update_video_step_progress_sync(video_id, pct)
-                except Exception:
-                    pass
+                except Exception as _e:
+                    logger.debug(f"Suppressed: {_e}")
             keyframe_captions = caption_keyframes(
                 frame_dir=frame_dir,
                 rep_frames=filtered_rep_frames if filtered_rep_frames else rep_frames,
@@ -1263,8 +1263,8 @@ def main():
             def _on_step6_progress(pct):
                 try:
                     update_video_step_progress_sync(video_id, pct)
-                except Exception:
-                    pass
+                except Exception as _e:
+                    logger.debug(f"Suppressed: {_e}")
             phase_units = build_phase_descriptions(phase_units, on_progress=_on_step6_progress)
 
             logger.info("[DB] Persist phase_description to video_phases")
@@ -1497,8 +1497,8 @@ def main():
             def _on_product_progress(pct):
                 try:
                     update_video_step_progress_sync(video_id, pct)
-                except Exception:
-                    pass
+                except Exception as _e:
+                    logger.debug(f"Suppressed: {_e}")
 
             try:
                 # Ensure table exists
@@ -1698,8 +1698,8 @@ def main():
                     try:
                         # Re-write current progress; updated_at is set by the SQL
                         update_video_step_progress_sync(video_id, 0)
-                    except Exception:
-                        pass
+                    except Exception as _e:
+                        logger.debug(f"Suppressed: {_e}")
                     last_heartbeat_time = time.time()
 
                 if split_status == "done":
@@ -1744,8 +1744,8 @@ def main():
                         completed_phases = int(split_status)
                         pct = min(int(completed_phases / total_split_phases * 100), 99)
                         update_video_step_progress_sync(video_id, pct)
-                    except (ValueError, TypeError):
-                        pass
+                    except (ValueError, TypeError) as _e:
+                        logger.debug(f"Suppressed: {_e}")
 
                 logger.info("[FINALIZE] Waiting split... current=%s (waited=%ds)", split_status, waited)
                 time.sleep(CHECK_INTERVAL)
@@ -1764,8 +1764,8 @@ def main():
         try:
             from db_ops import update_video_error_message_sync
             update_video_error_message_sync(video_id, _err_msg)
-        except Exception:
-            pass
+        except Exception as _e:
+            logger.debug(f"Suppressed: {_e}")
         update_video_status_sync(video_id, VideoStatus.ERROR)
         logger.exception("Video processing failed: %s", _err_msg)
 
@@ -1795,8 +1795,8 @@ def main():
         # Final safety net: always attempt cleanup regardless of success/error
         try:
             cleanup_video_files(video_id)
-        except Exception:
-            pass
+        except Exception as _e:
+            logger.debug(f"Suppressed: {_e}")
         logger.info("[DB] Closing database connection...")
         close_db_sync()
 

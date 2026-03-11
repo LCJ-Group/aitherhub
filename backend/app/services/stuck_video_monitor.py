@@ -176,8 +176,8 @@ async def _check_and_requeue_stuck_videos():
                         )
                         try:
                             await db.rollback()
-                        except Exception:
-                            pass
+                        except Exception as _e:
+                            logger.debug(f"Suppressed: {_e}")
 
         except Exception as e:
             logger.warning(f"[stuck-monitor] Check cycle error: {e}")

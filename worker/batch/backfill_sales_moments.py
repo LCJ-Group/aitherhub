@@ -129,8 +129,8 @@ async def backfill_all(video_id: str = None, limit: int = None):
                     print(f"  Already has {existing_count} moments. Skipping.")
                     skip_count += 1
                     continue
-            except Exception:
-                pass
+            except Exception as _e:
+                print(f"Suppressed: {_e}")
 
             try:
                 trend_data = parse_trend_excel_safe(trend_path)
