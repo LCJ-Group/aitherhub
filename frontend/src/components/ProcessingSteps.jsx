@@ -64,6 +64,10 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
   // ── Stall detection state ──
   const [isStalled, setIsStalled] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
+  const [errorLogs, setErrorLogs] = useState([]);
+  const [showErrorLogs, setShowErrorLogs] = useState(false);
+  const [latestError, setLatestError] = useState(null);
+  const [loadingErrorLogs, setLoadingErrorLogs] = useState(false);
   const lastProgressRef = useRef(null);       // { progress, timestamp }
   const stallCheckTimerRef = useRef(null);
 
@@ -339,6 +343,20 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
     }
   }, [onProcessingComplete]);
 
+  // ── Fetch error logs handler ──
+  const fetchErrorLogs = useCallback(async () => {
+    if (!videoId || loadingErrorLogs) return;
+    setLoadingErrorLogs(true);
+    try {
+      const res = await VideoService.getErrorLogs(videoId);
+      if (res?.error_logs) setErrorLogs(res.error_logs);
+    } catch (err) {
+      console.error('Failed to fetch error logs:', err);
+    } finally {
+      setLoadingErrorLogs(false);
+    }
+  }, [videoId, loadingErrorLogs]);
+
   // ── Retry analysis handler ──
   const handleRetryAnalysis = useCallback(async () => {
     if (!videoId || isRetrying) return;
@@ -603,6 +621,14 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
           }
           if (nextStatus === 'ERROR') {
             setEstimatedRemainingMs(null);
+            // Capture latest_error from SSE payload
+            if (data.latest_error) {
+              setLatestError(data.latest_error);
+            }
+            // Auto-fetch error logs when error occurs
+            VideoService.getErrorLogs(videoId).then(res => {
+              if (res?.error_logs) setErrorLogs(res.error_logs);
+            }).catch(() => {});
           }
         }
       },
@@ -655,6 +681,15 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
       }
     };
   }, [videoId]);
+
+  // Fetch error logs when status is ERROR on initial load
+  useEffect(() => {
+    if (videoId && (currentStatus === 'ERROR' || initialStatus === 'ERROR')) {
+      VideoService.getErrorLogs(videoId).then(res => {
+        if (res?.error_logs) setErrorLogs(res.error_logs);
+      }).catch(() => {});
+    }
+  }, [videoId, currentStatus, initialStatus]);
 
   // Clean up localStorage when DONE
   useEffect(() => {
@@ -1066,19 +1101,114 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
         </>
       )}
 
-      {/* Error message + retry button */}
+      {/* Error message + error details + retry button */}
       {isError && (
-        <div className="mt-2 text-center">
-          <p className="text-sm text-red-400 mb-2">
-            {window.__t('errorAnalysisMessage') || '解析中にエラーが発生しました。'}
-          </p>
-          <button
-            onClick={handleRetryAnalysis}
-            disabled={isRetrying}
-            className="px-4 py-1.5 text-sm font-medium text-white bg-red-500 hover:bg-red-600 disabled:bg-red-300 rounded-md transition-colors"
-          >
-            {isRetrying ? '再試行中...' : '解析を再試行'}
-          </button>
+        <div className="mt-2">
+          <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
+            <p className="text-sm text-red-600 font-medium mb-2 text-center">
+              {window.__t('errorAnalysisMessage') || '解析中にエラーが発生しました。'}
+            </p>
+
+            {/* Latest error detail */}
+            {latestError && (
+              <div className="mt-2 p-3 bg-white border border-red-100 rounded-md text-left">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="inline-block px-2 py-0.5 text-[11px] font-mono font-semibold bg-red-100 text-red-700 rounded">
+                    {latestError.error_code || 'UNKNOWN'}
+                  </span>
+                  {latestError.error_step && (
+                    <span className="text-[11px] text-gray-500">
+                      @ {latestError.error_step}
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-gray-700 break-words">
+                  {latestError.error_message || 'エラーの詳細情報がありません'}
+                </p>
+                {latestError.created_at && (
+                  <p className="text-[10px] text-gray-400 mt-1">
+                    {new Date(latestError.created_at).toLocaleString('ja-JP')}
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* Retry button */}
+            <div className="text-center mt-3">
+              <button
+                onClick={handleRetryAnalysis}
+                disabled={isRetrying}
+                className="px-4 py-1.5 text-sm font-medium text-white bg-red-500 hover:bg-red-600 disabled:bg-red-300 rounded-md transition-colors"
+              >
+                {isRetrying ? '再試行中...' : '解析を再試行'}
+              </button>
+            </div>
+          </div>
+
+          {/* Error log history toggle */}
+          {errorLogs.length > 0 && (
+            <div className="mt-3">
+              <button
+                onClick={() => {
+                  setShowErrorLogs(!showErrorLogs);
+                  if (!showErrorLogs && errorLogs.length === 0) fetchErrorLogs();
+                }}
+                className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 transition-colors mx-auto"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                  <polyline points="14 2 14 8 20 8"/>
+                  <line x1="16" y1="13" x2="8" y2="13"/>
+                  <line x1="16" y1="17" x2="8" y2="17"/>
+                </svg>
+                エラーログ履歴 ({errorLogs.length}件)
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                  className={`transition-transform duration-200 ${showErrorLogs ? 'rotate-180' : ''}`}>
+                  <polyline points="6 9 12 15 18 9"/>
+                </svg>
+              </button>
+
+              {showErrorLogs && (
+                <div className="mt-2 max-h-60 overflow-y-auto space-y-2">
+                  {loadingErrorLogs && (
+                    <p className="text-xs text-gray-400 text-center py-2">読み込み中...</p>
+                  )}
+                  {errorLogs.map((log, idx) => (
+                    <div key={log.id || idx} className="p-2.5 bg-gray-50 border border-gray-200 rounded-md text-left">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="inline-block px-1.5 py-0.5 text-[10px] font-mono font-semibold bg-red-50 text-red-600 rounded">
+                          {log.error_code || 'UNKNOWN'}
+                        </span>
+                        {log.error_step && (
+                          <span className="text-[10px] text-gray-500">@ {log.error_step}</span>
+                        )}
+                        {log.source && (
+                          <span className="text-[10px] text-gray-400">({log.source})</span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-gray-600 break-words">{log.error_message}</p>
+                      {log.created_at && (
+                        <p className="text-[10px] text-gray-400 mt-1">
+                          {new Date(log.created_at).toLocaleString('ja-JP')}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Manual refresh button for error logs */}
+          <div className="text-center mt-2">
+            <button
+              onClick={fetchErrorLogs}
+              disabled={loadingErrorLogs}
+              className="text-[11px] text-gray-400 hover:text-gray-600 underline transition-colors"
+            >
+              {loadingErrorLogs ? '読み込み中...' : 'エラーログを更新'}
+            </button>
+          </div>
         </div>
       )}
     </div>

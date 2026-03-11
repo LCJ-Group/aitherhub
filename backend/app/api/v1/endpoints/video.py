@@ -361,6 +361,35 @@ async def stream_video_status(
 
                     # Stop streaming if processing complete or error
                     if current_status in ["DONE", "ERROR"]:
+                        # On ERROR, fetch latest error log to include in final SSE event
+                        if current_status == "ERROR":
+                            try:
+                                err_result = await db.execute(
+                                    text("""
+                                        SELECT error_code, error_step, error_message, source, created_at
+                                        FROM video_error_logs
+                                        WHERE video_id = :vid
+                                        ORDER BY created_at DESC
+                                        LIMIT 1
+                                    """),
+                                    {"vid": video_id},
+                                )
+                                err_row = err_result.fetchone()
+                                if err_row:
+                                    error_payload = {
+                                        "video_id": str(video_id),
+                                        "status": "ERROR",
+                                        "latest_error": {
+                                            "error_code": err_row.error_code,
+                                            "error_step": err_row.error_step,
+                                            "error_message": err_row.error_message,
+                                            "source": err_row.source,
+                                            "created_at": err_row.created_at.isoformat() if err_row.created_at else None,
+                                        },
+                                    }
+                                    yield f"data: {json.dumps(error_payload)}\n\n"
+                            except Exception as err_log_exc:
+                                logger.warning(f"SSE: Failed to fetch error log for {video_id}: {err_log_exc}")
                         yield "data: [DONE]\n\n"
                         logger.info(f"SSE: Video {video_id} processing completed with status {current_status}")
                         break
@@ -4873,3 +4902,62 @@ async def get_subtitle_recommendation(
     except Exception as exc:
         logger.exception(f"Failed to get subtitle recommendation: {exc}")
         raise HTTPException(status_code=500, detail=f"Failed to get subtitle recommendation: {exc}")
+
+
+
+# ─────────────────────────────────────────────────────────────────────
+# ERROR LOG HISTORY
+# ─────────────────────────────────────────────────────────────────────
+
+@router.get("/{video_id}/error-logs")
+async def get_video_error_logs(
+    video_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """
+    Return all error log entries for a given video, newest first.
+    Each entry includes: error_code, error_step, error_message, source, created_at.
+    """
+    try:
+        # Verify the video belongs to the current user
+        ownership = await db.execute(
+            text("SELECT id FROM videos WHERE id = :vid AND user_id = :uid"),
+            {"vid": video_id, "uid": user.id},
+        )
+        if not ownership.fetchone():
+            raise HTTPException(status_code=404, detail="Video not found")
+
+        # Fetch error logs
+        result = await db.execute(
+            text("""
+                SELECT id, error_code, error_step, error_message, error_detail,
+                       source, created_at
+                FROM video_error_logs
+                WHERE video_id = :vid
+                ORDER BY created_at DESC
+                LIMIT 100
+            """),
+            {"vid": video_id},
+        )
+        rows = result.fetchall()
+
+        logs = []
+        for r in rows:
+            logs.append({
+                "id": r.id,
+                "error_code": r.error_code,
+                "error_step": r.error_step,
+                "error_message": r.error_message,
+                "error_detail": r.error_detail,
+                "source": r.source,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            })
+
+        return {"video_id": video_id, "error_logs": logs, "total": len(logs)}
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(f"Failed to get error logs for video {video_id}: {exc}")
+        raise HTTPException(status_code=500, detail=f"Failed to get error logs: {exc}")

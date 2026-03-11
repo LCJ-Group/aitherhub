@@ -129,6 +129,25 @@ async def _check_and_requeue_stuck_videos():
                                 f"({row.original_filename}) was={old_status} "
                                 f"retry={current_retries + 1}/{MAX_AUTO_RETRIES}"
                             )
+                            # Record stuck event as error log
+                            try:
+                                await db.execute(
+                                    text("""
+                                        INSERT INTO video_error_logs
+                                            (video_id, error_code, error_step, error_message, source)
+                                        VALUES
+                                            (:vid, 'STUCK_REQUEUE', :step, :msg, 'monitor')
+                                    """),
+                                    {
+                                        "vid": video_id,
+                                        "step": old_status or "UNKNOWN",
+                                        "msg": f"Video stuck at {old_status} for >{STUCK_THRESHOLD_MINUTES}min. "
+                                               f"Auto-requeued (retry {current_retries + 1}/{MAX_AUTO_RETRIES}).",
+                                    },
+                                )
+                                await db.commit()
+                            except Exception as log_err:
+                                logger.warning(f"[stuck-monitor] Failed to record error log: {log_err}")
                         else:
                             logger.warning(
                                 f"[stuck-monitor] Enqueue failed for {video_id}: "

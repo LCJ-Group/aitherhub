@@ -82,6 +82,7 @@ from db_ops import (
     bulk_insert_product_exposures_sync,
     ensure_sales_moments_table_sync,
     bulk_insert_sales_moments_sync,
+    insert_video_error_log_sync,
 )
 
 from video_structure_features import build_video_structure_features
@@ -142,6 +143,33 @@ def load_step1_cache(video_id):
         return None
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
+
+# =========================
+# Pipeline error helper
+# =========================
+
+class PipelineStepError(Exception):
+    """Wraps an exception with step context for error logging."""
+    def __init__(self, step_name: str, error_code: str, original: Exception):
+        self._error_step = step_name
+        self._error_code = error_code
+        self.original = original
+        super().__init__(f"[{step_name}] {error_code}: {original}")
+
+def _record_step_error(video_id, step_name, error_code, exc):
+    """Record a per-step error to video_error_logs without stopping the pipeline."""
+    import traceback as _tb
+    try:
+        insert_video_error_log_sync(
+            video_id=video_id,
+            error_code=error_code,
+            error_step=step_name,
+            error_message=str(exc)[:2000],
+            error_detail=_tb.format_exc()[:10000],
+            source="worker",
+        )
+    except Exception as log_err:
+        logger.warning("[ERROR_LOG] Failed to record step error: %s", log_err)
 
 # =========================
 # Resume helpers
@@ -338,12 +366,12 @@ def _download_blob(blob_url: str, dest_path: str):
                 logger.error("[SAS] Regenerated SAS also failed: %s", regen_err)
         logger.info("Requests FAILED")
         logger.info(f"Exception: {repr(e)}")
-        raise
+        raise PipelineStepError("DOWNLOAD", "DOWNLOAD_FAIL", e) from e
 
     except Exception as e:
         logger.info("Requests FAILED")
         logger.info(f"Exception: {repr(e)}")
-        raise
+        raise PipelineStepError("DOWNLOAD", "DOWNLOAD_FAIL", e) from e
 
     logger.info("END download")
 
@@ -384,15 +412,19 @@ def _resolve_inputs(args) -> tuple[str, str]:
             file_size = os.path.getsize(local_path)
             if file_size == 0:
                 logger.error(f"[DL] Downloaded file is 0 bytes! Blob may be empty: {local_path}")
-                raise RuntimeError(
-                    f"Downloaded video file is 0 bytes. "
-                    f"The video may not have been uploaded correctly to Blob Storage. "
-                    f"video_id={video_id}"
+                raise PipelineStepError("DOWNLOAD", "DOWNLOAD_EMPTY_FILE",
+                    RuntimeError(
+                        f"Downloaded video file is 0 bytes. "
+                        f"The video may not have been uploaded correctly to Blob Storage. "
+                        f"video_id={video_id}"
+                    )
                 )
             logger.info(f"[DL] Download complete: {local_path} ({file_size} bytes, {file_size/(1024**3):.2f} GB)")
         return local_path, video_id
 
-    raise FileNotFoundError("No local video and no blob_url provided.")
+    raise PipelineStepError("DOWNLOAD", "NO_VIDEO_SOURCE",
+        FileNotFoundError("No local video and no blob_url provided.")
+    )
 
 
 def fire_split_async(args, video_id, video_path, phase_source):
@@ -482,7 +514,7 @@ def main():
             logger.error(
                 "[DB_ERROR] Cannot connect to DB to check video_id=%s: %s", video_id, db_err,
             )
-            raise  # Will be caught by outer except → exit code 1 → retry
+            raise PipelineStepError("PRE_FLIGHT", "DB_CONNECTION_FAIL", db_err) from db_err
 
         if pre_user_id is None:
             # Not found on first check — sleep and recheck once to guard against
@@ -498,7 +530,7 @@ def main():
                 logger.error(
                     "[DB_ERROR] Recheck failed for video_id=%s: %s", video_id, db_err2,
                 )
-                raise  # retry-able
+                raise PipelineStepError("PRE_FLIGHT", "DB_RECHECK_FAIL", db_err2) from db_err2
 
             if pre_user_id is None:
                 # Still not found after recheck → confirmed orphan (exit code 2)
@@ -679,7 +711,7 @@ def main():
                         fut.result()
                     except Exception as e:
                         logger.error("[PARALLEL] Task failed: %s", e)
-                        raise
+                        raise PipelineStepError("STEP_0_EXTRACT_FRAMES", "FRAME_EXTRACT_FAIL", e) from e
 
             update_video_step_progress_sync(video_id, 100)
             logger.info("=== STEP 0+3 PARALLEL COMPLETE ===")
@@ -1151,6 +1183,7 @@ def main():
                     "Continuing with remaining pipeline.",
                     e, video_id,
                 )
+                _record_step_error(video_id, "STEP_5_6_SALES_MOMENT", "CSV_SALES_MOMENT_FAIL", e)
         elif not enable_sales_moment:
             logger.info("[SALES_MOMENT] Feature flag ENABLE_SALES_MOMENT is disabled, skipping")
 
@@ -1192,6 +1225,7 @@ def main():
                     "Continuing with remaining pipeline.",
                     e, video_id,
                 )
+                _record_step_error(video_id, "STEP_5_7_SCREEN_MOMENT", "SCREEN_MOMENT_FAIL", e)
         elif is_screen_recording and not enable_screen_moment:
             logger.info("[SCREEN_MOMENT] Feature flag ENABLE_SCREEN_MOMENT is disabled, skipping")
 
@@ -1242,7 +1276,7 @@ def main():
                 tags = p.get("sales_tags")
                 if tags and isinstance(tags, list) and len(tags) > 0:
                     try:
-                                update_video_phase_sales_tags_sync(
+                        update_video_phase_sales_tags_sync(
                             video_id=video_id,
                             phase_index=p["phase_index"],
                             sales_tags_json=json.dumps(tags),
@@ -1283,6 +1317,7 @@ def main():
                 logger.info("[DB] Saved audio_features for %d/%d phases", af_count, len(phase_units))
             except Exception as e:
                 logger.warning("[AUDIO-FEATURES][WARN] Skipped due to error: %s", e)
+                _record_step_error(video_id, "STEP_6_5_AUDIO_FEATURES", "AUDIO_FEATURES_FAIL", e)
         else:
             logger.info("[SKIP] STEP 6.5")
 
@@ -1385,6 +1420,7 @@ def main():
                 assign_video_structure_group(video_id, user_id)
             except Exception as e:
                 logger.warning("[STEP10] Non-fatal error (continuing): %s", e)
+                _record_step_error(video_id, "STEP_10_ASSIGN_VIDEO_STRUCTURE_GROUP", "STRUCTURE_GROUP_FAIL", e)
         else:
             logger.info("[SKIP] STEP 10")
 
@@ -1401,6 +1437,7 @@ def main():
                     recompute_video_structure_group_stats(group_id, user_id)
             except Exception as e:
                 logger.warning("[STEP11] Non-fatal error (continuing): %s", e)
+                _record_step_error(video_id, "STEP_11_UPDATE_VIDEO_STRUCTURE_GROUP_STATS", "STRUCTURE_STATS_FAIL", e)
         else:
             logger.info("[SKIP] STEP 11")
 
@@ -1414,6 +1451,7 @@ def main():
                 process_best_video(video_id, user_id)
             except Exception as e:
                 logger.warning("[STEP12] Non-fatal error (continuing): %s", e)
+                _record_step_error(video_id, "STEP_12_UPDATE_VIDEO_STRUCTURE_BEST", "BEST_VIDEO_FAIL", e)
         else:
             logger.info("[SKIP] STEP 12")
 
@@ -1485,6 +1523,7 @@ def main():
                     logger.info("[PRODUCT] No product list available, skipping detection")
             except Exception as e:
                 logger.warning("[STEP12.5] Non-fatal error (continuing): %s", e)
+                _record_step_error(video_id, "STEP_12_5_PRODUCT_DETECTION", "PRODUCT_DETECTION_FAIL", e)
         else:
             logger.info("[SKIP] STEP 12.5")
 
@@ -1691,9 +1730,26 @@ def main():
         cleanup_video_files(video_id)
 
 
-    except Exception:
+    except Exception as exc:
         update_video_status_sync(video_id, VideoStatus.ERROR)
         logger.exception("Video processing failed")
+
+        # Record error log to DB
+        try:
+            import traceback as _tb
+            _current_step = getattr(exc, '_error_step', None) or 'UNKNOWN'
+            _error_code = getattr(exc, '_error_code', None) or type(exc).__name__
+            insert_video_error_log_sync(
+                video_id=video_id,
+                error_code=_error_code,
+                error_step=_current_step,
+                error_message=str(exc)[:2000],
+                error_detail=_tb.format_exc()[:10000],
+                source="worker",
+            )
+        except Exception as log_err:
+            logger.warning("[ERROR_LOG] Failed to record error log: %s", log_err)
+
         # Still cleanup on error to prevent disk accumulation
         try:
             cleanup_video_files(video_id)

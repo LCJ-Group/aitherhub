@@ -178,6 +178,45 @@ async def ensure_tables_exist():
     except Exception as e:
         logger.warning(f"Failed to ensure subtitle tables on startup: {e}")
 
+    # Video error logs table – stores every error occurrence per video
+    try:
+        from app.core.db import engine
+        from sqlalchemy import text as _text
+
+        async with engine.begin() as conn:
+            await conn.execute(_text("""
+                CREATE TABLE IF NOT EXISTS video_error_logs (
+                    id BIGSERIAL PRIMARY KEY,
+                    video_id UUID NOT NULL,
+                    error_code VARCHAR(100) NOT NULL,
+                    error_step VARCHAR(100),
+                    error_message TEXT,
+                    error_detail TEXT,
+                    source VARCHAR(50) DEFAULT 'worker',
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """))
+            await conn.execute(_text("""
+                CREATE INDEX IF NOT EXISTS idx_vel_video_id
+                ON video_error_logs (video_id)
+            """))
+            await conn.execute(_text("""
+                CREATE INDEX IF NOT EXISTS idx_vel_created_at
+                ON video_error_logs (created_at DESC)
+            """))
+            # Also add last_error_code / last_error_message columns to videos
+            for col_sql in [
+                "ALTER TABLE videos ADD COLUMN IF NOT EXISTS last_error_code VARCHAR(100)",
+                "ALTER TABLE videos ADD COLUMN IF NOT EXISTS last_error_message TEXT",
+            ]:
+                try:
+                    await conn.execute(_text(col_sql))
+                except Exception:
+                    pass
+        logger.info("video_error_logs table & videos error columns verified/created")
+    except Exception as e:
+        logger.warning(f"Failed to ensure video_error_logs table on startup: {e}")
+
 
 @app.on_event("startup")
 async def restore_live_sessions():

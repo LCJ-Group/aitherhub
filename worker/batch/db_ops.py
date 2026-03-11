@@ -2074,3 +2074,98 @@ async def get_sales_moments(video_id: str, source: str = None):
 def get_sales_moments_sync(video_id: str):
     loop = get_event_loop()
     return loop.run_until_complete(get_sales_moments(video_id))
+
+
+# ─────────────────────────────────────────────────────────────────
+# Video Error Log helpers
+# ─────────────────────────────────────────────────────────────────
+
+async def insert_video_error_log(
+    video_id: str,
+    error_code: str,
+    error_step: str = None,
+    error_message: str = None,
+    error_detail: str = None,
+    source: str = "worker",
+):
+    """Insert a row into video_error_logs and update videos.last_error_*."""
+    # Truncate long strings to avoid DB column overflow
+    if error_message and len(error_message) > 2000:
+        error_message = error_message[:2000] + "...(truncated)"
+    if error_detail and len(error_detail) > 10000:
+        error_detail = error_detail[:10000] + "...(truncated)"
+
+    sql_insert = text("""
+        INSERT INTO video_error_logs
+            (video_id, error_code, error_step, error_message, error_detail, source)
+        VALUES
+            (:video_id, :error_code, :error_step, :error_message, :error_detail, :source)
+    """)
+    sql_update = text("""
+        UPDATE videos
+        SET last_error_code = :error_code,
+            last_error_message = :error_message,
+            updated_at = NOW()
+        WHERE id = :video_id
+    """)
+    async with AsyncSessionLocal() as session:
+        await session.execute(sql_insert, {
+            "video_id": video_id,
+            "error_code": error_code,
+            "error_step": error_step,
+            "error_message": error_message,
+            "error_detail": error_detail,
+            "source": source,
+        })
+        await session.execute(sql_update, {
+            "video_id": video_id,
+            "error_code": error_code,
+            "error_message": error_message,
+        })
+        await session.commit()
+
+
+def insert_video_error_log_sync(
+    video_id: str,
+    error_code: str,
+    error_step: str = None,
+    error_message: str = None,
+    error_detail: str = None,
+    source: str = "worker",
+):
+    """Synchronous wrapper for insert_video_error_log."""
+    loop = get_event_loop()
+    return loop.run_until_complete(
+        insert_video_error_log(
+            video_id=video_id,
+            error_code=error_code,
+            error_step=error_step,
+            error_message=error_message,
+            error_detail=error_detail,
+            source=source,
+        )
+    )
+
+
+async def get_video_error_logs(video_id: str, limit: int = 50):
+    """Fetch error logs for a video, newest first."""
+    sql = text("""
+        SELECT id, video_id, error_code, error_step, error_message,
+               error_detail, source, created_at
+        FROM video_error_logs
+        WHERE video_id = :video_id
+        ORDER BY created_at DESC
+        LIMIT :limit
+    """)
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(sql, {
+            "video_id": video_id,
+            "limit": limit,
+        })
+        rows = result.fetchall()
+        return [dict(row._mapping) for row in rows]
+
+
+def get_video_error_logs_sync(video_id: str, limit: int = 50):
+    loop = get_event_loop()
+    return loop.run_until_complete(get_video_error_logs(video_id, limit))

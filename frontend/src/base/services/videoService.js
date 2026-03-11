@@ -1481,5 +1481,20 @@ class VideoService extends BaseApiService {
       throw error;
     }
   }
+
+  /**
+   * Fetch error log history for a video.
+   * @param {string} videoId
+   * @returns {Promise<{video_id: string, error_logs: Array, total: number}>}
+   */
+  async getErrorLogs(videoId) {
+    try {
+      const response = await this.get(`/api/v1/videos/${videoId}/error-logs`);
+      return response;
+    } catch (error) {
+      console.error('Failed to fetch error logs:', error);
+      throw error;
+    }
+  }
 }
 export default new VideoService();
