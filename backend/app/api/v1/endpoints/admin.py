@@ -3149,3 +3149,32 @@ async def list_blobs_for_video(
     except Exception as e:
         logger.exception(f"Failed to list blobs: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── BUILD 33: Admin generate upload SAS (for testing) ──────────
+
+
+@router.post("/generate-upload-sas")
+async def admin_generate_upload_sas(
+    payload: dict,
+    admin: str = Depends(verify_admin),
+):
+    """Generate a write SAS URL for uploading a blob (admin/testing use)."""
+    from app.services.storage_service import generate_upload_sas
+
+    email = payload.get("email", "")
+    video_id = payload.get("video_id", "")
+    filename = payload.get("filename", "")
+
+    if not email or not video_id or not filename:
+        raise HTTPException(status_code=400, detail="email, video_id, filename required")
+
+    vid, upload_url, blob_url, expiry = await generate_upload_sas(
+        email=email, video_id=video_id, filename=filename,
+    )
+    return {
+        "video_id": vid,
+        "upload_url": upload_url,
+        "blob_url": blob_url,
+        "expires_at": expiry.isoformat(),
+    }
