@@ -500,6 +500,8 @@ def main():
 
     # Pre-initialize video_id from args so except/finally can always reference it
     video_id = args.video_id
+    # Track current step for better error reporting on resume
+    _current_step_name = "PRE_FLIGHT"
 
     logger.info("[DB] Initializing database connection...")
     init_db_sync()
@@ -621,12 +623,11 @@ def main():
             start_step = 0
             logger.info(f"[RESUME] starting from STEP 0 (status={current_status})")
 
-            # Only remove THIS video's artifact folder (not the shared ART_ROOT)
-            # to avoid deleting other videos' data during concurrent processing
+            # Preserve artifact folder on retry to allow resume from cached data.
+            # Each step overwrites its outputs, so stale files are harmless.
             my_art_dir = video_root(video_id)
             if os.path.exists(my_art_dir):
-                logger.info("[CLEAN] Remove old artifact folder for %s", video_id)
-                shutil.rmtree(my_art_dir, ignore_errors=True)
+                logger.info("[RESUME] Keeping existing artifact folder for %s (overwrite mode)", video_id)
             os.makedirs(my_art_dir, exist_ok=True)
 
         # =========================
@@ -643,6 +644,7 @@ def main():
         # =========================
         analysis_video_path = None
         if start_step <= 0:
+            _current_step_name = VideoStatus.STEP_0_EXTRACT_FRAMES
             update_video_status_sync(video_id, VideoStatus.STEP_0_EXTRACT_FRAMES)
             logger.info("=== STEP 0-PRE: GENERATE ANALYSIS VIDEO ===")
             _analysis_out = os.path.join(os.path.dirname(video_path), "analysis.mp4")
@@ -755,9 +757,10 @@ def main():
                     logger.warning("[ANALYSIS_VIDEO] Cleanup failed: %s", e)
 
         elif start_step <= 1:
-            # Only frames needed (audio already done in a previous run)
+            # Only frames needed (audio already done in previous run)
+            _current_step_name = VideoStatus.STEP_0_EXTRACT_FRAMES
             update_video_status_sync(video_id, VideoStatus.STEP_0_EXTRACT_FRAMES)
-            logger.info("=== STEP 0 – EXTRACT FRAMES ===")
+            logger.info("=== STEP 0 RESUME – EXTRACT FRAMES ONLY ===")
             def _on_frames_only_progress(pct):
                 try:
                     update_video_step_progress_sync(video_id, pct)
@@ -789,6 +792,7 @@ def main():
         # STEP 1 – PHASE DETECTION (YOLO)
         # =========================
         if start_step <= 1:
+            _current_step_name = VideoStatus.STEP_1_DETECT_PHASES
             update_video_status_sync(video_id, VideoStatus.STEP_1_DETECT_PHASES)
 
             logger.info("=== STEP 1 – PHASE DETECTION (YOLO) ===")
@@ -860,6 +864,7 @@ def main():
         # STEP 2 – PHASE METRICS
         # =========================
         if start_step <= 2:
+            _current_step_name = VideoStatus.STEP_2_EXTRACT_METRICS
             update_video_status_sync(video_id, VideoStatus.STEP_2_EXTRACT_METRICS)
             logger.info("=== STEP 2 – PHASE METRICS ===")
 
@@ -892,6 +897,7 @@ def main():
         # =========================
         if start_step > 0 and start_step <= 3:
             # Only run if we're resuming and audio wasn't done in parallel
+            _current_step_name = VideoStatus.STEP_3_TRANSCRIBE_AUDIO
             update_video_status_sync(video_id, VideoStatus.STEP_3_TRANSCRIBE_AUDIO)
             logger.info("=== STEP 3 – AUDIO TO TEXT ===")
             # v6: Extract full audio for BatchedInferencePipeline
@@ -908,6 +914,7 @@ def main():
         # STEP 4 – IMAGE CAPTION (filtered by CSV importance)
         # =========================
         if start_step <= 4:
+            _current_step_name = VideoStatus.STEP_4_IMAGE_CAPTION
             update_video_status_sync(video_id, VideoStatus.STEP_4_IMAGE_CAPTION)
             logger.info("=== STEP 4 – IMAGE CAPTION ===")
 
@@ -942,6 +949,7 @@ def main():
         # STEP 5 – BUILD PHASE UNITS (DB CHECKPOINT)
         # =========================
         if start_step <= 5:
+            _current_step_name = VideoStatus.STEP_5_BUILD_PHASE_UNITS
             update_video_status_sync(video_id, VideoStatus.STEP_5_BUILD_PHASE_UNITS)
             logger.info("=== STEP 5 – BUILD PHASE UNITS ===")
             phase_units = build_phase_units(
@@ -1317,6 +1325,7 @@ def main():
         # =========================
 
         if start_step <= 6:
+            _current_step_name = VideoStatus.STEP_6_BUILD_PHASE_DESCRIPTION
             update_video_status_sync(video_id, VideoStatus.STEP_6_BUILD_PHASE_DESCRIPTION)
             logger.info("=== STEP 6 – PHASE DESCRIPTION ===")
             def _on_step6_progress(pct):
@@ -1408,6 +1417,7 @@ def main():
         # STEP 7 – GLOBAL GROUPING
         # =========================
         if start_step <= 7:
+            _current_step_name = VideoStatus.STEP_7_GROUPING
             update_video_status_sync(video_id, VideoStatus.STEP_7_GROUPING)
             logger.info("=== STEP 7 – GLOBAL PHASE GROUPING ===")
             phase_units = embed_phase_descriptions(phase_units)
@@ -1438,6 +1448,7 @@ def main():
         # =========================
        
         if start_step <= 8:
+            _current_step_name = VideoStatus.STEP_8_UPDATE_BEST_PHASE
             update_video_status_sync(video_id, VideoStatus.STEP_8_UPDATE_BEST_PHASE)
             logger.info("=== STEP 8 – GROUP BEST PHASES (BULK) ===")
 
@@ -1486,6 +1497,7 @@ def main():
         # STEP 9 – BUILD VIDEO STRUCTURE FEATURES
         # =========================
         if start_step <= 9:
+            _current_step_name = VideoStatus.STEP_9_BUILD_VIDEO_STRUCTURE_FEATURES
             update_video_status_sync(video_id, VideoStatus.STEP_9_BUILD_VIDEO_STRUCTURE_FEATURES)
             logger.info("=== STEP 9 – BUILD VIDEO STRUCTURE FEATURES ===")
             build_video_structure_features(video_id, user_id)
@@ -1550,6 +1562,7 @@ def main():
         # =========================
         exposures = []  # Initialize for use in Report 3
         if start_step <= 13:  # index 13 in STEP_ORDER
+            _current_step_name = VideoStatus.STEP_12_5_PRODUCT_DETECTION
             update_video_status_sync(video_id, VideoStatus.STEP_12_5_PRODUCT_DETECTION)
             logger.info("=== STEP 12.5 – PRODUCT DETECTION ===")
 
@@ -1633,6 +1646,7 @@ def main():
         # STEP 13 – BUILD REPORTS
         # =========================
         if start_step <= 14:  # index 14 in STEP_ORDER (shifted +1)
+            _current_step_name = VideoStatus.STEP_13_BUILD_REPORTS
             update_video_status_sync(video_id, VideoStatus.STEP_13_BUILD_REPORTS)
             logger.info("=== STEP 13 – BUILD REPORTS ===")
 
@@ -1724,6 +1738,7 @@ def main():
             logger.info("[SKIP] STEP 13")
 
         if start_step <= 15:  # index 15 in STEP_ORDER (shifted +1)
+            _current_step_name = VideoStatus.STEP_14_FINALIZE
             update_video_status_sync(video_id, VideoStatus.STEP_14_FINALIZE)
             update_video_step_progress_sync(video_id, 0)
             logger.info("=== STEP 14 \u2013 FINALIZE PIPELINE (WAIT SPLIT) ===")
@@ -1831,7 +1846,7 @@ def main():
         # Record error log to DB
         try:
             import traceback as _tb
-            _current_step = getattr(exc, '_error_step', None) or 'UNKNOWN'
+            _current_step = getattr(exc, '_error_step', None) or _current_step_name or 'UNKNOWN'
             _error_code = getattr(exc, '_error_code', None) or type(exc).__name__
             insert_video_error_log_sync(
                 video_id=video_id,

@@ -1377,17 +1377,43 @@ async def retry_analysis(
                 {"vid": video_id},
             )
         else:
-            # ERROR or other status: reset to uploaded for full re-analysis
-            resume_status = 'uploaded'
+            # ERROR or other status: try to resume from the error step
+            # instead of restarting from scratch
+            resume_status = 'uploaded'  # fallback
+            try:
+                err_result = await db.execute(
+                    text("""
+                        SELECT error_step FROM video_error_logs
+                        WHERE video_id = :vid
+                        ORDER BY created_at DESC LIMIT 1
+                    """),
+                    {"vid": video_id},
+                )
+                err_row = err_result.fetchone()
+                if (
+                    err_row
+                    and err_row.error_step
+                    and err_row.error_step.startswith("STEP_")
+                ):
+                    resume_status = err_row.error_step
+                    logger.info(
+                        "[retry-analysis] Resuming from error_step=%s for video %s",
+                        resume_status, video_id,
+                    )
+            except Exception as _e:
+                logger.warning(
+                    "[retry-analysis] Could not read error_step, falling back to uploaded: %s", _e
+                )
+
             await db.execute(
                 text("""
                     UPDATE videos
-                    SET status = 'uploaded',
+                    SET status = :status,
                         step_progress = 0,
                         error_message = NULL
                     WHERE id = :vid
                 """),
-                {"vid": video_id},
+                {"vid": video_id, "status": resume_status},
             )
         await db.commit()
 
