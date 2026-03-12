@@ -3157,10 +3157,15 @@ async def list_blobs_for_video(
 @router.post("/generate-upload-sas")
 async def admin_generate_upload_sas(
     payload: dict,
-    admin: str = Depends(verify_admin),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
 ):
     """Generate a write SAS URL for uploading a blob (admin/testing use)."""
+    import os
     from app.services.storage_service import generate_upload_sas
+
+    expected_key = os.getenv("ADMIN_API_KEY", "aither:hub")
+    if x_admin_key != expected_key:
+        raise HTTPException(status_code=403, detail="Forbidden")
 
     email = payload.get("email", "")
     video_id = payload.get("video_id", "")
