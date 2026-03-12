@@ -225,6 +225,25 @@ jobs:
               echo "FAIL: No worker is active"
               exit 1
             fi
+            echo "=== Worker journal (last 50 lines) ==="
+            sudo journalctl -u aither-worker --no-pager -n 50 2>&1 || true
+            echo "=== Queue peek ==="
+            cd /opt/aitherhub && /opt/aitherhub/.venv/bin/python -c "
+import os, json
+from azure.storage.queue import QueueClient
+conn = os.getenv('AZURE_STORAGE_CONNECTION_STRING', '')
+if not conn:
+    from dotenv import load_dotenv
+    load_dotenv('/opt/aitherhub/.env')
+    conn = os.getenv('AZURE_STORAGE_CONNECTION_STRING', '')
+qname = os.getenv('AZURE_QUEUE_NAME', 'video-jobs')
+client = QueueClient.from_connection_string(conn, qname)
+props = client.get_queue_properties()
+print(f'Queue: {qname}, approx_count: {props.approximate_message_count}')
+msgs = client.peek_messages(max_messages=5)
+for m in msgs:
+    print(f'  msg: {m.content[:200]}')
+" 2>&1 || echo 'Queue peek failed'
           HEALTHCHECK
 
       - name: Cleanup SSH key
