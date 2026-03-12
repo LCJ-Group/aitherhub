@@ -94,6 +94,9 @@ class LiveAnalysisStatusResponse(BaseModel):
     completed_at: Optional[datetime] = None
     results: Optional[AnalysisResults] = None
     error_message: Optional[str] = None
+    # BUILD 31: Timeout detection fields
+    timeout_detected: bool = Field(False, description="True if job appears stuck")
+    stale_seconds: Optional[int] = Field(None, description="Seconds since last progress update")
 
 
 class GenerateChunkUploadURLRequest(BaseModel):

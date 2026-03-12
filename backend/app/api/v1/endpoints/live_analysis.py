@@ -456,6 +456,56 @@ async def get_analysis_status(
                     clip_candidates=[],
                 )
 
+        # BUILD 31: Timeout detection — if job is in a processing state
+        # and hasn't been updated for >2 minutes, mark as timed out.
+        TIMEOUT_SECONDS = 120  # 2 minutes
+        timeout_detected = False
+        stale_seconds = None
+        terminal_statuses = ("completed", "failed", "dead")
+
+        if job.status not in terminal_statuses:
+            # Use updated_at from the job record
+            last_update = job.updated_at
+            if last_update:
+                now_utc = datetime.now(timezone.utc)
+                # Ensure last_update is timezone-aware
+                if last_update.tzinfo is None:
+                    from datetime import timezone as _tz
+                    last_update = last_update.replace(tzinfo=_tz.utc)
+                delta = (now_utc - last_update).total_seconds()
+                stale_seconds = int(delta)
+                if delta > TIMEOUT_SECONDS:
+                    timeout_detected = True
+                    logger.warning(
+                        f"[live-analysis/status] TIMEOUT: job={job.id} "
+                        f"status={job.status} stale={stale_seconds}s"
+                    )
+                    # Auto-mark as failed if stale for >5 minutes
+                    if delta > 300 and job.status not in terminal_statuses:
+                        job.status = "failed"
+                        job.error_message = (
+                            f"タイムアウト: {stale_seconds}秒間進行なし。"
+                            f"最終ステップ: {job.current_step or job.status}"
+                        )
+                        await db.commit()
+                        logger.warning(
+                            f"[live-analysis/status] Auto-failed job={job.id} "
+                            f"after {stale_seconds}s stale"
+                        )
+                        # Also mark video as ERROR
+                        try:
+                            await db.execute(
+                                text("""
+                                    UPDATE videos
+                                    SET status = 'ERROR', updated_at = now()
+                                    WHERE id = :video_id
+                                """),
+                                {"video_id": video_id},
+                            )
+                            await db.commit()
+                        except Exception:
+                            pass
+
         return LiveAnalysisStatusResponse(
             job_id=str(job.id),
             video_id=job.video_id,
@@ -466,6 +516,8 @@ async def get_analysis_status(
             completed_at=job.completed_at,
             results=analysis_results,
             error_message=job.error_message,
+            timeout_detected=timeout_detected,
+            stale_seconds=stale_seconds,
         )
 
     except HTTPException:
