@@ -549,9 +549,15 @@ def main():
         # ── Early status update: mark that worker has started processing ──
         # This prevents the UI from showing "uploaded" (= 圧縮中) forever
         # if the worker crashes during download or pre-flight.
+        # SKIP if already in a STEP_* status (resume scenario) to avoid
+        # resetting the resume point.
         try:
-            update_video_status_sync(video_id, VideoStatus.STEP_COMPRESS_1080P)
-            logger.info("[STATUS] Early status update → STEP_COMPRESS_1080P (worker started)")
+            _pre_status = get_video_status_sync(video_id)
+            if _pre_status and _pre_status.startswith("STEP_") and _pre_status != VideoStatus.STEP_COMPRESS_1080P:
+                logger.info("[STATUS] Skipping early status update (resume from %s)", _pre_status)
+            else:
+                update_video_status_sync(video_id, VideoStatus.STEP_COMPRESS_1080P)
+                logger.info("[STATUS] Early status update → STEP_COMPRESS_1080P (worker started)")
         except Exception as e:
             logger.warning("[STATUS] Failed early status update: %s", e)
 
