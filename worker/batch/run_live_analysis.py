@@ -76,7 +76,27 @@ async def main():
     elif database_url.startswith("postgresql://"):
         database_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
 
-    engine = create_async_engine(database_url, echo=False)
+    # asyncpg does not accept 'sslmode' — strip it and pass SSLContext via connect_args
+    import ssl as _ssl
+    from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+
+    parsed = urlparse(database_url)
+    qp = parse_qs(parsed.query)
+    connect_args = {}
+    for key in ("sslmode", "ssl"):
+        if key in qp:
+            mode = qp.pop(key)[0]
+            if mode == "require":
+                ctx = _ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode = _ssl.CERT_NONE
+                connect_args["ssl"] = ctx
+            elif mode in ("verify-ca", "verify-full"):
+                connect_args["ssl"] = _ssl.create_default_context()
+    new_query = urlencode(qp, doseq=True)
+    database_url = urlunparse(parsed._replace(query=new_query))
+
+    engine = create_async_engine(database_url, echo=False, connect_args=connect_args)
     session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
     try:
