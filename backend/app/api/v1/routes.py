@@ -18,6 +18,7 @@ from app.api.v1.endpoints.clip_feedback import router as clip_feedback_router
 from app.api.v1.endpoints.feedback_loop import router as feedback_loop_router
 from app.api.v1.endpoints.live_analysis import router as live_analysis_router
 from app.api.v1.endpoints.clip_editor_v2 import router as clip_editor_v2_router
+from app.api.v1.endpoints.digital_human import router as digital_human_router
 
 routers = APIRouter()
 routers.include_router(auth_router, prefix="/auth", tags=["Auth"])
@@ -38,3 +39,4 @@ routers.include_router(clip_feedback_router, prefix="/clips", tags=["Clip Feedba
 routers.include_router(feedback_loop_router, prefix="/feedback", tags=["Feedback Loop"])
 routers.include_router(live_analysis_router)
 routers.include_router(clip_editor_v2_router, prefix="/editor", tags=["Clip Editor v2"])
+routers.include_router(digital_human_router)
