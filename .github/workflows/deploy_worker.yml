@@ -21,6 +21,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     name: Deploy Worker via SSH
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4
@@ -41,18 +42,45 @@ jobs:
             set -e
 
             echo "=== AitherHub Worker Deploy ==="
-            echo "Time: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "Time: \$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-            # --- Repo update (/opt/aitherhub — primary) ---
+            # ============================================================
+            # 0. DISK CLEANUP — run FIRST to ensure space for pip/rsync
+            # ============================================================
+            echo ""
+            echo "=== Disk status (before cleanup) ==="
+            df -h / | tail -1
+
+            echo "=== Aggressive disk cleanup ==="
+            sudo find /tmp/aitherhub -mindepth 1 -maxdepth 1 -mmin +60 -exec rm -rf {} + 2>/dev/null || true
+            sudo find /opt/aitherhub/worker/batch/uploadedvideo -type f -mmin +60 -delete 2>/dev/null || true
+            sudo find /opt/aitherhub/worker/batch/output -mindepth 1 -maxdepth 1 -mmin +60 -exec rm -rf {} + 2>/dev/null || true
+            sudo find /opt/aitherhub/worker/batch/splitvideo -mindepth 1 -maxdepth 1 -mmin +60 -exec rm -rf {} + 2>/dev/null || true
+            sudo find /opt/aitherhub/worker/batch/artifacts -mindepth 1 -maxdepth 1 -mmin +60 -exec rm -rf {} + 2>/dev/null || true
+            sudo rm -rf /root/.cache/pip 2>/dev/null || true
+            sudo rm -rf /home/*/.cache/pip 2>/dev/null || true
+            sudo apt-get clean 2>/dev/null || true
+            sudo journalctl --vacuum-time=1d 2>/dev/null || true
+            sudo find /opt/aitherhub -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+            sudo find /var/www/aitherhub -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+
+            echo "=== Disk status (after cleanup) ==="
+            df -h / | tail -1
+
+            # ============================================================
+            # 1. REPO UPDATE
+            # ============================================================
             cd /opt/aitherhub
             git config --global --add safe.directory /opt/aitherhub
-            echo "Before: $(git rev-parse HEAD)"
+            echo "Before: \$(git rev-parse HEAD)"
             git remote set-url origin https://github.com/LCJ-Group/aitherhub.git
             git fetch origin master --force
             git reset --hard origin/master
-            echo "After:  $(git rev-parse HEAD)"
+            echo "After:  \$(git rev-parse HEAD)"
 
-            # --- Sync to /var/www/aitherhub (legacy path used by systemd) ---
+            # ============================================================
+            # 2. SYNC to /var/www/aitherhub (legacy path)
+            # ============================================================
             echo ""
             echo "=== Syncing to /var/www/aitherhub ==="
             if [ -d "/var/www/aitherhub" ]; then
@@ -62,134 +90,75 @@ jobs:
                 --exclude='.env' \
                 --exclude='__pycache__' \
                 --exclude='*.pyc' \
-                /opt/aitherhub/ /var/www/aitherhub/
-              echo "Synced /opt/aitherhub -> /var/www/aitherhub"
-              echo "Verify: $(cd /var/www/aitherhub && head -1 requirements.txt 2>/dev/null || echo 'N/A')"
+                --exclude='worker/batch/uploadedvideo/' \
+                --exclude='worker/batch/output/' \
+                --exclude='worker/batch/splitvideo/' \
+                --exclude='worker/batch/artifacts/' \
+                /opt/aitherhub/ /var/www/aitherhub/ || {
+                RSYNC_EXIT=\$?
+                if [ \$RSYNC_EXIT -eq 24 ]; then
+                  echo "rsync: vanished files (exit 24) — safe to ignore"
+                else
+                  echo "rsync failed with exit code \$RSYNC_EXIT"
+                  exit \$RSYNC_EXIT
+                fi
+              }
+              echo "Synced OK"
             else
-              echo "/var/www/aitherhub does not exist — skipping sync"
+              echo "/var/www/aitherhub does not exist — skipping"
             fi
 
-            # --- Stale lock cleanup ---
-            echo ""
-            echo "=== Checking for stale worker lock ==="
+            # ============================================================
+            # 3. STALE LOCK CLEANUP
+            # ============================================================
             LOCK_FILE="/tmp/simple_worker.lock"
-            if [ -f "$LOCK_FILE" ]; then
-              LOCK_PID=$(cat "$LOCK_FILE" 2>/dev/null || echo "")
-              if [ -n "$LOCK_PID" ] && ! kill -0 "$LOCK_PID" 2>/dev/null; then
-                echo "Stale lock found (PID $LOCK_PID is dead). Removing..."
-                rm -f "$LOCK_FILE"
-                echo "Stale lock removed."
-              else
-                echo "Lock exists with active PID $LOCK_PID"
+            if [ -f "\$LOCK_FILE" ]; then
+              LOCK_PID=\$(cat "\$LOCK_FILE" 2>/dev/null || echo "")
+              if [ -n "\$LOCK_PID" ] && ! kill -0 "\$LOCK_PID" 2>/dev/null; then
+                rm -f "\$LOCK_FILE"
+                echo "Stale lock removed (PID \$LOCK_PID dead)"
               fi
-            else
-              echo "No lock file found."
             fi
 
-            # --- venv setup ---
-            echo ""
-            echo "=== Setting up virtual environment ==="
-            if [ ! -d ".venv" ]; then
-              echo "Creating new .venv ..."
-              python3 -m venv .venv
-            else
-              echo "Reusing existing .venv"
-            fi
-
-            # --- Install dependencies ---
+            # ============================================================
+            # 4. VENV + DEPENDENCIES
+            # ============================================================
             echo ""
             echo "=== Installing dependencies ==="
-            .venv/bin/python -m pip install --upgrade pip --quiet
-            .venv/bin/pip install -r requirements.txt --quiet
-            echo "Dependencies installed successfully"
+            if [ ! -d ".venv" ]; then
+              python3 -m venv .venv
+            fi
+            .venv/bin/pip install -r requirements.txt --quiet 2>&1 | tail -3
+            echo "Dependencies OK"
 
-            # --- Also install to system python (used by /var/www service) ---
-            echo ""
-            echo "=== Installing dependencies to system python ==="
-            sudo pip3 install -r requirements.txt --quiet 2>/dev/null || \
-              sudo python3 -m pip install -r requirements.txt --quiet 2>/dev/null || \
-              echo "WARNING: Could not install to system python"
-
-            # --- Restart worker ---
+            # ============================================================
+            # 5. RESTART WORKER
+            # ============================================================
             echo ""
             echo "=== Restarting worker ==="
-            # Try both service names (aither-worker and simple-worker)
             sudo systemctl restart aither-worker 2>/dev/null || true
             sudo systemctl restart simple-worker 2>/dev/null || true
             sleep 5
 
-            # --- Status check (with retry) ---
-            echo ""
-            echo "=== Worker status ==="
-            # Check which service is actually running
-            AITHER_STATUS=$(sudo systemctl is-active aither-worker 2>/dev/null || echo "inactive")
-            SIMPLE_STATUS=$(sudo systemctl is-active simple-worker 2>/dev/null || echo "inactive")
-            echo "aither-worker: $AITHER_STATUS"
-            echo "simple-worker: $SIMPLE_STATUS"
-
-            STATUS="inactive"
             for i in 1 2 3; do
-              AITHER_STATUS=$(sudo systemctl is-active aither-worker 2>/dev/null || echo "inactive")
-              SIMPLE_STATUS=$(sudo systemctl is-active simple-worker 2>/dev/null || echo "inactive")
-              if [ "$AITHER_STATUS" = "active" ] || [ "$SIMPLE_STATUS" = "active" ]; then
-                STATUS="active"
+              AITHER=\$(sudo systemctl is-active aither-worker 2>/dev/null || echo "inactive")
+              SIMPLE=\$(sudo systemctl is-active simple-worker 2>/dev/null || echo "inactive")
+              if [ "\$AITHER" = "active" ] || [ "\$SIMPLE" = "active" ]; then
+                echo "Worker is active (aither=\$AITHER simple=\$SIMPLE)"
                 break
               fi
-              echo "Attempt $i: aither=$AITHER_STATUS simple=$SIMPLE_STATUS, waiting 5s..."
+              echo "Attempt \$i: waiting 5s..."
               sleep 5
             done
 
-            if [ "$STATUS" != "active" ]; then
-              echo "FATAL: No worker service is active"
-              echo "--- aither-worker journal ---"
-              sudo journalctl -u aither-worker --no-pager -n 20 2>&1 || true
-              echo "--- simple-worker journal ---"
-              sudo journalctl -u simple-worker --no-pager -n 20 2>&1 || true
-              echo "--- systemd service files ---"
-              sudo systemctl cat aither-worker 2>/dev/null || echo "aither-worker: not found"
-              sudo systemctl cat simple-worker 2>/dev/null || echo "simple-worker: not found"
-              exit 1
-            fi
-
-            echo "Worker is active"
-            if [ "$AITHER_STATUS" = "active" ]; then
-              echo "Active service: aither-worker"
-              echo "Worker PID: $(systemctl show aither-worker --property=MainPID --value)"
-              echo "--- aither-worker config ---"
-              sudo systemctl cat aither-worker 2>/dev/null | head -20
-            fi
-            if [ "$SIMPLE_STATUS" = "active" ]; then
-              echo "Active service: simple-worker"
-              echo "Worker PID: $(systemctl show simple-worker --property=MainPID --value)"
-              echo "--- simple-worker config ---"
-              sudo systemctl cat simple-worker 2>/dev/null | head -20
-            fi
-
-            # --- Verify key files exist ---
+            # ============================================================
+            # 6. VERIFY
+            # ============================================================
             echo ""
-            echo "=== File verification ==="
-            for f in worker/controller/simple_worker.py worker/batch/run_live_analysis.py requirements.txt; do
-              if [ -f "/opt/aitherhub/$f" ]; then
-                echo "OK: /opt/aitherhub/$f"
-              else
-                echo "MISSING: /opt/aitherhub/$f"
-              fi
-              if [ -f "/var/www/aitherhub/$f" ]; then
-                echo "OK: /var/www/aitherhub/$f"
-              else
-                echo "MISSING: /var/www/aitherhub/$f"
-              fi
-            done
-
-            # --- Verify live_analysis handler exists ---
-            echo ""
-            echo "=== live_analysis handler check ==="
-            grep -c "process_live_analysis_job" /opt/aitherhub/worker/controller/simple_worker.py && echo "OK: /opt has handler" || echo "MISSING: /opt handler"
-            grep -c "process_live_analysis_job" /var/www/aitherhub/worker/controller/simple_worker.py 2>/dev/null && echo "OK: /var/www has handler" || echo "MISSING: /var/www handler"
-
-            echo ""
+            echo "=== Disk status (final) ==="
+            df -h / | tail -1
             echo "=== Deploy complete ==="
-            echo "Commit: $(git rev-parse HEAD)"
+            echo "Commit: \$(git rev-parse HEAD)"
           DEPLOY_SCRIPT
 
       - name: Verify deployment
@@ -198,7 +167,7 @@ jobs:
           SSH_USER: ${{ secrets.WORKER_SSH_USER }}
           COMMIT_SHA: ${{ github.sha }}
         run: |
-          DEPLOYED=$(ssh -i ~/.ssh/worker_key -o StrictHostKeyChecking=no ${SSH_USER}@${SSH_HOST} \
+          DEPLOYED=\$(ssh -i ~/.ssh/worker_key -o StrictHostKeyChecking=no ${SSH_USER}@${SSH_HOST} \
             "cd /opt/aitherhub && git rev-parse HEAD")
           echo "Expected: ${COMMIT_SHA}"
           echo "Deployed: ${DEPLOYED}"
@@ -215,8 +184,8 @@ jobs:
           SSH_USER: ${{ secrets.WORKER_SSH_USER }}
         run: |
           ssh -i ~/.ssh/worker_key -o StrictHostKeyChecking=no ${SSH_USER}@${SSH_HOST} << 'HEALTHCHECK'
-            AITHER=$(sudo systemctl is-active aither-worker 2>/dev/null || echo "inactive")
-            SIMPLE=$(sudo systemctl is-active simple-worker 2>/dev/null || echo "inactive")
+            AITHER=\$(sudo systemctl is-active aither-worker 2>/dev/null || echo "inactive")
+            SIMPLE=\$(sudo systemctl is-active simple-worker 2>/dev/null || echo "inactive")
             echo "aither-worker: ${AITHER}"
             echo "simple-worker: ${SIMPLE}"
             if [ "${AITHER}" = "active" ] || [ "${SIMPLE}" = "active" ]; then
@@ -227,10 +196,10 @@ jobs:
             fi
             echo "=== Waiting 15s for worker to process queue ==="
             sleep 15
-            echo "=== Worker journal (last 200 lines) ==="
-            sudo journalctl -u aither-worker --no-pager -n 200 2>&1 || true
-            echo "=== Queue peek ==="
-            cd /opt/aitherhub && /opt/aitherhub/.venv/bin/python -c "import os,json; exec(open('/opt/aitherhub/.env').read().replace('export ','')) if os.path.exists('/opt/aitherhub/.env') else None; from azure.storage.queue import QueueClient; conn=os.getenv('AZURE_STORAGE_CONNECTION_STRING',''); qname=os.getenv('AZURE_QUEUE_NAME','video-jobs'); client=QueueClient.from_connection_string(conn,qname); props=client.get_queue_properties(); print(f'Queue: {qname}, approx_count: {props.approximate_message_count}'); msgs=client.peek_messages(max_messages=5); [print(f'  msg: {m.content[:200]}') for m in msgs]" 2>&1 || echo 'Queue peek failed'
+            echo "=== Worker journal (last 100 lines) ==="
+            sudo journalctl -u aither-worker --no-pager -n 100 2>&1 || true
+            echo "=== Disk ==="
+            df -h / | tail -1
           HEALTHCHECK
 
       - name: Cleanup SSH key
