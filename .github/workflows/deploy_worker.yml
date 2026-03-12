@@ -134,8 +134,16 @@ jobs:
             # ============================================================
             echo ""
             echo "=== Restarting worker ==="
-            sudo systemctl restart aither-worker 2>/dev/null || true
-            sudo systemctl restart simple-worker 2>/dev/null || true
+            # Force-kill first to avoid systemctl restart hanging (worker ignores SIGTERM)
+            echo "Stopping workers (force kill if needed)..."
+            sudo systemctl stop aither-worker --force 2>/dev/null || true
+            sudo systemctl kill -s SIGKILL aither-worker 2>/dev/null || true
+            sudo systemctl stop simple-worker --force 2>/dev/null || true
+            sudo systemctl kill -s SIGKILL simple-worker 2>/dev/null || true
+            sleep 2
+            echo "Starting workers..."
+            sudo systemctl start aither-worker 2>/dev/null || true
+            sudo systemctl start simple-worker 2>/dev/null || true
             sleep 5
 
             for i in 1 2 3; do
