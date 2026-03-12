@@ -2498,20 +2498,103 @@ async def get_ai_context(
     x_admin_key: Optional[str] = Header(None),
 ):
     """
-    AI（Manus）が毎回タスク開始時に読むための構造化コンテキスト。
-    トークン節約のため簡潔なJSON形式で返す。
+    AI（Manus）が毎回タスク開始時に読む唯一のエンドポイント。
+    プロジェクトの永続記憶 + リアルタイム状態を2層構造で返す。
 
-    含まれる情報:
-      - open_bugs: 未解決のバグ一覧
+    第1層（常に返す・軽量）:
+      - dangers: 絶対にやってはいけないこと
+      - checklist_by_file: ファイル別の変更時チェックリスト
+      - checklist_by_feature: 機能別の変更時チェックリスト
+      - dependencies: ファイル間の依存マップ
+      - rules: システムの正常状態の定義
+      - preferences: ユーザーの方針
+      - feature_status: 機能の現在の状態
+      - open_bugs: 未解決のバグ
       - recent_errors: 直近24hのエラーサマリー
       - recent_work: 直近の作業ログ
-      - error_videos: 現在ERRORステータスの動画一覧
-      - stuck_videos: 長時間停滞中の動画一覧
+      - error_videos: ERRORステータスの動画
+      - stuck_videos: 停滞中の動画
     """
     if x_admin_key != f"{ADMIN_ID}:{ADMIN_PASS}":
         raise HTTPException(status_code=403, detail="Forbidden")
 
     context = {}
+
+    # ━━ プロジェクトの永続記憶（lessons_learned）━━
+    try:
+        result = await db.execute(text("""
+            SELECT id, category, title, content, related_files, related_feature
+            FROM lessons_learned
+            WHERE is_active = TRUE
+            ORDER BY
+                CASE category
+                    WHEN 'danger' THEN 0 WHEN 'checklist' THEN 1
+                    WHEN 'rule' THEN 2 WHEN 'dependency' THEN 3
+                    WHEN 'status' THEN 4 WHEN 'preference' THEN 5
+                    ELSE 6 END,
+                created_at DESC
+        """))
+        rows = result.fetchall()
+
+        # danger: 絶対にやってはいけないこと
+        context["dangers"] = [
+            r.title for r in rows if r.category == "danger"
+        ]
+
+        # checklist: ファイル別・機能別の変更時チェック
+        checklist_by_file = {}
+        checklist_by_feature = {}
+        for r in rows:
+            if r.category != "checklist":
+                continue
+            # ファイル別
+            if r.related_files:
+                for f in r.related_files.split(","):
+                    f = f.strip()
+                    if f:
+                        checklist_by_file.setdefault(f, []).append(r.title)
+            # 機能別
+            if r.related_feature:
+                checklist_by_feature.setdefault(r.related_feature.strip(), []).append(r.title)
+        context["checklist_by_file"] = checklist_by_file
+        context["checklist_by_feature"] = checklist_by_feature
+
+        # dependency: ファイル間の依存マップ
+        dep_map = {}
+        for r in rows:
+            if r.category != "dependency":
+                continue
+            # title = 起点ファイル, content = 依存先（カンマ区切り）
+            if r.title and r.content:
+                dep_map[r.title] = [x.strip() for x in r.content.split(",") if x.strip()]
+        context["dependencies"] = dep_map
+
+        # rule: システムの正常状態の定義
+        context["rules"] = [
+            {"title": r.title, "detail": r.content[:200]} for r in rows if r.category == "rule"
+        ]
+
+        # preference: ユーザーの方針
+        context["preferences"] = [
+            r.title for r in rows if r.category == "preference"
+        ]
+
+        # status: 機能の現在の状態
+        context["feature_status"] = [
+            {"feature": r.related_feature or r.title, "status": r.content[:100]}
+            for r in rows if r.category == "status"
+        ]
+
+        # lesson: 過去の失敗パターン（タイトルのみ、詳細は第2層）
+        context["lessons"] = [
+            {"id": r.id, "title": r.title}
+            for r in rows if r.category == "lesson"
+        ]
+
+    except Exception as e:
+        context["lessons_error"] = f"error: {e}"
+
+    # ━━ リアルタイム状態 ━━
 
     # 1. Open bugs
     try:
@@ -2621,3 +2704,172 @@ async def get_ai_context(
         context["stuck_videos"] = f"error: {e}"
 
     return context
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  Lessons Learned — プロジェクトの永続記憶
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+@router.get("/lessons")
+async def list_lessons(
+    db: AsyncSession = Depends(get_db),
+    x_admin_key: Optional[str] = Header(None),
+    category: Optional[str] = None,
+    is_active: Optional[bool] = True,
+    related_files: Optional[str] = None,
+    related_feature: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+):
+    """教訓一覧（カテゴリ・ファイル・機能でフィルタ可能）"""
+    if x_admin_key != f"{ADMIN_ID}:{ADMIN_PASS}":
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    try:
+        conditions = []
+        params = {"limit": limit, "offset": offset}
+
+        if is_active is not None:
+            conditions.append("is_active = :is_active")
+            params["is_active"] = is_active
+        if category:
+            conditions.append("category = :category")
+            params["category"] = category
+        if related_files:
+            conditions.append("related_files ILIKE :related_files")
+            params["related_files"] = f"%{related_files}%"
+        if related_feature:
+            conditions.append("related_feature ILIKE :related_feature")
+            params["related_feature"] = f"%{related_feature}%"
+
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+        count_result = await db.execute(
+            text(f"SELECT COUNT(*) FROM lessons_learned {where}"), params
+        )
+        total = count_result.scalar() or 0
+
+        result = await db.execute(
+            text(f"""
+                SELECT * FROM lessons_learned {where}
+                ORDER BY
+                    CASE category
+                        WHEN 'danger' THEN 0 WHEN 'checklist' THEN 1
+                        WHEN 'rule' THEN 2 WHEN 'dependency' THEN 3
+                        WHEN 'lesson' THEN 4 WHEN 'status' THEN 5
+                        ELSE 6 END,
+                    created_at DESC
+                LIMIT :limit OFFSET :offset
+            """),
+            params,
+        )
+        rows = result.fetchall()
+        lessons = [dict(r._mapping) for r in rows]
+        for l in lessons:
+            for k in ("created_at", "updated_at"):
+                if l.get(k):
+                    l[k] = l[k].isoformat()
+
+        return {"total": total, "lessons": lessons}
+    except Exception as e:
+        logger.exception(f"Failed to fetch lessons: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/lessons")
+async def create_lesson(
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+    x_admin_key: Optional[str] = Header(None),
+):
+    """教訓を新規作成"""
+    if x_admin_key != f"{ADMIN_ID}:{ADMIN_PASS}":
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    try:
+        result = await db.execute(
+            text("""
+                INSERT INTO lessons_learned
+                    (category, title, content, related_files, related_feature, source_bug_id)
+                VALUES
+                    (:category, :title, :content, :related_files, :related_feature, :source_bug_id)
+                RETURNING id
+            """),
+            {
+                "category": payload.get("category", "lesson"),
+                "title": payload.get("title", ""),
+                "content": payload.get("content", ""),
+                "related_files": payload.get("related_files", ""),
+                "related_feature": payload.get("related_feature", ""),
+                "source_bug_id": payload.get("source_bug_id"),
+            },
+        )
+        new_id = result.scalar()
+        await db.commit()
+        return {"status": "ok", "id": new_id}
+    except Exception as e:
+        await db.rollback()
+        logger.exception(f"Failed to create lesson: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/lessons/{lesson_id}")
+async def update_lesson(
+    lesson_id: int,
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+    x_admin_key: Optional[str] = Header(None),
+):
+    """教訓を更新"""
+    if x_admin_key != f"{ADMIN_ID}:{ADMIN_PASS}":
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    try:
+        set_clauses = []
+        params = {"id": lesson_id}
+        for field in ("category", "title", "content", "related_files", "related_feature", "is_active", "source_bug_id"):
+            if field in payload:
+                set_clauses.append(f"{field} = :{field}")
+                params[field] = payload[field]
+
+        if not set_clauses:
+            raise HTTPException(status_code=400, detail="No fields to update")
+
+        set_clauses.append("updated_at = NOW()")
+        set_sql = ", ".join(set_clauses)
+
+        await db.execute(
+            text(f"UPDATE lessons_learned SET {set_sql} WHERE id = :id"),
+            params,
+        )
+        await db.commit()
+        return {"status": "ok"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        logger.exception(f"Failed to update lesson: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/lessons/{lesson_id}")
+async def deactivate_lesson(
+    lesson_id: int,
+    db: AsyncSession = Depends(get_db),
+    x_admin_key: Optional[str] = Header(None),
+):
+    """教訓を無効化（DBからは削除しない）"""
+    if x_admin_key != f"{ADMIN_ID}:{ADMIN_PASS}":
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    try:
+        await db.execute(
+            text("UPDATE lessons_learned SET is_active = FALSE, updated_at = NOW() WHERE id = :id"),
+            {"id": lesson_id},
+        )
+        await db.commit()
+        return {"status": "ok"}
+    except Exception as e:
+        await db.rollback()
+        logger.exception(f"Failed to deactivate lesson: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

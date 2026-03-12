@@ -6,6 +6,7 @@ import AdminDiagnostics from "./admin/AdminDiagnostics";
 import AdminSystemErrors from "./admin/AdminSystemErrors";
 import AdminBugReports from "./admin/AdminBugReports";
 import AdminWorkLogs from "./admin/AdminWorkLogs";
+import AdminLessons from "./admin/AdminLessons";
 
 const ADMIN_ID = "aither";
 const ADMIN_PASS = "hub";
@@ -278,6 +279,16 @@ export default function AdminDashboard() {
           >
             Work Logs
           </button>
+          <button
+            onClick={() => setActiveTab("lessons")}
+            className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+              activeTab === "lessons"
+                ? "bg-white text-blue-600 shadow-sm"
+                : "text-gray-500 hover:text-gray-700"
+            }`}
+          >
+            🧠 Lessons
+          </button>
         </div>
 
         {activeTab === "dashboard" && (
@@ -359,6 +370,9 @@ export default function AdminDashboard() {
         )}
         {activeTab === "work-logs" && (
           <AdminWorkLogs adminKey={`${ADMIN_ID}:${ADMIN_PASS}`} />
+        )}
+        {activeTab === "lessons" && (
+          <AdminLessons adminKey={`${ADMIN_ID}:${ADMIN_PASS}`} />
         )}
       </div>
     </div>

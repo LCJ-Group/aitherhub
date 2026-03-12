@@ -275,6 +275,36 @@ async def ensure_tables_exist():
     except Exception as e:
         logger.warning(f"Failed to ensure bug_reports/work_logs tables on startup: {e}")
 
+    # ── lessons_learned: プロジェクトの永続記憶 ──
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(_text("""
+                CREATE TABLE IF NOT EXISTS lessons_learned (
+                    id BIGSERIAL PRIMARY KEY,
+                    category VARCHAR(50) NOT NULL DEFAULT 'lesson',
+                    title VARCHAR(500) NOT NULL,
+                    content TEXT NOT NULL DEFAULT '',
+                    related_files TEXT DEFAULT '',
+                    related_feature VARCHAR(200) DEFAULT '',
+                    source_bug_id BIGINT,
+                    is_active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """))
+            await conn.execute(_text("""
+                CREATE INDEX IF NOT EXISTS idx_ll_category ON lessons_learned (category)
+            """))
+            await conn.execute(_text("""
+                CREATE INDEX IF NOT EXISTS idx_ll_active ON lessons_learned (is_active)
+            """))
+            await conn.execute(_text("""
+                CREATE INDEX IF NOT EXISTS idx_ll_created_at ON lessons_learned (created_at DESC)
+            """))
+        logger.info("lessons_learned table verified/created")
+    except Exception as e:
+        logger.warning(f"Failed to ensure lessons_learned table on startup: {e}")
+
 
 @app.on_event("startup")
 async def restore_live_sessions():
