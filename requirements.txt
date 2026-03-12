@@ -15,6 +15,7 @@ asyncpg>=0.29.0
 httpx>=0.25.0
 requests>=2.31.0
 openai>=1.0.0
+aiohttp>=3.9.0
 
 # --- ML / Vision ---
 ultralytics>=8.0.0

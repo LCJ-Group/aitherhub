@@ -396,18 +396,25 @@ def process_live_analysis_job(payload: dict):
             cmd, cwd=BATCH_DIR,
             env=env,
             start_new_session=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
         )
         try:
-            proc.wait(timeout=VIDEO_PROCESS_TIMEOUT)
+            stdout_data, _ = proc.communicate(timeout=VIDEO_PROCESS_TIMEOUT)
         except subprocess.TimeoutExpired:
             print(f"[worker] Live analysis timeout — killing pid={proc.pid}")
             try:
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
             except (ProcessLookupError, OSError) as _e:
                 print(f"Suppressed: {_e}")
-            proc.wait()
+            stdout_data, _ = proc.communicate()
             log_error_type(job_id, "live_analysis", "TIMEOUT", f"timeout={VIDEO_PROCESS_TIMEOUT}s")
             return False
+
+        output = stdout_data.decode("utf-8", errors="replace") if stdout_data else ""
+        # Always log last 2000 chars of output for debugging
+        if output:
+            print(f"[worker] live_analysis output (last 2000 chars):\n{output[-2000:]}")
 
         if proc.returncode == 0:
             print(f"[worker] Live analysis completed: job={job_id} video={video_id}")
@@ -416,7 +423,7 @@ def process_live_analysis_job(payload: dict):
             print(f"[worker] Live analysis skipped (input error): job={job_id}")
             return True  # Delete queue message
         else:
-            log_error_type(job_id, "live_analysis", "SUBPROCESS_FAIL", f"exit_code={proc.returncode}")
+            log_error_type(job_id, "live_analysis", "SUBPROCESS_FAIL", f"exit_code={proc.returncode} output_tail={output[-500:]}")
             return False
     except Exception as e:
         exc_name = type(e).__name__
