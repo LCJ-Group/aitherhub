@@ -81,21 +81,24 @@ export default function CsvAssetPanel({ videoData, onReplace, onRefresh }) {
     }
   };
 
-  // 再検証 - retry-analysis APIを呼び出してSTEP 5からCSVメトリクスを再計算
+  // 再検証 - recalc-csv-metrics APIを呼び出してCSVメトリクスを再計算
+  // retry-analysisは使わない（DONE動画のステータスをリセットしてしまうため）
   const handleRevalidate = async () => {
     if (!videoData?.id) return;
     setRevalidating(true);
     try {
-      const res = await api.post(`/api/v1/videos/${videoData.id}/retry-analysis`);
-      if (res?.success) {
-        alert('再検証を開始しました。処理が完了するまで数分かかる場合があります。');
+      const res = await api.post(`/api/v1/admin/videos/${videoData.id}/recalc-csv-metrics`);
+      if (res?.success || res?.status === 'recalculated') {
+        alert('CSVメトリクスの再計算が完了しました。ページを再読み込みします。');
         // 親コンポーネントにリフレッシュを通知
         if (onRefresh) onRefresh();
+        // ページをリロードしてグラフを更新
+        window.location.reload();
       } else {
-        alert(`再検証に失敗しました: ${res?.detail || '不明なエラー'}`);
+        alert(`再検証に失敗しました: ${res?.detail || res?.message || '不明なエラー'}`);
       }
     } catch (err) {
-      console.error('[CsvAssetPanel] retry-analysis failed:', err);
+      console.error('[CsvAssetPanel] recalc-csv-metrics failed:', err);
       const msg = err?.response?.data?.detail || err?.message || '不明なエラー';
       alert(`再検証に失敗しました: ${msg}`);
     } finally {

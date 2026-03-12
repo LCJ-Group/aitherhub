@@ -1623,15 +1623,22 @@ async def retry_analysis(
         if str(row.user_id) != str(user_id):
             raise HTTPException(status_code=403, detail="Forbidden")
 
-        # Allow retry for ERROR, stuck QUEUED, stalled processing, or COMPLETED states
-        allowed_statuses = ("ERROR", "error", "uploaded", "UPLOADED", "QUEUED", "COMPLETED", "completed", "DONE")
+        # Allow retry for ERROR, stuck QUEUED, stalled processing states
+        # DONE/COMPLETED videos should NOT be retried — CSV metrics are
+        # auto-recalculated on page view via _auto_recalc_csv_metrics.
+        allowed_statuses = ("ERROR", "error", "uploaded", "UPLOADED", "QUEUED")
         # Also allow any STEP_* status (e.g. STEP_0_EXTRACT_FRAMES) that may be stalled
         is_stuck_step = row.status and row.status.startswith("STEP_")
+        if row.status in ("DONE", "COMPLETED", "completed"):
+            raise HTTPException(
+                status_code=400,
+                detail="この動画は解析完了済みです。データは自動的に最新化されます。",
+            )
         if row.status not in allowed_statuses and not is_stuck_step:
             raise HTTPException(
                 status_code=400,
                 detail=f"Cannot retry: video status is '{row.status}'. "
-                       f"Retry is only available for failed, stuck, or completed videos.",
+                       f"Retry is only available for failed or stuck videos.",
             )
 
         # Generate fresh SAS URL for the existing blob
@@ -1660,23 +1667,12 @@ async def retry_analysis(
                 """),
                 {"vid": video_id},
             )
-        elif previous_status in ("COMPLETED", "completed", "DONE"):
-            # COMPLETED/DONE: resume from STEP_5_BUILD_PHASE_UNITS to re-run CSV metrics
-            resume_status = 'STEP_5_BUILD_PHASE_UNITS'
-            await db.execute(
-                text("""
-                    UPDATE videos
-                    SET status = 'STEP_5_BUILD_PHASE_UNITS',
-                        step_progress = 0,
-                        error_message = NULL
-                    WHERE id = :vid
-                """),
-                {"vid": video_id},
-            )
         else:
             # ERROR or other status: try to resume from the error step
-            # instead of restarting from scratch
-            resume_status = 'uploaded'  # fallback
+            # instead of restarting from scratch.
+            # NEVER fall back to 'uploaded' — use STEP_0 as the safe minimum
+            # so the worker can still leverage cached artifacts.
+            resume_status = 'STEP_0_EXTRACT_FRAMES'  # safe fallback (not 'uploaded')
             try:
                 err_result = await db.execute(
                     text("""
@@ -1697,9 +1693,14 @@ async def retry_analysis(
                         "[retry-analysis] Resuming from error_step=%s for video %s",
                         resume_status, video_id,
                     )
+                else:
+                    logger.info(
+                        "[retry-analysis] No valid error_step found, starting from STEP_0 for video %s",
+                        video_id,
+                    )
             except Exception as _e:
                 logger.warning(
-                    "[retry-analysis] Could not read error_step, falling back to uploaded: %s", _e
+                    "[retry-analysis] Could not read error_step, starting from STEP_0: %s", _e
                 )
 
             await db.execute(
