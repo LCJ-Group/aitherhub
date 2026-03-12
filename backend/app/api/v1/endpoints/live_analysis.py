@@ -6,11 +6,10 @@ These endpoints handle the lifecycle of live-stream analysis jobs:
   - Poll analysis status
   - Generate per-chunk signed upload URLs
 
-BUILD 29: Root-cause fixes
-  - Unified transaction for Job + Video creation (no partial state)
-  - Status API returns graceful "pending" instead of 404 when job not yet created
-  - Start API checks response status so iOS can detect enqueue failures
-  - Retry endpoint for failed jobs
+BUILD 30: Self-healing status API
+  - Status API auto-creates missing jobs when video record exists
+  - Eliminates "waiting forever" — if job is missing, create + enqueue it
+  - Retry endpoint improved with total_chunks from video metadata
 
 ╔══════════════════════════════════════════════════════════════════╗
 ║  Routes:                                                        ║
@@ -88,9 +87,6 @@ async def _ensure_video_record(
     """
     Ensure a corresponding record exists in the `videos` table
     so that LiveBoost sessions appear in AitherHub's History view.
-
-    Uses check-then-insert to be idempotent. Non-critical — failures
-    are logged but do not block the analysis pipeline.
     """
     try:
         result = await db.execute(
@@ -99,7 +95,6 @@ async def _ensure_video_record(
         existing = result.scalar_one_or_none()
 
         if existing:
-            # Update status if it's being retried (ERROR → uploaded)
             if existing.status in ("ERROR", "failed") and status_value in ("uploaded", "pending"):
                 existing.status = "uploaded"
                 existing.step_progress = 0
@@ -125,7 +120,84 @@ async def _ensure_video_record(
             )
     except Exception as e:
         logger.warning(f"[live-analysis] Failed to ensure video record: {e}")
-        # Non-critical — don't block the analysis pipeline
+
+
+# ──────────────────────────────────────────────
+# Helper: Auto-create and enqueue a missing job
+# ──────────────────────────────────────────────
+async def _auto_create_and_enqueue_job(
+    db: AsyncSession,
+    video_id: str,
+    user_id: int,
+    email: str = "",
+    total_chunks: int | None = None,
+    stream_source: str = "tiktok_live",
+) -> LiveAnalysisJob | None:
+    """
+    BUILD 30: Self-healing — create a LiveAnalysisJob and enqueue it.
+    Called when status API detects a video record exists but no job.
+    Returns the created job, or None on failure.
+    """
+    try:
+        job = LiveAnalysisJob(
+            id=uuid_module.uuid4(),
+            video_id=video_id,
+            user_id=user_id,
+            stream_source=stream_source,
+            status="pending",
+            total_chunks=total_chunks,
+            progress=0,
+        )
+        db.add(job)
+        await db.commit()
+        await db.refresh(job)
+        logger.info(f"[live-analysis/auto-heal] Created job: {job.id} video={video_id}")
+
+        # Enqueue
+        queue_payload = {
+            "job_type": "live_analysis",
+            "job_id": str(job.id),
+            "video_id": video_id,
+            "user_id": user_id,
+            "stream_source": stream_source,
+            "total_chunks": total_chunks,
+            "email": email,
+        }
+        enqueue_result = await enqueue_job(queue_payload)
+
+        if enqueue_result.success:
+            await db.execute(
+                update(LiveAnalysisJob)
+                .where(LiveAnalysisJob.id == job.id)
+                .values(
+                    queue_message_id=enqueue_result.message_id,
+                    queue_enqueued_at=enqueue_result.enqueued_at,
+                    started_at=datetime.now(timezone.utc),
+                )
+            )
+            await db.commit()
+            logger.info(
+                f"[live-analysis/auto-heal] Enqueued OK job={job.id} "
+                f"msg_id={enqueue_result.message_id}"
+            )
+        else:
+            job.status = "failed"
+            job.error_message = f"Auto-heal enqueue failed: {enqueue_result.error}"
+            await db.commit()
+            logger.error(
+                f"[live-analysis/auto-heal] Enqueue FAILED job={job.id} "
+                f"error={enqueue_result.error}"
+            )
+
+        return job
+
+    except Exception as e:
+        logger.error(f"[live-analysis/auto-heal] Failed to create job: {e}")
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+        return None
 
 
 # ──────────────────────────────────────────────
@@ -139,9 +211,6 @@ async def start_live_analysis(
 ):
     """
     Trigger the analysis pipeline after all chunks have been uploaded.
-
-    BUILD 29: Unified transaction — Job + Video created in single commit.
-    Response status reflects actual enqueue result so iOS can detect failures.
     """
     try:
         user_id = current_user["id"]
@@ -152,7 +221,7 @@ async def start_live_analysis(
             f"chunks={payload.total_chunks} source={payload.stream_source}"
         )
 
-        # Check for duplicate: prevent re-triggering for same video_id
+        # Check for duplicate
         existing = await db.execute(
             select(LiveAnalysisJob).where(
                 LiveAnalysisJob.video_id == video_id,
@@ -182,12 +251,12 @@ async def start_live_analysis(
                 existing_job.started_at = None
                 existing_job.completed_at = None
                 existing_job.results = None
+                # Update total_chunks if provided
+                if payload.total_chunks:
+                    existing_job.total_chunks = payload.total_chunks
                 job = existing_job
 
-                # Also reset the videos table record
                 await _ensure_video_record(db, video_id, user_id, "uploaded")
-
-                # Single commit for both resets
                 await db.commit()
                 await db.refresh(job)
                 logger.info(f"[live-analysis/start] Reset failed job: {job.id}")
@@ -203,11 +272,7 @@ async def start_live_analysis(
                 progress=0,
             )
             db.add(job)
-
-            # Also create a record in the videos table
             await _ensure_video_record(db, video_id, user_id, "uploaded")
-
-            # Single commit for both creates
             await db.commit()
             await db.refresh(job)
             logger.info(f"[live-analysis/start] Created new job: {job.id}")
@@ -225,7 +290,6 @@ async def start_live_analysis(
 
         enqueue_result = await enqueue_job(queue_payload)
 
-        # Persist enqueue evidence
         try:
             if enqueue_result.success:
                 await db.execute(
@@ -250,7 +314,6 @@ async def start_live_analysis(
                         error_message=f"Failed to enqueue: {enqueue_result.error}",
                     )
                 )
-                # Also update videos table on enqueue failure
                 try:
                     await db.execute(
                         text("""
@@ -274,7 +337,7 @@ async def start_live_analysis(
             except Exception as _e:
                 logger.debug(f"Non-critical error suppressed: {_e}")
 
-        # BUILD 29: Return actual status so iOS can detect failures
+        # Return actual status so iOS can detect failures
         final_status = "pending" if enqueue_result.success else "failed"
         return LiveAnalysisStartResponse(
             job_id=str(job.id),
@@ -298,7 +361,7 @@ async def start_live_analysis(
 
 
 # ──────────────────────────────────────────────
-# 2. Get Analysis Status
+# 2. Get Analysis Status (SELF-HEALING)
 # ──────────────────────────────────────────────
 @router.get("/status/{video_id}", response_model=LiveAnalysisStatusResponse)
 async def get_analysis_status(
@@ -309,13 +372,13 @@ async def get_analysis_status(
     """
     Poll the current status of a live analysis job.
 
-    BUILD 29: Instead of returning 404 when no job exists, returns a
-    graceful "pending" status if a video record exists. This prevents
-    the iOS app from showing 0% indefinitely when the /start call
-    succeeded but the job hasn't been picked up yet.
+    BUILD 30: SELF-HEALING — if no job exists but a video record does,
+    automatically create the job and enqueue it. This eliminates the
+    "waiting forever" state that occurs when /start fails during deploy.
     """
     try:
         user_id = current_user["id"]
+        email = current_user.get("email", "")
 
         result = await db.execute(
             select(LiveAnalysisJob).where(
@@ -326,8 +389,7 @@ async def get_analysis_status(
         job = result.scalar_one_or_none()
 
         if not job:
-            # BUILD 29: Check if a video record exists (job may not have been
-            # created yet, e.g. during server restart or deploy)
+            # Check if a video record exists
             video_result = await db.execute(
                 select(Video).where(
                     Video.id == uuid_module.UUID(video_id),
@@ -337,23 +399,44 @@ async def get_analysis_status(
             video = video_result.scalar_one_or_none()
 
             if video and video.upload_type == "live_boost":
-                # Video exists but job doesn't — return "waiting" status
-                # so iOS shows a meaningful message instead of 0%
+                # BUILD 30: SELF-HEALING — auto-create the missing job
                 logger.warning(
-                    f"[live-analysis/status] No job but video exists: "
-                    f"video={video_id} video_status={video.status}"
+                    f"[live-analysis/status] SELF-HEAL: No job but video exists. "
+                    f"Auto-creating job for video={video_id}"
                 )
-                return LiveAnalysisStatusResponse(
-                    job_id="",
+                job = await _auto_create_and_enqueue_job(
+                    db=db,
                     video_id=video_id,
-                    status="waiting",
-                    current_step="解析ジョブを準備中...",
-                    progress=0.0,
-                    started_at=None,
-                    completed_at=None,
-                    results=None,
-                    error_message=None,
+                    user_id=user_id,
+                    email=email,
+                    stream_source="tiktok_live",
                 )
+
+                if job:
+                    return LiveAnalysisStatusResponse(
+                        job_id=str(job.id),
+                        video_id=video_id,
+                        status=job.status,
+                        current_step="解析ジョブを自動作成しました",
+                        progress=0.0,
+                        started_at=job.started_at,
+                        completed_at=None,
+                        results=None,
+                        error_message=job.error_message,
+                    )
+                else:
+                    # Auto-create failed — return waiting so iOS can retry
+                    return LiveAnalysisStatusResponse(
+                        job_id="",
+                        video_id=video_id,
+                        status="waiting",
+                        current_step="解析ジョブの作成に失敗しました。リトライ中...",
+                        progress=0.0,
+                        started_at=None,
+                        completed_at=None,
+                        results=None,
+                        error_message=None,
+                    )
 
             # Neither job nor video exists
             raise HTTPException(
@@ -409,23 +492,14 @@ async def generate_chunk_upload_url(
 ):
     """
     Generate a signed upload URL for a single video chunk.
-
-    The LiveBoost iOS app calls this for each 10MB chunk during
-    recording. Chunks are stored under:
-      {email}/{video_id}/chunks/chunk_{XXXX}.mp4
-
-    After all chunks are uploaded, the iOS app calls /start to
-    trigger the assembly + analysis pipeline.
     """
     try:
         email = current_user.get("email", "")
         video_id = payload.video_id
         chunk_index = payload.chunk_index
 
-        # Generate chunk filename
         chunk_filename = f"chunks/chunk_{chunk_index:04d}.mp4"
 
-        # Use existing storage service to generate SAS URL
         vid, upload_url, blob_url, expiry = await generate_upload_sas(
             email=email,
             video_id=video_id,
@@ -449,7 +523,7 @@ async def generate_chunk_upload_url(
 
 
 # ──────────────────────────────────────────────
-# 4. Retry Analysis (BUILD 29)
+# 4. Retry Analysis
 # ──────────────────────────────────────────────
 @router.post("/retry/{video_id}", response_model=LiveAnalysisStartResponse)
 async def retry_analysis(
@@ -458,17 +532,12 @@ async def retry_analysis(
     current_user: dict = Depends(get_current_user),
 ):
     """
-    BUILD 29: Retry a failed or stuck analysis job.
-
-    This endpoint:
-      1. Finds the existing job (or creates one if missing)
-      2. Resets it to pending
-      3. Re-enqueues the worker job
-
-    Can be called from the iOS History screen or the Web UI.
+    Retry a failed or stuck analysis job.
+    Can also create a job if one doesn't exist (self-healing).
     """
     try:
         user_id = current_user["id"]
+        email = current_user.get("email", "")
 
         # Find existing job
         result = await db.execute(
@@ -488,14 +557,17 @@ async def retry_analysis(
             job.started_at = None
             job.completed_at = None
             job.results = None
+            total_chunks = job.total_chunks
+            stream_source = job.stream_source or "tiktok_live"
         else:
-            # No job exists — create one (handles the case where /start
-            # failed to create the job but video record exists)
+            # No job exists — create one
+            total_chunks = None
+            stream_source = "tiktok_live"
             job = LiveAnalysisJob(
                 id=uuid_module.uuid4(),
                 video_id=video_id,
                 user_id=user_id,
-                stream_source="tiktok_live",
+                stream_source=stream_source,
                 status="pending",
                 progress=0,
             )
@@ -512,9 +584,9 @@ async def retry_analysis(
             "job_id": str(job.id),
             "video_id": video_id,
             "user_id": user_id,
-            "stream_source": job.stream_source or "tiktok_live",
-            "total_chunks": job.total_chunks,
-            "email": current_user.get("email", ""),
+            "stream_source": stream_source,
+            "total_chunks": total_chunks,
+            "email": email,
         }
 
         enqueue_result = await enqueue_job(queue_payload)
