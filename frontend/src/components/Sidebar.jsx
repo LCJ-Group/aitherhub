@@ -613,7 +613,12 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
                                   {/* Status badge for non-DONE videos */}
                                   {video.status && video.status !== 'DONE' && (
                                     <div className="flex items-center gap-1.5">
-                                      {video.status === 'ERROR' ? (
+                                      {video.status === 'ERROR' && video.stream_duration ? (
+                                        <span className="inline-flex items-center gap-1 text-[11px] text-amber-500 font-medium leading-normal">
+                                          <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                                          一部未完了
+                                        </span>
+                                      ) : video.status === 'ERROR' ? (
                                         <span className="inline-flex items-center gap-1 text-[11px] text-red-500 font-medium leading-normal">
                                           <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
                                           エラー

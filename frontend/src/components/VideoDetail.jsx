@@ -886,6 +886,16 @@ export default function VideoDetail({ videoData }) {
             })()}
           </div>
         </div>
+        {/* Partial Error Warning Banner */}
+        {videoData?.status === 'ERROR' && (
+          <div className="mx-4 mt-3 mb-1 px-4 py-3 rounded-xl border border-amber-300/40 bg-amber-50 flex items-center gap-3">
+            <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-amber-500 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            <div className="flex-1">
+              <p className="text-sm font-semibold text-amber-800">一部の処理が完了していません</p>
+              <p className="text-xs text-amber-600 mt-0.5">解析結果は表示できますが、一部のレポートが未生成の可能性があります。</p>
+            </div>
+          </div>
+        )}
         {/* SCROLL AREA */}
         <div className="flex-1 overflow-y-auto scrollbar-custom text-left px-0 md:px-4 md:mb-0">
           {/* CSV / Excel Info Panel */}

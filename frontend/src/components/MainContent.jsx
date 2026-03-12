@@ -1404,7 +1404,7 @@ export default function MainContent({
             </div>
           </div>
         ) : videoData ? (
-          videoData.status === 'DONE' ? (
+          videoData.status === 'DONE' || (videoData.status === 'ERROR' && videoData.reports_1 && videoData.reports_1.length > 0) ? (
             console.log("[MainContent] Rendering VideoDetail for videoData:", videoData) ||
             <VideoDetail videoData={videoData} />
           ) : videoData.status === 'ERROR' ? (
