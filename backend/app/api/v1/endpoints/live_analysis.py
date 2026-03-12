@@ -42,7 +42,7 @@ from app.schemas.live_analysis_schema import (
     GenerateChunkUploadURLRequest,
     GenerateChunkUploadURLResponse,
 )
-from app.services.storage_service import generate_upload_sas
+from app.services.storage_service import generate_upload_sas, check_blob_exists
 from app.services.queue_service import enqueue_job
 
 
@@ -220,6 +220,28 @@ async def start_live_analysis(
             f"[live-analysis/start] Received: video={video_id} user={user_id} "
             f"chunks={payload.total_chunks} source={payload.stream_source}"
         )
+
+        # BUILD 33: Verify at least chunk_0000 exists in blob storage
+        # This prevents creating jobs when iOS failed to upload chunks
+        email = current_user.get("email", "")
+        if payload.total_chunks and payload.total_chunks > 0 and email:
+            chunk_exists = await check_blob_exists(
+                email=email,
+                video_id=video_id,
+                filename="chunks/chunk_0000.mp4",
+            )
+            if not chunk_exists:
+                logger.error(
+                    f"[live-analysis/start] BUILD 33: chunk_0000.mp4 NOT FOUND in blob storage "
+                    f"for video={video_id} email={email}. Rejecting start request."
+                )
+                return LiveAnalysisStartResponse(
+                    job_id="",
+                    video_id=video_id,
+                    status="failed",
+                    message="No chunks found in storage. Please re-record and upload.",
+                )
+            logger.info(f"[live-analysis/start] BUILD 33: chunk_0000.mp4 verified in blob storage")
 
         # Check for duplicate
         existing = await db.execute(

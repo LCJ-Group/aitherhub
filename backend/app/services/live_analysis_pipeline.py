@@ -315,7 +315,11 @@ class LiveAnalysisPipeline:
             total_chunks = await self._discover_chunk_count(email, video_id)
 
         if total_chunks == 0:
-            raise ValueError(f"No chunks found for video_id={video_id}")
+            raise ValueError(
+                f"BUILD 33: No chunks found in blob storage for video_id={video_id} "
+                f"email={email}. This usually means the iOS app failed to upload "
+                f"chunks before calling /start. Check ChunkUploadService logs on device."
+            )
 
         # Download each chunk
         import aiohttp
@@ -348,7 +352,11 @@ class LiveAnalysisPipeline:
                     logger.warning(f"[assemble] Failed to download chunk {i}: {e}")
 
         if not chunk_paths:
-            raise ValueError("No chunks could be downloaded")
+            raise ValueError(
+                f"BUILD 33: No chunks could be downloaded for video_id={video_id}. "
+                f"Expected {total_chunks} chunks but downloaded 0. "
+                f"Blob path: {email}/{video_id}/chunks/chunk_XXXX.mp4"
+            )
 
         # Create ffmpeg concat list
         concat_list_path = os.path.join(work_dir, "concat_list.txt")

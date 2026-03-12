@@ -166,6 +166,27 @@ def generate_read_sas_from_url(
         return None
 
 
+async def check_blob_exists(email: str, video_id: str, filename: str) -> bool:
+    """
+    BUILD 33: Check if a specific blob exists in Azure Blob Storage.
+    Used to verify chunks were actually uploaded before starting analysis.
+    """
+    if not CONNECTION_STRING:
+        logger.warning("[check_blob_exists] No connection string — cannot verify blob")
+        return True  # Fail open if we can't check
+
+    try:
+        blob_name = generate_blob_name(email, video_id, filename)
+        service_client = BlobServiceClient.from_connection_string(CONNECTION_STRING)
+        blob_client = service_client.get_blob_client(
+            container=CONTAINER_NAME, blob=blob_name
+        )
+        return blob_client.exists()
+    except Exception as exc:
+        logger.warning(f"[check_blob_exists] Error checking blob: {exc}")
+        return True  # Fail open on error
+
+
 async def generate_download_sas(email: str, video_id: str, filename: str | None = None, expires_in_minutes: int | None = None) -> Tuple[str, datetime]:
     """
     Generate a read-only SAS URL for downloading a blob with folder structure: email/video_id/filename
