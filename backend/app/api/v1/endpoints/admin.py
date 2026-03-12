@@ -2496,10 +2496,15 @@ async def create_work_log(
 async def get_ai_context(
     db: AsyncSession = Depends(get_db),
     x_admin_key: Optional[str] = Header(None),
+    scope: Optional[str] = None,
 ):
     """
     AI（Manus）が毎回タスク開始時に読む唯一のエンドポイント。
     プロジェクトの永続記憶 + リアルタイム状態を2層構造で返す。
+
+    クエリパラメータ:
+      - scope: フィルタリング用。"aitherhub" or "liveboost" を指定すると
+               そのプロジェクトに関連する教訓のみ返す。省略時は全て返す。
 
     第1層（常に返す・軽量）:
       - dangers: 絶対にやってはいけないこと
@@ -2514,18 +2519,28 @@ async def get_ai_context(
       - recent_work: 直近の作業ログ
       - error_videos: ERRORステータスの動画
       - stuck_videos: 停滞中の動画
+      - action_required: 次のManusがやるべきこと
     """
     if x_admin_key != f"{ADMIN_ID}:{ADMIN_PASS}":
         raise HTTPException(status_code=403, detail="Forbidden")
 
     context = {}
+    if scope:
+        context["scope"] = scope
 
     # ━━ プロジェクトの永続記憶（lessons_learned）━━
     try:
-        result = await db.execute(text("""
+        # scopeフィルタ: related_featureでフィルタリング
+        scope_filter = ""
+        scope_params = {}
+        if scope:
+            scope_filter = "AND (related_feature = :scope OR related_feature IS NULL OR related_feature = '')"
+            scope_params["scope"] = scope
+
+        result = await db.execute(text(f"""
             SELECT id, category, title, content, related_files, related_feature
             FROM lessons_learned
-            WHERE is_active = TRUE
+            WHERE is_active = TRUE {scope_filter}
             ORDER BY
                 CASE category
                     WHEN 'danger' THEN 0 WHEN 'checklist' THEN 1
@@ -2533,7 +2548,7 @@ async def get_ai_context(
                     WHEN 'status' THEN 4 WHEN 'preference' THEN 5
                     ELSE 6 END,
                 created_at DESC
-        """))
+        """), scope_params)
         rows = result.fetchall()
 
         # danger: 絶対にやってはいけないこと
@@ -2702,6 +2717,45 @@ async def get_ai_context(
         ]
     except Exception as e:
         context["stuck_videos"] = f"error: {e}"
+
+    # ━━ action_required: 次のManusがやるべきこと ━━
+    action_required = []
+    try:
+        # 教訓登録忘れ検知: 直近のwork-logの後にlessonsが登録されているか
+        result = await db.execute(text("""
+            SELECT w.id, w.action, w.summary, w.created_at,
+                   (SELECT COUNT(*) FROM lessons_learned l
+                    WHERE l.created_at > w.created_at
+                      AND l.created_at < w.created_at + INTERVAL '24 hours') as lessons_after
+            FROM work_logs w
+            ORDER BY w.created_at DESC
+            LIMIT 3
+        """))
+        recent_logs = result.fetchall()
+        for log in recent_logs:
+            if log.lessons_after == 0 and log.action not in ('read', 'review', 'check'):
+                action_required.append(
+                    f"作業 '{log.summary[:80]}' (ID:{log.id}) の後に教訓が登録されていません。"
+                    f"バグ修正・機能追加をした場合はlessonsに登録してください。"
+                )
+    except Exception:
+        pass  # action_requiredは必須ではないのでエラーは無視
+
+    # 未解決バグがあれば警告
+    if context.get("open_bugs") and isinstance(context["open_bugs"], list) and len(context["open_bugs"]) > 0:
+        critical = [b for b in context["open_bugs"] if b.get("severity") in ("critical", "high")]
+        if critical:
+            action_required.append(
+                f"重要度の高い未解決バグが{len(critical)}件あります。作業前に確認してください。"
+            )
+
+    # stuck_videosがあれば警告
+    if context.get("stuck_videos") and isinstance(context["stuck_videos"], list) and len(context["stuck_videos"]) > 0:
+        action_required.append(
+            f"停滞中の動画が{len(context['stuck_videos'])}件あります。確認が必要かもしれません。"
+        )
+
+    context["action_required"] = action_required
 
     return context
 
