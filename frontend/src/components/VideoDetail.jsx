@@ -389,34 +389,38 @@ export default function VideoDetail({ videoData }) {
       const res = await VideoService.requestClipGeneration(videoData.id, phaseIndex, timeStart, timeEnd);
 
       if (res.status === 'completed' && res.clip_url) {
+        // Show subtitle generation status while transcribing
         setClipStates(prev => ({
           ...prev,
-          [phaseIndex]: { status: 'completed', clip_url: res.clip_url },
+          [phaseIndex]: { status: 'generating_subtitles', clip_url: res.clip_url, clip_id: res.clip_id },
         }));
-        // Auto-trigger subtitle generation in background
+        // Await subtitle generation before marking as completed
         try {
           console.log(`[AutoTranscribe] Clip immediately completed for phase ${phaseIndex}, triggering transcription`);
-          VideoService.transcribeClip(videoData.id, {
+          const transcribeRes = await VideoService.transcribeClip(videoData.id, {
             clip_url: res.clip_url,
             time_start: timeStart,
             time_end: timeEnd,
             phase_index: phaseIndex,
-          }).then(transcribeRes => {
-            if (transcribeRes?.segments?.length > 0) {
-              console.log(`[AutoTranscribe] Generated ${transcribeRes.segments.length} subtitles for phase ${phaseIndex}`);
-              const newCaps = transcribeRes.segments.map(s => ({
-                start: s.start, end: s.end, text: s.text, source: 'whisper',
-              }));
-              if (res.clip_id) {
-                VideoService.updateClipCaptions(videoData.id, res.clip_id, newCaps)
-                  .then(() => console.log(`[AutoTranscribe] Saved subtitles for phase ${phaseIndex}`))
-                  .catch(err => console.warn(`[AutoTranscribe] Save failed:`, err));
-              }
+          });
+          if (transcribeRes?.segments?.length > 0) {
+            console.log(`[AutoTranscribe] Generated ${transcribeRes.segments.length} subtitles for phase ${phaseIndex}`);
+            const newCaps = transcribeRes.segments.map(s => ({
+              start: s.start, end: s.end, text: s.text, source: 'whisper',
+            }));
+            if (res.clip_id) {
+              await VideoService.updateClipCaptions(videoData.id, res.clip_id, newCaps);
+              console.log(`[AutoTranscribe] Saved subtitles for phase ${phaseIndex}`);
             }
-          }).catch(err => console.warn(`[AutoTranscribe] Transcription failed:`, err));
+          }
         } catch (transcribeErr) {
-          console.warn(`[AutoTranscribe] Error:`, transcribeErr);
+          console.warn(`[AutoTranscribe] Transcription failed for phase ${phaseIndex}:`, transcribeErr);
         }
+        // Mark as fully completed (video + subtitles)
+        setClipStates(prev => ({
+          ...prev,
+          [phaseIndex]: { status: 'completed', clip_url: res.clip_url, clip_id: res.clip_id },
+        }));
         return;
       }
 
@@ -433,37 +437,40 @@ export default function VideoDetail({ videoData }) {
         try {
           const statusRes = await VideoService.getClipStatus(videoData.id, phaseIndex);
           if (statusRes.status === 'completed' && statusRes.clip_url) {
-            setClipStates(prev => ({
-              ...prev,
-              [phaseIndex]: { status: 'completed', clip_url: statusRes.clip_url },
-            }));
             clearInterval(clipPollingRef.current[phaseIndex]);
             delete clipPollingRef.current[phaseIndex];
-            // Auto-trigger subtitle generation in background
+            // Show subtitle generation status
+            setClipStates(prev => ({
+              ...prev,
+              [phaseIndex]: { status: 'generating_subtitles', clip_url: statusRes.clip_url, clip_id: statusRes.clip_id },
+            }));
+            // Await subtitle generation before marking as completed
             try {
               console.log(`[AutoTranscribe] Clip completed for phase ${phaseIndex}, triggering transcription`);
-              VideoService.transcribeClip(videoData.id, {
+              const transcribeRes = await VideoService.transcribeClip(videoData.id, {
                 clip_url: statusRes.clip_url,
                 time_start: timeStart,
                 time_end: timeEnd,
                 phase_index: phaseIndex,
-              }).then(transcribeRes => {
-                if (transcribeRes?.segments?.length > 0) {
-                  console.log(`[AutoTranscribe] Generated ${transcribeRes.segments.length} subtitles for phase ${phaseIndex}`);
-                  // Auto-save captions to clip
-                  const newCaps = transcribeRes.segments.map(s => ({
-                    start: s.start, end: s.end, text: s.text, source: 'whisper',
-                  }));
-                  if (statusRes.clip_id) {
-                    VideoService.updateClipCaptions(videoData.id, statusRes.clip_id, newCaps)
-                      .then(() => console.log(`[AutoTranscribe] Saved subtitles for phase ${phaseIndex}`))
-                      .catch(err => console.warn(`[AutoTranscribe] Save failed:`, err));
-                  }
+              });
+              if (transcribeRes?.segments?.length > 0) {
+                console.log(`[AutoTranscribe] Generated ${transcribeRes.segments.length} subtitles for phase ${phaseIndex}`);
+                const newCaps = transcribeRes.segments.map(s => ({
+                  start: s.start, end: s.end, text: s.text, source: 'whisper',
+                }));
+                if (statusRes.clip_id) {
+                  await VideoService.updateClipCaptions(videoData.id, statusRes.clip_id, newCaps);
+                  console.log(`[AutoTranscribe] Saved subtitles for phase ${phaseIndex}`);
                 }
-              }).catch(err => console.warn(`[AutoTranscribe] Transcription failed:`, err));
+              }
             } catch (transcribeErr) {
-              console.warn(`[AutoTranscribe] Error:`, transcribeErr);
+              console.warn(`[AutoTranscribe] Transcription failed for phase ${phaseIndex}:`, transcribeErr);
             }
+            // Mark as fully completed (video + subtitles)
+            setClipStates(prev => ({
+              ...prev,
+              [phaseIndex]: { status: 'completed', clip_url: statusRes.clip_url, clip_id: statusRes.clip_id },
+            }));
           } else if (statusRes.status === 'failed') {
             setClipStates(prev => ({
               ...prev,
@@ -1632,6 +1639,7 @@ export default function VideoDetail({ videoData }) {
                                 {item.time_start != null && item.time_end != null && (() => {
                                   const clipState = clipStates[itemKey];
                                   const isLoading = clipState?.status === 'requesting' || clipState?.status === 'pending' || clipState?.status === 'processing';
+                                  const isGeneratingSubtitles = clipState?.status === 'generating_subtitles';
                                   const isCompleted = clipState?.status === 'completed' && clipState?.clip_url;
                                   const isFailed = clipState?.status === 'failed' || clipState?.status === 'dead';
 
@@ -1655,6 +1663,11 @@ export default function VideoDetail({ videoData }) {
                                           </svg>
                                           切り抜きをダウンロード
                                         </a>
+                                      ) : isGeneratingSubtitles ? (
+                                        <div className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-purple-50 text-purple-600 text-xs font-medium border border-purple-200">
+                                          <div className="w-3 h-3 rounded-full border-2 border-purple-200 border-t-purple-500 animate-spin" />
+                                          字幕を生成中...
+                                        </div>
                                       ) : isLoading ? (
                                         <div className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-gray-100 text-gray-500 text-xs font-medium">
                                           <div className="w-3 h-3 rounded-full border-2 border-gray-300 border-t-purple-500 animate-spin" />

@@ -1425,8 +1425,18 @@ export default function DockPlayer({
                 {(() => {
                   const clipState = clipStates[phaseKey];
                   const isClipLoading = clipState?.status === 'requesting' || clipState?.status === 'pending' || clipState?.status === 'processing';
+                  const isGeneratingSubtitles = clipState?.status === 'generating_subtitles';
                   const isClipCompleted = clipState?.status === 'completed' && clipState?.clip_url;
                   const isClipFailed = clipState?.status === 'failed' || clipState?.status === 'dead';
+
+                  if (isGeneratingSubtitles) {
+                    return (
+                      <div className="flex items-center gap-2">
+                        <div className="w-4 h-4 rounded-full border-2 border-gray-500 border-t-purple-400 animate-spin" />
+                        <span className="text-xs text-purple-300">字幕を生成中...</span>
+                      </div>
+                    );
+                  }
 
                   if (isClipCompleted) {
                     return (

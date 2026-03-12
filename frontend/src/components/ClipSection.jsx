@@ -15,11 +15,11 @@ export default function ClipSection({ videoData, clipStates, reports1 }) {
   const [collapsed, setCollapsed] = useState(false);
   const [editorClip, setEditorClip] = useState(null);
 
-  // Get completed clips from clipStates
-  const completedClips = useMemo(() => {
+  // Get clips that are completed or generating subtitles
+  const visibleClips = useMemo(() => {
     if (!clipStates) return [];
     return Object.entries(clipStates)
-      .filter(([, state]) => state.status === "completed" && state.clip_url)
+      .filter(([, state]) => (state.status === "completed" || state.status === "generating_subtitles") && state.clip_url)
       .map(([phaseIndex, state]) => {
         const idx = parseInt(phaseIndex, 10);
         const phase = reports1?.[idx];
@@ -31,13 +31,14 @@ export default function ClipSection({ videoData, clipStates, reports1 }) {
           time_end: phase?.time_end,
           insight: phase?.insight,
           phase,
+          isGeneratingSubtitles: state.status === "generating_subtitles",
         };
       })
       .sort((a, b) => a.phaseIndex - b.phaseIndex);
   }, [clipStates, reports1]);
 
-  // Don't render if no completed clips
-  if (completedClips.length === 0) return null;
+  // Don't render if no visible clips
+  if (visibleClips.length === 0) return null;
 
   const formatTime = (seconds) => {
     if (seconds == null || isNaN(seconds)) return "--:--";
@@ -86,7 +87,7 @@ export default function ClipSection({ videoData, clipStates, reports1 }) {
               <div className="text-gray-900 text-xl font-semibold flex items-center gap-2">
                 切り抜き動画
                 <span className="inline-flex items-center justify-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gradient-to-r from-purple-500 to-pink-500 text-white">
-                  {completedClips.length}件
+                  {visibleClips.length}件
                 </span>
               </div>
               <div className="text-gray-500 text-sm mt-1">
@@ -107,7 +108,7 @@ export default function ClipSection({ videoData, clipStates, reports1 }) {
         {!collapsed && (
           <div className="px-5 pb-5">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {completedClips.map((clip) => (
+              {visibleClips.map((clip) => (
                 <div
                   key={clip.phaseIndex}
                   className="bg-white rounded-xl border border-purple-100 shadow-sm hover:shadow-md transition-all duration-200 overflow-hidden group"
@@ -147,7 +148,16 @@ export default function ClipSection({ videoData, clipStates, reports1 }) {
                       </p>
                     )}
 
-                    {/* Action buttons */}
+                    {/* Action buttons or subtitle generation indicator */}
+                    {clip.isGeneratingSubtitles ? (
+                      <div className="flex items-center justify-center gap-3 px-4 py-3 rounded-lg bg-gradient-to-r from-purple-50 to-pink-50 border border-purple-200">
+                        <svg className="animate-spin h-5 w-5 text-purple-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/>
+                        </svg>
+                        <span className="text-purple-600 text-sm font-medium">字幕を生成中...</span>
+                      </div>
+                    ) : (
                     <div className="flex gap-2">
                       {/* Edit button */}
                       <button
@@ -173,6 +183,7 @@ export default function ClipSection({ videoData, clipStates, reports1 }) {
                         ダウンロード
                       </a>
                     </div>
+                    )}
                   </div>
                 </div>
               ))}

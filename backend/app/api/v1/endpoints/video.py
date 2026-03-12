@@ -1326,15 +1326,15 @@ async def retry_analysis(
         if str(row.user_id) != str(user_id):
             raise HTTPException(status_code=403, detail="Forbidden")
 
-        # Allow retry for ERROR, stuck QUEUED, or stalled processing states
-        allowed_statuses = ("ERROR", "error", "uploaded", "UPLOADED", "QUEUED")
+        # Allow retry for ERROR, stuck QUEUED, stalled processing, or COMPLETED states
+        allowed_statuses = ("ERROR", "error", "uploaded", "UPLOADED", "QUEUED", "COMPLETED", "completed", "DONE")
         # Also allow any STEP_* status (e.g. STEP_0_EXTRACT_FRAMES) that may be stalled
         is_stuck_step = row.status and row.status.startswith("STEP_")
         if row.status not in allowed_statuses and not is_stuck_step:
             raise HTTPException(
                 status_code=400,
                 detail=f"Cannot retry: video status is '{row.status}'. "
-                       f"Retry is only available for failed or stuck videos.",
+                       f"Retry is only available for failed, stuck, or completed videos.",
             )
 
         # Generate fresh SAS URL for the existing blob
@@ -1358,6 +1358,19 @@ async def retry_analysis(
                 text("""
                     UPDATE videos
                     SET step_progress = 0,
+                        error_message = NULL
+                    WHERE id = :vid
+                """),
+                {"vid": video_id},
+            )
+        elif previous_status in ("COMPLETED", "completed", "DONE"):
+            # COMPLETED/DONE: resume from STEP_5_BUILD_PHASE_UNITS to re-run CSV metrics
+            resume_status = 'STEP_5_BUILD_PHASE_UNITS'
+            await db.execute(
+                text("""
+                    UPDATE videos
+                    SET status = 'STEP_5_BUILD_PHASE_UNITS',
+                        step_progress = 0,
                         error_message = NULL
                     WHERE id = :vid
                 """),
