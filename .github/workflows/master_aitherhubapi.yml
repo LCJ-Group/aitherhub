@@ -87,7 +87,7 @@ jobs:
           for i in 1 2 3 4 5; do
             HTTP_CODE=$(curl -s -o /tmp/response.json -w "%{http_code}" \
               --connect-timeout 10 --max-time 30 \
-              https://aitherhubapi.azurewebsites.net/ 2>/dev/null || echo "000")
+              https://aitherhubapi-cpcjcnezbgf5f7e2.japaneast-01.azurewebsites.net/ 2>/dev/null || echo "000")
             BODY=$(cat /tmp/response.json 2>/dev/null || echo "")
             echo "Attempt $i: HTTP $HTTP_CODE — $BODY"
 
@@ -111,7 +111,7 @@ jobs:
         if: success()
         run: |
           RESPONSE=$(curl -sf --connect-timeout 10 --max-time 15 \
-            https://aitherhubapi.azurewebsites.net/version 2>/dev/null || echo "{}")
+            https://aitherhubapi-cpcjcnezbgf5f7e2.japaneast-01.azurewebsites.net/version 2>/dev/null || echo "{}")
           echo "Version info: $RESPONSE"
           echo "$RESPONSE" | python3 -c "
           import sys, json
