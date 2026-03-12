@@ -2824,9 +2824,11 @@ async def get_ai_context(
         context["error_videos"] = f"error: {e}"
 
     # 5. Stuck videos (uploaded/processing for > 30 min)
+    #    Also detect videos stuck in STEP_* for > 6h (stalled pipeline)
     try:
         result = await db.execute(text("""
-            SELECT id, original_filename, status, updated_at
+            SELECT id, original_filename, status, updated_at, created_at,
+                   EXTRACT(EPOCH FROM (NOW() - updated_at)) / 3600.0 AS stall_hours
             FROM videos
             WHERE status NOT IN ('DONE', 'COMPLETED', 'ERROR', 'error', 'deleted')
               AND updated_at < NOW() - INTERVAL '30 minutes'
@@ -2840,6 +2842,7 @@ async def get_ai_context(
                 "file": r.original_filename or "",
                 "status": r.status or "",
                 "since": r.updated_at.isoformat() if r.updated_at else "",
+                "stall_hours": round(float(r.stall_hours), 1) if r.stall_hours else 0,
             }
             for r in rows
         ]
@@ -2879,9 +2882,17 @@ async def get_ai_context(
 
     # stuck_videosがあれば警告
     if context.get("stuck_videos") and isinstance(context["stuck_videos"], list) and len(context["stuck_videos"]) > 0:
-        action_required.append(
-            f"停滞中の動画が{len(context['stuck_videos'])}件あります。確認が必要かもしれません。"
-        )
+        stalled_critical = [v for v in context["stuck_videos"]
+                            if isinstance(v, dict) and v.get("stall_hours", 0) >= 6]
+        if stalled_critical:
+            action_required.append(
+                f"緊急: {len(stalled_critical)}件の動画が6時間以上停止しています。"
+                f" admin retry-video APIで再投入してください。"
+            )
+        else:
+            action_required.append(
+                f"停滞中の動画が{len(context['stuck_videos'])}件あります。確認が必要かもしれません。"
+            )
 
     context["action_required"] = action_required
 

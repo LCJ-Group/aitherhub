@@ -660,8 +660,10 @@ def main():
                 _vid_duration = float(_probe.stdout.strip())
             except Exception:
                 _vid_duration = 0
-            # Scale timeout: ~0.5x realtime for CPU encoding (min 10min, max 5h)
-            _analysis_timeout = max(600, min(int(_vid_duration * 0.5) + 600, 18000))  # 10min-5h
+            # Scale timeout: ~0.5x realtime for CPU encoding (min 10min, max 2h)
+            # Analysis video is optional — if it times out, we fall back to raw video.
+            # Reduced from 5h to 2h to avoid blocking the worker for too long.
+            _analysis_timeout = max(600, min(int(_vid_duration * 0.5) + 600, 7200))  # 10min-2h
             logger.info("[ANALYSIS_VIDEO] video_duration=%.0fs, timeout=%ds", _vid_duration, _analysis_timeout)
             try:
                 analysis_video_path = generate_analysis_video(
