@@ -15,6 +15,12 @@ SalesMomentClipService
   4. 複数メトリクスのスパイクが重なる場合はスコアを加算
   5. スパイク前後 ±15秒 をクリップ候補区間とする
   6. 重複する候補はマージ
+
+CTA フォールバック
+──────────────────
+  CSVメトリクス（GMV, orders, clicks, viewers）が全て0の場合、
+  CTA スコアを代替メトリクスとしてスパイク検出を行う。
+  CTA >= 4 のフェーズを「盛り上がり」として検出する。
 """
 
 from __future__ import annotations
@@ -40,12 +46,17 @@ SPIKE_WEIGHT = {
     "viewers": 15.0,
 }
 
+# CTA フォールバック用の重み
+CTA_SPIKE_WEIGHT = {
+    "cta": 30.0,
+}
+
 
 @dataclass
 class SpikeEvent:
     """検出されたスパイクイベント"""
     video_sec: float          # 動画内の秒数
-    metric: str               # "gmv" | "orders" | "clicks" | "viewers"
+    metric: str               # "gmv" | "orders" | "clicks" | "viewers" | "cta"
     value: float              # スパイク時の値
     moving_avg: float         # 移動平均値
     spike_ratio: float        # value / moving_avg
@@ -85,12 +96,24 @@ def _moving_average(values: list[float], window: int = SPIKE_WINDOW) -> list[flo
     return result
 
 
+def _has_any_csv_data(timed_metrics: list[dict]) -> bool:
+    """CSVメトリクスに有効なデータがあるかチェック"""
+    for metric_key in SPIKE_WEIGHT:
+        values = [_safe_float(m.get(metric_key, 0)) for m in timed_metrics]
+        if max(values, default=0) > 0:
+            return True
+    return False
+
+
 def detect_spikes(
     timed_metrics: list[dict],
     threshold: float = SPIKE_THRESHOLD,
 ) -> list[SpikeEvent]:
     """
     時系列メトリクスからスパイクを検出する。
+
+    CSVメトリクス（gmv, orders, clicks, viewers）が全て0の場合、
+    CTAスコアをフォールバックメトリクスとして使用する。
 
     Parameters
     ----------
@@ -102,6 +125,7 @@ def detect_spikes(
             "orders": float,
             "clicks": float,
             "viewers": float,
+            "cta": float,  # optional, used as fallback
         }
     threshold : float
         移動平均の何倍以上でスパイクとするか
@@ -116,7 +140,17 @@ def detect_spikes(
 
     spikes: list[SpikeEvent] = []
 
-    for metric_key, weight in SPIKE_WEIGHT.items():
+    # まずCSVメトリクスでスパイク検出を試みる
+    has_csv = _has_any_csv_data(timed_metrics)
+
+    if has_csv:
+        # 通常のCSVメトリクスベースのスパイク検出
+        weight_map = SPIKE_WEIGHT
+    else:
+        # CSVメトリクスが全て0 → CTAスコアをフォールバックとして使用
+        weight_map = CTA_SPIKE_WEIGHT
+
+    for metric_key, weight in weight_map.items():
         values = [_safe_float(m.get(metric_key, 0)) for m in timed_metrics]
         video_secs = [_safe_float(m.get("video_sec", 0)) for m in timed_metrics]
 
@@ -140,6 +174,26 @@ def detect_spikes(
                     spike_ratio=round(ratio, 2),
                     score=round(score, 2),
                 ))
+
+    # CTAフォールバック: スパイクが見つからない場合、CTA >= 4 のフェーズを直接候補にする
+    if not spikes and not has_csv:
+        cta_values = [_safe_float(m.get("cta", 0)) for m in timed_metrics]
+        video_secs = [_safe_float(m.get("video_sec", 0)) for m in timed_metrics]
+        max_cta = max(cta_values, default=0)
+
+        if max_cta >= 4:
+            for i, (cta, vsec) in enumerate(zip(cta_values, video_secs)):
+                if cta >= 4:
+                    # CTA 4-5 を直接スパイクとして扱う
+                    score = cta * 10.0 * (cta / max_cta)
+                    spikes.append(SpikeEvent(
+                        video_sec=vsec,
+                        metric="cta",
+                        value=cta,
+                        moving_avg=round(sum(cta_values) / len(cta_values), 2),
+                        spike_ratio=round(cta / (sum(cta_values) / len(cta_values)), 2) if sum(cta_values) > 0 else 1.0,
+                        score=round(score, 2),
+                    ))
 
     # スコア降順でソート
     spikes.sort(key=lambda x: x.score, reverse=True)
@@ -256,6 +310,7 @@ def build_moment_clips(
                     "orders": "注文",
                     "clicks": "クリック",
                     "viewers": "視聴者",
+                    "cta": "CTA",
                 }.get(spike.metric, spike.metric)
                 summary_parts.append(
                     f"{label} {spike.spike_ratio:.1f}x スパイク"
@@ -281,6 +336,8 @@ def compute_timed_metrics_from_phases(phases: list[dict]) -> list[dict]:
     """
     video_phases テーブルのデータから時系列メトリクスを構築する。
     各フェーズを1スロットとして扱う。
+
+    CSVメトリクスが全て0の場合に備え、CTAスコアも含める。
     """
     metrics = []
     for p in phases:
@@ -294,6 +351,7 @@ def compute_timed_metrics_from_phases(phases: list[dict]) -> list[dict]:
             "orders": _safe_float(p.get("order_count")),
             "clicks": _safe_float(p.get("product_clicks")),
             "viewers": _safe_float(p.get("viewer_count")),
+            "cta": _safe_float(p.get("cta_score")),
         })
 
     return metrics

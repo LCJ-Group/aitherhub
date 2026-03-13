@@ -914,7 +914,10 @@ async def get_sales_moment_clips(
             video_row = vres.fetchone()
             video_duration = float(video_row.duration) if video_row and video_row.duration else 0.0
         except Exception:
-            # Fallback: compute from phases
+            video_duration = 0.0
+
+        # Fallback: duration が 0 の場合は phases の max(time_end) から計算
+        if video_duration <= 0 and phases:
             video_duration = max((float(p.get("time_end", 0)) for p in phases), default=0.0)
 
         # 時系列メトリクスを構築
@@ -1311,11 +1314,101 @@ async def get_moment_clips(
                 rows = []
 
         if not rows:
+            # === CTA Fallback: video_sales_moments が空の場合 ===
+            # video_phases の CTA スコアから代替モーメントを自動生成
+            try:
+                cta_sql = text("""
+                    SELECT phase_index, time_start, time_end,
+                           COALESCE(cta_score, 0) as cta_score
+                    FROM video_phases
+                    WHERE video_id = :video_id
+                      AND (user_id = :user_id OR user_id IS NULL)
+                    ORDER BY phase_index ASC
+                """)
+                cta_result = await db.execute(cta_sql, {"video_id": video_id, "user_id": user_id})
+                cta_rows = cta_result.fetchall()
+            except Exception:
+                cta_rows = []
+
+            if not cta_rows:
+                return {
+                    "video_id": video_id,
+                    "categories": [],
+                    "total_moments": 0,
+                    "auto_zoom_data": [],
+                }
+
+            # CTA >= 4 → strong, CTA >= 3 → weak
+            strong_moments = []
+            weak_moments = []
+            for cr in cta_rows:
+                r = dict(cr._mapping)
+                cta = float(r.get("cta_score", 0))
+                t_start = float(r.get("time_start", 0))
+                t_end = float(r.get("time_end", 0))
+                mid = (t_start + t_end) / 2
+
+                moment_data = {
+                    "video_sec": mid,
+                    "confidence": min(cta / 5.0, 1.0),
+                    "reasons": [f"CTAスコア {cta:.0f}"],
+                    "order_value": 0,
+                    "click_value": 0,
+                    "frame_meta": None,
+                }
+                if cta >= 4:
+                    strong_moments.append(moment_data)
+                elif cta >= 3:
+                    weak_moments.append(moment_data)
+
+            # カテゴリごとにクリップ候補を生成
+            fallback_categories = []
+            if video_duration <= 0 and cta_rows:
+                video_duration = max((float(dict(cr._mapping).get("time_end", 0)) for cr in cta_rows), default=0.0)
+
+            if strong_moments:
+                strong_clips = _build_moment_category_clips(
+                    strong_moments,
+                    padding_before=MOMENT_CATEGORIES["strong"]["padding_before"],
+                    padding_after=MOMENT_CATEGORIES["strong"]["padding_after"],
+                    video_duration=video_duration,
+                    merge_gap=10.0,
+                )
+                if strong_clips:
+                    fallback_categories.append({
+                        "category": "strong",
+                        "label": MOMENT_CATEGORIES["strong"]["label"],
+                        "icon": MOMENT_CATEGORIES["strong"]["icon"],
+                        "description": MOMENT_CATEGORIES["strong"]["description"],
+                        "clips": strong_clips,
+                        "count": len(strong_clips),
+                    })
+
+            if weak_moments:
+                weak_clips = _build_moment_category_clips(
+                    weak_moments,
+                    padding_before=MOMENT_CATEGORIES["weak"]["padding_before"],
+                    padding_after=MOMENT_CATEGORIES["weak"]["padding_after"],
+                    video_duration=video_duration,
+                    merge_gap=10.0,
+                )
+                if weak_clips:
+                    fallback_categories.append({
+                        "category": "weak",
+                        "label": MOMENT_CATEGORIES["weak"]["label"],
+                        "icon": MOMENT_CATEGORIES["weak"]["icon"],
+                        "description": MOMENT_CATEGORIES["weak"]["description"],
+                        "clips": weak_clips,
+                        "count": len(weak_clips),
+                    })
+
+            total = sum(c["count"] for c in fallback_categories)
             return {
                 "video_id": video_id,
-                "categories": [],
-                "total_moments": 0,
+                "categories": fallback_categories,
+                "total_moments": len(strong_moments) + len(weak_moments),
                 "auto_zoom_data": [],
+                "fallback_source": "cta_score",
             }
 
         # moment_type_detail でグループ化

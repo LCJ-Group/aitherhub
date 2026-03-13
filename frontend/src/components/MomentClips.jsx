@@ -85,6 +85,22 @@ const CATEGORY_CONFIG = {
     text: "text-gray-700",
     badge: "bg-gray-100 text-gray-600",
   },
+  strong: {
+    icon: "📈",
+    gradient: "from-red-500 to-orange-500",
+    bg: "bg-red-50",
+    border: "border-red-200",
+    text: "text-red-700",
+    badge: "bg-red-100 text-red-600",
+  },
+  weak: {
+    icon: "📊",
+    gradient: "from-yellow-500 to-amber-500",
+    bg: "bg-yellow-50",
+    border: "border-yellow-200",
+    text: "text-yellow-700",
+    badge: "bg-yellow-100 text-yellow-600",
+  },
 };
 
 export default function MomentClips({ videoData, onRequestClip, clipStates = {} }) {
