@@ -271,14 +271,11 @@ async def get_event_scores(
                 vp.sales_psychology_tags,
                 COALESCE(vp.importance_score, 0) as importance_score
             FROM video_phases vp
-            WHERE vp.video_id = :video_id
-              AND (vp.user_id = :user_id OR vp.user_id IS NULL)
+             WHERE vp.video_id = :video_id
             ORDER BY vp.phase_index
         """)
-
         result = await db.execute(sql, {
             "video_id": video_id,
-            "user_id": user["id"],
         })
         phases = result.fetchall()
 
@@ -753,12 +750,10 @@ async def get_sales_clip_candidates(
                 vp.human_sales_tags
             FROM video_phases vp
             WHERE vp.video_id = :video_id
-              AND (vp.user_id = :user_id OR vp.user_id IS NULL)
-            ORDER BY vp.phase_index ASC
+            ORDER BY vp.phase_index
         """)
         phases_result = await db.execute(sql_phases, {
             "video_id": video_id,
-            "user_id": user_id,
         })
         phase_rows = phases_result.fetchall()
 
@@ -852,7 +847,13 @@ async def get_sales_moment_clips(
     try:
         user_id = user.get("user_id") or user.get("id")
 
-        # フェーズデータ取得
+        # 動画の所有権チェック（videosテーブルで確認）
+        ownership_sql = text("SELECT id FROM videos WHERE id = :video_id AND user_id = :user_id")
+        ownership_result = await db.execute(ownership_sql, {"video_id": video_id, "user_id": user_id})
+        if not ownership_result.fetchone():
+            return {"video_id": video_id, "spike_count": 0, "video_duration": 0.0, "candidates": []}
+
+        # フェーズデータ取得（video_phasesのuser_idは不整合があるためフィルタしない）
         try:
             sql_phases = text("""
                 SELECT
@@ -866,12 +867,10 @@ async def get_sales_moment_clips(
                     COALESCE(vp.cta_score, 0) as cta_score
                 FROM video_phases vp
                 WHERE vp.video_id = :video_id
-                  AND (vp.user_id = :user_id OR vp.user_id IS NULL)
                 ORDER BY vp.phase_index ASC
             """)
             phases_result = await db.execute(sql_phases, {
                 "video_id": video_id,
-                "user_id": user_id,
             })
             phase_rows = phases_result.fetchall()
             phases = [dict(row._mapping) for row in phase_rows]
@@ -886,12 +885,10 @@ async def get_sales_moment_clips(
                     COALESCE(vp.cta_score, 0) as cta_score
                 FROM video_phases vp
                 WHERE vp.video_id = :video_id
-                  AND (vp.user_id = :user_id OR vp.user_id IS NULL)
                 ORDER BY vp.phase_index ASC
             """)
             phases_result = await db.execute(sql_phases_fallback, {
                 "video_id": video_id,
-                "user_id": user_id,
             })
             phase_rows = phases_result.fetchall()
             # Add default values for missing columns
@@ -1004,12 +1001,10 @@ async def detect_hooks_for_video(
                     vp.audio_text
                 FROM video_phases vp
                 WHERE vp.video_id = :video_id
-                  AND (vp.user_id = :user_id OR vp.user_id IS NULL)
                 ORDER BY vp.phase_index ASC
             """)
             phases_result = await db.execute(sql_phases, {
                 "video_id": video_id,
-                "user_id": user_id,
             })
             phase_rows = phases_result.fetchall()
         except Exception:
@@ -1024,12 +1019,10 @@ async def detect_hooks_for_video(
                     vp.phase_description as audio_text
                 FROM video_phases vp
                 WHERE vp.video_id = :video_id
-                  AND (vp.user_id = :user_id OR vp.user_id IS NULL)
                 ORDER BY vp.phase_index ASC
             """)
             phases_result = await db.execute(sql_phases_fallback, {
                 "video_id": video_id,
-                "user_id": user_id,
             })
             phase_rows = phases_result.fetchall()
 
@@ -1322,10 +1315,9 @@ async def get_moment_clips(
                            COALESCE(cta_score, 0) as cta_score
                     FROM video_phases
                     WHERE video_id = :video_id
-                      AND (user_id = :user_id OR user_id IS NULL)
                     ORDER BY phase_index ASC
                 """)
-                cta_result = await db.execute(cta_sql, {"video_id": video_id, "user_id": user_id})
+                cta_result = await db.execute(cta_sql, {"video_id": video_id})
                 cta_rows = cta_result.fetchall()
             except Exception:
                 cta_rows = []
