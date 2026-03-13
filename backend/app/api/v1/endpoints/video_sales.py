@@ -1249,9 +1249,10 @@ async def get_moment_clips(
         user_id = current_user.get("user_id") or current_user.get("id")
 
         # 動画情報を取得（duration カラムが存在しない場合のフォールバック付き）
+        # NOTE: user_idフィルタを削除 — video_phasesのuser_idが動画アップロード者と異なる場合があるため
         try:
-            video_sql = text("SELECT duration, upload_type FROM videos WHERE id = :video_id AND user_id = :user_id")
-            vres = await db.execute(video_sql, {"video_id": video_id, "user_id": user_id})
+            video_sql = text("SELECT duration, upload_type FROM videos WHERE id = :video_id")
+            vres = await db.execute(video_sql, {"video_id": video_id})
             video_row = vres.fetchone()
             if not video_row:
                 raise HTTPException(status_code=404, detail="Video not found")
@@ -1260,8 +1261,8 @@ async def get_moment_clips(
             raise
         except Exception:
             # Fallback: check video exists without duration column
-            video_check_sql = text("SELECT id, upload_type FROM videos WHERE id = :video_id AND user_id = :user_id")
-            vres = await db.execute(video_check_sql, {"video_id": video_id, "user_id": user_id})
+            video_check_sql = text("SELECT id, upload_type FROM videos WHERE id = :video_id")
+            vres = await db.execute(video_check_sql, {"video_id": video_id})
             video_row = vres.fetchone()
             if not video_row:
                 raise HTTPException(status_code=404, detail="Video not found")
