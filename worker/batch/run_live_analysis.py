@@ -30,6 +30,15 @@ BACKEND_DIR = os.path.join(PROJECT_ROOT, "backend")
 sys.path.insert(0, BACKEND_DIR)
 sys.path.insert(0, PROJECT_ROOT)
 
+# BUILD 36b: Ensure venv site-packages are available (system Python may lack them)
+_venv_lib = os.path.join(PROJECT_ROOT, ".venv", "lib")
+if os.path.isdir(_venv_lib):
+    for _d in sorted(os.listdir(_venv_lib), reverse=True):
+        _sp = os.path.join(_venv_lib, _d, "site-packages")
+        if os.path.isdir(_sp) and _sp not in sys.path:
+            sys.path.insert(1, _sp)
+            break
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",

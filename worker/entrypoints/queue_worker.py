@@ -34,6 +34,17 @@ from threading import Lock, Thread
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+# BUILD 36b: Ensure venv site-packages are available even when running
+# under system Python (/usr/bin/python3). The systemd service may use
+# system Python, but dependencies are installed in the venv.
+_VENV_SP = PROJECT_ROOT / ".venv" / "lib"
+if _VENV_SP.exists():
+    for _pydir in sorted(_VENV_SP.iterdir(), reverse=True):
+        _sp = _pydir / "site-packages"
+        if _sp.is_dir() and str(_sp) not in sys.path:
+            sys.path.insert(1, str(_sp))
+            break
+
 from shared.config import (
     WORKER_MAX_CONCURRENT,
     WORKER_MAX_RETRIES,
