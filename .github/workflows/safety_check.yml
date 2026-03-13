@@ -1,0 +1,153 @@
+name: Safety Check — Overwrite Detection
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - 'worker/**'
+      - 'shared/**'
+
+jobs:
+  overwrite-detection:
+    runs-on: ubuntu-latest
+    name: Detect Potential Code Overwrites
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 10  # Last 10 commits for comparison
+
+      - name: Check for large deletions
+        run: |
+          echo "## Safety Check: Overwrite Detection" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Compare with previous commit
+          PREV_COMMIT=$(git rev-parse HEAD~1 2>/dev/null || echo "")
+          if [ -z "$PREV_COMMIT" ]; then
+            echo "First commit — skipping overwrite check" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          THRESHOLD=50
+          ALERT=false
+
+          echo "| File | Added | Deleted | Net | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-------|---------|-----|--------|" >> $GITHUB_STEP_SUMMARY
+
+          while IFS=$'\t' read -r added deleted filepath; do
+            [ "$added" = "-" ] && continue
+            [ "$deleted" = "-" ] && continue
+            [ -z "$filepath" ] && continue
+
+            net=$((deleted - added))
+            if [ "$net" -gt "$THRESHOLD" ]; then
+              echo "| \`$filepath\` | +$added | -$deleted | -$net | :warning: SUSPICIOUS |" >> $GITHUB_STEP_SUMMARY
+              ALERT=true
+            fi
+          done < <(git diff --numstat HEAD~1 HEAD)
+
+          if [ "$ALERT" = "true" ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo ":warning: **Large deletions detected.** Please verify these changes are intentional." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "If this was an accidental overwrite, restore with:" >> $GITHUB_STEP_SUMMARY
+            echo '```bash' >> $GITHUB_STEP_SUMMARY
+            echo "git revert HEAD" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          else
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo ":white_check_mark: No suspicious deletions detected." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Check protected file patterns
+        run: |
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Protected File Check" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # List of files that should rarely be fully rewritten
+          PROTECTED_FILES=(
+            "backend/app/api/v1/endpoints/admin.py"
+            "backend/app/api/v1/endpoints/video_sales.py"
+            "backend/app/api/v1/endpoints/video_clips.py"
+            "backend/app/api/v1/routes.py"
+            "backend/app/main.py"
+            "frontend/src/components/AnalyticsSection.jsx"
+            "frontend/src/components/VideoDetail.jsx"
+            "frontend/src/components/DockPlayer.jsx"
+          )
+
+          PREV_COMMIT=$(git rev-parse HEAD~1 2>/dev/null || echo "")
+          [ -z "$PREV_COMMIT" ] && exit 0
+
+          CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD)
+          ALERT=false
+
+          for pf in "${PROTECTED_FILES[@]}"; do
+            if echo "$CHANGED_FILES" | grep -q "^${pf}$"; then
+              # Check if the file was significantly modified
+              STATS=$(git diff --numstat HEAD~1 HEAD -- "$pf" 2>/dev/null)
+              if [ -n "$STATS" ]; then
+                ADDED=$(echo "$STATS" | awk '{print $1}')
+                DELETED=$(echo "$STATS" | awk '{print $2}')
+                NET=$((DELETED - ADDED))
+                if [ "$NET" -gt 30 ]; then
+                  echo ":warning: Protected file modified with large deletions: \`$pf\` (+$ADDED/-$DELETED)" >> $GITHUB_STEP_SUMMARY
+                  ALERT=true
+                else
+                  echo ":white_check_mark: Protected file modified (safe): \`$pf\` (+$ADDED/-$DELETED)" >> $GITHUB_STEP_SUMMARY
+                fi
+              fi
+            fi
+          done
+
+          if [ "$ALERT" = "false" ]; then
+            echo ":white_check_mark: No protected files were suspiciously modified." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Verify critical functions exist
+        run: |
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Critical Function Verification" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          ERRORS=0
+
+          # Check that key endpoints still exist in video_sales.py
+          if [ -f "backend/app/api/v1/endpoints/video_sales.py" ]; then
+            for pattern in "sales-moment-clips" "moment-clips" "hook-detection"; do
+              if ! grep -q "$pattern" "backend/app/api/v1/endpoints/video_sales.py"; then
+                echo ":x: Missing endpoint pattern: \`$pattern\` in video_sales.py" >> $GITHUB_STEP_SUMMARY
+                ERRORS=$((ERRORS + 1))
+              fi
+            done
+          fi
+
+          # Check that key components still exist in frontend
+          for component in "AnalyticsSection.jsx" "VideoDetail.jsx" "DockPlayer.jsx"; do
+            if [ ! -f "frontend/src/components/$component" ]; then
+              echo ":x: Missing component: \`$component\`" >> $GITHUB_STEP_SUMMARY
+              ERRORS=$((ERRORS + 1))
+            fi
+          done
+
+          # Check routes.py has all expected routers
+          if [ -f "backend/app/api/v1/routes.py" ]; then
+            for router_name in "admin_router" "video_router" "auth_router" "upload_core_router"; do
+              if ! grep -q "$router_name" "backend/app/api/v1/routes.py"; then
+                echo ":x: Missing router: \`$router_name\` in routes.py" >> $GITHUB_STEP_SUMMARY
+                ERRORS=$((ERRORS + 1))
+              fi
+            done
+          fi
+
+          if [ "$ERRORS" -eq 0 ]; then
+            echo ":white_check_mark: All critical functions and components verified." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo ":rotating_light: **$ERRORS critical issues found!** This push may have broken functionality." >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
