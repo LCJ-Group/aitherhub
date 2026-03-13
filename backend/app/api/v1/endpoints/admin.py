@@ -3097,6 +3097,7 @@ async def deactivate_lesson(
 @router.get("/list-blobs/{video_id}")
 async def list_blobs_for_video(
     video_id: str,
+    email: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     x_admin_key: Optional[str] = Header(None),
 ):
@@ -3113,16 +3114,16 @@ async def list_blobs_for_video(
         if not conn_str:
             raise HTTPException(status_code=500, detail="No storage connection string")
 
-        # Get email for this video
-        result = await db.execute(
-            text("SELECT u.email FROM videos v JOIN users u ON v.user_id = u.id WHERE v.id = :vid"),
-            {"vid": video_id},
-        )
-        row = result.fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Video not found")
-
-        email = row[0]
+        # Get email — use query param if provided, otherwise look up from DB
+        if not email:
+            result = await db.execute(
+                text("SELECT u.email FROM videos v JOIN users u ON v.user_id = u.id WHERE v.id = :vid"),
+                {"vid": video_id},
+            )
+            row = result.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Video not found")
+            email = row[0]
         prefix = f"{email}/{video_id}/"
 
         service_client = BlobServiceClient.from_connection_string(conn_str)
