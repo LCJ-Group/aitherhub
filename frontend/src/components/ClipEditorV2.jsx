@@ -1270,7 +1270,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                     transition: 'all 0.2s ease',
                   }}
                 >
-                  <span style={{ fontSize: 14 }}>\u2728</span>
+                  <span style={{ fontSize: 14 }}>{'✨'}</span>
                   <div style={{ flex: 1 }}>
                     <div style={{ color: C.accent, fontSize: 11, fontWeight: 700 }}>
                       AIおすすめ
@@ -1295,7 +1295,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                     </div>
                   </div>
                   {subtitleStyle === aiRecommendation.style && (
-                    <span style={{ color: C.accent, fontSize: 12, fontWeight: 700 }}>\u2713</span>
+                    <span style={{ color: C.accent, fontSize: 12, fontWeight: 700 }}>{'✓'}</span>
                   )}
                 </div>
 
@@ -1389,7 +1389,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                       cursor: 'pointer',
                     }}
                   >
-                    \u2193 下配置
+                    {'↓'} 下配置
                   </button>
                   <button
                     onClick={() => setSubtitlePos({ x: 50, y: 50 })}
@@ -1404,7 +1404,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                       cursor: 'pointer',
                     }}
                   >
-                    \u2194 中央配置
+                    {'↔'} 中央配置
                   </button>
                   <button
                     onClick={() => setSubtitlePos({ x: 50, y: 15 })}
@@ -1419,7 +1419,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                       cursor: 'pointer',
                     }}
                   >
-                    \u2191 上配置
+                    {'↑'} 上配置
                   </button>
                 </div>
 
@@ -1498,7 +1498,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                 )}
                 {feedbackSaved && (
                   <p style={{ color: C.green, fontSize: 10, textAlign: 'center', margin: '0 0 14px' }}>
-                    \u2713 フィードバックを保存しました。AIが学習します。
+                    {'✓'} フィードバックを保存しました。AIが学習します。
                   </p>
                 )}
 

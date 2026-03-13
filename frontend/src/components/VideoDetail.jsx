@@ -880,7 +880,7 @@ export default function VideoDetail({ videoData }) {
                 : `${m}:${String(s).padStart(2, '0')}`;
               return (
                 <span className="text-gray-400 whitespace-nowrap" title="\u52d5\u753b\u306e\u518d\u751f\u6642\u9593">
-                  \ud83c\udfac {durStr}
+                  {'🎬'} {durStr}
                 </span>
               );
             })()}

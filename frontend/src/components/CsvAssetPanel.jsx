@@ -28,12 +28,19 @@ export default function CsvAssetPanel({ videoData, onReplace, onRefresh }) {
   const loadExcelInfo = useCallback(async () => {
     if (!videoData?.id) return;
     setLoading(true);
+    // Safety timeout: prevent infinite spinner
+    const timeout = setTimeout(() => {
+      console.warn("[CsvAssetPanel] Loading timed out after 10s");
+      setLoading(false);
+    }, 10000);
     try {
       const res = await api.get(`/api/v1/videos/${videoData.id}/excel-info`);
       setExcelInfo(res);
     } catch (err) {
       console.warn("[CsvAssetPanel] Failed to load excel info:", err);
+      setExcelInfo(null);
     } finally {
+      clearTimeout(timeout);
       setLoading(false);
     }
   }, [videoData?.id]);
