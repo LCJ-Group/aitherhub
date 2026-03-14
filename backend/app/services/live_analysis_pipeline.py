@@ -104,6 +104,59 @@ class LiveAnalysisPipeline:
             )
             await self._update_step(job_uuid, "assembling", 0.10, video_id=video_id)
 
+            # BUILD 41: Upload assembled video IMMEDIATELY after assembly.
+            # This ensures the video is available for playback even if later
+            # analysis steps (STT, OCR, sales detection) fail.
+            # Previously this was Step 7 (after all analysis), meaning a failure
+            # in any step would leave the user with no video to watch.
+            compressed_blob_path = None
+            try:
+                from app.services.storage_service import generate_upload_sas
+                import aiohttp
+
+                preview_filename = f"{video_id}_assembled.mp4"
+                blob_name = f"assembled/{preview_filename}"
+                _, upload_url, blob_url, _ = await generate_upload_sas(
+                    email=email,
+                    video_id=video_id,
+                    filename=blob_name,
+                )
+
+                async with aiohttp.ClientSession() as http_session:
+                    with open(assembled_path, "rb") as f:
+                        video_data = f.read()
+                    async with http_session.put(
+                        upload_url,
+                        data=video_data,
+                        headers={
+                            "x-ms-blob-type": "BlockBlob",
+                            "Content-Type": "video/mp4",
+                        },
+                    ) as resp:
+                        if resp.status in (200, 201):
+                            compressed_blob_path = blob_name
+                            logger.info(f"[pipeline] Uploaded assembled video to blob: {blob_name}")
+                            # Save compressed_blob_url to DB immediately so video
+                            # is playable even if subsequent steps fail
+                            try:
+                                await self.db.execute(
+                                    text("""
+                                        UPDATE videos
+                                        SET compressed_blob_url = COALESCE(:blob_url, compressed_blob_url),
+                                            updated_at = now()
+                                        WHERE id = :video_id
+                                    """),
+                                    {"video_id": video_id, "blob_url": compressed_blob_path},
+                                )
+                                await self.db.commit()
+                                logger.info(f"[pipeline] Saved compressed_blob_url early for video={video_id}")
+                            except Exception as db_err:
+                                logger.warning(f"[pipeline] Non-critical: early blob_url save failed: {db_err}")
+                        else:
+                            logger.warning(f"[pipeline] Failed to upload assembled video: HTTP {resp.status}")
+            except Exception as e:
+                logger.warning(f"[pipeline] Non-critical: assembled video upload failed: {e}")
+
             # Step 2: Extract audio
             await self._update_step(job_uuid, "audio_extraction", 0.10, video_id=video_id)
             audio_path = await self._extract_audio(assembled_path)
@@ -137,39 +190,6 @@ class LiveAnalysisPipeline:
                 email=email,
             )
             await self._update_step(job_uuid, "clip_generation", 1.0, video_id=video_id)
-
-            # Step 7: Upload assembled video to Blob Storage for playback
-            compressed_blob_path = None
-            try:
-                from app.services.storage_service import generate_upload_sas
-                import aiohttp
-
-                preview_filename = f"{video_id}_assembled.mp4"
-                blob_name = f"assembled/{preview_filename}"
-                _, upload_url, blob_url, _ = await generate_upload_sas(
-                    email=email,
-                    video_id=video_id,
-                    filename=blob_name,
-                )
-
-                async with aiohttp.ClientSession() as http_session:
-                    with open(assembled_path, "rb") as f:
-                        video_data = f.read()
-                    async with http_session.put(
-                        upload_url,
-                        data=video_data,
-                        headers={
-                            "x-ms-blob-type": "BlockBlob",
-                            "Content-Type": "video/mp4",
-                        },
-                    ) as resp:
-                        if resp.status in (200, 201):
-                            compressed_blob_path = blob_name
-                            logger.info(f"[pipeline] Uploaded assembled video to blob: {blob_name}")
-                        else:
-                            logger.warning(f"[pipeline] Failed to upload assembled video: HTTP {resp.status}")
-            except Exception as e:
-                logger.warning(f"[pipeline] Non-critical: assembled video upload failed: {e}")
 
             # Build final results
             results = {

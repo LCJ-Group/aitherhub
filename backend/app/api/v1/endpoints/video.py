@@ -1012,11 +1012,13 @@ async def get_video_detail(
                 report3.append({"title": latest_insight.title, "content": latest_insight.content})
 
         # ---- Step 6: Generate preview URL (inline, no service call) ----
+        # BUILD 41: Fixed path mismatch. compressed_blob_url stores the relative
+        # path under email/video_id/ (e.g. "assembled/{video_id}_assembled.mp4").
+        # We must use it as-is, not strip the subdirectory.
         preview_url = None
         if compressed_blob and email and account_key:
             try:
-                preview_filename = compressed_blob.split('/')[-1] if '/' in compressed_blob else compressed_blob
-                blob_name = f"{email}/{video_id}/{preview_filename}"
+                blob_name = f"{email}/{video_id}/{compressed_blob}"
                 preview_url = _make_sas_url(blob_name)
             except Exception:
                 preview_url = None
