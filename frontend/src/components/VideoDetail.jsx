@@ -138,6 +138,9 @@ export default function VideoDetail({ videoData }) {
   // AI Event Scores state (sell-ability prediction per phase)
   const [eventScores, setEventScores] = useState([]);
 
+  // Product Exposures state (product exposure timeline data)
+  const [productExposures, setProductExposures] = useState([]);
+
   // Initialize ratings from existing data
   useEffect(() => {
     try {
@@ -206,6 +209,23 @@ export default function VideoDetail({ videoData }) {
         }
       } catch (err) {
         console.warn('[VideoDetail] Failed to load event scores:', err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [videoData?.id]);
+
+  // Load product exposures when video loads
+  useEffect(() => {
+    if (!videoData?.id) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await VideoService.getProductExposures(videoData.id);
+        if (!cancelled && res?.exposures) {
+          setProductExposures(res.exposures);
+        }
+      } catch (err) {
+        console.warn('[VideoDetail] Failed to load product exposures:', err);
       }
     })();
     return () => { cancelled = true; };
@@ -1815,6 +1835,7 @@ export default function VideoDetail({ videoData }) {
         videoData={videoData}
         salesMoments={salesMoments}
         eventScores={eventScores}
+        productExposures={productExposures}
       />
       </SectionErrorBoundary>
     </div>

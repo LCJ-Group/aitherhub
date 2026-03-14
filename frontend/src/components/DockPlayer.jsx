@@ -117,6 +117,7 @@ export default function DockPlayer({
   videoData,
   salesMoments = [],
   eventScores = [],
+  productExposures = [],
 }) {
   const videoRef = useRef(null);
   const hasSetupRef = useRef(false);
@@ -706,6 +707,35 @@ export default function DockPlayer({
   const hasMetrics = csv && (csv.gmv > 0 || csv.order_count > 0 || csv.viewer_count > 0 || csv.like_count > 0);
   const tags = currentPhase?.sales_psychology_tags || [];
   const productNames = csv?.product_names || [];
+
+  // ── Filter product exposures that overlap with current phase ──
+  const phaseProducts = (() => {
+    if (!currentPhase || !productExposures || productExposures.length === 0) return [];
+    const pStart = currentPhase.time_start;
+    const pEnd = currentPhase.time_end;
+    if (pStart == null || pEnd == null) return [];
+    // Find exposures that overlap with this phase's time range
+    const overlapping = productExposures.filter(exp => {
+      const eStart = exp.time_start;
+      const eEnd = exp.time_end;
+      return eStart < pEnd && eEnd > pStart; // overlap check
+    });
+    // Group by product_name, sum duration within phase
+    const grouped = {};
+    for (const exp of overlapping) {
+      const name = exp.product_name;
+      const overlapStart = Math.max(exp.time_start, pStart);
+      const overlapEnd = Math.min(exp.time_end, pEnd);
+      const dur = overlapEnd - overlapStart;
+      if (!grouped[name]) {
+        grouped[name] = { name, duration: 0, segments: 0, source: exp.source };
+      }
+      grouped[name].duration += dur;
+      grouped[name].segments += 1;
+    }
+    // Sort by duration descending
+    return Object.values(grouped).sort((a, b) => b.duration - a.duration);
+  })();
   const phaseDesc = currentPhase?.phase_description || "";
   const ctaScore = currentPhase?.cta_score;
   const currentRating = phaseRatings[phaseKey]?.rating || 0;
@@ -1080,8 +1110,28 @@ export default function DockPlayer({
               );
             })()}
 
-               {/* ── Product Names ──────────────────────────── */}
-            {productNames.length > 0 && (
+               {/* ── Product Exposures (from timeline) ────────── */}
+            {phaseProducts.length > 0 ? (
+              <div>
+                <div className="text-[11px] text-white/40 mb-1.5 font-medium">商品露出</div>
+                <div className="flex flex-col gap-1.5">
+                  {phaseProducts.slice(0, 5).map((prod, idx) => {
+                    const mins = Math.floor(prod.duration / 60);
+                    const secs = Math.floor(prod.duration % 60);
+                    const durStr = mins > 0 ? `${mins}分${secs}秒` : `${secs}秒`;
+                    return (
+                      <div key={idx} className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-indigo-500/10 border border-indigo-500/20">
+                        <span className="text-[11px] font-medium text-indigo-300 truncate flex-1">{prod.name}</span>
+                        <span className="text-[10px] text-white/40 whitespace-nowrap">{durStr}</span>
+                      </div>
+                    );
+                  })}
+                  {phaseProducts.length > 5 && (
+                    <span className="text-[10px] text-white/40 text-center">+{phaseProducts.length - 5}件</span>
+                  )}
+                </div>
+              </div>
+            ) : productNames.length > 0 ? (
               <div>
                 <div className="text-[11px] text-white/40 mb-1.5 font-medium">商品</div>
                 <div className="flex flex-wrap gap-1.5">
@@ -1095,7 +1145,7 @@ export default function DockPlayer({
                   )}
                 </div>
               </div>
-            )}
+            ) : null}
 
             {/* ── AI Summary ───────────────────────────────── */}
             {phaseDesc && (
