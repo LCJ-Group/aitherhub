@@ -1614,7 +1614,7 @@ def remove_silence_from_video(video_path: str, output_path: str, silence_interva
 # Main pipeline
 # =========================
 
-def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float, time_end: float, phase_index: int = -1, speed_factor: float = 1.0):
+def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float, time_end: float, phase_index = -1, speed_factor: float = 1.0):
     """Main clip generation pipeline."""
     logger.info(f"=== Starting clip generation ===")
     logger.info(f"clip_id={clip_id}, video_id={video_id}, speed={speed_factor}x")
@@ -1710,7 +1710,14 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
         # 3.5. GPT-4o subtitle refinement
         if segments:
             phase_context = ""
-            if phase_index >= 0:
+            # phase_index can be int or string (e.g. "moment_strong_1")
+            _use_phase_context = False
+            try:
+                _use_phase_context = int(phase_index) >= 0
+            except (ValueError, TypeError):
+                # String phase_index like "moment_strong_1" — skip phase context lookup
+                pass
+            if _use_phase_context:
                 try:
                     phase_context = get_phase_context(video_id, phase_index)
                     if phase_context:
@@ -1797,7 +1804,7 @@ def main():
     parser.add_argument("--blob-url", required=True, help="Source video blob URL (with SAS)")
     parser.add_argument("--time-start", type=float, required=True, help="Start time in seconds")
     parser.add_argument("--time-end", type=float, required=True, help="End time in seconds")
-    parser.add_argument("--phase-index", type=int, default=-1, help="Phase index for context-aware subtitles")
+    parser.add_argument("--phase-index", default="-1", help="Phase index for context-aware subtitles (int or string identifier)")
     parser.add_argument("--speed-factor", type=float, default=1.0, help="Playback speed (1.0=normal, 1.2=20%% faster)")
 
     args = parser.parse_args()
