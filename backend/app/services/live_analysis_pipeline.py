@@ -418,11 +418,13 @@ class LiveAnalysisPipeline:
             )
 
         # Download each chunk
+        # BUILD 41: Also scan beyond total_chunks in case of gaps
         import aiohttp
 
         chunk_paths = []
+        scan_limit = total_chunks + 3  # Check a few extra in case of numbering gaps
         async with aiohttp.ClientSession() as session:
-            for i in range(total_chunks):
+            for i in range(scan_limit):
                 chunk_filename = f"chunks/chunk_{i:04d}.mp4"
                 try:
                     download_url, _ = await generate_download_sas(
@@ -439,10 +441,10 @@ class LiveAnalysisPipeline:
                                 async for data in resp.content.iter_chunked(1024 * 1024):
                                     f.write(data)
                             chunk_paths.append(local_path)
-                            logger.info(f"[assemble] Downloaded chunk {i}/{total_chunks}")
+                            logger.info(f"[assemble] Downloaded chunk {i} ({len(chunk_paths)}/{total_chunks})")
                         else:
                             logger.warning(
-                                f"[assemble] Chunk {i} download failed: HTTP {resp.status}"
+                                f"[assemble] Chunk {i} not found: HTTP {resp.status} — skipping"
                             )
                 except Exception as e:
                     logger.warning(f"[assemble] Failed to download chunk {i}: {e}")
@@ -501,11 +503,20 @@ class LiveAnalysisPipeline:
         return output_path
 
     async def _discover_chunk_count(self, email: str, video_id: str) -> int:
-        """Probe blob storage to discover how many chunks exist."""
+        """Probe blob storage to discover how many chunks exist.
+
+        BUILD 41: Improved to handle gaps in chunk numbering.
+        If chunk_0000 is missing but chunk_0001 exists, we keep scanning
+        up to 3 consecutive misses before stopping.
+        """
         from app.services.storage_service import generate_download_sas
         import aiohttp
 
         count = 0
+        consecutive_misses = 0
+        max_consecutive_misses = 3  # Allow up to 3 gaps
+        max_index = 0
+
         async with aiohttp.ClientSession() as session:
             for i in range(10000):  # Safety limit
                 chunk_filename = f"chunks/chunk_{i:04d}.mp4"
@@ -519,11 +530,21 @@ class LiveAnalysisPipeline:
                     async with session.head(download_url) as resp:
                         if resp.status == 200:
                             count += 1
+                            max_index = i
+                            consecutive_misses = 0
                         else:
-                            break
+                            consecutive_misses += 1
+                            if consecutive_misses >= max_consecutive_misses:
+                                break
                 except Exception:
-                    break
-        logger.info(f"[assemble] Discovered {count} chunks for video={video_id}")
+                    consecutive_misses += 1
+                    if consecutive_misses >= max_consecutive_misses:
+                        break
+
+        logger.info(
+            f"[assemble] Discovered {count} chunks for video={video_id} "
+            f"(max_index={max_index})"
+        )
         return count
 
     # ──────────────────────────────────────────
