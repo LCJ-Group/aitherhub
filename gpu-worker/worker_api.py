@@ -73,12 +73,17 @@ current_session = {
 }
 
 current_config = {
-    "face_swapper_model": "inswapper_128",
+    "face_swapper_model": "inswapper_128_fp16",
+    "face_swapper_pixel_boost": "512x512",
+    "face_swapper_weight": 0.85,
     "face_enhancer_model": "gfpgan_1.4",
     "face_enhancer_enabled": True,
     "face_detector_model": "yolo_face",
     "face_detector_score": 0.5,
+    "face_mask_types": ["box", "occlusion", "region"],
     "face_mask_blur": 0.3,
+    "face_mask_padding": [0, 0, 0, 0],
+    "output_image_quality": 95,
     "output_resolution": "1280x720",
     "output_fps": 30,
     "execution_providers": "cuda",
@@ -126,11 +131,16 @@ class SwapFrameRequest(BaseModel):
 
 class UpdateConfigRequest(BaseModel):
     face_swapper_model: Optional[str] = None
+    face_swapper_pixel_boost: Optional[str] = None
+    face_swapper_weight: Optional[float] = None
     face_enhancer_model: Optional[str] = None
     face_enhancer_enabled: Optional[bool] = None
     face_detector_model: Optional[str] = None
     face_detector_score: Optional[float] = None
+    face_mask_types: Optional[list] = None
     face_mask_blur: Optional[float] = None
+    face_mask_padding: Optional[list] = None
+    output_image_quality: Optional[int] = None
     output_resolution: Optional[str] = None
     output_fps: Optional[int] = None
     execution_thread_count: Optional[int] = None
@@ -212,23 +222,36 @@ def build_facefusion_webcam_cmd() -> list:
 
 def build_facefusion_headless_cmd(input_path: str, output_path: str) -> list:
     """Build the FaceFusion command for headless single-image processing."""
+    processors = ["face_swapper"]
+    if current_config["face_enhancer_enabled"]:
+        processors.append("face_enhancer")
+
     cmd = [
         sys.executable, f"{FACEFUSION_DIR}/facefusion.py", "headless-run",
         "--source-paths", source_face_path,
         "--target-path", input_path,
         "--output-path", output_path,
-        "--processors", "face_swapper",
+        # Processors
+        "--processors", *processors,
+        # Face swapper settings
         "--face-swapper-model", current_config["face_swapper_model"],
+        "--face-swapper-pixel-boost", current_config["face_swapper_pixel_boost"],
+        "--face-swapper-weight", str(current_config["face_swapper_weight"]),
+        # Face detector settings
         "--face-detector-model", current_config["face_detector_model"],
         "--face-detector-score", str(current_config["face_detector_score"]),
+        # Face mask settings
+        "--face-mask-types", *current_config["face_mask_types"],
+        "--face-mask-blur", str(current_config["face_mask_blur"]),
+        "--face-mask-padding", *[str(p) for p in current_config["face_mask_padding"]],
+        # Output settings
+        "--output-image-quality", str(current_config["output_image_quality"]),
+        # Execution settings
         "--execution-providers", current_config["execution_providers"],
         "--execution-thread-count", str(current_config["execution_thread_count"]),
     ]
 
     if current_config["face_enhancer_enabled"]:
-        # Insert face_enhancer after face_swapper
-        idx = cmd.index("face_swapper")
-        cmd.insert(idx + 1, "face_enhancer")
         cmd.extend(["--face-enhancer-model", current_config["face_enhancer_model"]])
 
     return cmd
@@ -658,8 +681,16 @@ async def get_config(auth: bool = Depends(verify_api_key)):
             "face_swapper": [
                 "inswapper_128",
                 "inswapper_128_fp16",
+                "hyperswap_1a_256",
+                "hyperswap_1b_256",
+                "hyperswap_1c_256",
                 "simswap_256",
                 "blendswap_256",
+                "uniface_256",
+            ],
+            "face_swapper_pixel_boost": [
+                "128x128", "256x256", "384x384",
+                "512x512", "768x768", "1024x1024",
             ],
             "face_enhancer": [
                 "gfpgan_1.4",
