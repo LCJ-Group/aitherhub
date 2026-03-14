@@ -206,7 +206,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
   const [segments, setSegments] = useState([]);
   const [videoScore, setVideoScore] = useState(null);
 
-  const [tab, setTab] = useState("info");
+  const [tab, setTab] = useState("captions");
   const [isTrimming, setIsTrimming] = useState(false);
   const [status, setStatus] = useState(null);
   const [captions, setCaptions] = useState([]);
@@ -819,7 +819,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
               borderRadius: 4,
             }}
           >
-            Phase {clip.phase_index ?? "?"} | {fmt(origStart)} - {fmt(origEnd)}
+            Phase {clip.phase_index != null && !isNaN(Number(clip.phase_index)) ? clip.phase_index : (clip.phase_index || "?")} | {fmt(origStart)} - {fmt(origEnd)}
           </span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -1010,12 +1010,12 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
             >
               {fmt(origStart)} – {fmt(origEnd)}
               <span style={{ marginLeft: 6, opacity: 0.6, fontSize: 10 }}>
-                Phase {clip.phase_index ?? "?"}
+                Phase {clip.phase_index != null && !isNaN(Number(clip.phase_index)) ? clip.phase_index : (clip.phase_index || "?")}
               </span>
             </div>
 
-            {/* ★ SUBTITLE OVERLAY ★ */}
-            {currentCaption && (() => {
+            {/* ★ SUBTITLE OVERLAY ★ — hidden when clip_url exists (video has burned-in subs) */}
+            {currentCaption && !isClipVideo && (() => {
               const preset = SUBTITLE_PRESETS[subtitleStyle] || SUBTITLE_PRESETS.box;
               const presetText = preset.text || {};
               return (
@@ -1084,8 +1084,8 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
             }}
           >
             {[
-              { k: "info", l: "AI分析" },
               { k: "captions", l: "字幕" },
+              { k: "info", l: "AI分析" },
               { k: "trim", l: "Trim" },
               { k: "feedback", l: "評価" },
             ].map((t) => (
