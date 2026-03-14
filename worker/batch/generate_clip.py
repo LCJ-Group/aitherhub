@@ -200,7 +200,7 @@ def update_clip_status(clip_id: str, status: str, clip_url: str = None, error_me
                 import json as _json
                 captions_sql = text("""
                     UPDATE video_clips
-                    SET captions = :captions_json::jsonb, updated_at = NOW()
+                    SET captions = CAST(:captions_json AS jsonb), updated_at = NOW()
                     WHERE id = :clip_id
                 """)
                 await session.execute(captions_sql, {
