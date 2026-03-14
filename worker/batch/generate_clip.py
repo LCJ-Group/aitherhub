@@ -194,7 +194,7 @@ def update_clip_status(clip_id: str, status: str, clip_url: str = None, error_me
                     SET status = :status, updated_at = NOW()
                     WHERE id = :clip_id
                 """)
-                await session.execute(sql, {"status": status, "clip_id": clip_id}))
+                await session.execute(sql, {"status": status, "clip_id": clip_id})
             # Save captions (subtitle data) to DB
             if captions is not None:
                 import json as _json

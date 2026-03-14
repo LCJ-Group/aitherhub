@@ -144,25 +144,9 @@ async def request_clip_generation(
             expires_in_minutes=1440,
         )
 
-        # Create clip record
+        # Create clip record with job_payload for worker DB fallback
         clip_id = str(uuid_module.uuid4())
-        insert_sql = text("""
-            INSERT INTO video_clips (id, video_id, user_id, phase_index, time_start, time_end, status)
-            VALUES (:id, :video_id, :user_id, :phase_index, :time_start, :time_end, 'pending')
-        """)
-        await db.execute(insert_sql, {
-            "id": clip_id,
-            "video_id": video_id,
-            "user_id": user_id,
-            "phase_index": phase_index,
-            "time_start": time_start,
-            "time_end": time_end,
-        })
-        await db.commit()
-
-        # Enqueue clip generation job
-        from app.services.queue_service import enqueue_job
-        await enqueue_job({
+        job_payload = {
             "job_type": "generate_clip",
             "clip_id": clip_id,
             "video_id": video_id,
@@ -171,7 +155,28 @@ async def request_clip_generation(
             "time_end": time_end,
             "phase_index": phase_index,
             "speed_factor": speed_factor,
+        }
+        import json as _json
+        insert_sql = text("""
+            INSERT INTO video_clips (id, video_id, user_id, phase_index, time_start, time_end, status, job_payload)
+            VALUES (:id, :video_id, :user_id, :phase_index, :time_start, :time_end, 'pending', :job_payload::jsonb)
+        """)
+        await db.execute(insert_sql, {
+            "id": clip_id,
+            "video_id": video_id,
+            "user_id": user_id,
+            "phase_index": phase_index,
+            "time_start": time_start,
+            "time_end": time_end,
+            "job_payload": _json.dumps(job_payload, ensure_ascii=False),
         })
+        await db.commit()
+
+        # Enqueue clip generation job
+        from app.services.queue_service import enqueue_job
+        enqueue_result = await enqueue_job(job_payload)
+        if not enqueue_result.success:
+            logger.warning(f"Queue enqueue failed for clip {clip_id}: {enqueue_result.error}. Worker DB fallback will pick it up.")
 
         logger.info(f"Clip generation requested: clip_id={clip_id}, video_id={video_id}, phase={phase_index}")
 
