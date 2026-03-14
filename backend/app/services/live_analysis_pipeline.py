@@ -501,8 +501,47 @@ class LiveAnalysisPipeline:
         Extract audio track from video using ffmpeg.
 
         Returns path to the extracted WAV file (16kHz mono for STT).
+        If the video has no audio track, returns an empty silent WAV.
         """
         audio_path = video_path.replace(".mp4", "_audio.wav")
+
+        # Validate input file exists and has content
+        if not os.path.exists(video_path):
+            raise RuntimeError(f"Video file not found: {video_path}")
+        file_size = os.path.getsize(video_path)
+        if file_size == 0:
+            raise RuntimeError(f"Video file is empty: {video_path}")
+        logger.info(f"[audio] Input video: {video_path} ({file_size} bytes)")
+
+        # First, probe if the video has an audio stream
+        probe_proc = await asyncio.create_subprocess_exec(
+            "ffprobe", "-v", "error",
+            "-select_streams", "a",
+            "-show_entries", "stream=codec_type",
+            "-of", "csv=p=0",
+            video_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        probe_stdout, probe_stderr = await probe_proc.communicate()
+        has_audio = probe_stdout.decode().strip() != ""
+
+        if not has_audio:
+            logger.warning(f"[audio] No audio stream found in {video_path} — generating silent WAV")
+            # Generate a 1-second silent WAV for the pipeline to continue
+            silence_proc = await asyncio.create_subprocess_exec(
+                "ffmpeg", "-y",
+                "-f", "lavfi",
+                "-i", "anullsrc=r=16000:cl=mono",
+                "-t", "1",
+                "-acodec", "pcm_s16le",
+                audio_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await silence_proc.communicate()
+            logger.info(f"[audio] Generated silent WAV → {audio_path}")
+            return audio_path
 
         proc = await asyncio.create_subprocess_exec(
             "ffmpeg", "-y",
@@ -518,8 +557,13 @@ class LiveAnalysisPipeline:
         stdout, stderr = await proc.communicate()
 
         if proc.returncode != 0:
+            stderr_text = stderr.decode(errors="replace")
+            logger.error(f"[audio] ffmpeg stderr: {stderr_text}")
+            # Extract actual error lines (skip version/config preamble)
+            error_lines = [l for l in stderr_text.splitlines() if l.strip()]
+            tail = "\n".join(error_lines[-5:]) if error_lines else stderr_text[:500]
             raise RuntimeError(
-                f"Audio extraction failed (rc={proc.returncode}): {stderr.decode()[:500]}"
+                f"Audio extraction failed (rc={proc.returncode}): {tail}"
             )
 
         logger.info(f"[audio] Extracted audio → {audio_path}")
