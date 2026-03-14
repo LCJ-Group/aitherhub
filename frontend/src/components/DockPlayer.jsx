@@ -173,6 +173,9 @@ export default function DockPlayer({
   // 'full'  = 自由再生（フェーズロック解除）
   const [playMode, setPlayMode] = useState('phase');
   const [loopFade, setLoopFade] = useState(false); // ループ暗転演出
+  const [isPaused, setIsPaused] = useState(false); // Custom play/pause state
+  const [phaseProgress, setPhaseProgress] = useState(0); // 0-1 progress within phase
+  const [phaseCurrentTime, setPhaseCurrentTime] = useState('0:00'); // Time display within phase
 
   // Combined tags: { phaseKey: ['HOOK', 'CHAT', 'EMPATHY', ...] }
   const [selectedPhaseTags, setSelectedPhaseTags] = useState({});
@@ -330,6 +333,9 @@ export default function DockPlayer({
       navTokenRef.current = 0;
       setPlayMode('phase');
       setLoopFade(false);
+      setIsPaused(false);
+      setPhaseProgress(0);
+      setPhaseCurrentTime('0:00');
       // Reset video source to prop values for next open
       setActiveVideoUrl(videoUrl);
       setUsingFullVideo(!isClipPreview);
@@ -474,6 +480,19 @@ export default function DockPlayer({
         }
       }
 
+      // Update phase progress for custom progress bar
+      if (currentPhaseIndex >= 0 && currentPhaseIndex < reports1.length) {
+        const lockedPhase = reports1[currentPhaseIndex];
+        const phaseStart = Number(lockedPhase.time_start) || 0;
+        const phaseEnd = Number(lockedPhase.time_end) || Infinity;
+        const phaseDuration = phaseEnd - phaseStart;
+        if (phaseDuration > 0) {
+          const elapsed = absoluteTime - phaseStart;
+          setPhaseProgress(Math.max(0, Math.min(1, elapsed / phaseDuration)));
+          setPhaseCurrentTime(formatTime(Math.max(0, elapsed)));
+        }
+      }
+
       // Update current phase index based on time
       const idx = findPhaseIndex(absoluteTime);
       setCurrentPhaseIndex((prev) => (idx !== prev ? idx : prev));
@@ -528,6 +547,18 @@ export default function DockPlayer({
       if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
 
       switch (e.key) {
+        case " ":
+          e.preventDefault();
+          if (videoRef.current) {
+            if (videoRef.current.paused) {
+              videoRef.current.play().catch(() => {});
+              setIsPaused(false);
+            } else {
+              videoRef.current.pause();
+              setIsPaused(true);
+            }
+          }
+          break;
         case "1":
           handleSpeedChange(1);
           break;
@@ -713,6 +744,7 @@ export default function DockPlayer({
     setIsBuffering(false);
     setIsLoading(false);
     setShowCustomLoading(false);
+    setIsPaused(false);
   }, []);
 
   // ── Don't render if not open ──────────────────────────────
@@ -849,20 +881,91 @@ export default function DockPlayer({
               <video
                 ref={videoRef}
                 src={activeVideoUrl}
-                controls
                 autoPlay
                 playsInline
                 preload="metadata"
-                className="h-full object-contain"
+                className="h-full object-contain cursor-pointer"
                 style={{
                   maxHeight: "calc(100vh - 100px)",
                   maxWidth: "100%",
                   aspectRatio: "9/16",
                 }}
+                onClick={() => {
+                  const vid = videoRef.current;
+                  if (!vid) return;
+                  if (vid.paused) {
+                    vid.play().catch(() => {});
+                    setIsPaused(false);
+                  } else {
+                    vid.pause();
+                    setIsPaused(true);
+                  }
+                }}
                 onWaiting={handleWaiting}
                 onPlaying={handlePlaying}
+                onPause={() => setIsPaused(true)}
                 onError={handleVideoError}
               />
+
+              {/* Custom play/pause overlay (shows when paused) */}
+              {isPaused && !isLoading && !isBuffering && (
+                <div
+                  className="absolute inset-0 flex items-center justify-center z-10 cursor-pointer"
+                  onClick={() => {
+                    const vid = videoRef.current;
+                    if (vid) {
+                      vid.play().catch(() => {});
+                      setIsPaused(false);
+                    }
+                  }}
+                >
+                  <div className="w-16 h-16 rounded-full bg-black/50 backdrop-blur-sm flex items-center justify-center">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="white" stroke="none">
+                      <polygon points="6 3 20 12 6 21 6 3" />
+                    </svg>
+                  </div>
+                </div>
+              )}
+
+              {/* Custom phase progress bar (replaces native controls) */}
+              {currentPhase && (
+                <div className="absolute bottom-0 left-0 right-0 z-15">
+                  {/* Time display */}
+                  <div className="flex items-center justify-between px-3 py-1 bg-gradient-to-t from-black/80 to-transparent">
+                    <span className="text-[11px] text-white/80 font-mono">{phaseCurrentTime}</span>
+                    <span className="text-[11px] text-white/50 font-mono">{formatTime((Number(currentPhase.time_end) || 0) - (Number(currentPhase.time_start) || 0))}</span>
+                  </div>
+                  {/* Progress bar */}
+                  <div
+                    className="h-1 bg-white/20 cursor-pointer relative group"
+                    onClick={(e) => {
+                      const vid = videoRef.current;
+                      if (!vid || !currentPhase) return;
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+                      const phaseStart = Number(currentPhase.time_start) || 0;
+                      const phaseEnd = Number(currentPhase.time_end) || 0;
+                      const phaseDuration = phaseEnd - phaseStart;
+                      const targetAbsolute = phaseStart + pct * phaseDuration;
+                      if (usingFullVideo) {
+                        vid.currentTime = targetAbsolute;
+                      } else {
+                        vid.currentTime = pct * phaseDuration;
+                      }
+                      if (vid.paused) vid.play().catch(() => {});
+                    }}
+                  >
+                    <div
+                      className="absolute top-0 left-0 h-full bg-amber-400 transition-[width] duration-100"
+                      style={{ width: `${phaseProgress * 100}%` }}
+                    />
+                    <div
+                      className="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-amber-400 opacity-0 group-hover:opacity-100 transition-opacity shadow-lg"
+                      style={{ left: `calc(${phaseProgress * 100}% - 6px)` }}
+                    />
+                  </div>
+                </div>
+              )}
 
               {/* Speed overlay on video (YouTube style) */}
               {showSpeedOverlay && (
