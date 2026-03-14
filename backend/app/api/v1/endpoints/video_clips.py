@@ -159,7 +159,7 @@ async def request_clip_generation(
         import json as _json
         insert_sql = text("""
             INSERT INTO video_clips (id, video_id, user_id, phase_index, time_start, time_end, status, job_payload)
-            VALUES (:id, :video_id, :user_id, :phase_index, :time_start, :time_end, 'pending', :job_payload::jsonb)
+            VALUES (:id, :video_id, :user_id, :phase_index, :time_start, :time_end, 'pending', CAST(:job_payload AS jsonb))
         """)
         await db.execute(insert_sql, {
             "id": clip_id,
@@ -548,7 +548,7 @@ async def update_clip_captions(
 
         update_sql = text("""
             UPDATE video_clips
-            SET captions = :captions_json::jsonb, updated_at = NOW()
+            SET captions = CAST(:captions_json AS jsonb), updated_at = NOW()
             WHERE id = :clip_id
         """)
         await db.execute(update_sql, {"captions_json": captions_json, "clip_id": clip_id})
@@ -610,7 +610,7 @@ async def save_subtitle_feedback(
                 (video_id, clip_id, user_id, subtitle_style, vote, tags,
                  position_x, position_y, ai_recommended_style)
             VALUES
-                (:video_id, :clip_id, :user_id, :style, :vote, :tags::jsonb,
+                (:video_id, :clip_id, :user_id, :style, :vote, CAST(:tags AS jsonb),
                  :pos_x, :pos_y, :ai_recommended)
             RETURNING id
         """)
