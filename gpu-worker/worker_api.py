@@ -76,7 +76,7 @@ current_config = {
     "face_swapper_model": "inswapper_128",
     "face_enhancer_model": "gfpgan_1.4",
     "face_enhancer_enabled": True,
-    "face_detector_model": "yoloface",
+    "face_detector_model": "yolo_face",
     "face_detector_score": 0.5,
     "face_mask_blur": 0.3,
     "output_resolution": "1280x720",
@@ -669,9 +669,11 @@ async def get_config(auth: bool = Depends(verify_api_key)):
                 "restoreformer_plus_plus",
             ],
             "face_detector": [
-                "yoloface",
+                "many",
                 "retinaface",
                 "scrfd",
+                "yolo_face",
+                "yunet",
             ],
         },
     }
