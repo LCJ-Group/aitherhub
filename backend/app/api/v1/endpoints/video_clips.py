@@ -278,7 +278,8 @@ async def list_clips(
         user_id = user.get("user_id") or user.get("id")
 
         sql = text("""
-            SELECT id, phase_index, time_start, time_end, status, clip_url, sas_token, sas_expireddate, created_at, captions
+            SELECT id, phase_index, time_start, time_end, status, clip_url, sas_token, sas_expireddate, created_at, captions,
+                   COALESCE(progress_pct, 0) as progress_pct, progress_step
             FROM video_clips
             WHERE video_id = :video_id
             ORDER BY phase_index ASC, created_at DESC
@@ -300,6 +301,8 @@ async def list_clips(
                 "time_start": row.time_start,
                 "time_end": row.time_end,
                 "status": row.status,
+                "progress_pct": row.progress_pct if hasattr(row, 'progress_pct') else 0,
+                "progress_step": row.progress_step if hasattr(row, 'progress_step') else None,
             }
             if row.status == "completed" and row.clip_url:
                 # Generate or reuse SAS download URL (same logic as get_clip_status)
