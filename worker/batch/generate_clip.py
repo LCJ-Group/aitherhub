@@ -1731,14 +1731,75 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
 
         update_clip_progress(clip_id, 75, "creating_clip")
 
-        # 4. Choose random TikTok style
-        style = random.choice(SUBTITLE_STYLES)
-        logger.info(f"Selected subtitle style: {style['name']}")
-
-        # 5. Create vertical clip with subtitles + speed adjustment
+        # 4. Create vertical clip WITHOUT burned-in subtitles
+        # Subtitles are rendered as overlay in the frontend (ClipEditorV2)
+        # and burned in only during "Export MP4" via the export API.
+        # This avoids double-subtitle display.
         clip_path = os.path.join(work_dir, "clip_final.mp4")
-        if not create_vertical_clip(segment_path, clip_path, segments, style, speed_factor=speed_factor):
-            raise RuntimeError("Failed to create vertical clip")
+        logger.info("Creating vertical clip (no burned-in subtitles)...")
+        width, height = get_video_dimensions(segment_path)
+        target_w, target_h = 1080, 1920
+        source_ratio = width / height
+        target_ratio = target_w / target_h
+        if source_ratio > target_ratio:
+            crop_h = height
+            crop_w = int(height * target_ratio)
+            crop_x = (width - crop_w) // 2
+            crop_y = 0
+        else:
+            crop_w = width
+            crop_h = int(width / target_ratio)
+            crop_x = 0
+            crop_y = (height - crop_h) // 2
+
+        # Build ffmpeg command: crop → scale → speed adjustment (no subtitles)
+        vf_parts = [
+            f"crop={crop_w}:{crop_h}:{crop_x}:{crop_y}",
+            f"scale={target_w}:{target_h}:flags=lanczos",
+        ]
+        if speed_factor != 1.0 and speed_factor > 0:
+            vf_parts.append(f"setpts=PTS/{speed_factor}")
+
+        cmd = [
+            FFMPEG_BIN, "-y",
+            "-i", segment_path,
+            "-vf", ",".join(vf_parts),
+        ]
+        if speed_factor != 1.0 and speed_factor > 0:
+            atempo_filters = []
+            remaining = speed_factor
+            while remaining > 2.0:
+                atempo_filters.append("atempo=2.0")
+                remaining /= 2.0
+            while remaining < 0.5:
+                atempo_filters.append("atempo=0.5")
+                remaining /= 0.5
+            atempo_filters.append(f"atempo={remaining:.4f}")
+            cmd.extend(["-af", ",".join(atempo_filters)])
+        cmd.extend([
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+            "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
+            "-movflags", "+faststart", "-r", "30",
+            clip_path,
+        ])
+
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            if result.returncode != 0:
+                logger.error(f"FFmpeg nosub stderr: {result.stderr[-500:]}")
+                # Fallback to create_vertical_clip_nosub helper
+                if not create_vertical_clip_nosub(segment_path, clip_path,
+                                                   crop_w, crop_h, crop_x, crop_y, target_w, target_h):
+                    raise RuntimeError("Failed to create vertical clip")
+            else:
+                logger.info(f"Vertical clip created (no subtitles, speed={speed_factor}x)")
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("FFmpeg timed out creating vertical clip")
+        except Exception as e:
+            logger.error(f"FFmpeg nosub failed: {e}")
+            if not create_vertical_clip_nosub(segment_path, clip_path,
+                                               crop_w, crop_h, crop_x, crop_y, target_w, target_h):
+                raise RuntimeError("Failed to create vertical clip")
 
         if not os.path.exists(clip_path) or os.path.getsize(clip_path) == 0:
             raise RuntimeError("Output clip file is empty")

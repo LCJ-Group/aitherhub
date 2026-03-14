@@ -243,6 +243,10 @@ export default function VideoDetail({ videoData }) {
             states[clip.phase_index] = {
               status: clip.status,
               clip_url: clip.clip_url || null,
+              clip_id: clip.id || clip.clip_id || null,
+              time_start: clip.time_start ?? null,
+              time_end: clip.time_end ?? null,
+              captions: clip.captions || null,
             };
           }
           setClipStates(states);

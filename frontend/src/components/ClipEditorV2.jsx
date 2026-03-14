@@ -819,7 +819,15 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
               borderRadius: 4,
             }}
           >
-            Phase {clip.phase_index != null && !isNaN(Number(clip.phase_index)) ? clip.phase_index : (clip.phase_index || "?")} | {fmt(origStart)} - {fmt(origEnd)}
+            {(() => {
+              const key = String(clip.phase_index ?? "");
+              if (key.startsWith("moment_")) return "Moment Clip";
+              if (key.startsWith("sales_")) return "Sales Spike";
+              if (key.startsWith("hook")) return "Hook";
+              if (key.startsWith("ai_")) return "AI\u63A8\u85A6";
+              if (/^\d+$/.test(key)) return `Phase ${Number(key) + 1}`;
+              return key || "?";
+            })()} | {fmt(origStart)} - {fmt(origEnd)}
           </span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -1014,8 +1022,8 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
               </span>
             </div>
 
-            {/* ★ SUBTITLE OVERLAY ★ — hidden when clip_url exists (video has burned-in subs) */}
-            {currentCaption && !isClipVideo && (() => {
+            {/* ★ SUBTITLE OVERLAY ★ */}
+            {currentCaption && (() => {
               const preset = SUBTITLE_PRESETS[subtitleStyle] || SUBTITLE_PRESETS.box;
               const presetText = preset.text || {};
               return (
