@@ -354,6 +354,33 @@ def process_job(payload: dict, msg_id: str, pop_receipt: str) -> bool:
             active_jobs.pop(job_id, None)
 
 
+def _mark_clip_failed(clip_id: str, error_message: str):
+    """Mark a clip as 'failed' in the database with error details."""
+    try:
+        from shared.db.session import get_session, run_sync
+        from sqlalchemy import text
+
+        async def _update():
+            async with get_session() as session:
+                await session.execute(
+                    text("""
+                        UPDATE video_clips
+                        SET status = 'failed',
+                            error_message = :error_message,
+                            progress_step = 'error',
+                            updated_at = NOW()
+                        WHERE id = :clip_id
+                        AND status NOT IN ('completed', 'dead')
+                    """),
+                    {"clip_id": clip_id, "error_message": error_message[:500]},
+                )
+
+        run_sync(_update())
+        print(f"[worker] Marked clip {clip_id} as 'failed'")
+    except Exception as db_err:
+        print(f"[worker] Failed to mark clip as failed: {db_err}")
+
+
 def _run_clip_job(payload: dict) -> bool:
     """Run clip generation as subprocess with heartbeat, metrics, and temp cleanup."""
     clip_id = payload.get("clip_id")
@@ -405,9 +432,11 @@ def _run_clip_job(payload: dict) -> bool:
             cmd, cwd=BATCH_DIR,
             env={**os.environ, "PYTHONPATH": f"{str(PROJECT_ROOT)}:{BATCH_DIR}"},
             start_new_session=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
         )
         try:
-            proc.wait(timeout=WORKER_CLIP_TIMEOUT)
+            stdout, stderr = proc.communicate(timeout=WORKER_CLIP_TIMEOUT)
         except subprocess.TimeoutExpired:
             print(f"[worker] Clip timeout — killing pid={proc.pid}")
             try:
@@ -426,16 +455,27 @@ def _run_clip_job(payload: dict) -> bool:
 
         if proc.returncode == 0:
             print(f"[worker] Clip completed: {clip_id}")
+            if stdout:
+                for line in stdout.decode(errors='replace').strip().split('\n')[-5:]:
+                    print(f"[clip-stdout] {line}")
             if metrics:
                 metrics.finish(status="completed")
             return True
         else:
-            log_error_type(clip_id, "generate_clip", "FFMPEG_FAIL", f"exit={proc.returncode}")
+            stderr_text = stderr.decode(errors='replace').strip() if stderr else ''
+            stdout_text = stdout.decode(errors='replace').strip() if stdout else ''
+            last_lines = '\n'.join((stderr_text or stdout_text).split('\n')[-10:])
+            print(f"[worker] Clip FAILED: {clip_id} exit={proc.returncode}")
+            print(f"[clip-stderr] {last_lines}")
+            log_error_type(clip_id, "generate_clip", "FFMPEG_FAIL", f"exit={proc.returncode} stderr={last_lines[:200]}")
+            # Mark clip as failed in DB (generate_clip.py may not have had a chance to do this)
+            _mark_clip_failed(clip_id, f"exit={proc.returncode}: {last_lines[:300]}")
             if metrics:
                 metrics.finish(status="failed")
             return False
     except Exception as e:
         log_error_type(clip_id, "generate_clip", "UNKNOWN", f"EXC={type(e).__name__} {e}")
+        _mark_clip_failed(clip_id, f"{type(e).__name__}: {e}")
         if metrics:
             metrics.finish(status="error")
         return False
