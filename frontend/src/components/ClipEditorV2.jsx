@@ -253,14 +253,26 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
   }, [isClipVideo, origStart]);
 
   // Current caption based on playback time (with offset correction)
+  // Extend display: each caption stays visible until the next caption starts
+  // or for a minimum of 3 seconds, whichever is longer.
   const currentCaption = useMemo(() => {
     if (!captions.length) return null;
     const t = currentTime;
-    return captions.find((c) => {
+    const MIN_DISPLAY = 3; // minimum display duration in seconds
+    for (let i = 0; i < captions.length; i++) {
+      const c = captions[i];
       const localStart = toLocalTime(c.start || 0);
-      const localEnd = toLocalTime(c.end || (c.start + 5));
-      return t >= localStart && t <= localEnd;
-    });
+      const rawEnd = toLocalTime(c.end || (c.start + 5));
+      // Extend end to at least MIN_DISPLAY seconds after start
+      let extendedEnd = Math.max(rawEnd, localStart + MIN_DISPLAY);
+      // But don't overlap with next caption's start
+      if (i + 1 < captions.length) {
+        const nextStart = toLocalTime(captions[i + 1].start || 0);
+        extendedEnd = Math.min(extendedEnd, nextStart);
+      }
+      if (t >= localStart && t < extendedEnd) return c;
+    }
+    return null;
   }, [captions, currentTime, toLocalTime]);
 
   const currentPhase = useMemo(() => {
