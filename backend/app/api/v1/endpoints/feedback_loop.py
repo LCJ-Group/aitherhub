@@ -51,7 +51,7 @@ class ClipRatingRequest(BaseModel):
 class ClipRatingResponse(BaseModel):
     id: str
     video_id: str
-    phase_index: int
+    phase_index: str
     rating: str
     reason_tags: Optional[list[str]]
     created_at: str
@@ -95,7 +95,7 @@ class SalesConfirmationRequest(BaseModel):
 class SalesConfirmationResponse(BaseModel):
     id: str
     video_id: str
-    phase_index: int
+    phase_index: str
     is_sales_moment: bool
     confidence: Optional[int]
     note: Optional[str]

@@ -301,6 +301,53 @@ async def ensure_tables_exist():
     # ── Feedback Loop tables: clip_feedback extensions, sales_confirmation, clip_edit_log ──
     try:
         async with engine.begin() as conn:
+            # Fix phase_index type: INTEGER → TEXT (Moment clips use string IDs like 'moment_strong_test4')
+            try:
+                await conn.execute(_text("""
+                    DO $$
+                    BEGIN
+                        IF EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'clip_feedback'
+                              AND column_name = 'phase_index'
+                              AND data_type = 'integer'
+                        ) THEN
+                            -- Drop the unique constraint first
+                            ALTER TABLE clip_feedback DROP CONSTRAINT IF EXISTS uq_clip_feedback_video_phase;
+                            -- Change column type
+                            ALTER TABLE clip_feedback ALTER COLUMN phase_index TYPE TEXT USING phase_index::TEXT;
+                            -- Re-add the unique constraint
+                            ALTER TABLE clip_feedback ADD CONSTRAINT uq_clip_feedback_video_phase UNIQUE (video_id, phase_index);
+                            RAISE NOTICE 'clip_feedback.phase_index changed from INTEGER to TEXT';
+                        END IF;
+                    END $$;
+                """))
+            except Exception as _e:
+                logger.debug(f"clip_feedback phase_index type change skipped: {_e}")
+
+            try:
+                await conn.execute(_text("""
+                    DO $$
+                    BEGIN
+                        IF EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'sales_confirmation'
+                              AND column_name = 'phase_index'
+                              AND data_type = 'integer'
+                        ) THEN
+                            -- Drop the unique constraint first
+                            ALTER TABLE sales_confirmation DROP CONSTRAINT IF EXISTS uq_sales_confirmation_video_phase;
+                            -- Change column type
+                            ALTER TABLE sales_confirmation ALTER COLUMN phase_index TYPE TEXT USING phase_index::TEXT;
+                            -- Re-add the unique constraint
+                            ALTER TABLE sales_confirmation ADD CONSTRAINT uq_sales_confirmation_video_phase UNIQUE (video_id, phase_index);
+                            RAISE NOTICE 'sales_confirmation.phase_index changed from INTEGER to TEXT';
+                        END IF;
+                    END $$;
+                """))
+            except Exception as _e:
+                logger.debug(f"sales_confirmation phase_index type change skipped: {_e}")
+
             # Ensure clip_feedback has rating + reason_tags columns
             for col_sql in [
                 "ALTER TABLE clip_feedback ADD COLUMN IF NOT EXISTS rating VARCHAR(20)",
@@ -331,7 +378,7 @@ async def ensure_tables_exist():
                 CREATE TABLE IF NOT EXISTS sales_confirmation (
                     id UUID PRIMARY KEY,
                     video_id UUID NOT NULL,
-                    phase_index INTEGER NOT NULL,
+                    phase_index TEXT NOT NULL,
                     time_start FLOAT NOT NULL,
                     time_end FLOAT NOT NULL,
                     is_sales_moment BOOLEAN NOT NULL,
