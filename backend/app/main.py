@@ -298,6 +298,82 @@ async def ensure_tables_exist():
     except Exception as e:
         logger.warning(f"Failed to ensure bug_reports/work_logs tables on startup: {e}")
 
+    # ── Feedback Loop tables: clip_feedback extensions, sales_confirmation, clip_edit_log ──
+    try:
+        async with engine.begin() as conn:
+            # Ensure clip_feedback has rating + reason_tags columns
+            for col_sql in [
+                "ALTER TABLE clip_feedback ADD COLUMN IF NOT EXISTS rating VARCHAR(20)",
+                "ALTER TABLE clip_feedback ADD COLUMN IF NOT EXISTS reason_tags JSONB",
+            ]:
+                try:
+                    await conn.execute(_text(col_sql))
+                except Exception as _e:
+                    logger.debug(f"DDL skipped (likely already exists): {_e}")
+
+            # Ensure UNIQUE constraint on (video_id, phase_index) for ON CONFLICT
+            await conn.execute(_text("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_constraint
+                        WHERE conname = 'uq_clip_feedback_video_phase'
+                    ) THEN
+                        ALTER TABLE clip_feedback
+                        ADD CONSTRAINT uq_clip_feedback_video_phase
+                        UNIQUE (video_id, phase_index);
+                    END IF;
+                END $$;
+            """))
+
+            # Create sales_confirmation table
+            await conn.execute(_text("""
+                CREATE TABLE IF NOT EXISTS sales_confirmation (
+                    id UUID PRIMARY KEY,
+                    video_id UUID NOT NULL,
+                    phase_index INTEGER NOT NULL,
+                    time_start FLOAT NOT NULL,
+                    time_end FLOAT NOT NULL,
+                    is_sales_moment BOOLEAN NOT NULL,
+                    clip_id UUID,
+                    confidence INTEGER,
+                    note TEXT,
+                    reviewer_name VARCHAR(100),
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ DEFAULT NOW(),
+                    CONSTRAINT uq_sales_confirmation_video_phase UNIQUE (video_id, phase_index)
+                )
+            """))
+            await conn.execute(_text("""
+                CREATE INDEX IF NOT EXISTS ix_sales_confirmation_video_id
+                ON sales_confirmation (video_id)
+            """))
+
+            # Create clip_edit_log table
+            await conn.execute(_text("""
+                CREATE TABLE IF NOT EXISTS clip_edit_log (
+                    id UUID PRIMARY KEY,
+                    clip_id UUID NOT NULL,
+                    video_id UUID NOT NULL,
+                    edit_type VARCHAR(50) NOT NULL,
+                    before_value JSONB,
+                    after_value JSONB,
+                    delta_seconds FLOAT,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """))
+            await conn.execute(_text("""
+                CREATE INDEX IF NOT EXISTS ix_clip_edit_log_video_id
+                ON clip_edit_log (video_id)
+            """))
+            await conn.execute(_text("""
+                CREATE INDEX IF NOT EXISTS ix_clip_edit_log_clip_id
+                ON clip_edit_log (clip_id)
+            """))
+        logger.info("Feedback loop tables (clip_feedback extensions, sales_confirmation, clip_edit_log) verified/created")
+    except Exception as e:
+        logger.warning(f"Failed to ensure feedback loop tables on startup: {e}")
+
     # ── lessons_learned: プロジェクトの永続記憶 ──
     try:
         async with engine.begin() as conn:

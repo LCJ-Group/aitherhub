@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import VideoService from "../base/services/videoService";
 import ClipEditorV2 from "./ClipEditorV2";
 
@@ -36,9 +36,10 @@ function detectSource(phaseIndex) {
  *   clipStates – current clip generation states from parent (keyed by phase_index)
  *   reports1 – array of phase objects (for phase labels)
  */
-export default function ClipSection({ videoData, clipStates, reports1 }) {
+export default function ClipSection({ videoData, clipStates, reports1, editorParams }) {
   const [collapsed, setCollapsed] = useState(false);
   const [editorClip, setEditorClip] = useState(null);
+  const editorAutoOpenedRef = useRef(false);
 
   // Get clips that are completed or generating subtitles
   const visibleClips = useMemo(() => {
@@ -91,6 +92,35 @@ export default function ClipSection({ videoData, clipStates, reports1 }) {
         return String(a.phaseIndex).localeCompare(String(b.phaseIndex));
       });
   }, [clipStates, reports1]);
+
+  // Auto-open editor when editorParams are provided (from feedback card click)
+  useEffect(() => {
+    if (!editorParams || editorAutoOpenedRef.current || visibleClips.length === 0) return;
+    editorAutoOpenedRef.current = true;
+
+    // Find the clip that matches the editorParams (by phase_index or time range)
+    let targetClip = null;
+    if (editorParams.phase_index != null) {
+      targetClip = visibleClips.find(
+        (c) => String(c.phaseIndex) === String(editorParams.phase_index)
+      );
+    }
+    // Fallback: match by time range overlap
+    if (!targetClip && editorParams.time_start != null && editorParams.time_end != null) {
+      targetClip = visibleClips.find((c) => {
+        const cStart = c.time_start ?? 0;
+        const cEnd = c.time_end ?? 0;
+        return cStart < editorParams.time_end && cEnd > editorParams.time_start;
+      });
+    }
+    // Fallback: open the first clip
+    if (!targetClip && visibleClips.length > 0) {
+      targetClip = visibleClips[0];
+    }
+    if (targetClip) {
+      handleOpenEditor(targetClip);
+    }
+  }, [editorParams, visibleClips]);
 
   // Don't render if no visible clips
   if (visibleClips.length === 0) return null;
