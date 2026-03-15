@@ -1090,9 +1090,14 @@ async def export_subtitled_clip(
     """
     Generate a subtitled MP4 clip using ffmpeg with ASS subtitles.
     Downloads the source clip, generates ASS subtitle file,
-    burns subtitles into video, and returns the result URL.
+    burns subtitles into video, uploads to Azure Blob, and returns the download URL.
     """
     import shutil
+    from azure.storage.blob import BlobServiceClient, BlobSasPermissions, generate_blob_sas, ContentSettings
+    from app.services.storage_service import (
+        CONNECTION_STRING, ACCOUNT_NAME, CONTAINER_NAME,
+        generate_read_sas_from_url, _parse_account_key,
+    )
 
     try:
         uuid.UUID(video_id)
@@ -1108,18 +1113,24 @@ async def export_subtitled_clip(
         video_path = os.path.join(tmp_dir, "source.mp4")
         clip_url = req.clip_url
 
-        # Add SAS token if needed (same logic as transcribe)
+        # Add SAS token if needed for Azure Blob URLs
         if "blob.core.windows.net" in clip_url and "sig=" not in clip_url:
-            try:
-                from app.services.azure_storage import generate_sas_url
-                clip_url = await generate_sas_url(clip_url)
-            except Exception as _e:
-                logger.debug(f"Non-critical error suppressed: {_e}")
+            sas_url = generate_read_sas_from_url(clip_url)
+            if sas_url:
+                clip_url = sas_url
+                logger.info(f"[export-sub] Added SAS token to clip URL")
 
         import httpx
-        async with httpx.AsyncClient(timeout=120) as client:
-            resp = await client.get(clip_url)
-            resp.raise_for_status()
+        async with httpx.AsyncClient(timeout=180, verify=True, follow_redirects=True) as client:
+            try:
+                resp = await client.get(clip_url)
+                resp.raise_for_status()
+            except httpx.ConnectError as ssl_err:
+                # Retry without SSL verification for Azure Blob internal certs
+                logger.warning(f"[export-sub] SSL error, retrying without verify: {ssl_err}")
+                async with httpx.AsyncClient(timeout=180, verify=False, follow_redirects=True) as client2:
+                    resp = await client2.get(clip_url)
+                    resp.raise_for_status()
             with open(video_path, "wb") as f:
                 f.write(resp.content)
         logger.info(f"[export-sub] Downloaded clip: {os.path.getsize(video_path)} bytes")
@@ -1162,20 +1173,24 @@ async def export_subtitled_clip(
         output_size = os.path.getsize(output_path)
         logger.info(f"[export-sub] Generated subtitled video: {output_size/1024/1024:.1f} MB")
 
-        # Step 4: Upload to Azure Blob Storage
-        try:
-            from app.services.azure_storage import upload_file_to_blob
-            blob_name = f"exports/{video_id}/subtitled_{uuid.uuid4().hex[:8]}.mp4"
-            download_url = await upload_file_to_blob(output_path, blob_name, content_type="video/mp4")
-            logger.info(f"[export-sub] Uploaded to Azure: {blob_name}")
-        except ImportError:
-            # Fallback: return as base64 or file response
-            from fastapi.responses import FileResponse
-            return FileResponse(
-                output_path,
-                media_type="video/mp4",
-                filename=f"clip_{video_id}_subtitled.mp4",
-            )
+        # Step 4: Upload to Azure Blob Storage using BlobServiceClient
+        if not CONNECTION_STRING:
+            raise HTTPException(status_code=500, detail="Azure storage not configured")
+
+        blob_name = f"exports/{video_id}/subtitled_{uuid.uuid4().hex[:8]}.mp4"
+        service_client = BlobServiceClient.from_connection_string(CONNECTION_STRING)
+        blob_client = service_client.get_blob_client(container=CONTAINER_NAME, blob=blob_name)
+
+        with open(output_path, "rb") as data:
+            blob_client.upload_blob(data, overwrite=True, content_settings=ContentSettings(content_type="video/mp4"))
+        logger.info(f"[export-sub] Uploaded to Azure: {blob_name}")
+
+        # Generate download URL with SAS token
+        blob_url = f"https://{ACCOUNT_NAME}.blob.core.windows.net/{CONTAINER_NAME}/{blob_name}"
+        download_url = generate_read_sas_from_url(blob_url, expires_hours=72)
+        if not download_url:
+            download_url = blob_url
+        logger.info(f"[export-sub] Download URL generated")
 
         return {
             "video_id": video_id,
