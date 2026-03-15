@@ -1,7 +1,12 @@
 FROM python:3.11-slim
 
-# Install ffmpeg for audio extraction (needed for Whisper transcription)
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+# Install ffmpeg (with libass for subtitle burning), fonts, and CA certificates
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    libass9 \
+    fonts-noto-cjk \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
