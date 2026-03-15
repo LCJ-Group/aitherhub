@@ -1109,8 +1109,32 @@ def _generate_ass_content(captions: list, style: str, position_x: float, positio
     return ass
 
 
-# ─── In-memory export job store ──────────────────────────────────────────────
-_export_jobs: dict = {}  # job_id -> {status, download_url, error, ...}
+# ─── File-based export job store (survives worker recycle) ────────────────────
+_EXPORT_JOB_DIR = os.path.join(tempfile.gettempdir(), "aitherhub_export_jobs")
+os.makedirs(_EXPORT_JOB_DIR, exist_ok=True)
+
+def _save_job(job_id: str, data: dict):
+    """Persist job state to a JSON file."""
+    path = os.path.join(_EXPORT_JOB_DIR, f"{job_id}.json")
+    with open(path, "w") as f:
+        json.dump(data, f)
+
+def _load_job(job_id: str) -> dict | None:
+    """Load job state from file."""
+    path = os.path.join(_EXPORT_JOB_DIR, f"{job_id}.json")
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+def _update_job(job_id: str, **kwargs):
+    """Update specific fields in a job."""
+    data = _load_job(job_id) or {}
+    data.update(kwargs)
+    _save_job(job_id, data)
 
 
 async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, style: str,
@@ -1132,7 +1156,7 @@ async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, s
     tmp_dir = tempfile.mkdtemp(prefix="export_sub_")
     try:
         # ── Step 1: Download clip from Azure Blob ──
-        _export_jobs[job_id]["status"] = "downloading"
+        _update_job(job_id, status="downloading")
         video_path = os.path.join(tmp_dir, "source.mp4")
 
         # Extract blob_name from clip_url (CDN or Blob URL)
@@ -1162,7 +1186,7 @@ async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, s
         logger.info(f"[export-job {job_id}] Downloaded: {file_size/1024/1024:.1f} MB")
 
         # ── Step 2: Generate SRT subtitle file ──
-        _export_jobs[job_id]["status"] = "encoding"
+        _update_job(job_id, status="encoding")
         srt_path = os.path.join(tmp_dir, "subtitles.srt")
         srt_content = _generate_srt_content(captions, time_start)
         with open(srt_path, "w", encoding="utf-8") as f:
@@ -1235,25 +1259,22 @@ async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, s
             proc.kill()
             await proc.wait()
             logger.error(f"[export-job {job_id}] ffmpeg timed out after {FFMPEG_TIMEOUT}s")
-            _export_jobs[job_id]["status"] = "failed"
-            _export_jobs[job_id]["error"] = f"Encoding timed out ({FFMPEG_TIMEOUT}s)"
+            _update_job(job_id, status="failed", error=f"Encoding timed out ({FFMPEG_TIMEOUT}s)")
             return
 
         if proc.returncode != 0:
             err_msg = stderr.decode(errors='replace')[:500]
             logger.error(f"[export-job {job_id}] ffmpeg failed (rc={proc.returncode}): {err_msg}")
-            _export_jobs[job_id]["status"] = "failed"
-            _export_jobs[job_id]["error"] = f"ffmpeg error: {err_msg[:200]}"
+            _update_job(job_id, status="failed", error=f"ffmpeg error: {err_msg[:200]}")
             return
 
         output_size = os.path.getsize(output_path)
         logger.info(f"[export-job {job_id}] Encoded: {output_size/1024/1024:.1f} MB")
 
         # ── Step 4: Upload to Azure Blob ──
-        _export_jobs[job_id]["status"] = "uploading"
+        _update_job(job_id, status="uploading")
         if not CONNECTION_STRING:
-            _export_jobs[job_id]["status"] = "failed"
-            _export_jobs[job_id]["error"] = "Azure storage not configured"
+            _update_job(job_id, status="failed", error="Azure storage not configured")
             return
 
         upload_blob_name = f"exports/{video_id}/subtitled_{uuid.uuid4().hex[:8]}.mp4"
@@ -1275,15 +1296,12 @@ async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, s
         if _BLOB_HOST and _CDN_HOST:
             download_url = download_url.replace(_BLOB_HOST, _CDN_HOST)
 
-        _export_jobs[job_id]["status"] = "done"
-        _export_jobs[job_id]["download_url"] = download_url
-        _export_jobs[job_id]["file_size"] = output_size
+        _update_job(job_id, status="done", download_url=download_url, file_size=output_size)
         logger.info(f"[export-job {job_id}] Complete! URL: {download_url[:80]}...")
 
     except Exception as e:
         logger.error(f"[export-job {job_id}] Failed: {e}", exc_info=True)
-        _export_jobs[job_id]["status"] = "failed"
-        _export_jobs[job_id]["error"] = str(e)[:300]
+        _update_job(job_id, status="failed", error=str(e)[:300])
     finally:
         _cleanup_tmp(tmp_dir)
 
@@ -1307,13 +1325,13 @@ async def export_subtitled_clip(
         raise HTTPException(status_code=400, detail="No captions provided")
 
     job_id = uuid.uuid4().hex[:12]
-    _export_jobs[job_id] = {
+    _save_job(job_id, {
         "status": "queued",
         "video_id": video_id,
         "style": req.style,
         "caption_count": len(req.captions),
         "created_at": datetime.now(timezone.utc).isoformat(),
-    }
+    })
 
     # Launch background task
     asyncio.create_task(_run_export_job(
@@ -1333,7 +1351,7 @@ async def get_export_status(video_id: str, job_id: str):
     """
     Poll export job status. Returns download_url when done.
     """
-    job = _export_jobs.get(job_id)
+    job = _load_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Export job not found")
 
