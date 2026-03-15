@@ -1,9 +1,9 @@
 #!/bin/bash
 
-# Install ffmpeg for audio extraction (needed for Whisper transcription)
+# Install ffmpeg and subtitle dependencies
 if ! command -v ffmpeg &> /dev/null; then
     echo "[startup] Installing ffmpeg..."
-    apt-get update -qq && apt-get install -y -qq --no-install-recommends ffmpeg libass-dev fonts-noto-cjk 2>&1 | tail -3
+    apt-get update -qq && apt-get install -y -qq --no-install-recommends ffmpeg 2>&1 | tail -3
     echo "[startup] ffmpeg installed: $(ffmpeg -version 2>&1 | head -1)"
 else
     echo "[startup] ffmpeg already available: $(ffmpeg -version 2>&1 | head -1)"
