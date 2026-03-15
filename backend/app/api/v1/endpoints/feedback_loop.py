@@ -193,7 +193,7 @@ async def submit_clip_rating(
     except Exception as e:
         await db.rollback()
         logger.error(f"[clip_rating] DB error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to save rating")
+        raise HTTPException(status_code=500, detail=f"Failed to save rating: {str(e)[:300]}")
 
     reason_tags_parsed = None
     if row.reason_tags:
@@ -433,7 +433,7 @@ async def submit_sales_confirmation(
     except Exception as e:
         await db.rollback()
         logger.error(f"[sales_confirmation] DB error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to save confirmation")
+        raise HTTPException(status_code=500, detail=f"Failed to save confirmation: {str(e)[:300]}")
 
     return SalesConfirmationResponse(
         id=str(row.id),
