@@ -712,7 +712,7 @@ async def get_subtitle_recommendation(
 
         # Get video metadata
         video_sql = text("""
-            SELECT title, tags, status FROM videos WHERE id = :video_id
+            SELECT original_filename, status FROM videos WHERE id = :video_id
         """)
         vres = await db.execute(video_sql, {"video_id": video_id})
         video = vres.fetchone()
@@ -748,25 +748,23 @@ async def get_subtitle_recommendation(
             }
         elif video:
             # Fallback to content-based recommendation
-            title = (video.title or "").lower()
-            tags = video.tags if video.tags else []
-            tags_str = str(tags).lower()
+            title = (video.original_filename or "").lower()
 
-            if any(kw in title or kw in tags_str for kw in ["美容", "コスメ", "スキンケア", "beauty"]):
+            if any(kw in title for kw in ["美容", "コスメ", "スキンケア", "beauty"]):
                 recommendation = {
                     "style": "gradient",
                     "reason": "美容系コンテンツに最適",
                     "confidence": 0.7,
                     "source": "content_analysis",
                 }
-            elif any(kw in title or kw in tags_str for kw in ["エンタメ", "お笑い", "バラエティ", "funny"]):
+            elif any(kw in title for kw in ["エンタメ", "お笑い", "バラエティ", "funny"]):
                 recommendation = {
                     "style": "pop",
                     "reason": "エンタメ系に最適・インパクト大",
                     "confidence": 0.7,
                     "source": "content_analysis",
                 }
-            elif any(kw in title or kw in tags_str for kw in ["ビジネス", "解説", "教育"]):
+            elif any(kw in title for kw in ["ビジネス", "解説", "教育"]):
                 recommendation = {
                     "style": "simple",
                     "reason": "ビジネス系・読みやすさ重視",
