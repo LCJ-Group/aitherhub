@@ -170,22 +170,77 @@ def generate_read_sas_from_url(
         return None
 
 
+def resolve_blob_video_id(email: str, video_id: str) -> str:
+    """
+    BUILD 42: Resolve the correct UUID case for blob storage paths.
+
+    iOS generates UPPERCASE UUIDs (UUID().uuidString) while PostgreSQL
+    normalises to lowercase.  Azure Blob Storage paths are case-sensitive.
+    This helper checks which case actually has blobs and returns the
+    correct video_id string to use for all subsequent blob operations.
+
+    Returns the video_id in the correct case (uppercase or lowercase).
+    If neither case has blobs, returns the original video_id.
+    """
+    if not CONNECTION_STRING:
+        return video_id
+    try:
+        service_client = BlobServiceClient.from_connection_string(CONNECTION_STRING)
+        container_client = service_client.get_container_client(CONTAINER_NAME)
+        # Try original case first
+        prefix = f"{email}/{video_id}/"
+        blobs = list(container_client.list_blobs(name_starts_with=prefix, results_per_page=1))
+        if blobs:
+            return video_id
+        # Try UPPERCASE
+        upper_vid = video_id.upper()
+        if upper_vid != video_id:
+            prefix_upper = f"{email}/{upper_vid}/"
+            blobs_upper = list(container_client.list_blobs(name_starts_with=prefix_upper, results_per_page=1))
+            if blobs_upper:
+                logger.info(f"[resolve_blob_video_id] Resolved {video_id} → {upper_vid} (UPPERCASE)")
+                return upper_vid
+        return video_id
+    except Exception as exc:
+        logger.warning(f"[resolve_blob_video_id] Error: {exc}")
+        return video_id
+
+
 def check_blob_exists(email: str, video_id: str, filename: str) -> bool:
     """
-    BUILD 33: Check if a specific blob exists in Azure Blob Storage.
+    BUILD 33/42: Check if a specific blob exists in Azure Blob Storage.
     Used to verify chunks were actually uploaded before starting analysis.
+
+    BUILD 42: iOS generates UPPERCASE UUIDs (UUID().uuidString) while
+    PostgreSQL normalises to lowercase.  Blob Storage paths are
+    case-sensitive, so we try both cases.
     """
     if not CONNECTION_STRING:
         logger.warning("[check_blob_exists] No connection string — cannot verify blob")
         return True  # Fail open if we can't check
 
     try:
-        blob_name = generate_blob_name(email, video_id, filename)
         service_client = BlobServiceClient.from_connection_string(CONNECTION_STRING)
+        # Try original case first (usually lowercase from DB)
+        blob_name = generate_blob_name(email, video_id, filename)
         blob_client = service_client.get_blob_client(
             container=CONTAINER_NAME, blob=blob_name
         )
-        return blob_client.exists()
+        if blob_client.exists():
+            return True
+        # BUILD 42: Fallback — try UPPERCASE UUID (iOS convention)
+        upper_vid = video_id.upper()
+        if upper_vid != video_id:
+            blob_name_upper = generate_blob_name(email, upper_vid, filename)
+            blob_client_upper = service_client.get_blob_client(
+                container=CONTAINER_NAME, blob=blob_name_upper
+            )
+            if blob_client_upper.exists():
+                logger.info(
+                    f"[check_blob_exists] Found blob with UPPERCASE UUID: {blob_name_upper}"
+                )
+                return True
+        return False
     except Exception as exc:
         logger.warning(f"[check_blob_exists] Error checking blob: {exc}")
         return True  # Fail open on error

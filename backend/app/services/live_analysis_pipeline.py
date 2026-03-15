@@ -90,6 +90,16 @@ class LiveAnalysisPipeline:
         job_uuid = uuid.UUID(job_id)
         logger.info(f"[pipeline] Starting analysis job={job_id} video={video_id}")
 
+        # BUILD 42: Resolve UUID case for blob storage.
+        # iOS generates UPPERCASE UUIDs but PostgreSQL normalises to lowercase.
+        # We need the correct case for all blob operations.
+        from app.services.storage_service import resolve_blob_video_id
+        blob_video_id = resolve_blob_video_id(email, video_id)
+        if blob_video_id != video_id:
+            logger.info(
+                f"[pipeline] BUILD 42: UUID case resolved: {video_id} → {blob_video_id}"
+            )
+
         # Track temp paths for cleanup in finally block
         assembled_path = None
         audio_path = None
@@ -98,7 +108,7 @@ class LiveAnalysisPipeline:
             # Step 1: Assemble chunks
             await self._update_step(job_uuid, "assembling", 0.0, video_id=video_id)
             assembled_path = await self._assemble_chunks(
-                video_id=video_id,
+                video_id=blob_video_id,
                 email=email,
                 total_chunks=total_chunks,
             )
