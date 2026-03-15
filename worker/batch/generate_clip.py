@@ -1046,59 +1046,115 @@ def detect_person_intervals(video_path: str, sample_fps: float = 2.0, confidence
 def concatenate_intervals(video_path: str, intervals: list, output_path: str) -> bool:
     """
     Concatenate only the specified time intervals from the video.
-    Uses FFmpeg concat demuxer for seamless joining.
+
+    Uses FFmpeg filter_complex with accurate seeking (re-encode) to avoid
+    duplicate frames caused by keyframe-aligned stream-copy cuts.
+    When there are many intervals (>10), falls back to per-segment re-encode
+    + concat demuxer to avoid overly complex filter graphs.
     """
     if not intervals:
         return False
 
+    # Filter out very short intervals
+    intervals = [(s, e) for s, e in intervals if e - s >= 0.5]
+    if not intervals:
+        return False
+
     work_dir = os.path.dirname(output_path)
+    n = len(intervals)
+    logger.info(f"Concatenating {n} intervals from {video_path}")
+
+    # ---- Strategy A: filter_complex for small number of intervals ----
+    if n <= 10:
+        try:
+            return _concat_via_filter_complex(video_path, intervals, output_path)
+        except Exception as e:
+            logger.warning(f"filter_complex concat failed, falling back to per-segment: {e}")
+
+    # ---- Strategy B: per-segment re-encode + concat demuxer ----
+    return _concat_via_segments(video_path, intervals, output_path, work_dir)
+
+
+def _concat_via_filter_complex(video_path: str, intervals: list, output_path: str) -> bool:
+    """
+    Use a single FFmpeg command with filter_complex to trim and concatenate
+    intervals accurately (re-encode, no keyframe issues).
+    """
+    n = len(intervals)
+    # Build filter_complex string
+    filter_parts = []
+    concat_inputs = ""
+    for i, (start, end) in enumerate(intervals):
+        duration = end - start
+        filter_parts.append(
+            f"[0:v]trim=start={start:.3f}:duration={duration:.3f},setpts=PTS-STARTPTS[v{i}];"
+        )
+        filter_parts.append(
+            f"[0:a]atrim=start={start:.3f}:duration={duration:.3f},asetpts=PTS-STARTPTS[a{i}];"
+        )
+        concat_inputs += f"[v{i}][a{i}]"
+
+    filter_parts.append(
+        f"{concat_inputs}concat=n={n}:v=1:a=1[outv][outa]"
+    )
+    filter_str = "".join(filter_parts)
+
+    cmd = [
+        FFMPEG_BIN, "-y",
+        "-i", video_path,
+        "-filter_complex", filter_str,
+        "-map", "[outv]", "-map", "[outa]",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+        "-c:a", "aac", "-b:a", "128k",
+        "-movflags", "+faststart",
+        output_path,
+    ]
+
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    if result.returncode != 0:
+        logger.error(f"filter_complex concat stderr: {result.stderr[-500:]}")
+        raise RuntimeError(f"filter_complex concat failed (rc={result.returncode})")
+
+    logger.info(f"Concatenated {n} intervals via filter_complex")
+    return True
+
+
+def _concat_via_segments(video_path: str, intervals: list, output_path: str, work_dir: str) -> bool:
+    """
+    Cut each interval with re-encode (accurate seek) then concatenate
+    via concat demuxer.  Used when there are too many intervals for
+    filter_complex.
+    """
     segment_files = []
 
-    # Cut each interval into a separate file
     for i, (start, end) in enumerate(intervals):
         seg_path = os.path.join(work_dir, f"person_seg_{i}.mp4")
         duration = end - start
-        if duration < 0.5:  # Skip very short segments
+        if duration < 0.5:
             continue
 
-        # Use stream copy for near-instant cutting (2026-03 optimization)
+        # Always re-encode for accurate cutting (avoids keyframe duplication)
         cmd = [
             FFMPEG_BIN, "-y",
             "-ss", f"{start:.3f}",
+            "-accurate_seek",
             "-i", video_path,
             "-t", f"{duration:.3f}",
-            "-c", "copy",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+            "-c:a", "aac", "-b:a", "128k",
             "-movflags", "+faststart",
-            "-avoid_negative_ts", "make_zero",
             seg_path,
         ]
         try:
-            subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=30)
+            subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=300)
             segment_files.append(seg_path)
         except Exception as e:
-            logger.warning(f"Stream-copy cut failed for interval {i}, trying re-encode: {e}")
-            # Fallback to re-encode
-            cmd_fallback = [
-                FFMPEG_BIN, "-y",
-                "-ss", f"{start:.3f}",
-                "-i", video_path,
-                "-t", f"{duration:.3f}",
-                "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-                "-c:a", "aac", "-b:a", "128k",
-                "-movflags", "+faststart",
-                seg_path,
-            ]
-            try:
-                subprocess.run(cmd_fallback, check=True, capture_output=True, text=True, timeout=300)
-                segment_files.append(seg_path)
-            except Exception as e2:
-                logger.error(f"Failed to cut person interval {i}: {e2}")
+            logger.error(f"Failed to cut interval {i} ({start:.1f}-{end:.1f}): {e}")
 
     if not segment_files:
         return False
 
     if len(segment_files) == 1:
-        # Only one segment, just rename
         os.rename(segment_files[0], output_path)
         return True
 
@@ -1108,8 +1164,8 @@ def concatenate_intervals(video_path: str, intervals: list, output_path: str) ->
         for seg_path in segment_files:
             f.write(f"file '{seg_path}'\n")
 
-    # Concatenate using FFmpeg concat demuxer
-    # Use stream copy first (fast), fallback to re-encode if needed
+    # Concatenate using concat demuxer (stream copy is safe here because
+    # all segments were re-encoded with identical codec settings)
     cmd = [
         FFMPEG_BIN, "-y",
         "-f", "concat",
@@ -1122,10 +1178,10 @@ def concatenate_intervals(video_path: str, intervals: list, output_path: str) ->
 
     try:
         subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=300)
-        logger.info(f"Concatenated {len(segment_files)} person segments")
+        logger.info(f"Concatenated {len(segment_files)} re-encoded segments")
         return True
     except Exception as e:
-        logger.error(f"Failed to concatenate person segments: {e}")
+        logger.error(f"Failed to concatenate segments: {e}")
         return False
     finally:
         # Cleanup temp segments
