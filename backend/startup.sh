@@ -3,7 +3,7 @@
 # Install ffmpeg (required for subtitle export)
 if ! command -v ffmpeg &> /dev/null; then
     echo "[startup] Installing ffmpeg..."
-    apt-get update -qq && apt-get install -y -qq --no-install-recommends ffmpeg 2>&1 | tail -3
+    apt-get update -qq && apt-get install -y -qq --no-install-recommends ffmpeg libass-dev 2>&1 | tail -3
     echo "[startup] ffmpeg installed: $(ffmpeg -version 2>&1 | head -1)"
 else
     echo "[startup] ffmpeg already available: $(ffmpeg -version 2>&1 | head -1)"
@@ -32,4 +32,4 @@ else
     pip install -r requirements.txt 2>&1 | tail -5
 fi
 
-gunicorn -k uvicorn.workers.UvicornWorker app.main:app --workers 1 --threads 1 --timeout 120 --bind 0.0.0.0:8000 --access-logfile - --error-logfile -
+gunicorn -k uvicorn.workers.UvicornWorker app.main:app --workers 1 --threads 1 --timeout 300 --bind 0.0.0.0:8000 --access-logfile - --error-logfile -
