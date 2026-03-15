@@ -18,7 +18,7 @@ import CsvAssetPanel from "./CsvAssetPanel";
 import CsvReplaceModal from "./CsvReplaceModal";
 // ProductTimeline is now integrated into AnalyticsSection
 
-export default function VideoDetail({ videoData }) {
+export default function VideoDetail({ videoData, editorParams }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const markdownTableStyles = `
   .markdown table {
@@ -952,7 +952,7 @@ export default function VideoDetail({ videoData }) {
 
           {/* Clip Section - show generated clips at the top */}
           <SectionErrorBoundary sectionName="切り抜き動画">
-            <ClipSection videoData={videoData} clipStates={clipStates} reports1={videoData?.reports_1} />
+            <ClipSection videoData={videoData} clipStates={clipStates} reports1={videoData?.reports_1} editorParams={editorParams} />
           </SectionErrorBoundary>
 
           {/* AI Sales Clip Candidates */}

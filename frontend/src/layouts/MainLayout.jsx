@@ -1,7 +1,7 @@
 import Sidebar from "../components/Sidebar";
 import MainContent from '../components/MainContent';
 import { useState, useCallback, useMemo, useEffect } from "react";
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 
 const getUserFromStorage = () => {
   try {
@@ -15,7 +15,20 @@ const getUserFromStorage = () => {
 export default function MainLayout() {
   const { videoId } = useParams();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [openSidebar, setOpenSidebar] = useState(false);
+
+  // Extract editor params from URL (for feedback card → editor navigation)
+  const editorParams = useMemo(() => {
+    if (searchParams.get('open_editor') === '1') {
+      return {
+        phase_index: searchParams.get('phase') ? Number(searchParams.get('phase')) : null,
+        time_start: searchParams.get('t_start') ? Number(searchParams.get('t_start')) : null,
+        time_end: searchParams.get('t_end') ? Number(searchParams.get('t_end')) : null,
+      };
+    }
+    return null;
+  }, [searchParams]);
   const [selectedVideoId, setSelectedVideoId] = useState(videoId || null);
   const [user, setUser] = useState(getUserFromStorage);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -128,7 +141,8 @@ export default function MainLayout() {
     selectedVideoId,
     showFeedback,
     onCloseFeedback: handleCloseFeedback,
-  }), [handleOpenSidebar, user, handleUserChange, handleUploadSuccess, selectedVideoId, showFeedback, handleCloseFeedback]);
+    editorParams,
+  }), [handleOpenSidebar, user, handleUserChange, handleUploadSuccess, selectedVideoId, showFeedback, handleCloseFeedback, editorParams]);
 
   return (
     <div className="min-h-screen bg-gray-100 flex justify-center">

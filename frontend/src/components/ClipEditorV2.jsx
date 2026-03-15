@@ -556,6 +556,30 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
       const res = await VideoService.trimClip(videoId, clip.clip_id, trimStart, trimEnd);
       setStatus({ ok: true, msg: "トリム適用中..." });
       if (onClipUpdated) onClipUpdated(res);
+
+      // Log trim edits for AI learning
+      try {
+        if (trimStart !== origStart) {
+          await VideoService.logClipEdit(videoId, {
+            clip_id: clip.clip_id,
+            edit_type: 'trim_start',
+            before_value: { time_start: origStart },
+            after_value: { time_start: trimStart },
+            delta_seconds: trimStart - origStart,
+          });
+        }
+        if (trimEnd !== origEnd) {
+          await VideoService.logClipEdit(videoId, {
+            clip_id: clip.clip_id,
+            edit_type: 'trim_end',
+            before_value: { time_end: origEnd },
+            after_value: { time_end: trimEnd },
+            delta_seconds: trimEnd - origEnd,
+          });
+        }
+      } catch (logErr) {
+        console.warn('[ClipEditor] Failed to log trim edit:', logErr);
+      }
     } catch (e) {
       setStatus({ ok: false, msg: `トリム失敗: ${e.message}` });
     } finally {
@@ -580,8 +604,22 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
       // Mark all captions as saved so they get priority on next load
       const capsToSave = captions.map(c => ({ ...c, source: 'saved' }));
       await VideoService.updateClipCaptions(videoId, clip.clip_id, capsToSave);
+
+      // Log caption edit for AI learning
+      try {
+        await VideoService.logClipEdit(videoId, {
+          clip_id: clip.clip_id,
+          edit_type: 'caption_edit',
+          before_value: { captions: (clip.captions || []).map(c => ({ start: c.start, text: c.text })) },
+          after_value: { captions: capsToSave.map(c => ({ start: c.start, text: c.text })) },
+          delta_seconds: null,
+        });
+      } catch (logErr) {
+        console.warn('[ClipEditor] Failed to log caption edit:', logErr);
+      }
+
       setCaptions(capsToSave);
-      setStatus({ ok: true, msg: "字幕を保存しました" });
+      setStatus({ ok: true, msg: "字幕を保存しました（AI学習に反映）" });
     } catch (e) {
       setStatus({ ok: false, msg: `字幕保存失敗: ${e.message}` });
     } finally {
