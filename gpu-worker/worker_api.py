@@ -28,6 +28,16 @@ import os
 import signal
 import subprocess
 import sys
+
+# ── Ensure CUDA libraries (cuDNN, cuBLAS) are discoverable ────────────────────
+_nvidia_lib_dirs = [
+    "/usr/local/lib/python3.11/dist-packages/nvidia/cudnn/lib",
+    "/usr/local/lib/python3.11/dist-packages/nvidia/cublas/lib",
+]
+_existing = os.environ.get("LD_LIBRARY_PATH", "")
+_new_paths = [p for p in _nvidia_lib_dirs if os.path.isdir(p) and p not in _existing]
+if _new_paths:
+    os.environ["LD_LIBRARY_PATH"] = ":".join(_new_paths) + (":" + _existing if _existing else "")
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -73,7 +83,7 @@ current_session = {
 }
 
 current_config = {
-    "face_swapper_model": "inswapper_128_fp16",
+    "face_swapper_model": "inswapper_128",
     "face_swapper_pixel_boost": "512x512",
     "face_swapper_weight": 0.85,
     "face_enhancer_model": "gfpgan_1.4",
