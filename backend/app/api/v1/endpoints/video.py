@@ -1042,8 +1042,19 @@ async def get_video_detail(
                         # Fallback: use video_id as-is (lowercase from DB)
                         original_case_vid = video_id
                     blob_name = f"{email}/{original_case_vid}/{compressed_blob}"
-                preview_url = _make_sas_url(blob_name)
-                logger.debug(f"[preview_url] blob_name={blob_name}")
+                # BUILD 42: Use direct Blob URL (not CDN) for preview_url.
+                # CDN may interfere with AVPlayer streaming (Range requests,
+                # SAS token handling, or caching issues).
+                _preview_sas = _generate_blob_sas(
+                    account_name=account_name,
+                    container_name=container_name,
+                    blob_name=blob_name,
+                    account_key=account_key,
+                    permission=_BlobSasPermissions(read=True),
+                    expiry=sas_expiry,
+                )
+                preview_url = f"https://{account_name}.blob.core.windows.net/{container_name}/{blob_name}?{_preview_sas}"
+                logger.debug(f"[preview_url] blob_name={blob_name} (direct blob, no CDN)")
             except Exception as exc:
                 logger.warning(f"[preview_url] Failed to generate SAS: {exc}")
                 preview_url = None
