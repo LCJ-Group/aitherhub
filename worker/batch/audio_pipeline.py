@@ -487,10 +487,34 @@ def transcribe_audio_chunks(audio_dir: str, text_dir: str, on_progress=None):
                 print(f"[TRANSCRIBE][WARN] Batched transcription failed, falling back to chunks: {e}")
 
         # Fallback: chunk-based transcription
+        # v7: If chunks don't exist yet (skipped in process_video), extract them now
         files = sorted([
             f for f in os.listdir(audio_dir)
             if f.startswith("chunk_") and f.endswith(".wav")
         ])
+        if not files:
+            print(f"[TRANSCRIBE] No chunks found, extracting from full audio or video...")
+            # Try to find the original video path from the audio dir structure
+            # audio_dir = output/<video_id>/audio
+            # We need to extract chunks from full_audio.wav if it exists
+            if os.path.exists(full_audio_path) and os.path.getsize(full_audio_path) > 100:
+                # Split full_audio.wav into chunks using ffmpeg
+                chunk_pattern = os.path.join(audio_dir, "chunk_%03d.wav")
+                try:
+                    import subprocess as _sp
+                    _sp.run(
+                        ["ffmpeg", "-y", "-i", full_audio_path,
+                         "-f", "segment", "-segment_time", str(CHUNK_SECONDS),
+                         "-reset_timestamps", "1", "-ac", "1", "-ar", "16000",
+                         chunk_pattern],
+                        stdout=_sp.DEVNULL, stderr=_sp.DEVNULL, timeout=3600,
+                    )
+                except Exception as chunk_err:
+                    print(f"[TRANSCRIBE][WARN] Failed to split full audio into chunks: {chunk_err}")
+                files = sorted([
+                    f for f in os.listdir(audio_dir)
+                    if f.startswith("chunk_") and f.endswith(".wav")
+                ])
         total_chunks = len(files)
         print(f"[TRANSCRIBE] Engine: {engine}, Chunks: {total_chunks}, Workers: {WHISPER_PARALLEL_WORKERS}")
 
