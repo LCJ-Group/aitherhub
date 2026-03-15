@@ -1460,12 +1460,36 @@ class VideoService extends BaseApiService {
    * @param {object} data - { clip_url, captions, style, position_x, position_y, time_start }
    * @returns {Promise<{video_id, download_url, style, caption_count, file_size}>}
    */
-  async exportSubtitledClip(videoId, data) {
+  async exportSubtitledClip(videoId, data, { onProgress } = {}) {
     try {
-      const response = await this.post(`/api/v1/editor/${videoId}/export-subtitled`, data, {
-        timeout: 600000, // 10 minutes (ffmpeg encoding can be slow)
-      });
-      return response;
+      // Step 1: Start the export job
+      const startRes = await this.post(`/api/v1/editor/${videoId}/export-subtitled`, data);
+      const jobId = startRes?.job_id || startRes?.data?.job_id;
+      if (!jobId) {
+        // Fallback: old API returned download_url directly
+        return startRes;
+      }
+
+      // Step 2: Poll for completion
+      const maxAttempts = 120; // 10 minutes max (5s intervals)
+      for (let i = 0; i < maxAttempts; i++) {
+        await new Promise(r => setTimeout(r, 5000)); // wait 5 seconds
+        const status = await this.get(`/api/v1/editor/${videoId}/export-subtitled/${jobId}`);
+        const st = status?.status || status?.data?.status;
+        if (onProgress) onProgress(st);
+
+        if (st === 'done') {
+          return {
+            download_url: status?.download_url || status?.data?.download_url,
+            file_size: status?.file_size || status?.data?.file_size,
+            video_id: videoId,
+          };
+        } else if (st === 'failed') {
+          throw new Error(status?.error || status?.data?.error || 'Export failed');
+        }
+        // else: queued, downloading, encoding, uploading - keep polling
+      }
+      throw new Error('Export timed out after 10 minutes');
     } catch (error) {
       console.error('Failed to export subtitled clip:', error);
       throw error;

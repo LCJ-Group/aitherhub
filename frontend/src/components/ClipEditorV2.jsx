@@ -902,6 +902,13 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                 if (exporting) return;
                 setExporting(true);
                 setStatus({ ok: true, msg: '字幕付きMP4を生成中...' });
+                const statusLabels = {
+                  queued: '準備中...',
+                  downloading: 'クリップをダウンロード中...',
+                  encoding: '字幕を焼き込み中...',
+                  uploading: 'アップロード中...',
+                  done: '完了！',
+                };
                 try {
                   const res = await VideoService.exportSubtitledClip(videoId, {
                     clip_url: clip.clip_url,
@@ -915,6 +922,8 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                     position_x: subtitlePos.x,
                     position_y: subtitlePos.y,
                     time_start: clip.time_start || origStart,
+                  }, {
+                    onProgress: (st) => setStatus({ ok: true, msg: statusLabels[st] || `処理中 (${st})...` }),
                   });
                   if (res?.download_url) {
                     window.open(res.download_url, '_blank');
