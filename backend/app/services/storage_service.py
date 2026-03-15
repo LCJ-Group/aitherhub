@@ -149,6 +149,9 @@ def generate_read_sas_from_url(
         # Strip any existing query string from blob_name
         if "?" in blob_name:
             blob_name = blob_name.split("?", 1)[0]
+        # URL-decode blob_name (e.g. %40 → @) for correct SAS signature
+        from urllib.parse import unquote
+        blob_name = unquote(blob_name)
         account_key = _parse_account_key(CONNECTION_STRING)
         expiry = datetime.now(timezone.utc) + timedelta(hours=expires_hours)
         sas = generate_blob_sas(
