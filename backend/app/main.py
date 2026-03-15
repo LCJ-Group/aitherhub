@@ -142,17 +142,37 @@ async def ensure_tables_exist():
         from sqlalchemy import text
 
         async with engine.begin() as conn:
+            # Drop old table if schema is wrong (missing subtitle_style column)
+            try:
+                check = await conn.execute(text("""
+                    SELECT column_name FROM information_schema.columns
+                    WHERE table_name = 'subtitle_feedback' AND column_name = 'subtitle_style'
+                """))
+                has_correct_schema = check.fetchone() is not None
+                if not has_correct_schema:
+                    # Check if old table exists
+                    check_old = await conn.execute(text("""
+                        SELECT column_name FROM information_schema.columns
+                        WHERE table_name = 'subtitle_feedback' AND column_name = 'style_selected'
+                    """))
+                    if check_old.fetchone():
+                        logger.info("Dropping old subtitle_feedback table with wrong schema")
+                        await conn.execute(text("DROP TABLE IF EXISTS subtitle_feedback"))
+            except Exception as _e:
+                logger.debug(f"Schema check skipped: {_e}")
+
             await conn.execute(text("""
                 CREATE TABLE IF NOT EXISTS subtitle_feedback (
                     id SERIAL PRIMARY KEY,
                     video_id TEXT NOT NULL,
-                    clip_id TEXT NOT NULL,
+                    clip_id TEXT,
                     user_id TEXT,
-                    style_selected TEXT,
+                    subtitle_style TEXT DEFAULT 'box',
+                    vote TEXT,
+                    tags JSONB DEFAULT '[]'::jsonb,
+                    position_x REAL DEFAULT 50,
+                    position_y REAL DEFAULT 85,
                     ai_recommended_style TEXT,
-                    feedback_type TEXT CHECK (feedback_type IN ('like','dislike')),
-                    tags TEXT[],
-                    comment TEXT,
                     created_at TIMESTAMPTZ DEFAULT NOW()
                 )
             """))

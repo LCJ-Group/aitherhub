@@ -279,7 +279,11 @@ export default function ClipSection({ videoData, clipStates, reports1 }) {
           phases={reports1}
           onClose={() => setEditorClip(null)}
           onClipUpdated={(res) => {
-            setEditorClip(null);
+            // Keep editor open after trim - update clip data instead of closing
+            if (res && typeof res === 'object') {
+              setEditorClip(prev => ({ ...prev, ...res }));
+            }
+            // Note: clip list will refresh on next page load
           }}
         />
       )}

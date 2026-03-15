@@ -212,6 +212,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
   const [captions, setCaptions] = useState([]);
   const [savingCaps, setSavingCaps] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
+  const [captionsLoaded, setCaptionsLoaded] = useState(false);
 
   // Subtitle style & position
   const [subtitleStyle, setSubtitleStyle] = useState('box');
@@ -395,6 +396,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
           const withSource = saved.map(c => ({ ...c, source: c.source || 'saved' }));
           console.log(`[Subtitles] Loaded ${withSource.length} saved captions from DB`);
           setCaptions(withSource);
+          setCaptionsLoaded(true);
           return;
         }
       } catch (e) {
@@ -405,6 +407,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
       if (clip?.captions && clip.captions.length > 0) {
         console.log("[Subtitles] Using clip.captions");
         setCaptions(clip.captions);
+        setCaptionsLoaded(true);
         return;
       }
 
@@ -414,6 +417,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
         if (fromTranscripts.length > 0) {
           console.log(`[Subtitles] Using ${fromTranscripts.length} real transcript segments (source: ${timelineData.transcript_source})`);
           setCaptions(fromTranscripts);
+          setCaptionsLoaded(true);
           return;
         }
       }
@@ -424,21 +428,26 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
         if (fallback.length > 0) {
           console.log(`[Subtitles] Using ${fallback.length} audio_text fallback captions`);
           setCaptions(fallback);
+          setCaptionsLoaded(true);
         }
       }
+      // Mark as loaded even if no captions found (so autoTranscribe can proceed)
+      setCaptionsLoaded(true);
     })();
   }, [clip, videoId, timelineData, buildCaptionsFromTranscripts, buildCaptionsFromAudioText]);
 
   // ─── Auto-generate subtitles when clip editor opens ─────────────
   // If no Whisper-sourced captions exist, auto-trigger transcription
+  // IMPORTANT: Wait for captionsLoaded=true before deciding to auto-transcribe
+  // to avoid race condition where captions haven't loaded from DB yet
   const autoTranscribeTriggered = useRef(false);
   useEffect(() => {
     if (autoTranscribeTriggered.current) return;
     if (!videoId || !clip) return;
     if (transcribing) return;
 
-    // Wait for timelineData to load first
-    if (timelineData === null) return;
+    // CRITICAL: Wait for caption loading to complete before deciding
+    if (!captionsLoaded) return;
 
     // Check if we already have good captions (saved, whisper, or transcript)
     const hasGoodCaptions = captions.some(
@@ -455,17 +464,23 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
       return;
     }
 
-    // No Whisper captions found - auto-trigger transcription
+    // Check if any captions exist at all (audio_text fallback etc.)
+    if (captions.length > 0) {
+      console.log("[AutoTranscribe] Captions already loaded (" + captions.length + " items, source: " + captions[0]?.source + "), skipping");
+      return;
+    }
+
+    // No captions found at all - auto-trigger transcription
     const clipUrl = clip.clip_url || videoData?.video_url || clip.video_url;
     if (!clipUrl) {
       console.log("[AutoTranscribe] No clip URL available, skipping");
       return;
     }
 
-    console.log("[AutoTranscribe] No Whisper captions found, auto-triggering transcription");
+    console.log("[AutoTranscribe] No captions found after loading, auto-triggering transcription");
     autoTranscribeTriggered.current = true;
     generateSubtitles();
-  }, [videoId, clip, timelineData, captions, transcribing, videoData]);
+  }, [videoId, clip, captionsLoaded, captions, transcribing, videoData]);
 
   // ─── Video Handlers ────────────────────────────────────────────
   const onTimeUpdate = useCallback(() => {
