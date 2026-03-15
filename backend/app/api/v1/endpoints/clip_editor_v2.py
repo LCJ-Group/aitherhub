@@ -1145,7 +1145,7 @@ async def export_subtitled_clip(
         # Step 2: Generate ASS subtitle file
         ass_path = os.path.join(tmp_dir, "subtitles.ass")
         ass_content = _generate_ass_content(
-            [c.dict() for c in req.captions],
+            req.captions,
             req.style,
             req.position_x,
             req.position_y,
