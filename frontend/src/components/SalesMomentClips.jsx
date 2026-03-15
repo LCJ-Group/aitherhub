@@ -268,27 +268,46 @@ export default function SalesMomentClips({ videoData, onRequestClip, clipStates 
                             </a>
                           </>
                         ) : clipState?.status === "generating_subtitles" ? (
-                          <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-purple-50 text-purple-600 text-xs font-medium cursor-not-allowed border border-purple-200">
-                            <svg className="animate-spin" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                              <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
-                            </svg>
-                            字幕生成中...
-                          </span>
-                        ) : clipState?.status === "requesting" || clipState?.status === "pending" || clipState?.status === "processing" ? (
-                          <div className="flex items-center gap-2 min-w-[160px]">
-                            <div className="flex-1 bg-gray-200 rounded-full h-2 overflow-hidden">
-                              <div
-                                className="h-full rounded-full transition-all duration-500 ease-out"
-                                style={{
-                                  width: `${Math.max(clipState?.progress_pct || 0, 3)}%`,
-                                  background: 'linear-gradient(90deg, #f97316, #ef4444)',
-                                }}
-                              />
+                          <div className="flex-1 flex flex-col gap-1">
+                            <div className="flex items-center justify-between">
+                              <span className="text-purple-600 text-xs font-medium">字幕生成中...</span>
+                              <span className="text-purple-500 text-xs font-bold">95%</span>
                             </div>
-                            <span className="text-xs text-gray-500 font-medium whitespace-nowrap">
-                              {clipState?.progress_pct > 0 ? `${clipState.progress_pct}%` : '待機中...'}
-                            </span>
+                            <div className="w-full h-1.5 bg-purple-100 rounded-full overflow-hidden">
+                              <div className="h-full bg-gradient-to-r from-orange-500 to-red-500 rounded-full transition-all duration-500 ease-out" style={{ width: '95%' }} />
+                            </div>
                           </div>
+                        ) : clipState?.status === "requesting" || clipState?.status === "pending" || clipState?.status === "processing" ? (
+                          (() => {
+                            const pct = clipState?.progress_pct || 0;
+                            const step = clipState?.progress_step || '';
+                            const stepLabels = {
+                              downloading: '取得中',
+                              speech_boundary: '音声検出',
+                              cutting: 'カット中',
+                              person_detection: '人物検出',
+                              silence_removal: '無音除去',
+                              transcribing: '文字起こし',
+                              refining_subtitles: '字幕最適化',
+                              creating_clip: '動画作成',
+                              uploading: 'アップロード',
+                            };
+                            const label = stepLabels[step] || '生成中';
+                            return (
+                              <div className="flex-1 flex flex-col gap-1">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-gray-600 text-xs font-medium">{label}...</span>
+                                  <span className="text-orange-600 text-xs font-bold">{pct}%</span>
+                                </div>
+                                <div className="w-full h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                                  <div
+                                    className="h-full bg-gradient-to-r from-orange-500 to-red-500 rounded-full transition-all duration-700 ease-out"
+                                    style={{ width: `${Math.max(pct, 2)}%` }}
+                                  />
+                                </div>
+                              </div>
+                            );
+                          })()
                         ) : (
                           <button
                             type="button"

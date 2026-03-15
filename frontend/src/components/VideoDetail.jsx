@@ -1704,15 +1704,46 @@ export default function VideoDetail({ videoData }) {
                                           切り抜きをダウンロード
                                         </a>
                                       ) : isGeneratingSubtitles ? (
-                                        <div className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-purple-50 text-purple-600 text-xs font-medium border border-purple-200">
-                                          <div className="w-3 h-3 rounded-full border-2 border-purple-200 border-t-purple-500 animate-spin" />
-                                          字幕を生成中...
+                                        <div className="flex-1 flex flex-col gap-1.5">
+                                          <div className="flex items-center justify-between">
+                                            <span className="text-purple-600 text-xs font-medium">字幕を生成中...</span>
+                                            <span className="text-purple-500 text-xs font-bold">95%</span>
+                                          </div>
+                                          <div className="w-full h-2 bg-purple-100 rounded-full overflow-hidden">
+                                            <div className="h-full bg-gradient-to-r from-purple-500 to-pink-500 rounded-full transition-all duration-500 ease-out" style={{ width: '95%' }} />
+                                          </div>
                                         </div>
                                       ) : isLoading ? (
-                                        <div className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-gray-100 text-gray-500 text-xs font-medium">
-                                          <div className="w-3 h-3 rounded-full border-2 border-gray-300 border-t-purple-500 animate-spin" />
-                                          切り抜き生成中...
-                                        </div>
+                                        (() => {
+                                          const pct = clipState?.progress_pct || 0;
+                                          const step = clipState?.progress_step || '';
+                                          const stepLabels = {
+                                            downloading: 'ソース動画を取得中',
+                                            speech_boundary: '音声境界を検出中',
+                                            cutting: 'セグメントをカット中',
+                                            person_detection: '人物を検出中',
+                                            silence_removal: '無音区間を除去中',
+                                            transcribing: '音声を文字起こし中',
+                                            refining_subtitles: '字幕を最適化中',
+                                            creating_clip: '縦型動画を作成中',
+                                            uploading: 'アップロード中',
+                                          };
+                                          const label = stepLabels[step] || '切り抜き生成中';
+                                          return (
+                                            <div className="flex-1 flex flex-col gap-1.5">
+                                              <div className="flex items-center justify-between">
+                                                <span className="text-gray-600 text-xs font-medium">{label}...</span>
+                                                <span className="text-purple-600 text-xs font-bold">{pct}%</span>
+                                              </div>
+                                              <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
+                                                <div
+                                                  className="h-full bg-gradient-to-r from-purple-500 to-pink-500 rounded-full transition-all duration-700 ease-out"
+                                                  style={{ width: `${Math.max(pct, 2)}%` }}
+                                                />
+                                              </div>
+                                            </div>
+                                          );
+                                        })()
                                       ) : (
                                         <>
                                           <button
