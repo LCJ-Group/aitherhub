@@ -1099,29 +1099,30 @@ async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, s
     try:
         _export_jobs[job_id]["status"] = "downloading"
         video_path = os.path.join(tmp_dir, "source.mp4")
-        dl_url = clip_url
 
+        # Extract blob_name from clip_url (CDN or Blob URL)
+        from urllib.parse import unquote
         _CDN_HOST = os.getenv("CDN_HOST", "https://cdn.aitherhub.com")
-        _BLOB_HOST = os.getenv("AZURE_BLOB_HOST", "https://aitherhub.blob.core.windows.net")
-        if _CDN_HOST and dl_url.startswith(_CDN_HOST):
-            dl_url = dl_url.replace(_CDN_HOST, _BLOB_HOST)
+        url_path = clip_url
+        if _CDN_HOST and url_path.startswith(_CDN_HOST):
+            url_path = url_path[len(_CDN_HOST):]
+        elif f"blob.core.windows.net/{CONTAINER_NAME}" in url_path:
+            url_path = url_path.split(f"/{CONTAINER_NAME}", 1)[-1]
+        # Remove leading slash and query string
+        url_path = url_path.lstrip("/")
+        if url_path.startswith(f"{CONTAINER_NAME}/"):
+            url_path = url_path[len(CONTAINER_NAME) + 1:]
+        if "?" in url_path:
+            url_path = url_path.split("?", 1)[0]
+        blob_name = unquote(url_path)  # decode %40 -> @
 
-        if "blob.core.windows.net" in dl_url and "sig=" not in dl_url:
-            sas_url = generate_read_sas_from_url(dl_url)
-            if sas_url:
-                dl_url = sas_url
-
-        # If clip_url already has SAS token (from CDN), use it directly
-        if "sig=" in clip_url and "blob.core.windows.net" not in dl_url:
-            dl_url = clip_url
-
-        import httpx
-        async with httpx.AsyncClient(timeout=180, verify=False, follow_redirects=True) as client:
-            resp = await client.get(dl_url)
-            resp.raise_for_status()
-            with open(video_path, "wb") as f:
-                f.write(resp.content)
-        logger.info(f"[export-job {job_id}] Downloaded: {os.path.getsize(video_path)} bytes")
+        # Download using BlobServiceClient (connection string auth, no SAS needed)
+        blob_service = BlobServiceClient.from_connection_string(CONNECTION_STRING)
+        blob_client = blob_service.get_blob_client(container=CONTAINER_NAME, blob=blob_name)
+        with open(video_path, "wb") as f:
+            download_stream = blob_client.download_blob()
+            f.write(download_stream.readall())
+        logger.info(f"[export-job {job_id}] Downloaded blob '{blob_name}': {os.path.getsize(video_path)} bytes")
 
         # Generate ASS subtitle file
         _export_jobs[job_id]["status"] = "encoding"
