@@ -595,7 +595,7 @@ async def save_subtitle_feedback(
     }
     """
     try:
-        user_id = user.get("user_id") or user.get("id")
+        user_id = str(user.get("user_id") or user.get("id"))
         style = request_body.get("style", "box")
         vote = request_body.get("vote")
         tags = request_body.get("tags", [])
@@ -708,7 +708,7 @@ async def get_subtitle_recommendation(
     Uses aggregated feedback data to personalize recommendations.
     """
     try:
-        user_id = user.get("user_id") or user.get("id")
+        user_id = str(user.get("user_id") or user.get("id"))
 
         # Get video metadata
         video_sql = text("""
