@@ -1793,7 +1793,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
             {tab === "feedback" && (
               <ClipFeedbackPanel
                 videoId={videoId}
-                phaseIndex={clip.phase_index != null ? Number(clip.phase_index) : 0}
+                phaseIndex={clip.phase_index != null ? (isNaN(Number(clip.phase_index)) ? String(clip.phase_index) : Number(clip.phase_index)) : null}
                 timeStart={clip.time_start || origStart}
                 timeEnd={clip.time_end || origEnd}
                 clipId={clip.clip_id}
