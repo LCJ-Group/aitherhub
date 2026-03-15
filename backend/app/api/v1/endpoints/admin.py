@@ -628,6 +628,7 @@ async def get_video_detail(
                 "has_excel_product": bool(video.excel_product_blob_url),
                 "has_excel_trend": bool(video.excel_trend_blob_url),
                 "has_compressed": bool(video.compressed_blob_url),
+                "compressed_blob_url": video.compressed_blob_url,
                 "top_products": video.top_products,
                 "time_offset_seconds": video.time_offset_seconds,
             },
