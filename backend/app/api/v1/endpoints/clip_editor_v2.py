@@ -1113,6 +1113,13 @@ async def export_subtitled_clip(
         video_path = os.path.join(tmp_dir, "source.mp4")
         clip_url = req.clip_url
 
+        # Convert CDN URL back to blob URL for SAS token generation
+        _CDN_HOST = os.getenv("CDN_HOST", "https://cdn.aitherhub.com")
+        _BLOB_HOST = os.getenv("AZURE_BLOB_HOST", "https://aitherhub.blob.core.windows.net")
+        if _CDN_HOST and clip_url.startswith(_CDN_HOST):
+            clip_url = clip_url.replace(_CDN_HOST, _BLOB_HOST)
+            logger.info(f"[export-sub] Converted CDN URL to blob URL")
+
         # Add SAS token if needed for Azure Blob URLs
         if "blob.core.windows.net" in clip_url and "sig=" not in clip_url:
             sas_url = generate_read_sas_from_url(clip_url)
@@ -1190,6 +1197,8 @@ async def export_subtitled_clip(
         download_url = generate_read_sas_from_url(blob_url, expires_hours=72)
         if not download_url:
             download_url = blob_url
+        # Convert to CDN URL for faster download
+        download_url = download_url.replace(_BLOB_HOST, _CDN_HOST)
         logger.info(f"[export-sub] Download URL generated")
 
         return {
