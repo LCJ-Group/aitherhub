@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import VideoService from '../base/services/videoService';
 
 /**
@@ -64,6 +64,7 @@ const ClipFeedbackPanel = ({
           const existing = salesResp.confirmations.find(c => c.phase_index === phaseIndex);
           if (existing) {
             setSalesConfirm(existing.is_sales_moment);
+            if (existing.note) setSalesNote(existing.note);
             setSalesSubmitted(true);
           }
         }
@@ -118,9 +119,14 @@ const ClipFeedbackPanel = ({
     });
   }, [rating, videoId, phaseIndex, timeStart, timeEnd, clipId, aiScore, scoreBreakdown]);
 
-  const handleSalesConfirmation = useCallback(async (isSalesMoment) => {
+  // Use ref to always get latest salesNote in callbacks
+  const salesNoteRef = useRef(salesNote);
+  useEffect(() => { salesNoteRef.current = salesNote; }, [salesNote]);
+
+  const handleSalesConfirmation = useCallback(async (isSalesMoment, noteOverride) => {
     setSalesConfirm(isSalesMoment);
     setError(null);
+    const currentNote = noteOverride !== undefined ? noteOverride : salesNoteRef.current;
     try {
       await VideoService.submitSalesConfirmation(videoId, {
         phase_index: phaseIndex,
@@ -128,14 +134,25 @@ const ClipFeedbackPanel = ({
         time_end: timeEnd,
         is_sales_moment: isSalesMoment,
         clip_id: clipId,
-        note: salesNote || null,
+        note: currentNote || null,
       });
       setSalesSubmitted(true);
       onFeedbackSubmitted({ type: 'sales_confirmation', is_sales_moment: isSalesMoment });
     } catch (e) {
       setError('確認の保存に失敗しました');
     }
-  }, [videoId, phaseIndex, timeStart, timeEnd, clipId, salesNote, onFeedbackSubmitted]);
+  }, [videoId, phaseIndex, timeStart, timeEnd, clipId, onFeedbackSubmitted]);
+
+  // Debounced auto-save for salesNote changes
+  const saveTimerRef = useRef(null);
+  useEffect(() => {
+    if (salesConfirm === null || !salesNote) return;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      handleSalesConfirmation(salesConfirm, salesNote);
+    }, 1000);
+    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
+  }, [salesNote, salesConfirm, handleSalesConfirmation]);
 
   // Compact mode: just rating buttons
   if (compact) {
@@ -327,11 +344,6 @@ const ClipFeedbackPanel = ({
             type="text"
             value={salesNote}
             onChange={(e) => setSalesNote(e.target.value)}
-            onBlur={() => {
-              if (salesNote && salesConfirm !== null) {
-                handleSalesConfirmation(salesConfirm);
-              }
-            }}
             placeholder="メモ（任意）: 例「商品紹介の瞬間」"
             style={{
               width: '100%', padding: '6px 10px', borderRadius: '6px',
