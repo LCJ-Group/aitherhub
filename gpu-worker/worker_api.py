@@ -139,6 +139,20 @@ class SwapFrameRequest(BaseModel):
     face_enhancer: bool = Field(default=True, description="Enable face enhancement")
 
 
+class SwapVideoRequest(BaseModel):
+    """Request to start a video face swap job."""
+    job_id: str = Field(..., description="Unique job ID assigned by the backend")
+    video_url: str = Field(..., description="URL to download the input video")
+    face_enhancer: bool = Field(default=True, description="Enable face enhancement")
+    quality: str = Field(default="high", description="Quality preset: fast, balanced, high")
+    output_video_quality: int = Field(default=90, description="Output video quality 0-100")
+
+
+# ── Video Job State ─────────────────────────────────────────────────────────
+
+video_jobs: dict = {}  # job_id -> {status, progress, output_path, error, ...}
+
+
 class UpdateConfigRequest(BaseModel):
     face_swapper_model: Optional[str] = None
     face_swapper_pixel_boost: Optional[str] = None
@@ -738,6 +752,291 @@ async def update_config(req: UpdateConfigRequest, auth: bool = Depends(verify_ap
         "config": current_config,
         "note": "Changes take effect on next stream start" if current_session["status"] == "running" else None,
     }
+
+
+# ── Video Face Swap ─────────────────────────────────────────────────────────
+
+def build_facefusion_video_cmd(input_path: str, output_path: str) -> list:
+    """Build FaceFusion command for video face swap (headless-run)."""
+    processors = ["face_swapper"]
+    if current_config["face_enhancer_enabled"]:
+        processors.append("face_enhancer")
+
+    cmd = [
+        sys.executable, f"{FACEFUSION_DIR}/facefusion.py", "headless-run",
+        "--source-paths", source_face_path,
+        "--target-path", input_path,
+        "--output-path", output_path,
+        # Processors
+        "--processors", *processors,
+        # Face swapper settings
+        "--face-swapper-model", current_config["face_swapper_model"],
+        "--face-swapper-pixel-boost", current_config["face_swapper_pixel_boost"],
+        "--face-swapper-weight", str(current_config["face_swapper_weight"]),
+        # Face detector settings
+        "--face-detector-model", current_config["face_detector_model"],
+        "--face-detector-score", str(current_config["face_detector_score"]),
+        # Face mask settings
+        "--face-mask-types", *current_config["face_mask_types"],
+        "--face-mask-blur", str(current_config["face_mask_blur"]),
+        "--face-mask-padding", *[str(p) for p in current_config["face_mask_padding"]],
+        # Output settings
+        "--output-video-quality", str(current_config.get("output_video_quality", 90)),
+        # Execution settings
+        "--execution-providers", current_config["execution_providers"],
+        "--execution-thread-count", str(current_config["execution_thread_count"]),
+    ]
+
+    if current_config["face_enhancer_enabled"]:
+        cmd.extend(["--face-enhancer-model", current_config["face_enhancer_model"]])
+
+    return cmd
+
+
+def _run_video_job(job_id: str, video_url: str, face_enhancer: bool,
+                   quality: str, output_video_quality: int):
+    """Background thread: download video, run FaceFusion, update job state."""
+    import threading
+    import httpx as _httpx
+
+    job = video_jobs[job_id]
+    input_path = os.path.join(TEMP_DIR, f"vid_in_{job_id}.mp4")
+    output_path = os.path.join(TEMP_DIR, f"vid_out_{job_id}.mp4")
+
+    try:
+        # --- Step 1: Download video ---
+        job["status"] = "downloading"
+        job["step"] = "Downloading input video"
+        logger.info(f"[{job_id}] Downloading video from {video_url[:80]}...")
+
+        with _httpx.Client(timeout=300, follow_redirects=True) as client:
+            with client.stream("GET", video_url) as resp:
+                resp.raise_for_status()
+                total = int(resp.headers.get("content-length", 0))
+                downloaded = 0
+                with open(input_path, "wb") as f:
+                    for chunk in resp.iter_bytes(chunk_size=1024 * 256):
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if total > 0:
+                            job["progress"] = min(20, int(downloaded / total * 20))
+
+        file_size_mb = os.path.getsize(input_path) / (1024 * 1024)
+        logger.info(f"[{job_id}] Downloaded: {file_size_mb:.1f} MB")
+
+        # --- Step 2: Get video duration for progress estimation ---
+        try:
+            probe = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                 "-of", "default=noprint_wrappers=1:nokey=1", input_path],
+                capture_output=True, text=True, timeout=30,
+            )
+            duration_sec = float(probe.stdout.strip()) if probe.returncode == 0 else 0
+        except Exception:
+            duration_sec = 0
+        job["duration_sec"] = duration_sec
+
+        # --- Step 3: Apply quality settings ---
+        original_enhancer = current_config["face_enhancer_enabled"]
+        if quality == "fast":
+            current_config["face_enhancer_enabled"] = False
+        else:
+            current_config["face_enhancer_enabled"] = face_enhancer
+        current_config["output_video_quality"] = output_video_quality
+
+        # --- Step 4: Run FaceFusion ---
+        job["status"] = "processing"
+        job["step"] = "Face swapping video frames"
+        job["progress"] = 20
+
+        cmd = build_facefusion_video_cmd(input_path, output_path)
+        logger.info(f"[{job_id}] Running FaceFusion: {' '.join(cmd[:6])}...")
+
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            cwd=FACEFUSION_DIR,
+        )
+        job["pid"] = proc.pid
+
+        # Parse FaceFusion output for progress
+        for line in iter(proc.stdout.readline, ""):
+            line = line.strip()
+            if not line:
+                continue
+            # FaceFusion prints progress like: "Processing: 50%" or frame counts
+            if "%" in line:
+                try:
+                    pct_str = line.split("%")[0].split()[-1]
+                    pct = float(pct_str)
+                    # Map 0-100% of FaceFusion to 20-90% of overall progress
+                    job["progress"] = 20 + int(pct * 0.7)
+                except (ValueError, IndexError):
+                    pass
+            logger.debug(f"[{job_id}] FF: {line[:120]}")
+
+        proc.wait()
+        current_config["face_enhancer_enabled"] = original_enhancer
+
+        if proc.returncode != 0:
+            raise RuntimeError(f"FaceFusion exited with code {proc.returncode}")
+
+        if not Path(output_path).exists():
+            raise RuntimeError("FaceFusion did not produce output video")
+
+        output_size_mb = os.path.getsize(output_path) / (1024 * 1024)
+        logger.info(f"[{job_id}] Face swap complete: {output_size_mb:.1f} MB")
+
+        # --- Step 5: Done ---
+        job.update({
+            "status": "completed",
+            "step": "Face swap completed",
+            "progress": 100,
+            "output_path": output_path,
+            "output_size_mb": round(output_size_mb, 1),
+            "completed_at": time.time(),
+        })
+
+    except Exception as e:
+        logger.error(f"[{job_id}] Video job failed: {e}")
+        job.update({
+            "status": "error",
+            "step": "Error",
+            "error": str(e),
+        })
+    finally:
+        # Cleanup input file (keep output for download)
+        try:
+            os.unlink(input_path)
+        except FileNotFoundError:
+            pass
+        job["pid"] = None
+
+
+@app.post("/api/swap-video")
+async def swap_video(req: SwapVideoRequest, auth: bool = Depends(verify_api_key)):
+    """
+    Start an async video face swap job.
+
+    The video is downloaded from the provided URL, processed frame-by-frame
+    with FaceFusion, and the result is made available for download.
+
+    Returns immediately with job_id; poll /api/video-status/{job_id} for progress.
+    """
+    if source_face_path is None or not Path(source_face_path).exists():
+        raise HTTPException(400, "Source face not set. Call /api/set-source first.")
+
+    if req.job_id in video_jobs:
+        existing = video_jobs[req.job_id]
+        if existing["status"] in ("downloading", "processing"):
+            raise HTTPException(409, f"Job {req.job_id} already in progress")
+
+    # Initialize job
+    video_jobs[req.job_id] = {
+        "status": "queued",
+        "step": "Queued",
+        "progress": 0,
+        "error": None,
+        "output_path": None,
+        "output_size_mb": 0,
+        "duration_sec": 0,
+        "pid": None,
+        "created_at": time.time(),
+        "completed_at": None,
+    }
+
+    # Start background thread
+    import threading
+    t = threading.Thread(
+        target=_run_video_job,
+        args=(req.job_id, req.video_url, req.face_enhancer,
+              req.quality, req.output_video_quality),
+        daemon=True,
+    )
+    t.start()
+
+    return {
+        "status": "accepted",
+        "job_id": req.job_id,
+        "poll_url": f"/api/video-status/{req.job_id}",
+    }
+
+
+@app.get("/api/video-status/{job_id}")
+async def video_status(job_id: str, auth: bool = Depends(verify_api_key)):
+    """Get the status and progress of a video face swap job."""
+    if job_id not in video_jobs:
+        raise HTTPException(404, f"Job {job_id} not found")
+
+    job = video_jobs[job_id]
+    elapsed = 0
+    if job.get("created_at"):
+        elapsed = time.time() - job["created_at"]
+
+    return {
+        "job_id": job_id,
+        "status": job["status"],
+        "step": job["step"],
+        "progress": job["progress"],
+        "duration_sec": job.get("duration_sec", 0),
+        "elapsed_sec": round(elapsed, 1),
+        "output_size_mb": job.get("output_size_mb", 0),
+        "error": job.get("error"),
+    }
+
+
+@app.get("/api/video-download/{job_id}")
+async def video_download(job_id: str, auth: bool = Depends(verify_api_key)):
+    """
+    Download the processed video.
+    Returns the video file as a streaming response.
+    """
+    from fastapi.responses import FileResponse
+
+    if job_id not in video_jobs:
+        raise HTTPException(404, f"Job {job_id} not found")
+
+    job = video_jobs[job_id]
+    if job["status"] != "completed":
+        raise HTTPException(400, f"Job not completed (status: {job['status']})")
+
+    output_path = job.get("output_path")
+    if not output_path or not Path(output_path).exists():
+        raise HTTPException(404, "Output file not found")
+
+    return FileResponse(
+        path=output_path,
+        media_type="video/mp4",
+        filename=f"face_swap_{job_id}.mp4",
+    )
+
+
+@app.delete("/api/video-job/{job_id}")
+async def delete_video_job(job_id: str, auth: bool = Depends(verify_api_key)):
+    """Delete a video job and its output file."""
+    if job_id not in video_jobs:
+        raise HTTPException(404, f"Job {job_id} not found")
+
+    job = video_jobs[job_id]
+
+    # Kill running process if any
+    if job.get("pid"):
+        try:
+            os.kill(job["pid"], signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+
+    # Delete output file
+    if job.get("output_path"):
+        try:
+            os.unlink(job["output_path"])
+        except FileNotFoundError:
+            pass
+
+    del video_jobs[job_id]
+    return {"status": "deleted", "job_id": job_id}
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────

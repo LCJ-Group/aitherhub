@@ -539,3 +539,74 @@ class FaceSwapService:
             json_data=payload,
             timeout=30.0,
         )
+
+    # ──────────────────────────────────────────
+    # Video Face Swap
+    # ──────────────────────────────────────────
+
+    async def start_video_swap(
+        self,
+        job_id: str,
+        video_url: str,
+        quality: str = "high",
+        face_enhancer: bool = True,
+        output_video_quality: int = 90,
+    ) -> Dict[str, Any]:
+        """
+        Start an asynchronous video face swap job on the GPU worker.
+
+        The GPU worker will download the video, process all frames with
+        FaceFusion, and make the result available for download.
+
+        Args:
+            job_id: Unique job identifier
+            video_url: URL to download the input video
+            quality: Quality preset (fast, balanced, high)
+            face_enhancer: Enable GFPGAN face enhancement
+            output_video_quality: Output video quality 0-100
+
+        Returns:
+            Dict with job_id and poll_url
+        """
+        payload = {
+            "job_id": job_id,
+            "video_url": video_url,
+            "quality": quality,
+            "face_enhancer": face_enhancer,
+            "output_video_quality": output_video_quality,
+        }
+
+        logger.info(f"Starting video swap job: {job_id}")
+        return await self._request(
+            "POST", "/api/swap-video",
+            json_data=payload,
+            timeout=30.0,
+        )
+
+    async def get_video_status(self, job_id: str) -> Dict[str, Any]:
+        """
+        Get the status and progress of a video face swap job.
+
+        Returns:
+            Dict with status, progress (0-100), step description, etc.
+        """
+        return await self._request(
+            "GET", f"/api/video-status/{job_id}",
+            timeout=10.0,
+        )
+
+    async def get_video_download_url(self, job_id: str) -> str:
+        """
+        Get the download URL for a completed video face swap job.
+        Returns the full URL to stream the processed video.
+        """
+        return f"{self.worker_url}/api/video-download/{job_id}"
+
+    async def delete_video_job(self, job_id: str) -> Dict[str, Any]:
+        """
+        Delete a video job and its output file from the GPU worker.
+        """
+        return await self._request(
+            "DELETE", f"/api/video-job/{job_id}",
+            timeout=10.0,
+        )
