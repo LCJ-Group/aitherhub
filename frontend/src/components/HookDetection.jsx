@@ -210,12 +210,14 @@ export default function HookDetection({ videoData, onSelectHook }) {
                       <span className={`${scoreBadge(hook.hook_score)} text-white text-xs font-bold px-2.5 py-1 rounded-full`}>
                         {hook.hook_score}pt
                       </span>
-                      {hook.is_question && (
-                        <span className="text-xs">❓</span>
-                      )}
-                      {hook.has_number && (
-                        <span className="text-xs">🔢</span>
-                      )}
+                      <div className="flex items-center gap-0.5">
+                        {hook.is_question && (
+                          <span className="text-[10px] font-bold text-purple-500" title="疑問文">Q</span>
+                        )}
+                        {hook.has_number && (
+                          <span className="text-[10px] font-bold text-blue-500" title="数字を含む">#</span>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </div>
