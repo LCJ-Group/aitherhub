@@ -163,6 +163,7 @@ def generate_read_sas_from_url(
             expiry=expiry,
         )
         base_url = blob_url.split("?", 1)[0]  # strip old query
+        base_url = unquote(base_url)  # decode %40 etc. to match SAS signature
         return f"{base_url}?{sas}"
     except Exception as exc:
         logger.warning("generate_read_sas_from_url failed for %s: %s", blob_url[:80] if blob_url else None, exc)
