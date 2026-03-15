@@ -3217,3 +3217,46 @@ async def admin_generate_upload_sas(
         "blob_url": blob_url,
         "expires_at": expiry.isoformat(),
     }
+
+
+# ── BUILD 42: Admin generate read SAS (for debugging video playback) ──────────
+@router.post("/generate-read-sas")
+async def admin_generate_read_sas(
+    payload: dict,
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """Generate a read-only SAS URL for downloading/viewing a blob (admin/debug use)."""
+    import os
+    from azure.storage.blob import generate_blob_sas, BlobSasPermissions
+    expected_key = os.getenv("ADMIN_API_KEY", "aither:hub")
+    if x_admin_key != expected_key:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    blob_name = payload.get("blob_name", "")
+    if not blob_name:
+        raise HTTPException(status_code=400, detail="blob_name required")
+    conn_str = os.getenv("AZURE_STORAGE_CONNECTION_STRING", "")
+    account_name = os.getenv("AZURE_STORAGE_ACCOUNT_NAME", "")
+    container_name = os.getenv("AZURE_BLOB_CONTAINER", "videos")
+    account_key = ""
+    for part in conn_str.split(";"):
+        if part.startswith("AccountKey="):
+            account_key = part.split("=", 1)[1]
+            break
+    if not account_key:
+        raise HTTPException(status_code=500, detail="No account key found")
+    from datetime import datetime, timezone, timedelta
+    expiry = datetime.now(timezone.utc) + timedelta(hours=1)
+    sas = generate_blob_sas(
+        account_name=account_name,
+        container_name=container_name,
+        blob_name=blob_name,
+        account_key=account_key,
+        permission=BlobSasPermissions(read=True),
+        expiry=expiry,
+    )
+    url = f"https://{account_name}.blob.core.windows.net/{container_name}/{blob_name}?{sas}"
+    return {
+        "blob_name": blob_name,
+        "read_url": url,
+        "expires_at": expiry.isoformat(),
+    }
