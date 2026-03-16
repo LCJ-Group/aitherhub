@@ -389,8 +389,20 @@ class AutoVideoPipelineService:
             job["progress"] = 2
             logger.info(f"[{job_id}] Step 1: Downloading video")
 
+            # If the video URL is on our Azure Blob Storage (no SAS token),
+            # generate a read SAS to avoid 409 "Public access not permitted"
+            download_url = job["video_url"]
+            if "aitherhub.blob.core.windows.net" in download_url and "?" not in download_url:
+                from app.services.storage_service import generate_read_sas_from_url
+                sas_url = generate_read_sas_from_url(download_url)
+                if sas_url:
+                    download_url = sas_url
+                    logger.info(f"[{job_id}] Added read SAS to blob URL")
+                else:
+                    logger.warning(f"[{job_id}] Failed to generate read SAS, trying direct URL")
+
             async with httpx.AsyncClient(timeout=300, follow_redirects=True) as client:
-                async with client.stream("GET", job["video_url"]) as resp:
+                async with client.stream("GET", download_url) as resp:
                     resp.raise_for_status()
                     total = int(resp.headers.get("content-length", 0))
                     downloaded = 0
@@ -471,9 +483,17 @@ class AutoVideoPipelineService:
             fs_job_id = f"fs-{job_id}"
             job["face_swap_job_id"] = fs_job_id
 
+            # Use SAS URL for face swap too (GPU worker needs to download the video)
+            fs_video_url = job["video_url"]
+            if "aitherhub.blob.core.windows.net" in fs_video_url and "?" not in fs_video_url:
+                from app.services.storage_service import generate_read_sas_from_url
+                sas_url = generate_read_sas_from_url(fs_video_url)
+                if sas_url:
+                    fs_video_url = sas_url
+
             await self.face_swap.swap_video(
                 job_id=fs_job_id,
-                video_url=job["video_url"],
+                video_url=fs_video_url,
                 quality=job["quality"],
                 output_video_quality=95,
             )
