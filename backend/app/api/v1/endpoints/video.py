@@ -1012,13 +1012,51 @@ async def get_video_detail(
                 report3.append({"title": latest_insight.title, "content": latest_insight.content})
 
         # ---- Step 6: Generate preview URL (inline, no service call) ----
+        # BUILD 41 FIX: compressed_blob_url has two formats depending on source:
+        #   clean_video (worker): full path  "email/video_id/video_id_preview.mp4"
+        #   live_boost (pipeline): relative  "assembled/VIDEO_ID_assembled.mp4"
+        # Also, iOS generates UPPERCASE UUIDs (UUID().uuidString) while PostgreSQL
+        # normalises to lowercase. Blob Storage paths are case-sensitive, so we
+        # must reconstruct the path using the original case from the blob URL.
         preview_url = None
         if compressed_blob and email and account_key:
             try:
-                preview_filename = compressed_blob.split('/')[-1] if '/' in compressed_blob else compressed_blob
-                blob_name = f"{email}/{video_id}/{preview_filename}"
-                preview_url = _make_sas_url(blob_name)
-            except Exception:
+                # Detect if compressed_blob already contains the full path
+                # (i.e. starts with email or contains 3+ path segments)
+                segments = compressed_blob.split("/")
+                if "@" in segments[0] or len(segments) >= 3:
+                    # Full path — use as-is (clean_video / worker pipeline)
+                    blob_name = compressed_blob
+                else:
+                    # Relative path under email/video_id/ (live_boost pipeline)
+                    # The video_id folder on Blob was created by iOS with UPPERCASE UUID.
+                    # Extract the original case from the filename in compressed_blob_url
+                    # e.g. "assembled/8E8C6B5F-..._assembled.mp4" → "8E8C6B5F-..."
+                    fname = segments[-1]  # e.g. "8E8C6B5F-..._assembled.mp4"
+                    # Try to extract UUID from filename (before first underscore after UUID pattern)
+                    import re
+                    uuid_match = re.search(r'([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})', fname)
+                    if uuid_match:
+                        original_case_vid = uuid_match.group(1)
+                    else:
+                        # Fallback: use video_id as-is (lowercase from DB)
+                        original_case_vid = video_id
+                    blob_name = f"{email}/{original_case_vid}/{compressed_blob}"
+                # BUILD 42: Use direct Blob URL (not CDN) for preview_url.
+                # CDN may interfere with AVPlayer streaming (Range requests,
+                # SAS token handling, or caching issues).
+                _preview_sas = _generate_blob_sas(
+                    account_name=account_name,
+                    container_name=container_name,
+                    blob_name=blob_name,
+                    account_key=account_key,
+                    permission=_BlobSasPermissions(read=True),
+                    expiry=sas_expiry,
+                )
+                preview_url = f"https://{account_name}.blob.core.windows.net/{container_name}/{blob_name}?{_preview_sas}"
+                logger.debug(f"[preview_url] blob_name={blob_name} (direct blob, no CDN)")
+            except Exception as exc:
+                logger.warning(f"[preview_url] Failed to generate SAS: {exc}")
                 preview_url = None
 
         _t_end = _time.monotonic()

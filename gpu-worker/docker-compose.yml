@@ -1,0 +1,64 @@
+##############################################################################
+# FaceFusion GPU Worker — Docker Compose
+#
+# Usage:
+#   docker compose up -d
+#   docker compose logs -f
+#   docker compose down
+#
+# Requirements:
+#   - NVIDIA Docker runtime installed
+#   - At least 1x NVIDIA GPU (RTX 4090 recommended)
+##############################################################################
+
+services:
+  face-swap-worker:
+    build: .
+    image: aitherhub/face-swap-worker:latest
+    container_name: face-swap-worker
+    restart: unless-stopped
+
+    # GPU access
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    # Environment
+    environment:
+      - WORKER_API_KEY=${WORKER_API_KEY:-change-me-in-production}
+      - WORKER_PORT=8000
+      - FACEFUSION_DIR=/workspace/facefusion
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
+
+    # Ports
+    ports:
+      - "${WORKER_PORT:-8000}:8000"
+
+    # Volumes for persistence
+    volumes:
+      # Persist FaceFusion models (avoid re-download)
+      - facefusion-models:/workspace/facefusion/.assets/models
+      # Persist source face images
+      - source-faces:/workspace/source_faces
+
+    # Privileged for v4l2loopback
+    privileged: true
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "-H", "X-Api-Key: ${WORKER_API_KEY:-change-me-in-production}", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+volumes:
+  facefusion-models:
+    driver: local
+  source-faces:
+    driver: local

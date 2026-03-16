@@ -1647,9 +1647,14 @@ export default function DockPlayer({
 
                   if (isGeneratingSubtitles) {
                     return (
-                      <div className="flex items-center gap-2">
-                        <div className="w-4 h-4 rounded-full border-2 border-gray-500 border-t-purple-400 animate-spin" />
-                        <span className="text-xs text-purple-300">字幕を生成中...</span>
+                      <div className="flex flex-col gap-1 min-w-[140px]">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-purple-300">字幕生成中...</span>
+                          <span className="text-xs text-purple-400 font-bold">95%</span>
+                        </div>
+                        <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
+                          <div className="h-full bg-gradient-to-r from-purple-500 to-pink-500 rounded-full transition-all duration-500 ease-out" style={{ width: '95%' }} />
+                        </div>
                       </div>
                     );
                   }
@@ -1676,10 +1681,32 @@ export default function DockPlayer({
                   }
 
                   if (isClipLoading) {
+                    const pct = clipState?.progress_pct || 0;
+                    const step = clipState?.progress_step || '';
+                    const stepLabels = {
+                      downloading: '取得中',
+                      speech_boundary: '音声検出',
+                      cutting: 'カット中',
+                      person_detection: '人物検出',
+                      silence_removal: '無音除去',
+                      transcribing: '文字起こし',
+                      refining_subtitles: '字幕最適化',
+                      creating_clip: '動画作成',
+                      uploading: 'アップロード',
+                    };
+                    const label = stepLabels[step] || '生成中';
                     return (
-                      <div className="flex items-center gap-2">
-                        <div className="w-4 h-4 rounded-full border-2 border-gray-500 border-t-purple-400 animate-spin" />
-                        <span className="text-xs text-white/50">切り抜き生成中...</span>
+                      <div className="flex flex-col gap-1 min-w-[140px]">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-white/50">{label}...</span>
+                          <span className="text-xs text-purple-400 font-bold">{pct}%</span>
+                        </div>
+                        <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-gradient-to-r from-purple-500 to-pink-500 rounded-full transition-all duration-700 ease-out"
+                            style={{ width: `${Math.max(pct, 2)}%` }}
+                          />
+                        </div>
                       </div>
                     );
                   }

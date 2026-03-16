@@ -781,8 +781,23 @@ function FeedbackCard({ fb }) {
 
   const timeRange = formatSeconds(fb.time_start) + " – " + formatSeconds(fb.time_end);
 
+  const handleClick = () => {
+    // Navigate to clip editor with phase_index and time range as query params
+    const params = new URLSearchParams({
+      phase: fb.phase_index,
+      t_start: fb.time_start,
+      t_end: fb.time_end,
+      open_editor: '1',
+    });
+    window.open(`/video/${fb.video_id}?${params.toString()}`, '_blank');
+  };
+
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-4 hover:shadow-md transition-all">
+    <div
+      className="bg-white rounded-xl border border-gray-200 p-4 hover:shadow-md hover:border-orange-300 transition-all cursor-pointer group"
+      onClick={handleClick}
+      title="クリックしてクリップエディタを開く"
+    >
       <div className="flex items-start justify-between gap-4">
         {/* Left: Rating + Content */}
         <div className="flex-1 min-w-0">
@@ -817,6 +832,9 @@ function FeedbackCard({ fb }) {
               {formatDate(fb.rated_at)}
             </p>
           )}
+          <p className="text-[10px] text-orange-400 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            → エディタを開く
+          </p>
         </div>
       </div>
     </div>

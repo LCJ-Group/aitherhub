@@ -90,6 +90,16 @@ class LiveAnalysisPipeline:
         job_uuid = uuid.UUID(job_id)
         logger.info(f"[pipeline] Starting analysis job={job_id} video={video_id}")
 
+        # BUILD 42: Resolve UUID case for blob storage.
+        # iOS generates UPPERCASE UUIDs but PostgreSQL normalises to lowercase.
+        # We need the correct case for all blob operations.
+        from app.services.storage_service import resolve_blob_video_id
+        blob_video_id = resolve_blob_video_id(email, video_id)
+        if blob_video_id != video_id:
+            logger.info(
+                f"[pipeline] BUILD 42: UUID case resolved: {video_id} → {blob_video_id}"
+            )
+
         # Track temp paths for cleanup in finally block
         assembled_path = None
         audio_path = None
@@ -98,11 +108,64 @@ class LiveAnalysisPipeline:
             # Step 1: Assemble chunks
             await self._update_step(job_uuid, "assembling", 0.0, video_id=video_id)
             assembled_path = await self._assemble_chunks(
-                video_id=video_id,
+                video_id=blob_video_id,
                 email=email,
                 total_chunks=total_chunks,
             )
             await self._update_step(job_uuid, "assembling", 0.10, video_id=video_id)
+
+            # BUILD 41: Upload assembled video IMMEDIATELY after assembly.
+            # This ensures the video is available for playback even if later
+            # analysis steps (STT, OCR, sales detection) fail.
+            # Previously this was Step 7 (after all analysis), meaning a failure
+            # in any step would leave the user with no video to watch.
+            compressed_blob_path = None
+            try:
+                from app.services.storage_service import generate_upload_sas
+                import aiohttp
+
+                preview_filename = f"{video_id}_assembled.mp4"
+                blob_name = f"assembled/{preview_filename}"
+                _, upload_url, blob_url, _ = await generate_upload_sas(
+                    email=email,
+                    video_id=video_id,
+                    filename=blob_name,
+                )
+
+                async with aiohttp.ClientSession() as http_session:
+                    with open(assembled_path, "rb") as f:
+                        video_data = f.read()
+                    async with http_session.put(
+                        upload_url,
+                        data=video_data,
+                        headers={
+                            "x-ms-blob-type": "BlockBlob",
+                            "Content-Type": "video/mp4",
+                        },
+                    ) as resp:
+                        if resp.status in (200, 201):
+                            compressed_blob_path = blob_name
+                            logger.info(f"[pipeline] Uploaded assembled video to blob: {blob_name}")
+                            # Save compressed_blob_url to DB immediately so video
+                            # is playable even if subsequent steps fail
+                            try:
+                                await self.db.execute(
+                                    text("""
+                                        UPDATE videos
+                                        SET compressed_blob_url = COALESCE(:blob_url, compressed_blob_url),
+                                            updated_at = now()
+                                        WHERE id = :video_id
+                                    """),
+                                    {"video_id": video_id, "blob_url": compressed_blob_path},
+                                )
+                                await self.db.commit()
+                                logger.info(f"[pipeline] Saved compressed_blob_url early for video={video_id}")
+                            except Exception as db_err:
+                                logger.warning(f"[pipeline] Non-critical: early blob_url save failed: {db_err}")
+                        else:
+                            logger.warning(f"[pipeline] Failed to upload assembled video: HTTP {resp.status}")
+            except Exception as e:
+                logger.warning(f"[pipeline] Non-critical: assembled video upload failed: {e}")
 
             # Step 2: Extract audio
             await self._update_step(job_uuid, "audio_extraction", 0.10, video_id=video_id)
@@ -160,7 +223,7 @@ class LiveAnalysisPipeline:
                 )
             )
 
-            # BUILD 28: Mark videos table as DONE
+            # BUILD 28: Mark videos table as DONE + save compressed_blob_url
             try:
                 duration = results.get("total_duration_seconds")
                 await self.db.execute(
@@ -169,10 +232,11 @@ class LiveAnalysisPipeline:
                         SET status = 'DONE',
                             step_progress = 100,
                             duration = :duration,
+                            compressed_blob_url = COALESCE(:blob_url, compressed_blob_url),
                             updated_at = now()
                         WHERE id = :video_id
                     """),
-                    {"video_id": video_id, "duration": duration},
+                    {"video_id": video_id, "duration": duration, "blob_url": compressed_blob_path},
                 )
             except Exception as e:
                 logger.debug(f"[pipeline] Non-critical: video DONE sync failed: {e}")
@@ -384,11 +448,13 @@ class LiveAnalysisPipeline:
             )
 
         # Download each chunk
+        # BUILD 41: Also scan beyond total_chunks in case of gaps
         import aiohttp
 
         chunk_paths = []
+        scan_limit = total_chunks + 3  # Check a few extra in case of numbering gaps
         async with aiohttp.ClientSession() as session:
-            for i in range(total_chunks):
+            for i in range(scan_limit):
                 chunk_filename = f"chunks/chunk_{i:04d}.mp4"
                 try:
                     download_url, _ = await generate_download_sas(
@@ -405,10 +471,10 @@ class LiveAnalysisPipeline:
                                 async for data in resp.content.iter_chunked(1024 * 1024):
                                     f.write(data)
                             chunk_paths.append(local_path)
-                            logger.info(f"[assemble] Downloaded chunk {i}/{total_chunks}")
+                            logger.info(f"[assemble] Downloaded chunk {i} ({len(chunk_paths)}/{total_chunks})")
                         else:
                             logger.warning(
-                                f"[assemble] Chunk {i} download failed: HTTP {resp.status}"
+                                f"[assemble] Chunk {i} not found: HTTP {resp.status} — skipping"
                             )
                 except Exception as e:
                     logger.warning(f"[assemble] Failed to download chunk {i}: {e}")
@@ -467,11 +533,20 @@ class LiveAnalysisPipeline:
         return output_path
 
     async def _discover_chunk_count(self, email: str, video_id: str) -> int:
-        """Probe blob storage to discover how many chunks exist."""
+        """Probe blob storage to discover how many chunks exist.
+
+        BUILD 41: Improved to handle gaps in chunk numbering.
+        If chunk_0000 is missing but chunk_0001 exists, we keep scanning
+        up to 3 consecutive misses before stopping.
+        """
         from app.services.storage_service import generate_download_sas
         import aiohttp
 
         count = 0
+        consecutive_misses = 0
+        max_consecutive_misses = 3  # Allow up to 3 gaps
+        max_index = 0
+
         async with aiohttp.ClientSession() as session:
             for i in range(10000):  # Safety limit
                 chunk_filename = f"chunks/chunk_{i:04d}.mp4"
@@ -485,11 +560,21 @@ class LiveAnalysisPipeline:
                     async with session.head(download_url) as resp:
                         if resp.status == 200:
                             count += 1
+                            max_index = i
+                            consecutive_misses = 0
                         else:
-                            break
+                            consecutive_misses += 1
+                            if consecutive_misses >= max_consecutive_misses:
+                                break
                 except Exception:
-                    break
-        logger.info(f"[assemble] Discovered {count} chunks for video={video_id}")
+                    consecutive_misses += 1
+                    if consecutive_misses >= max_consecutive_misses:
+                        break
+
+        logger.info(
+            f"[assemble] Discovered {count} chunks for video={video_id} "
+            f"(max_index={max_index})"
+        )
         return count
 
     # ──────────────────────────────────────────
@@ -501,8 +586,47 @@ class LiveAnalysisPipeline:
         Extract audio track from video using ffmpeg.
 
         Returns path to the extracted WAV file (16kHz mono for STT).
+        If the video has no audio track, returns an empty silent WAV.
         """
         audio_path = video_path.replace(".mp4", "_audio.wav")
+
+        # Validate input file exists and has content
+        if not os.path.exists(video_path):
+            raise RuntimeError(f"Video file not found: {video_path}")
+        file_size = os.path.getsize(video_path)
+        if file_size == 0:
+            raise RuntimeError(f"Video file is empty: {video_path}")
+        logger.info(f"[audio] Input video: {video_path} ({file_size} bytes)")
+
+        # First, probe if the video has an audio stream
+        probe_proc = await asyncio.create_subprocess_exec(
+            "ffprobe", "-v", "error",
+            "-select_streams", "a",
+            "-show_entries", "stream=codec_type",
+            "-of", "csv=p=0",
+            video_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        probe_stdout, probe_stderr = await probe_proc.communicate()
+        has_audio = probe_stdout.decode().strip() != ""
+
+        if not has_audio:
+            logger.warning(f"[audio] No audio stream found in {video_path} — generating silent WAV")
+            # Generate a 1-second silent WAV for the pipeline to continue
+            silence_proc = await asyncio.create_subprocess_exec(
+                "ffmpeg", "-y",
+                "-f", "lavfi",
+                "-i", "anullsrc=r=16000:cl=mono",
+                "-t", "1",
+                "-acodec", "pcm_s16le",
+                audio_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await silence_proc.communicate()
+            logger.info(f"[audio] Generated silent WAV → {audio_path}")
+            return audio_path
 
         proc = await asyncio.create_subprocess_exec(
             "ffmpeg", "-y",
@@ -518,8 +642,13 @@ class LiveAnalysisPipeline:
         stdout, stderr = await proc.communicate()
 
         if proc.returncode != 0:
+            stderr_text = stderr.decode(errors="replace")
+            logger.error(f"[audio] ffmpeg stderr: {stderr_text}")
+            # Extract actual error lines (skip version/config preamble)
+            error_lines = [l for l in stderr_text.splitlines() if l.strip()]
+            tail = "\n".join(error_lines[-5:]) if error_lines else stderr_text[:500]
             raise RuntimeError(
-                f"Audio extraction failed (rc={proc.returncode}): {stderr.decode()[:500]}"
+                f"Audio extraction failed (rc={proc.returncode}): {tail}"
             )
 
         logger.info(f"[audio] Extracted audio → {audio_path}")

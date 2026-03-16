@@ -68,7 +68,13 @@ FFMPEG_BIN = os.getenv("FFMPEG_PATH", "ffmpeg")
 # OpenAI client for GPT-4o subtitle post-processing
 try:
     from openai import OpenAI
-    _openai_client = OpenAI()
+    _openai_api_key = os.getenv("OPENAI_API_KEY") or os.getenv("AZURE_OPENAI_KEY") or ""
+    if _openai_api_key and not _openai_api_key.startswith("your-"):
+        _openai_client = OpenAI(api_key=_openai_api_key)
+        logger.info("OpenAI client initialized for subtitle refinement")
+    else:
+        logger.warning("No OPENAI_API_KEY or AZURE_OPENAI_KEY found, GPT refinement disabled")
+        _openai_client = None
 except Exception as e:
     logger.warning(f"OpenAI client init failed: {e}")
     _openai_client = None
@@ -194,13 +200,13 @@ def update_clip_status(clip_id: str, status: str, clip_url: str = None, error_me
                     SET status = :status, updated_at = NOW()
                     WHERE id = :clip_id
                 """)
-                await session.execute(sql, {"status": status, "clip_id": clip_id}))
+                await session.execute(sql, {"status": status, "clip_id": clip_id})
             # Save captions (subtitle data) to DB
             if captions is not None:
                 import json as _json
                 captions_sql = text("""
                     UPDATE video_clips
-                    SET captions = :captions_json::jsonb, updated_at = NOW()
+                    SET captions = CAST(:captions_json AS jsonb), updated_at = NOW()
                     WHERE id = :clip_id
                 """)
                 await session.execute(captions_sql, {
@@ -753,13 +759,13 @@ def transcribe_audio(audio_path: str) -> list:
 # GPT-4o subtitle post-processing
 # =========================
 
-def refine_subtitles_with_gpt(segments: list, phase_context: str = "") -> list:
+def refine_subtitles_with_gpt(segments: list, phase_context: str = "", product_names: list = None) -> list:
     """
-    Use GPT-4o to refine Whisper transcription for Japanese subtitles.
+    Use GPT-4.1-mini to refine Whisper transcription for Japanese subtitles.
     
     Improvements:
-    - Fix misrecognized Japanese words using context
-    - Split text into natural Japanese phrases (bunsetsu)
+    - Fix misrecognized Japanese words using context + product name dictionary
+    - Merge fragmented segments into natural sentence units
     - Remove filler words contextually
     - Add appropriate punctuation
     - Reconstruct word-level timestamps for karaoke effect
@@ -767,7 +773,7 @@ def refine_subtitles_with_gpt(segments: list, phase_context: str = "") -> list:
     Returns refined segments with word-level timestamps preserved.
     """
     if not _openai_client or not segments:
-        logger.info("GPT-4o refinement skipped (no client or no segments)")
+        logger.info("GPT refinement skipped (no client or no segments)")
         return segments
 
     # Combine all segment texts with timestamps for context
@@ -776,41 +782,52 @@ def refine_subtitles_with_gpt(segments: list, phase_context: str = "") -> list:
         raw_lines.append(f"[{seg['start']:.2f}-{seg['end']:.2f}] {seg['text']}")
     raw_text = "\n".join(raw_lines)
 
-    # Build prompt
+    # Build context sections
     context_section = ""
     if phase_context:
         context_section = f"""\n## このフェーズの内容（参考情報 - 商品名や固有名詞の修正に活用）
 {phase_context}\n"""
 
+    # Build product name dictionary section
+    product_section = ""
+    if product_names:
+        product_section = f"""\n## 商品名辞書（この動画に登場する商品名 - 誤認識修正に必ず活用）
+{', '.join(product_names)}
+※ Whisperが誤認識した場合、上記の商品名に修正してください\n"""
+
     prompt = f"""あなたは日本語ライブコマース動画のTikTok/Reels向けバイラル字幕を作成する専門家です。
 Whisperで自動生成された字幕テキストを、SNS動画で最大限バズる形式に変換してください。
-{context_section}
+{context_section}{product_section}
 ## 修正ルール（優先度順）
-1. **誤認識の修正**: 日本語として不自然な単語や文を正しく修正する
-   - 商品名・ブランド名の誤認識（コンテキストから推測）
+1. **重複・断片テキストの結合（最重要）**: 同じ内容が繰り返されているセグメントを統合する
+   - 例: 「あとは合わせんがん」+「合 わせがんに混ぜて」→「あとは合わせがんに混ぜて」
+   - 例: 「コラーゲンパックみたいにする」+「パックみたいにするっていうのも」→「コラーゲンパックみたいにするっていうのも」
+   - 前後の文脈を理解して、意味が通る自然な1文にまとめる
+   - 結合した場合、タイムスタンプは最初のセグメントのstartから最後のセグメントのendまでとする
+2. **誤認識の修正**: 日本語として不自然な単語や文を正しく修正する
+   - 商品名・ブランド名の誤認識（コンテキスト・商品名辞書から推測）
    - 数字・金額の誤り（例: 「センエン」→「1000円」）
-   - 敬語・丁寧語の崩れ修正
-2. **フィラーワード除去**: 「えー」「あのー」「うーん」「なんか」「まあ」等を除去
-3. **バイラル文節分割（最重要）**: TikTok字幕として最適な改行で分割する
-   - 1行は5〜10文字が理想（短いほど読みやすい）
+   - 単語の途中で切れている場合は結合（例: 「合 わせがん」→「合わせがん」）
+3. **フィラーワード除去**: 「えー」「あのー」「うーん」「なんか」「まあ」等を除去
+4. **バイラル文節分割**: TikTok字幕として最適な長さに分割する
+   - 1行は8〜15文字が理想（意味が伝わる最小単位）
+   - 短すぎる分割は避ける（3文字以下の単独セグメントは前後と結合）
    - 意味の区切り・息継ぎで改行
-   - 重要ワード（商品名、金額、感嘆表現）は単独行にする
-   - 例: 「ブリーチ毛って色がすぐ抜けるじゃないですか」→
-     「ブリーチ毛って」「色がすぐ」「抜けるじゃないですか」
-4. **重要ワードマーキング**: 以下のワードは emphasis: true を付ける
+   - 重要ワード（商品名、金額、感嘆表現）は強調表示で目立たせる
+5. **重要ワードマーキング**: 以下のワードは emphasis: true を付ける
    - 商品名・ブランド名
    - 金額（例: 1000円、半額）
    - 感嘆表現（すごい、やばい、めっちゃ、マジで）
    - 数量限定表現（限定、残りわずか、ラスト）
    - CTA表現（今すぐ、ポチって、買って）
-5. **句読点**: 自然な位置に「、」を追加。字幕なので「。」は最小限
+6. **句読点**: 自然な位置に「、」を追加。字幕なので「。」は最小限
 
 ## 入力（Whisper生テキスト + タイムスタンプ）
 {raw_text}
 
 ## タイムスタンプルール（厳守）
 - **元のWhisperタイムスタンプを絶対に大幅に変更しない**
-- 各セグメントのstart/endは元のタイムスタンプ範囲内に収める
+- 重複セグメントを結合した場合: 最初のstartから最後のendまでを使用
 - 1つの元セグメントを複数に分割する場合、元のstart〜endの範囲内で文字数比率で分配
 - セグメント間にギャップがある場合はそのまま維持（無理に埋めない）
 - 音声と字幕のズレを防ぐため、タイムスタンプの精度を最優先する
@@ -825,6 +842,7 @@ Whisperで自動生成された字幕テキストを、SNS動画で最大限バ�
 }}}}
 - emphasis: true の行は字幕で大きく強調表示される
 - フィラーワードのみのセグメントは除去
+- 3文字以下の単独セグメントは作らない（前後と結合すること）
 
 JSON配列のみ出力（説明不要）:"""
 
@@ -856,7 +874,7 @@ JSON配列のみ出力（説明不要）:"""
         refined = json.loads(result_text)
 
         if not isinstance(refined, list) or len(refined) == 0:
-            logger.warning("GPT-4o returned invalid format, using original segments")
+            logger.warning("GPT returned invalid format, using original segments")
             return segments
 
         # Compute the valid time range from original Whisper segments
@@ -901,17 +919,17 @@ JSON配列のみ出力（説明不要）:"""
                     })
 
         if not valid_segments:
-            logger.warning("GPT-4o refinement produced no valid segments, using original")
+            logger.warning("GPT refinement produced no valid segments, using original")
             return segments
 
-        logger.info(f"GPT-4o refined {len(segments)} segments → {len(valid_segments)} segments")
+        logger.info(f"GPT refined {len(segments)} segments → {len(valid_segments)} segments")
         return valid_segments
 
     except json.JSONDecodeError as e:
-        logger.warning(f"GPT-4o response JSON parse failed: {e}")
+        logger.warning(f"GPT response JSON parse failed: {e}")
         return segments
     except Exception as e:
-        logger.error(f"GPT-4o subtitle refinement failed: {e}")
+        logger.error(f"GPT subtitle refinement failed: {e}")
         return segments
 
 
@@ -947,6 +965,49 @@ def get_phase_context(video_id: str, phase_index: int) -> str:
     except Exception as e:
         logger.warning(f"Failed to fetch phase context: {e}")
         return ""
+
+
+def get_product_names(video_id: str) -> list:
+    """
+    Fetch product names from video_product_exposures and video_phases tables
+    to provide domain-specific vocabulary for subtitle refinement.
+    """
+    loop = get_event_loop()
+
+    async def _fetch():
+        async with get_session() as session:
+            # Get product names from product exposures
+            sql = text("""
+                SELECT DISTINCT product_name
+                FROM video_product_exposures
+                WHERE video_id = :video_id AND product_name IS NOT NULL
+            """)
+            result = await session.execute(sql, {"video_id": video_id})
+            names = [row.product_name for row in result.fetchall() if row.product_name]
+
+            # Also get product names from video_phases
+            sql2 = text("""
+                SELECT DISTINCT product_names
+                FROM video_phases
+                WHERE video_id = :video_id AND product_names IS NOT NULL
+            """)
+            result2 = await session.execute(sql2, {"video_id": video_id})
+            for row in result2.fetchall():
+                if row.product_names:
+                    try:
+                        pn = json.loads(row.product_names) if isinstance(row.product_names, str) else row.product_names
+                        if isinstance(pn, list):
+                            names.extend(pn)
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
+            return list(set(n for n in names if n and len(n) > 1))
+
+    try:
+        return loop.run_until_complete(_fetch())
+    except Exception as e:
+        logger.warning(f"Failed to fetch product names: {e}")
+        return []
 
 
 # =========================
@@ -1046,59 +1107,115 @@ def detect_person_intervals(video_path: str, sample_fps: float = 2.0, confidence
 def concatenate_intervals(video_path: str, intervals: list, output_path: str) -> bool:
     """
     Concatenate only the specified time intervals from the video.
-    Uses FFmpeg concat demuxer for seamless joining.
+
+    Uses FFmpeg filter_complex with accurate seeking (re-encode) to avoid
+    duplicate frames caused by keyframe-aligned stream-copy cuts.
+    When there are many intervals (>10), falls back to per-segment re-encode
+    + concat demuxer to avoid overly complex filter graphs.
     """
     if not intervals:
         return False
 
+    # Filter out very short intervals
+    intervals = [(s, e) for s, e in intervals if e - s >= 0.5]
+    if not intervals:
+        return False
+
     work_dir = os.path.dirname(output_path)
+    n = len(intervals)
+    logger.info(f"Concatenating {n} intervals from {video_path}")
+
+    # ---- Strategy A: filter_complex for small number of intervals ----
+    if n <= 10:
+        try:
+            return _concat_via_filter_complex(video_path, intervals, output_path)
+        except Exception as e:
+            logger.warning(f"filter_complex concat failed, falling back to per-segment: {e}")
+
+    # ---- Strategy B: per-segment re-encode + concat demuxer ----
+    return _concat_via_segments(video_path, intervals, output_path, work_dir)
+
+
+def _concat_via_filter_complex(video_path: str, intervals: list, output_path: str) -> bool:
+    """
+    Use a single FFmpeg command with filter_complex to trim and concatenate
+    intervals accurately (re-encode, no keyframe issues).
+    """
+    n = len(intervals)
+    # Build filter_complex string
+    filter_parts = []
+    concat_inputs = ""
+    for i, (start, end) in enumerate(intervals):
+        duration = end - start
+        filter_parts.append(
+            f"[0:v]trim=start={start:.3f}:duration={duration:.3f},setpts=PTS-STARTPTS[v{i}];"
+        )
+        filter_parts.append(
+            f"[0:a]atrim=start={start:.3f}:duration={duration:.3f},asetpts=PTS-STARTPTS[a{i}];"
+        )
+        concat_inputs += f"[v{i}][a{i}]"
+
+    filter_parts.append(
+        f"{concat_inputs}concat=n={n}:v=1:a=1[outv][outa]"
+    )
+    filter_str = "".join(filter_parts)
+
+    cmd = [
+        FFMPEG_BIN, "-y",
+        "-i", video_path,
+        "-filter_complex", filter_str,
+        "-map", "[outv]", "-map", "[outa]",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+        "-c:a", "aac", "-b:a", "128k",
+        "-movflags", "+faststart",
+        output_path,
+    ]
+
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    if result.returncode != 0:
+        logger.error(f"filter_complex concat stderr: {result.stderr[-500:]}")
+        raise RuntimeError(f"filter_complex concat failed (rc={result.returncode})")
+
+    logger.info(f"Concatenated {n} intervals via filter_complex")
+    return True
+
+
+def _concat_via_segments(video_path: str, intervals: list, output_path: str, work_dir: str) -> bool:
+    """
+    Cut each interval with re-encode (accurate seek) then concatenate
+    via concat demuxer.  Used when there are too many intervals for
+    filter_complex.
+    """
     segment_files = []
 
-    # Cut each interval into a separate file
     for i, (start, end) in enumerate(intervals):
         seg_path = os.path.join(work_dir, f"person_seg_{i}.mp4")
         duration = end - start
-        if duration < 0.5:  # Skip very short segments
+        if duration < 0.5:
             continue
 
-        # Use stream copy for near-instant cutting (2026-03 optimization)
+        # Always re-encode for accurate cutting (avoids keyframe duplication)
         cmd = [
             FFMPEG_BIN, "-y",
             "-ss", f"{start:.3f}",
+            "-accurate_seek",
             "-i", video_path,
             "-t", f"{duration:.3f}",
-            "-c", "copy",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+            "-c:a", "aac", "-b:a", "128k",
             "-movflags", "+faststart",
-            "-avoid_negative_ts", "make_zero",
             seg_path,
         ]
         try:
-            subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=30)
+            subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=300)
             segment_files.append(seg_path)
         except Exception as e:
-            logger.warning(f"Stream-copy cut failed for interval {i}, trying re-encode: {e}")
-            # Fallback to re-encode
-            cmd_fallback = [
-                FFMPEG_BIN, "-y",
-                "-ss", f"{start:.3f}",
-                "-i", video_path,
-                "-t", f"{duration:.3f}",
-                "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-                "-c:a", "aac", "-b:a", "128k",
-                "-movflags", "+faststart",
-                seg_path,
-            ]
-            try:
-                subprocess.run(cmd_fallback, check=True, capture_output=True, text=True, timeout=300)
-                segment_files.append(seg_path)
-            except Exception as e2:
-                logger.error(f"Failed to cut person interval {i}: {e2}")
+            logger.error(f"Failed to cut interval {i} ({start:.1f}-{end:.1f}): {e}")
 
     if not segment_files:
         return False
 
     if len(segment_files) == 1:
-        # Only one segment, just rename
         os.rename(segment_files[0], output_path)
         return True
 
@@ -1108,8 +1225,8 @@ def concatenate_intervals(video_path: str, intervals: list, output_path: str) ->
         for seg_path in segment_files:
             f.write(f"file '{seg_path}'\n")
 
-    # Concatenate using FFmpeg concat demuxer
-    # Use stream copy first (fast), fallback to re-encode if needed
+    # Concatenate using concat demuxer (stream copy is safe here because
+    # all segments were re-encoded with identical codec settings)
     cmd = [
         FFMPEG_BIN, "-y",
         "-f", "concat",
@@ -1122,10 +1239,10 @@ def concatenate_intervals(video_path: str, intervals: list, output_path: str) ->
 
     try:
         subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=300)
-        logger.info(f"Concatenated {len(segment_files)} person segments")
+        logger.info(f"Concatenated {len(segment_files)} re-encoded segments")
         return True
     except Exception as e:
-        logger.error(f"Failed to concatenate person segments: {e}")
+        logger.error(f"Failed to concatenate segments: {e}")
         return False
     finally:
         # Cleanup temp segments
@@ -1614,7 +1731,7 @@ def remove_silence_from_video(video_path: str, output_path: str, silence_interva
 # Main pipeline
 # =========================
 
-def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float, time_end: float, phase_index: int = -1, speed_factor: float = 1.0):
+def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float, time_end: float, phase_index = -1, speed_factor: float = 1.0):
     """Main clip generation pipeline."""
     logger.info(f"=== Starting clip generation ===")
     logger.info(f"clip_id={clip_id}, video_id={video_id}, speed={speed_factor}x")
@@ -1707,10 +1824,17 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
 
         update_clip_progress(clip_id, 65, "refining_subtitles")
 
-        # 3.5. GPT-4o subtitle refinement
+        # 3.5. GPT subtitle refinement (merge fragments, fix errors, add emphasis)
         if segments:
             phase_context = ""
-            if phase_index >= 0:
+            # phase_index can be int or string (e.g. "moment_strong_1")
+            _use_phase_context = False
+            try:
+                _use_phase_context = int(phase_index) >= 0
+            except (ValueError, TypeError):
+                # String phase_index like "moment_strong_1" — skip phase context lookup
+                pass
+            if _use_phase_context:
                 try:
                     phase_context = get_phase_context(video_id, phase_index)
                     if phase_context:
@@ -1718,20 +1842,90 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
                 except Exception as e:
                     logger.warning(f"Failed to get phase context: {e}")
 
-            logger.info("Refining subtitles with GPT-4o...")
-            segments = refine_subtitles_with_gpt(segments, phase_context)
-            logger.info(f"After GPT-4o refinement: {len(segments)} subtitle segments")
+            # Fetch product names for domain-specific vocabulary
+            product_names = []
+            try:
+                product_names = get_product_names(video_id)
+                if product_names:
+                    logger.info(f"Got {len(product_names)} product names for subtitle refinement: {product_names[:5]}")
+            except Exception as e:
+                logger.warning(f"Failed to get product names: {e}")
+
+            logger.info("Refining subtitles with GPT-4.1-mini...")
+            segments = refine_subtitles_with_gpt(segments, phase_context, product_names=product_names)
+            logger.info(f"After GPT refinement: {len(segments)} subtitle segments")
 
         update_clip_progress(clip_id, 75, "creating_clip")
 
-        # 4. Choose random TikTok style
-        style = random.choice(SUBTITLE_STYLES)
-        logger.info(f"Selected subtitle style: {style['name']}")
-
-        # 5. Create vertical clip with subtitles + speed adjustment
+        # 4. Create vertical clip WITHOUT burned-in subtitles
+        # Subtitles are rendered as overlay in the frontend (ClipEditorV2)
+        # and burned in only during "Export MP4" via the export API.
+        # This avoids double-subtitle display.
         clip_path = os.path.join(work_dir, "clip_final.mp4")
-        if not create_vertical_clip(segment_path, clip_path, segments, style, speed_factor=speed_factor):
-            raise RuntimeError("Failed to create vertical clip")
+        logger.info("Creating vertical clip (no burned-in subtitles)...")
+        width, height = get_video_dimensions(segment_path)
+        target_w, target_h = 1080, 1920
+        source_ratio = width / height
+        target_ratio = target_w / target_h
+        if source_ratio > target_ratio:
+            crop_h = height
+            crop_w = int(height * target_ratio)
+            crop_x = (width - crop_w) // 2
+            crop_y = 0
+        else:
+            crop_w = width
+            crop_h = int(width / target_ratio)
+            crop_x = 0
+            crop_y = (height - crop_h) // 2
+
+        # Build ffmpeg command: crop → scale → speed adjustment (no subtitles)
+        vf_parts = [
+            f"crop={crop_w}:{crop_h}:{crop_x}:{crop_y}",
+            f"scale={target_w}:{target_h}:flags=lanczos",
+        ]
+        if speed_factor != 1.0 and speed_factor > 0:
+            vf_parts.append(f"setpts=PTS/{speed_factor}")
+
+        cmd = [
+            FFMPEG_BIN, "-y",
+            "-i", segment_path,
+            "-vf", ",".join(vf_parts),
+        ]
+        if speed_factor != 1.0 and speed_factor > 0:
+            atempo_filters = []
+            remaining = speed_factor
+            while remaining > 2.0:
+                atempo_filters.append("atempo=2.0")
+                remaining /= 2.0
+            while remaining < 0.5:
+                atempo_filters.append("atempo=0.5")
+                remaining /= 0.5
+            atempo_filters.append(f"atempo={remaining:.4f}")
+            cmd.extend(["-af", ",".join(atempo_filters)])
+        cmd.extend([
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+            "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
+            "-movflags", "+faststart", "-r", "30",
+            clip_path,
+        ])
+
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            if result.returncode != 0:
+                logger.error(f"FFmpeg nosub stderr: {result.stderr[-500:]}")
+                # Fallback to create_vertical_clip_nosub helper
+                if not create_vertical_clip_nosub(segment_path, clip_path,
+                                                   crop_w, crop_h, crop_x, crop_y, target_w, target_h):
+                    raise RuntimeError("Failed to create vertical clip")
+            else:
+                logger.info(f"Vertical clip created (no subtitles, speed={speed_factor}x)")
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("FFmpeg timed out creating vertical clip")
+        except Exception as e:
+            logger.error(f"FFmpeg nosub failed: {e}")
+            if not create_vertical_clip_nosub(segment_path, clip_path,
+                                               crop_w, crop_h, crop_x, crop_y, target_w, target_h):
+                raise RuntimeError("Failed to create vertical clip")
 
         if not os.path.exists(clip_path) or os.path.getsize(clip_path) == 0:
             raise RuntimeError("Output clip file is empty")
@@ -1797,7 +1991,7 @@ def main():
     parser.add_argument("--blob-url", required=True, help="Source video blob URL (with SAS)")
     parser.add_argument("--time-start", type=float, required=True, help="Start time in seconds")
     parser.add_argument("--time-end", type=float, required=True, help="End time in seconds")
-    parser.add_argument("--phase-index", type=int, default=-1, help="Phase index for context-aware subtitles")
+    parser.add_argument("--phase-index", default="-1", help="Phase index for context-aware subtitles (int or string identifier)")
     parser.add_argument("--speed-factor", type=float, default=1.0, help="Playback speed (1.0=normal, 1.2=20%% faster)")
 
     args = parser.parse_args()

@@ -212,17 +212,47 @@ def generate_analysis_video(
         input_path, original_size / (1024 ** 3), fps, scale_width, crf,
     )
 
-    cmd = [
-        FFMPEG, "-y",
-        "-i", input_path,
-        "-vf", f"fps={fps},scale={scale_width}:-1",
-        "-c:v", "libx264",
-        "-preset", preset,
-        "-crf", str(crf),
-        "-an",                  # no audio – analysis only
-        "-movflags", "+faststart",
-        output_path,
-    ]
+    # Try GPU (NVENC) first for 5-10x speedup, fallback to CPU
+    use_nvenc = False
+    try:
+        probe = subprocess.run(
+            [FFMPEG, "-hide_banner", "-encoders"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if "h264_nvenc" in (probe.stdout or ""):
+            use_nvenc = True
+            logger.info("[ANALYSIS_VIDEO] NVENC available → using GPU encoding")
+    except Exception as _e:
+        logger.debug(f"Suppressed: {_e}")
+
+    if use_nvenc:
+        cmd = [
+            FFMPEG, "-y",
+            "-hwaccel", "cuda",
+            "-i", input_path,
+            "-vf", f"fps={fps},scale={scale_width}:-1",
+            "-c:v", "h264_nvenc",
+            "-preset", "p4",
+            "-rc", "vbr",
+            "-cq", str(crf),
+            "-b:v", "0",
+            "-an",
+            "-movflags", "+faststart",
+            output_path,
+        ]
+    else:
+        logger.info("[ANALYSIS_VIDEO] NVENC not available → using CPU encoding")
+        cmd = [
+            FFMPEG, "-y",
+            "-i", input_path,
+            "-vf", f"fps={fps},scale={scale_width}:-1",
+            "-c:v", "libx264",
+            "-preset", preset,
+            "-crf", str(crf),
+            "-an",                  # no audio – analysis only
+            "-movflags", "+faststart",
+            output_path,
+        ]
 
     try:
         logger.info("[ANALYSIS_VIDEO] FFmpeg command: %s", " ".join(cmd))

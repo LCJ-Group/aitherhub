@@ -34,7 +34,7 @@ router = APIRouter()
 
 # ① Clip Rating
 class ClipRatingRequest(BaseModel):
-    phase_index: Union[int, str] = Field(..., description="Phase index (int or string)")
+    phase_index: Optional[Union[int, str]] = Field(None, description="Phase index (int or string)")
     time_start: float = Field(..., description="Clip start time in seconds")
     time_end: float = Field(..., description="Clip end time in seconds")
     rating: str = Field(..., description="'good' or 'bad'")
@@ -51,7 +51,7 @@ class ClipRatingRequest(BaseModel):
 class ClipRatingResponse(BaseModel):
     id: str
     video_id: str
-    phase_index: int
+    phase_index: str
     rating: str
     reason_tags: Optional[list[str]]
     created_at: str
@@ -82,7 +82,7 @@ class EditLogResponse(BaseModel):
 
 # ③ Sales Confirmation
 class SalesConfirmationRequest(BaseModel):
-    phase_index: Union[int, str] = Field(..., description="Phase index (int or string)")
+    phase_index: Optional[Union[int, str]] = Field(None, description="Phase index (int or string)")
     time_start: float = Field(..., description="Clip start time in seconds")
     time_end: float = Field(..., description="Clip end time in seconds")
     is_sales_moment: bool = Field(..., description="True if this is a selling moment")
@@ -95,7 +95,7 @@ class SalesConfirmationRequest(BaseModel):
 class SalesConfirmationResponse(BaseModel):
     id: str
     video_id: str
-    phase_index: int
+    phase_index: str
     is_sales_moment: bool
     confidence: Optional[int]
     note: Optional[str]
@@ -139,6 +139,15 @@ async def submit_clip_rating(
     # Map rating to feedback for backward compatibility with clip_feedback table
     feedback_value = "adopted" if req.rating == "good" else "rejected"
 
+    # Ensure phase_index has a value for ON CONFLICT (video_id, phase_index)
+    # If not provided, use clip_id or generate from time range
+    phase_index_val = req.phase_index
+    if phase_index_val is None:
+        if req.clip_id:
+            phase_index_val = f"clip_{req.clip_id[:8]}"
+        else:
+            phase_index_val = f"t_{int(req.time_start)}_{int(req.time_end)}"
+
     upsert_sql = text("""
         INSERT INTO clip_feedback (
             id, video_id, phase_index, time_start, time_end,
@@ -168,7 +177,7 @@ async def submit_clip_rating(
         result = await db.execute(upsert_sql, {
             "id": feedback_id,
             "video_id": video_id,
-            "phase_index": req.phase_index,
+            "phase_index": str(phase_index_val),
             "time_start": req.time_start,
             "time_end": req.time_end,
             "feedback": feedback_value,
@@ -377,6 +386,14 @@ async def submit_sales_confirmation(
 
     conf_id = str(uuid.uuid4())
 
+    # Ensure phase_index has a value for ON CONFLICT (video_id, phase_index)
+    phase_index_val = req.phase_index
+    if phase_index_val is None:
+        if req.clip_id:
+            phase_index_val = f"clip_{req.clip_id[:8]}"
+        else:
+            phase_index_val = f"t_{int(req.time_start)}_{int(req.time_end)}"
+
     upsert_sql = text("""
         INSERT INTO sales_confirmation (
             id, video_id, phase_index, time_start, time_end,
@@ -402,7 +419,7 @@ async def submit_sales_confirmation(
         result = await db.execute(upsert_sql, {
             "id": conf_id,
             "video_id": video_id,
-            "phase_index": req.phase_index,
+            "phase_index": str(phase_index_val),
             "time_start": req.time_start,
             "time_end": req.time_end,
             "is_sales_moment": req.is_sales_moment,

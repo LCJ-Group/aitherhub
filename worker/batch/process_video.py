@@ -660,10 +660,10 @@ def main():
                 _vid_duration = float(_probe.stdout.strip())
             except Exception:
                 _vid_duration = 0
-            # Scale timeout: ~0.5x realtime for CPU encoding (min 10min, max 2h)
+            # Scale timeout: GPU is ~10x faster than CPU, so reduce max timeout
             # Analysis video is optional — if it times out, we fall back to raw video.
-            # Reduced from 5h to 2h to avoid blocking the worker for too long.
-            _analysis_timeout = max(600, min(int(_vid_duration * 0.5) + 600, 7200))  # 10min-2h
+            # With GPU (NVENC): ~0.05x realtime; CPU: ~0.5x realtime
+            _analysis_timeout = max(600, min(int(_vid_duration * 0.15) + 600, 3600))  # 10min-1h
             logger.info("[ANALYSIS_VIDEO] video_duration=%.0fs, timeout=%ds", _vid_duration, _analysis_timeout)
             try:
                 analysis_video_path = generate_analysis_video(
@@ -728,11 +728,28 @@ def main():
 
             def _do_audio_transcription():
                 logger.info("[PARALLEL] Starting audio extraction + transcription")
-                # v6: Extract full audio for BatchedInferencePipeline
-                extract_audio_full(video_path, ad)
-                # Also extract chunks as fallback
-                extract_audio_chunks(video_path, ad)
-                transcribe_audio_chunks(ad, atd, on_progress=_on_audio_progress)
+                # Audio progress split: extraction=20%, transcription=80%
+                def _on_transcription_progress(pct):
+                    # Map transcription 0-100 to overall audio 20-100
+                    _on_audio_progress(20 + int(pct * 0.8))
+
+                # v7: Extract full audio first (for BatchedInferencePipeline)
+                _on_audio_progress(0)
+                full_path = extract_audio_full(video_path, ad)
+                _on_audio_progress(10)
+
+                if full_path:
+                    # Full audio extracted successfully — skip chunk extraction
+                    # Chunks are only needed as fallback if batched transcription fails
+                    logger.info("[PARALLEL] Full audio extracted, skipping chunk extraction")
+                    _on_audio_progress(20)
+                else:
+                    # Full audio failed — extract chunks as fallback
+                    logger.info("[PARALLEL] Full audio failed, extracting chunks")
+                    extract_audio_chunks(video_path, ad)
+                    _on_audio_progress(20)
+
+                transcribe_audio_chunks(ad, atd, on_progress=_on_transcription_progress)
                 logger.info("[PARALLEL] Audio transcription DONE")
 
             with ThreadPoolExecutor(max_workers=2) as pool:
@@ -768,12 +785,24 @@ def main():
                     update_video_step_progress_sync(video_id, pct)
                 except Exception as _e:
                     logger.debug(f"Suppressed: {_e}")
-            # Try to generate analysis video for faster extraction
+            # Try to generate analysis video for faster extraction (with timeout)
             _analysis_out_resume = os.path.join(os.path.dirname(video_path), "analysis.mp4")
+            try:
+                import subprocess as _sp2
+                _probe2 = _sp2.run(
+                    ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                     "-of", "default=noprint_wrappers=1:nokey=1", video_path],
+                    capture_output=True, text=True, timeout=30
+                )
+                _vid_dur2 = float(_probe2.stdout.strip())
+            except Exception:
+                _vid_dur2 = 0
+            _resume_timeout = max(600, min(int(_vid_dur2 * 0.15) + 600, 3600))
             _resume_source = generate_analysis_video(
                 input_path=video_path,
                 output_path=_analysis_out_resume,
                 fps=1, scale_width=1280, crf=28, preset="veryfast",
+                timeout=_resume_timeout,
             ) or video_path
             extract_frames(
                 video_path=_resume_source,
@@ -902,9 +931,10 @@ def main():
             _current_step_name = VideoStatus.STEP_3_TRANSCRIBE_AUDIO
             update_video_status_sync(video_id, VideoStatus.STEP_3_TRANSCRIBE_AUDIO)
             logger.info("=== STEP 3 – AUDIO TO TEXT ===")
-            # v6: Extract full audio for BatchedInferencePipeline
-            extract_audio_full(video_path, ad)
-            extract_audio_chunks(video_path, ad)
+            # v7: Extract full audio first, skip chunks if successful
+            full_path = extract_audio_full(video_path, ad)
+            if not full_path:
+                extract_audio_chunks(video_path, ad)
             transcribe_audio_chunks(ad, atd)
         elif start_step <= 0:
             # Already done in parallel above

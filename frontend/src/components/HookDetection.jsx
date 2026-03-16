@@ -20,8 +20,10 @@ export default function HookDetection({ videoData, onSelectHook }) {
   const formatTime = (seconds) => {
     if (seconds == null || isNaN(seconds)) return "--:--";
     const s = Math.round(Number(seconds));
-    const m = Math.floor(s / 60);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
     const sec = s % 60;
+    if (h > 0) return `${h}:${m.toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")}`;
     return `${m}:${sec.toString().padStart(2, "0")}`;
   };
 
@@ -210,12 +212,14 @@ export default function HookDetection({ videoData, onSelectHook }) {
                       <span className={`${scoreBadge(hook.hook_score)} text-white text-xs font-bold px-2.5 py-1 rounded-full`}>
                         {hook.hook_score}pt
                       </span>
-                      {hook.is_question && (
-                        <span className="text-xs">❓</span>
-                      )}
-                      {hook.has_number && (
-                        <span className="text-xs">🔢</span>
-                      )}
+                      <div className="flex items-center gap-0.5">
+                        {hook.is_question && (
+                          <span className="text-[10px] font-bold text-purple-500" title="疑問文">Q</span>
+                        )}
+                        {hook.has_number && (
+                          <span className="text-[10px] font-bold text-blue-500" title="数字を含む">#</span>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </div>

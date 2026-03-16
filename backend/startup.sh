@@ -1,13 +1,25 @@
 #!/bin/bash
 
-# Install ffmpeg for audio extraction (needed for Whisper transcription)
+# Install ffmpeg (required for subtitle export)
 if ! command -v ffmpeg &> /dev/null; then
     echo "[startup] Installing ffmpeg..."
-    apt-get update -qq && apt-get install -y -qq --no-install-recommends ffmpeg 2>&1 | tail -3
+    apt-get update -qq && apt-get install -y -qq --no-install-recommends ffmpeg libass-dev 2>&1 | tail -3
     echo "[startup] ffmpeg installed: $(ffmpeg -version 2>&1 | head -1)"
 else
     echo "[startup] ffmpeg already available: $(ffmpeg -version 2>&1 | head -1)"
 fi
+
+# Install CJK fonts in background (non-blocking) for subtitle rendering
+(
+    if ! fc-list 2>/dev/null | grep -qi "noto.*cjk"; then
+        echo "[startup-bg] Installing CJK fonts in background..."
+        apt-get update -qq && apt-get install -y -qq --no-install-recommends fonts-noto-cjk 2>&1 | tail -3
+        fc-cache -f 2>/dev/null
+        echo "[startup-bg] CJK fonts installed"
+    else
+        echo "[startup-bg] CJK fonts already available"
+    fi
+) &
 
 # Activate the virtual environment created during deployment
 if [ -d "antenv" ]; then
@@ -20,4 +32,4 @@ else
     pip install -r requirements.txt 2>&1 | tail -5
 fi
 
-gunicorn -k uvicorn.workers.UvicornWorker app.main:app --workers 1 --threads 1 --timeout 120 --bind 0.0.0.0:8000 --access-logfile - --error-logfile -
+gunicorn -k uvicorn.workers.UvicornWorker app.main:app --workers 1 --threads 1 --timeout 300 --bind 0.0.0.0:8000 --access-logfile - --error-logfile -

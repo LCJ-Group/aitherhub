@@ -206,12 +206,13 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
   const [segments, setSegments] = useState([]);
   const [videoScore, setVideoScore] = useState(null);
 
-  const [tab, setTab] = useState("info");
+  const [tab, setTab] = useState("captions");
   const [isTrimming, setIsTrimming] = useState(false);
   const [status, setStatus] = useState(null);
   const [captions, setCaptions] = useState([]);
   const [savingCaps, setSavingCaps] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
+  const [captionsLoaded, setCaptionsLoaded] = useState(false);
 
   // Subtitle style & position
   const [subtitleStyle, setSubtitleStyle] = useState('box');
@@ -253,14 +254,26 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
   }, [isClipVideo, origStart]);
 
   // Current caption based on playback time (with offset correction)
+  // Extend display: each caption stays visible until the next caption starts
+  // or for a minimum of 3 seconds, whichever is longer.
   const currentCaption = useMemo(() => {
     if (!captions.length) return null;
     const t = currentTime;
-    return captions.find((c) => {
+    const MIN_DISPLAY = 3; // minimum display duration in seconds
+    for (let i = 0; i < captions.length; i++) {
+      const c = captions[i];
       const localStart = toLocalTime(c.start || 0);
-      const localEnd = toLocalTime(c.end || (c.start + 5));
-      return t >= localStart && t <= localEnd;
-    });
+      const rawEnd = toLocalTime(c.end || (c.start + 5));
+      // Extend end to at least MIN_DISPLAY seconds after start
+      let extendedEnd = Math.max(rawEnd, localStart + MIN_DISPLAY);
+      // But don't overlap with next caption's start
+      if (i + 1 < captions.length) {
+        const nextStart = toLocalTime(captions[i + 1].start || 0);
+        extendedEnd = Math.min(extendedEnd, nextStart);
+      }
+      if (t >= localStart && t < extendedEnd) return c;
+    }
+    return null;
   }, [captions, currentTime, toLocalTime]);
 
   const currentPhase = useMemo(() => {
@@ -383,6 +396,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
           const withSource = saved.map(c => ({ ...c, source: c.source || 'saved' }));
           console.log(`[Subtitles] Loaded ${withSource.length} saved captions from DB`);
           setCaptions(withSource);
+          setCaptionsLoaded(true);
           return;
         }
       } catch (e) {
@@ -393,6 +407,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
       if (clip?.captions && clip.captions.length > 0) {
         console.log("[Subtitles] Using clip.captions");
         setCaptions(clip.captions);
+        setCaptionsLoaded(true);
         return;
       }
 
@@ -402,6 +417,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
         if (fromTranscripts.length > 0) {
           console.log(`[Subtitles] Using ${fromTranscripts.length} real transcript segments (source: ${timelineData.transcript_source})`);
           setCaptions(fromTranscripts);
+          setCaptionsLoaded(true);
           return;
         }
       }
@@ -412,21 +428,26 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
         if (fallback.length > 0) {
           console.log(`[Subtitles] Using ${fallback.length} audio_text fallback captions`);
           setCaptions(fallback);
+          setCaptionsLoaded(true);
         }
       }
+      // Mark as loaded even if no captions found (so autoTranscribe can proceed)
+      setCaptionsLoaded(true);
     })();
   }, [clip, videoId, timelineData, buildCaptionsFromTranscripts, buildCaptionsFromAudioText]);
 
   // ─── Auto-generate subtitles when clip editor opens ─────────────
   // If no Whisper-sourced captions exist, auto-trigger transcription
+  // IMPORTANT: Wait for captionsLoaded=true before deciding to auto-transcribe
+  // to avoid race condition where captions haven't loaded from DB yet
   const autoTranscribeTriggered = useRef(false);
   useEffect(() => {
     if (autoTranscribeTriggered.current) return;
     if (!videoId || !clip) return;
     if (transcribing) return;
 
-    // Wait for timelineData to load first
-    if (timelineData === null) return;
+    // CRITICAL: Wait for caption loading to complete before deciding
+    if (!captionsLoaded) return;
 
     // Check if we already have good captions (saved, whisper, or transcript)
     const hasGoodCaptions = captions.some(
@@ -443,17 +464,23 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
       return;
     }
 
-    // No Whisper captions found - auto-trigger transcription
+    // Check if any captions exist at all (audio_text fallback etc.)
+    if (captions.length > 0) {
+      console.log("[AutoTranscribe] Captions already loaded (" + captions.length + " items, source: " + captions[0]?.source + "), skipping");
+      return;
+    }
+
+    // No captions found at all - auto-trigger transcription
     const clipUrl = clip.clip_url || videoData?.video_url || clip.video_url;
     if (!clipUrl) {
       console.log("[AutoTranscribe] No clip URL available, skipping");
       return;
     }
 
-    console.log("[AutoTranscribe] No Whisper captions found, auto-triggering transcription");
+    console.log("[AutoTranscribe] No captions found after loading, auto-triggering transcription");
     autoTranscribeTriggered.current = true;
     generateSubtitles();
-  }, [videoId, clip, timelineData, captions, transcribing, videoData]);
+  }, [videoId, clip, captionsLoaded, captions, transcribing, videoData]);
 
   // ─── Video Handlers ────────────────────────────────────────────
   const onTimeUpdate = useCallback(() => {
@@ -529,6 +556,30 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
       const res = await VideoService.trimClip(videoId, clip.clip_id, trimStart, trimEnd);
       setStatus({ ok: true, msg: "トリム適用中..." });
       if (onClipUpdated) onClipUpdated(res);
+
+      // Log trim edits for AI learning
+      try {
+        if (trimStart !== origStart) {
+          await VideoService.logClipEdit(videoId, {
+            clip_id: clip.clip_id,
+            edit_type: 'trim_start',
+            before_value: { time_start: origStart },
+            after_value: { time_start: trimStart },
+            delta_seconds: trimStart - origStart,
+          });
+        }
+        if (trimEnd !== origEnd) {
+          await VideoService.logClipEdit(videoId, {
+            clip_id: clip.clip_id,
+            edit_type: 'trim_end',
+            before_value: { time_end: origEnd },
+            after_value: { time_end: trimEnd },
+            delta_seconds: trimEnd - origEnd,
+          });
+        }
+      } catch (logErr) {
+        console.warn('[ClipEditor] Failed to log trim edit:', logErr);
+      }
     } catch (e) {
       setStatus({ ok: false, msg: `トリム失敗: ${e.message}` });
     } finally {
@@ -553,8 +604,22 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
       // Mark all captions as saved so they get priority on next load
       const capsToSave = captions.map(c => ({ ...c, source: 'saved' }));
       await VideoService.updateClipCaptions(videoId, clip.clip_id, capsToSave);
+
+      // Log caption edit for AI learning
+      try {
+        await VideoService.logClipEdit(videoId, {
+          clip_id: clip.clip_id,
+          edit_type: 'caption_edit',
+          before_value: { captions: (clip.captions || []).map(c => ({ start: c.start, text: c.text })) },
+          after_value: { captions: capsToSave.map(c => ({ start: c.start, text: c.text })) },
+          delta_seconds: null,
+        });
+      } catch (logErr) {
+        console.warn('[ClipEditor] Failed to log caption edit:', logErr);
+      }
+
       setCaptions(capsToSave);
-      setStatus({ ok: true, msg: "字幕を保存しました" });
+      setStatus({ ok: true, msg: "字幕を保存しました（AI学習に反映）" });
     } catch (e) {
       setStatus({ ok: false, msg: `字幕保存失敗: ${e.message}` });
     } finally {
@@ -819,7 +884,15 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
               borderRadius: 4,
             }}
           >
-            Phase {clip.phase_index ?? "?"} | {fmt(origStart)} - {fmt(origEnd)}
+            {(() => {
+              const key = String(clip.phase_index ?? "");
+              if (key.startsWith("moment_")) return "Moment Clip";
+              if (key.startsWith("sales_")) return "Sales Spike";
+              if (key.startsWith("hook")) return "Hook";
+              if (key.startsWith("ai_")) return "AI\u63A8\u85A6";
+              if (/^\d+$/.test(key)) return `Phase ${Number(key) + 1}`;
+              return key || "?";
+            })()} | {fmt(origStart)} - {fmt(origEnd)}
           </span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -829,6 +902,13 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                 if (exporting) return;
                 setExporting(true);
                 setStatus({ ok: true, msg: '字幕付きMP4を生成中...' });
+                const statusLabels = {
+                  queued: '準備中...',
+                  downloading: 'クリップをダウンロード中...',
+                  encoding: '字幕を焼き込み中...',
+                  uploading: 'アップロード中...',
+                  done: '完了！',
+                };
                 try {
                   const res = await VideoService.exportSubtitledClip(videoId, {
                     clip_url: clip.clip_url,
@@ -842,13 +922,29 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                     position_x: subtitlePos.x,
                     position_y: subtitlePos.y,
                     time_start: clip.time_start || origStart,
+                  }, {
+                    onProgress: (st) => setStatus({ ok: true, msg: statusLabels[st] || `処理中 (${st})...` }),
                   });
                   if (res?.download_url) {
-                    window.open(res.download_url, '_blank');
-                    setStatus({ ok: true, msg: '字幕付きMP4をダウンロード中...' });
+                    // Use <a> tag download to avoid popup blockers
+                    const a = document.createElement('a');
+                    a.href = res.download_url;
+                    a.download = `clip_phase${clip.phase_index || ''}_subtitled.mp4`;
+                    a.target = '_blank';
+                    a.rel = 'noopener noreferrer';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    setStatus({ ok: true, msg: '字幕付きMP4のダウンロードを開始しました！' });
+                    setTimeout(() => setStatus(null), 5000);
+                  } else {
+                    setStatus({ ok: true, msg: 'エクスポート完了' });
+                    setTimeout(() => setStatus(null), 3000);
                   }
                 } catch (e) {
                   setStatus({ ok: false, msg: `エクスポート失敗: ${e.message}` });
+                  // Keep error visible for 10 seconds
+                  setTimeout(() => setStatus(null), 10000);
                 } finally {
                   setExporting(false);
                 }
@@ -1010,7 +1106,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
             >
               {fmt(origStart)} – {fmt(origEnd)}
               <span style={{ marginLeft: 6, opacity: 0.6, fontSize: 10 }}>
-                Phase {clip.phase_index ?? "?"}
+                Phase {clip.phase_index != null && !isNaN(Number(clip.phase_index)) ? clip.phase_index : (clip.phase_index || "?")}
               </span>
             </div>
 
@@ -1084,8 +1180,8 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
             }}
           >
             {[
-              { k: "info", l: "AI分析" },
               { k: "captions", l: "字幕" },
+              { k: "info", l: "AI分析" },
               { k: "trim", l: "Trim" },
               { k: "feedback", l: "評価" },
             ].map((t) => (
@@ -1720,7 +1816,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
             {tab === "feedback" && (
               <ClipFeedbackPanel
                 videoId={videoId}
-                phaseIndex={clip.phase_index != null ? Number(clip.phase_index) : 0}
+                phaseIndex={clip.phase_index != null ? (isNaN(Number(clip.phase_index)) ? String(clip.phase_index) : Number(clip.phase_index)) : null}
                 timeStart={clip.time_start || origStart}
                 timeEnd={clip.time_end || origEnd}
                 clipId={clip.clip_id}

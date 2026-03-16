@@ -144,25 +144,9 @@ async def request_clip_generation(
             expires_in_minutes=1440,
         )
 
-        # Create clip record
+        # Create clip record with job_payload for worker DB fallback
         clip_id = str(uuid_module.uuid4())
-        insert_sql = text("""
-            INSERT INTO video_clips (id, video_id, user_id, phase_index, time_start, time_end, status)
-            VALUES (:id, :video_id, :user_id, :phase_index, :time_start, :time_end, 'pending')
-        """)
-        await db.execute(insert_sql, {
-            "id": clip_id,
-            "video_id": video_id,
-            "user_id": user_id,
-            "phase_index": phase_index,
-            "time_start": time_start,
-            "time_end": time_end,
-        })
-        await db.commit()
-
-        # Enqueue clip generation job
-        from app.services.queue_service import enqueue_job
-        await enqueue_job({
+        job_payload = {
             "job_type": "generate_clip",
             "clip_id": clip_id,
             "video_id": video_id,
@@ -171,7 +155,28 @@ async def request_clip_generation(
             "time_end": time_end,
             "phase_index": phase_index,
             "speed_factor": speed_factor,
+        }
+        import json as _json
+        insert_sql = text("""
+            INSERT INTO video_clips (id, video_id, user_id, phase_index, time_start, time_end, status, job_payload)
+            VALUES (:id, :video_id, :user_id, :phase_index, :time_start, :time_end, 'pending', CAST(:job_payload AS jsonb))
+        """)
+        await db.execute(insert_sql, {
+            "id": clip_id,
+            "video_id": video_id,
+            "user_id": user_id,
+            "phase_index": phase_index,
+            "time_start": time_start,
+            "time_end": time_end,
+            "job_payload": _json.dumps(job_payload, ensure_ascii=False),
         })
+        await db.commit()
+
+        # Enqueue clip generation job
+        from app.services.queue_service import enqueue_job
+        enqueue_result = await enqueue_job(job_payload)
+        if not enqueue_result.success:
+            logger.warning(f"Queue enqueue failed for clip {clip_id}: {enqueue_result.error}. Worker DB fallback will pick it up.")
 
         logger.info(f"Clip generation requested: clip_id={clip_id}, video_id={video_id}, phase={phase_index}")
 
@@ -543,7 +548,7 @@ async def update_clip_captions(
 
         update_sql = text("""
             UPDATE video_clips
-            SET captions = :captions_json::jsonb, updated_at = NOW()
+            SET captions = CAST(:captions_json AS jsonb), updated_at = NOW()
             WHERE id = :clip_id
         """)
         await db.execute(update_sql, {"captions_json": captions_json, "clip_id": clip_id})
@@ -590,7 +595,7 @@ async def save_subtitle_feedback(
     }
     """
     try:
-        user_id = user.get("user_id") or user.get("id")
+        user_id = str(user.get("user_id") or user.get("id"))
         style = request_body.get("style", "box")
         vote = request_body.get("vote")
         tags = request_body.get("tags", [])
@@ -605,7 +610,7 @@ async def save_subtitle_feedback(
                 (video_id, clip_id, user_id, subtitle_style, vote, tags,
                  position_x, position_y, ai_recommended_style)
             VALUES
-                (:video_id, :clip_id, :user_id, :style, :vote, :tags::jsonb,
+                (:video_id, :clip_id, :user_id, :style, :vote, CAST(:tags AS jsonb),
                  :pos_x, :pos_y, :ai_recommended)
             RETURNING id
         """)
@@ -703,11 +708,11 @@ async def get_subtitle_recommendation(
     Uses aggregated feedback data to personalize recommendations.
     """
     try:
-        user_id = user.get("user_id") or user.get("id")
+        user_id = str(user.get("user_id") or user.get("id"))
 
         # Get video metadata
         video_sql = text("""
-            SELECT title, tags, status FROM videos WHERE id = :video_id
+            SELECT original_filename, status FROM videos WHERE id = :video_id
         """)
         vres = await db.execute(video_sql, {"video_id": video_id})
         video = vres.fetchone()
@@ -743,25 +748,23 @@ async def get_subtitle_recommendation(
             }
         elif video:
             # Fallback to content-based recommendation
-            title = (video.title or "").lower()
-            tags = video.tags if video.tags else []
-            tags_str = str(tags).lower()
+            title = (video.original_filename or "").lower()
 
-            if any(kw in title or kw in tags_str for kw in ["美容", "コスメ", "スキンケア", "beauty"]):
+            if any(kw in title for kw in ["美容", "コスメ", "スキンケア", "beauty"]):
                 recommendation = {
                     "style": "gradient",
                     "reason": "美容系コンテンツに最適",
                     "confidence": 0.7,
                     "source": "content_analysis",
                 }
-            elif any(kw in title or kw in tags_str for kw in ["エンタメ", "お笑い", "バラエティ", "funny"]):
+            elif any(kw in title for kw in ["エンタメ", "お笑い", "バラエティ", "funny"]):
                 recommendation = {
                     "style": "pop",
                     "reason": "エンタメ系に最適・インパクト大",
                     "confidence": 0.7,
                     "source": "content_analysis",
                 }
-            elif any(kw in title or kw in tags_str for kw in ["ビジネス", "解説", "教育"]):
+            elif any(kw in title for kw in ["ビジネス", "解説", "教育"]):
                 recommendation = {
                     "style": "simple",
                     "reason": "ビジネス系・読みやすさ重視",

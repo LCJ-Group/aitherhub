@@ -354,6 +354,33 @@ def process_job(payload: dict, msg_id: str, pop_receipt: str) -> bool:
             active_jobs.pop(job_id, None)
 
 
+def _mark_clip_failed(clip_id: str, error_message: str):
+    """Mark a clip as 'failed' in the database with error details."""
+    try:
+        from shared.db.session import get_session, run_sync
+        from sqlalchemy import text
+
+        async def _update():
+            async with get_session() as session:
+                await session.execute(
+                    text("""
+                        UPDATE video_clips
+                        SET status = 'failed',
+                            error_message = :error_message,
+                            progress_step = 'error',
+                            updated_at = NOW()
+                        WHERE id = :clip_id
+                        AND status NOT IN ('completed', 'dead')
+                    """),
+                    {"clip_id": clip_id, "error_message": error_message[:500]},
+                )
+
+        run_sync(_update())
+        print(f"[worker] Marked clip {clip_id} as 'failed'")
+    except Exception as db_err:
+        print(f"[worker] Failed to mark clip as failed: {db_err}")
+
+
 def _run_clip_job(payload: dict) -> bool:
     """Run clip generation as subprocess with heartbeat, metrics, and temp cleanup."""
     clip_id = payload.get("clip_id")
@@ -405,9 +432,11 @@ def _run_clip_job(payload: dict) -> bool:
             cmd, cwd=BATCH_DIR,
             env={**os.environ, "PYTHONPATH": f"{str(PROJECT_ROOT)}:{BATCH_DIR}"},
             start_new_session=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
         )
         try:
-            proc.wait(timeout=WORKER_CLIP_TIMEOUT)
+            stdout, stderr = proc.communicate(timeout=WORKER_CLIP_TIMEOUT)
         except subprocess.TimeoutExpired:
             print(f"[worker] Clip timeout — killing pid={proc.pid}")
             try:
@@ -426,16 +455,27 @@ def _run_clip_job(payload: dict) -> bool:
 
         if proc.returncode == 0:
             print(f"[worker] Clip completed: {clip_id}")
+            if stdout:
+                for line in stdout.decode(errors='replace').strip().split('\n')[-5:]:
+                    print(f"[clip-stdout] {line}")
             if metrics:
                 metrics.finish(status="completed")
             return True
         else:
-            log_error_type(clip_id, "generate_clip", "FFMPEG_FAIL", f"exit={proc.returncode}")
+            stderr_text = stderr.decode(errors='replace').strip() if stderr else ''
+            stdout_text = stdout.decode(errors='replace').strip() if stdout else ''
+            last_lines = '\n'.join((stderr_text or stdout_text).split('\n')[-10:])
+            print(f"[worker] Clip FAILED: {clip_id} exit={proc.returncode}")
+            print(f"[clip-stderr] {last_lines}")
+            log_error_type(clip_id, "generate_clip", "FFMPEG_FAIL", f"exit={proc.returncode} stderr={last_lines[:200]}")
+            # Mark clip as failed in DB (generate_clip.py may not have had a chance to do this)
+            _mark_clip_failed(clip_id, f"exit={proc.returncode}: {last_lines[:300]}")
             if metrics:
                 metrics.finish(status="failed")
             return False
     except Exception as e:
         log_error_type(clip_id, "generate_clip", "UNKNOWN", f"EXC={type(e).__name__} {e}")
+        _mark_clip_failed(clip_id, f"{type(e).__name__}: {e}")
         if metrics:
             metrics.finish(status="error")
         return False
@@ -1100,6 +1140,92 @@ def periodic_disk_cleanup():
 
 
 # =============================================================================
+# DB Fallback: Poll pending clips directly from database
+# =============================================================================
+
+CLIP_FALLBACK_INTERVAL = 60   # Check every 60 seconds
+CLIP_FALLBACK_AGE = 120       # Clips pending for > 2 minutes
+_last_clip_fallback_check = 0
+
+
+def poll_pending_clips_from_db():
+    """DB fallback: pick up clips stuck in 'pending' with job_payload.
+
+    If a clip has been pending for > CLIP_FALLBACK_AGE seconds and is not already
+    being processed, submit it to the executor.
+    """
+    global _last_clip_fallback_check
+    now = time.time()
+    if now - _last_clip_fallback_check < CLIP_FALLBACK_INTERVAL:
+        return
+    _last_clip_fallback_check = now
+
+    try:
+        from shared.db.session import get_session, run_sync
+        from sqlalchemy import text
+
+        async def _fetch_pending():
+            async with get_session() as session:
+                sql = text(f"""
+                    SELECT id, job_payload
+                    FROM video_clips
+                    WHERE status IN ('pending', 'retrying')
+                    AND COALESCE(updated_at, created_at) < NOW() - INTERVAL '{CLIP_FALLBACK_AGE} seconds'
+                    AND job_payload IS NOT NULL
+                    LIMIT 5
+                """)
+                result = await session.execute(sql)
+                return result.fetchall()
+
+        rows = run_sync(_fetch_pending())
+
+        if not rows:
+            return
+
+        for row in rows:
+            clip_id = str(row.id)
+            payload = row.job_payload if isinstance(row.job_payload, dict) else json.loads(row.job_payload)
+
+            # Skip if already being processed
+            with active_jobs_lock:
+                if clip_id in active_jobs and not active_jobs[clip_id]["future"].done():
+                    continue
+
+            print(f"[worker] DB fallback: found pending clip {clip_id}, submitting")
+
+            # Mark as processing to prevent duplicate pickup
+            _cid = clip_id
+            try:
+                async def _mark_processing(cid=_cid):
+                    async with get_session() as session:
+                        sql = text("""
+                            UPDATE video_clips
+                            SET status = 'processing', progress_step = 'queued_by_fallback', updated_at = NOW()
+                            WHERE id = :clip_id AND status IN ('pending', 'retrying')
+                        """)
+                        await session.execute(sql, {"clip_id": cid})
+                run_sync(_mark_processing())
+            except Exception as mark_err:
+                print(f"[worker] DB fallback: failed to mark {clip_id} as processing: {mark_err}")
+
+            # Submit to executor
+            future = executor_ref[0].submit(process_job, payload, "db-fallback", "db-fallback")
+            with active_jobs_lock:
+                active_jobs[clip_id] = {
+                    "future": future,
+                    "msg_id": None,
+                    "pop_receipt": None,
+                }
+
+    except Exception as e:
+        print(f"[worker] DB fallback error: {e}")
+
+
+# Reference to executor for DB fallback
+executor_ref = [None]
+
+
+# =============================================================================
 # Stability modules (Task 1-5)
 # =============================================================================
 
@@ -1189,12 +1315,16 @@ def main():
     periodic_disk_cleanup()
 
     executor = ThreadPoolExecutor(max_workers=MAX_WORKERS)
+    executor_ref[0] = executor  # Set reference for DB fallback
+
+    print(f"[worker] DB fallback: check pending clips every {CLIP_FALLBACK_INTERVAL}s (age > {CLIP_FALLBACK_AGE}s)")
 
     try:
         while not shutdown_requested:
             try:
                 periodic_disk_cleanup()
                 poll_and_process(executor)
+                poll_pending_clips_from_db()  # DB fallback for lost queue messages
                 time.sleep(5)
             except Exception as e:
                 print(f"[worker] Unexpected error: {e}")

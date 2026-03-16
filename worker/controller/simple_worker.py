@@ -675,6 +675,89 @@ def process_video_job(payload: dict):
 
 
 # =============================================================================
+# DB Fallback: Poll pending clips directly from database
+# =============================================================================
+
+_last_clip_fallback_check = 0
+CLIP_FALLBACK_INTERVAL = 60  # Check every 60 seconds
+CLIP_FALLBACK_AGE = 120  # Clips pending for > 2 minutes
+
+
+def poll_pending_clips_from_db():
+    """Fallback: check DB for pending clips that may have lost their queue message.
+    If a clip has been pending for > CLIP_FALLBACK_AGE seconds and is not already
+    being processed by clip_executor, submit it directly."""
+    global _last_clip_fallback_check
+    now = time.time()
+    if now - _last_clip_fallback_check < CLIP_FALLBACK_INTERVAL:
+        return
+    _last_clip_fallback_check = now
+
+    try:
+        sys.path.insert(0, BATCH_DIR)
+        from db_ops import init_db_sync, get_event_loop, get_session
+        from sqlalchemy import text
+        init_db_sync()
+        loop = get_event_loop()
+
+        async def _fetch_pending():
+            async with get_session() as session:
+                sql = text(f"""
+                    SELECT id, job_payload
+                    FROM video_clips
+                    WHERE status = 'pending'
+                    AND COALESCE(updated_at, created_at) < NOW() - INTERVAL '{CLIP_FALLBACK_AGE} seconds'
+                    AND job_payload IS NOT NULL
+                    LIMIT 5
+                """)
+                result = await session.execute(sql)
+                return result.fetchall()
+
+        rows = loop.run_until_complete(_fetch_pending())
+
+        if not rows:
+            return
+
+        for row in rows:
+            clip_id = str(row.id)
+            payload = row.job_payload if isinstance(row.job_payload, dict) else json.loads(row.job_payload)
+
+            # Skip if already being processed
+            with clip_jobs_lock:
+                if clip_id in clip_jobs and not clip_jobs[clip_id]["future"].done():
+                    continue
+
+            print(f"[worker] DB fallback: found pending clip {clip_id}, submitting to clip_executor")
+
+            # Mark as processing to prevent duplicate pickup
+            _cid = clip_id  # capture for closure
+            try:
+                async def _mark_processing(cid=_cid):
+                    async with get_session() as session:
+                        sql = text("""
+                            UPDATE video_clips
+                            SET status = 'processing', progress_step = 'queued_by_fallback', updated_at = NOW()
+                            WHERE id = :clip_id AND status = 'pending'
+                        """)
+                        await session.execute(sql, {"clip_id": cid})
+                loop.run_until_complete(_mark_processing())
+            except Exception as mark_err:
+                print(f"[worker] DB fallback: failed to mark {clip_id} as processing: {mark_err}")
+
+            # Submit to clip_executor (no queue message to delete, use dummy msg_id/pop_receipt)
+            future = clip_executor.submit(process_clip_job, payload)
+            with clip_jobs_lock:
+                clip_jobs[clip_id] = {
+                    "future": future,
+                    "msg_id": None,
+                    "pop_receipt": None,
+                }
+
+    except Exception as e:
+        print(f"[worker] DB fallback error: {e}")
+
+
+# =============================================================================
 # Main Loop
 # =============================================================================
 
@@ -941,6 +1024,7 @@ def main():
     print(f"[worker] Message deletion: after successful completion only (retry on failure)")
     print(f"[worker] Poison handling: move to dead-letter queue (NEVER delete without backup)")
     print(f"[worker] Clip executor: 2 dedicated threads (bypasses MAX_WORKERS)")
+    print(f"[worker] DB fallback: check pending clips every {CLIP_FALLBACK_INTERVAL}s (age > {CLIP_FALLBACK_AGE}s)")
 
     # Ensure dead-letter queue exists
     try:
@@ -962,6 +1046,7 @@ def main():
             try:
                 periodic_disk_cleanup()
                 poll_and_process(executor)
+                poll_pending_clips_from_db()  # DB fallback for lost queue messages
                 time.sleep(5)  # Poll every 5 seconds
             except Exception as e:
                 print(f"[worker] Unexpected error: {e}")

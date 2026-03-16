@@ -175,6 +175,7 @@ export default function MainContent({
   selectedVideoId,
   showFeedback,
   onCloseFeedback,
+  editorParams,
 }) {
   const navigate = useNavigate();
   const postLoginRedirectKey = "postLoginRedirect";
@@ -1406,7 +1407,7 @@ export default function MainContent({
         ) : videoData ? (
           videoData.status === 'DONE' || (videoData.status === 'ERROR' && videoData.reports_1 && videoData.reports_1.length > 0) ? (
             console.log("[MainContent] Rendering VideoDetail for videoData:", videoData) ||
-            <VideoDetail videoData={videoData} />
+            <VideoDetail videoData={videoData} editorParams={editorParams} />
           ) : videoData.status === 'ERROR' ? (
             <div className="w-full flex flex-col items-center justify-center">
               <div className="w-full max-w-md mx-auto">

@@ -685,6 +685,90 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
     };
   }, [videoId]);
 
+  // ── Visibility change: refresh status when tab becomes active ──
+  useEffect(() => {
+    if (!videoId) return;
+
+    const handleVisibilityChange = async () => {
+      if (document.hidden) return; // Only act when tab becomes visible
+
+      // Skip if already DONE or ERROR
+      if (currentStatus === 'DONE' || currentStatus === 'ERROR') return;
+
+      console.log('👁️ Tab became visible, refreshing video status');
+      try {
+        const response = await VideoService.getVideoById(videoId);
+        if (response && response.status) {
+          const newStatus = normalizeProcessingStatus(response.status);
+          console.log(`👁️ Refreshed status: ${newStatus} (was: ${currentStatus})`);
+          setCurrentStatus(newStatus);
+
+          const serverStepProgress = typeof response.step_progress === 'number' ? response.step_progress : 0;
+          setStepProgress(serverStepProgress);
+
+          const floor = calculateProgressFromStatus(newStatus);
+          const ceiling = calculateProgressCeilingFromStatus(newStatus);
+          let progress;
+          if (serverStepProgress > 0 && serverStepProgress < 100) {
+            progress = Math.round(floor + (ceiling - floor) * serverStepProgress / 100);
+          } else {
+            const serverProgress = typeof response.progress === 'number' ? response.progress : 0;
+            progress = Math.max(serverProgress, floor);
+          }
+          setMonotonicProgress(progress);
+          lastStatusChangeRef.current = Date.now();
+
+          handleTimingUpdate({
+            status: newStatus,
+            progress,
+            created_at: response.created_at,
+            updated_at: response.updated_at,
+            server_now: response.server_now,
+            video_id: videoId,
+          });
+
+          if (newStatus === 'DONE') {
+            // Close SSE if still open
+            if (statusStreamRef.current) {
+              statusStreamRef.current.close();
+              statusStreamRef.current = null;
+            }
+            if (pollingIntervalRef.current) {
+              clearInterval(pollingIntervalRef.current);
+              pollingIntervalRef.current = null;
+            }
+            if (handleProcessingComplete) {
+              handleProcessingComplete();
+            }
+          } else if (newStatus === 'ERROR') {
+            if (statusStreamRef.current) {
+              statusStreamRef.current.close();
+              statusStreamRef.current = null;
+            }
+            if (pollingIntervalRef.current) {
+              clearInterval(pollingIntervalRef.current);
+              pollingIntervalRef.current = null;
+            }
+            VideoService.getErrorLogs(videoId).then(res => {
+              if (res?.error_logs) setErrorLogs(res.error_logs);
+            }).catch(() => {});
+          } else {
+            // Still processing: ensure SSE or polling is active
+            if (!statusStreamRef.current && !pollingIntervalRef.current) {
+              console.log('👁️ No active SSE or polling, restarting polling');
+              startPolling();
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('👁️ Failed to refresh status on visibility change:', err);
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [videoId, currentStatus, calculateProgressFromStatus, calculateProgressCeilingFromStatus, setMonotonicProgress, handleTimingUpdate, handleProcessingComplete, startPolling]);
+
   // Fetch error logs when status is ERROR on initial load
   useEffect(() => {
     if (videoId && (currentStatus === 'ERROR' || initialStatus === 'ERROR')) {

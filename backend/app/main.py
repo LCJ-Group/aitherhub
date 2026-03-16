@@ -142,17 +142,37 @@ async def ensure_tables_exist():
         from sqlalchemy import text
 
         async with engine.begin() as conn:
+            # Drop old table if schema is wrong (missing subtitle_style column)
+            try:
+                check = await conn.execute(text("""
+                    SELECT column_name FROM information_schema.columns
+                    WHERE table_name = 'subtitle_feedback' AND column_name = 'subtitle_style'
+                """))
+                has_correct_schema = check.fetchone() is not None
+                if not has_correct_schema:
+                    # Check if old table exists
+                    check_old = await conn.execute(text("""
+                        SELECT column_name FROM information_schema.columns
+                        WHERE table_name = 'subtitle_feedback' AND column_name = 'style_selected'
+                    """))
+                    if check_old.fetchone():
+                        logger.info("Dropping old subtitle_feedback table with wrong schema")
+                        await conn.execute(text("DROP TABLE IF EXISTS subtitle_feedback"))
+            except Exception as _e:
+                logger.debug(f"Schema check skipped: {_e}")
+
             await conn.execute(text("""
                 CREATE TABLE IF NOT EXISTS subtitle_feedback (
                     id SERIAL PRIMARY KEY,
                     video_id TEXT NOT NULL,
-                    clip_id TEXT NOT NULL,
+                    clip_id TEXT,
                     user_id TEXT,
-                    style_selected TEXT,
+                    subtitle_style TEXT DEFAULT 'box',
+                    vote TEXT,
+                    tags JSONB DEFAULT '[]'::jsonb,
+                    position_x REAL DEFAULT 50,
+                    position_y REAL DEFAULT 85,
                     ai_recommended_style TEXT,
-                    feedback_type TEXT CHECK (feedback_type IN ('like','dislike')),
-                    tags TEXT[],
-                    comment TEXT,
                     created_at TIMESTAMPTZ DEFAULT NOW()
                 )
             """))
@@ -171,6 +191,7 @@ async def ensure_tables_exist():
                 "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS subtitle_position_y REAL DEFAULT 85",
                 "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS progress_pct INTEGER DEFAULT 0",
                 "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS progress_step TEXT DEFAULT ''",
+                "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS job_payload JSONB",
             ]:
                 try:
                     await conn.execute(text(col_sql))
@@ -276,6 +297,129 @@ async def ensure_tables_exist():
         logger.info("bug_reports & work_logs tables verified/created")
     except Exception as e:
         logger.warning(f"Failed to ensure bug_reports/work_logs tables on startup: {e}")
+
+    # ── Feedback Loop tables: clip_feedback extensions, sales_confirmation, clip_edit_log ──
+    try:
+        async with engine.begin() as conn:
+            # Fix phase_index type: INTEGER → TEXT (Moment clips use string IDs like 'moment_strong_test4')
+            try:
+                await conn.execute(_text("""
+                    DO $$
+                    BEGIN
+                        IF EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'clip_feedback'
+                              AND column_name = 'phase_index'
+                              AND data_type = 'integer'
+                        ) THEN
+                            -- Drop the unique constraint first
+                            ALTER TABLE clip_feedback DROP CONSTRAINT IF EXISTS uq_clip_feedback_video_phase;
+                            -- Change column type
+                            ALTER TABLE clip_feedback ALTER COLUMN phase_index TYPE TEXT USING phase_index::TEXT;
+                            -- Re-add the unique constraint
+                            ALTER TABLE clip_feedback ADD CONSTRAINT uq_clip_feedback_video_phase UNIQUE (video_id, phase_index);
+                            RAISE NOTICE 'clip_feedback.phase_index changed from INTEGER to TEXT';
+                        END IF;
+                    END $$;
+                """))
+            except Exception as _e:
+                logger.debug(f"clip_feedback phase_index type change skipped: {_e}")
+
+            try:
+                await conn.execute(_text("""
+                    DO $$
+                    BEGIN
+                        IF EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'sales_confirmation'
+                              AND column_name = 'phase_index'
+                              AND data_type = 'integer'
+                        ) THEN
+                            -- Drop the unique constraint first
+                            ALTER TABLE sales_confirmation DROP CONSTRAINT IF EXISTS uq_sales_confirmation_video_phase;
+                            -- Change column type
+                            ALTER TABLE sales_confirmation ALTER COLUMN phase_index TYPE TEXT USING phase_index::TEXT;
+                            -- Re-add the unique constraint
+                            ALTER TABLE sales_confirmation ADD CONSTRAINT uq_sales_confirmation_video_phase UNIQUE (video_id, phase_index);
+                            RAISE NOTICE 'sales_confirmation.phase_index changed from INTEGER to TEXT';
+                        END IF;
+                    END $$;
+                """))
+            except Exception as _e:
+                logger.debug(f"sales_confirmation phase_index type change skipped: {_e}")
+
+            # Ensure clip_feedback has rating + reason_tags columns
+            for col_sql in [
+                "ALTER TABLE clip_feedback ADD COLUMN IF NOT EXISTS rating VARCHAR(20)",
+                "ALTER TABLE clip_feedback ADD COLUMN IF NOT EXISTS reason_tags JSONB",
+            ]:
+                try:
+                    await conn.execute(_text(col_sql))
+                except Exception as _e:
+                    logger.debug(f"DDL skipped (likely already exists): {_e}")
+
+            # Ensure UNIQUE constraint on (video_id, phase_index) for ON CONFLICT
+            await conn.execute(_text("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_constraint
+                        WHERE conname = 'uq_clip_feedback_video_phase'
+                    ) THEN
+                        ALTER TABLE clip_feedback
+                        ADD CONSTRAINT uq_clip_feedback_video_phase
+                        UNIQUE (video_id, phase_index);
+                    END IF;
+                END $$;
+            """))
+
+            # Create sales_confirmation table
+            await conn.execute(_text("""
+                CREATE TABLE IF NOT EXISTS sales_confirmation (
+                    id UUID PRIMARY KEY,
+                    video_id UUID NOT NULL,
+                    phase_index TEXT NOT NULL,
+                    time_start FLOAT NOT NULL,
+                    time_end FLOAT NOT NULL,
+                    is_sales_moment BOOLEAN NOT NULL,
+                    clip_id UUID,
+                    confidence INTEGER,
+                    note TEXT,
+                    reviewer_name VARCHAR(100),
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ DEFAULT NOW(),
+                    CONSTRAINT uq_sales_confirmation_video_phase UNIQUE (video_id, phase_index)
+                )
+            """))
+            await conn.execute(_text("""
+                CREATE INDEX IF NOT EXISTS ix_sales_confirmation_video_id
+                ON sales_confirmation (video_id)
+            """))
+
+            # Create clip_edit_log table
+            await conn.execute(_text("""
+                CREATE TABLE IF NOT EXISTS clip_edit_log (
+                    id UUID PRIMARY KEY,
+                    clip_id UUID NOT NULL,
+                    video_id UUID NOT NULL,
+                    edit_type VARCHAR(50) NOT NULL,
+                    before_value JSONB,
+                    after_value JSONB,
+                    delta_seconds FLOAT,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """))
+            await conn.execute(_text("""
+                CREATE INDEX IF NOT EXISTS ix_clip_edit_log_video_id
+                ON clip_edit_log (video_id)
+            """))
+            await conn.execute(_text("""
+                CREATE INDEX IF NOT EXISTS ix_clip_edit_log_clip_id
+                ON clip_edit_log (clip_id)
+            """))
+        logger.info("Feedback loop tables (clip_feedback extensions, sales_confirmation, clip_edit_log) verified/created")
+    except Exception as e:
+        logger.warning(f"Failed to ensure feedback loop tables on startup: {e}")
 
     # ── lessons_learned: プロジェクトの永続記憶 ──
     try:

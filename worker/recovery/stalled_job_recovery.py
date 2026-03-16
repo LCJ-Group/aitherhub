@@ -116,7 +116,7 @@ class StalledJobRecovery:
                 else:
                     # Mark as retrying — will be picked up by queue again
                     run_sync(self._mark_retrying(clip_id, attempt_count, old_worker))
-                    self._re_enqueue_clip(clip_id, video_id)
+                    self._re_enqueue_clip(clip_id, video_id, job.get("job_payload"))
                     logger.warning(
                         "[recovery] RETRY: clip=%s video=%s attempt=%d/%d (was on worker=%s)",
                         clip_id, video_id, attempt_count + 1, MAX_ATTEMPTS, old_worker,
@@ -134,7 +134,7 @@ class StalledJobRecovery:
             result = await session.execute(
                 text("""
                     SELECT id, video_id, worker_id, status,
-                           heartbeat_at, started_at, attempt_count
+                           heartbeat_at, started_at, attempt_count, job_payload
                     FROM video_clips
                     WHERE status IN ('downloading', 'processing', 'uploading')
                       AND (
@@ -194,18 +194,28 @@ class StalledJobRecovery:
                 },
             )
 
-    def _re_enqueue_clip(self, clip_id: str, video_id: str):
-        """Re-enqueue a clip job to the queue for retry."""
+    def _re_enqueue_clip(self, clip_id: str, video_id: str, job_payload: dict = None):
+        """Re-enqueue a clip job to the queue for retry.
+
+        Uses job_payload from DB if available (contains blob_url and other fields).
+        Falls back to minimal payload if job_payload is not available.
+        """
         try:
             from shared.queue.client import get_queue_client
-            import json
 
-            payload = {
-                "job_type": "generate_clip",
-                "clip_id": clip_id,
-                "video_id": video_id,
-                "retry": True,
-            }
+            if job_payload and isinstance(job_payload, dict):
+                # Use the full payload from DB (has blob_url, time_start, etc.)
+                payload = {**job_payload, "retry": True}
+            else:
+                # Fallback: minimal payload (DB fallback will pick it up instead)
+                payload = {
+                    "job_type": "generate_clip",
+                    "clip_id": clip_id,
+                    "video_id": video_id,
+                    "retry": True,
+                }
+                logger.warning("[recovery] No job_payload for clip %s, using minimal payload", clip_id)
+
             client = get_queue_client()
             client.send_message(json.dumps(payload, ensure_ascii=False))
             logger.info("[recovery] Re-enqueued clip %s for retry", clip_id)

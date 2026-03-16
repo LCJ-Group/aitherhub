@@ -1023,6 +1023,34 @@ def _seconds_to_ass_time(seconds: float) -> str:
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
 
+def _seconds_to_srt_time(seconds: float) -> str:
+    """Convert seconds to SRT time format: HH:MM:SS,mmm"""
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    ms = int((seconds % 1) * 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def _generate_srt_content(captions: list, time_offset: float = 0) -> str:
+    """Generate SRT subtitle file content from captions."""
+    srt = ""
+    idx = 1
+    for cap in captions:
+        local_start = cap.start - time_offset if time_offset > 0 else cap.start
+        local_end = cap.end - time_offset if time_offset > 0 else cap.end
+        if local_start < 0:
+            local_start = 0
+        if local_end <= local_start:
+            continue
+        start_ts = _seconds_to_srt_time(local_start)
+        end_ts = _seconds_to_srt_time(local_end)
+        text = cap.text.replace('\n', '\n')  # preserve newlines
+        srt += f"{idx}\n{start_ts} --> {end_ts}\n{text}\n\n"
+        idx += 1
+    return srt
+
+
 def _generate_ass_content(captions: list, style: str, position_x: float, position_y: float, time_offset: float = 0) -> str:
     """Generate ASS subtitle file content."""
     s = _ASS_STYLES.get(style, _ASS_STYLES['box'])
@@ -1081,6 +1109,204 @@ def _generate_ass_content(captions: list, style: str, position_x: float, positio
     return ass
 
 
+# ─── File-based export job store (survives worker recycle) ────────────────────
+_EXPORT_JOB_DIR = os.path.join(tempfile.gettempdir(), "aitherhub_export_jobs")
+os.makedirs(_EXPORT_JOB_DIR, exist_ok=True)
+
+def _save_job(job_id: str, data: dict):
+    """Persist job state to a JSON file."""
+    path = os.path.join(_EXPORT_JOB_DIR, f"{job_id}.json")
+    with open(path, "w") as f:
+        json.dump(data, f)
+
+def _load_job(job_id: str) -> dict | None:
+    """Load job state from file."""
+    path = os.path.join(_EXPORT_JOB_DIR, f"{job_id}.json")
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+def _update_job(job_id: str, **kwargs):
+    """Update specific fields in a job."""
+    data = _load_job(job_id) or {}
+    data.update(kwargs)
+    _save_job(job_id, data)
+
+
+async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, style: str,
+                          position_x: float, position_y: float, time_start: float):
+    """Background task: download clip, burn subtitles, upload result."""
+    import shutil
+    import functools
+    from azure.storage.blob import BlobServiceClient, ContentSettings
+    from app.services.storage_service import (
+        CONNECTION_STRING, ACCOUNT_NAME, CONTAINER_NAME,
+        generate_read_sas_from_url,
+    )
+    from urllib.parse import unquote
+
+    _CDN_HOST = os.getenv("CDN_HOST", "https://cdn.aitherhub.com")
+    _BLOB_HOST = f"https://{ACCOUNT_NAME}.blob.core.windows.net" if ACCOUNT_NAME else ""
+    FFMPEG_TIMEOUT = 600  # 10 minutes max for encoding
+
+    tmp_dir = tempfile.mkdtemp(prefix="export_sub_")
+    try:
+        # ── Step 1: Download clip from Azure Blob ──
+        _update_job(job_id, status="downloading")
+        video_path = os.path.join(tmp_dir, "source.mp4")
+
+        # Extract blob_name from clip_url (CDN or Blob URL)
+        url_path = clip_url
+        if _CDN_HOST and url_path.startswith(_CDN_HOST):
+            url_path = url_path[len(_CDN_HOST):]
+        elif f"blob.core.windows.net/{CONTAINER_NAME}" in url_path:
+            url_path = url_path.split(f"/{CONTAINER_NAME}", 1)[-1]
+        url_path = url_path.lstrip("/")
+        if url_path.startswith(f"{CONTAINER_NAME}/"):
+            url_path = url_path[len(CONTAINER_NAME) + 1:]
+        if "?" in url_path:
+            url_path = url_path.split("?", 1)[0]
+        blob_name = unquote(url_path)
+        logger.info(f"[export-job {job_id}] Downloading blob: {blob_name}")
+
+        # Download using BlobServiceClient (wrapped in thread to avoid blocking event loop)
+        def _download_blob():
+            blob_service = BlobServiceClient.from_connection_string(CONNECTION_STRING)
+            blob_client = blob_service.get_blob_client(container=CONTAINER_NAME, blob=blob_name)
+            with open(video_path, "wb") as f:
+                download_stream = blob_client.download_blob()
+                f.write(download_stream.readall())
+
+        await asyncio.get_event_loop().run_in_executor(None, _download_blob)
+        file_size = os.path.getsize(video_path)
+        logger.info(f"[export-job {job_id}] Downloaded: {file_size/1024/1024:.1f} MB")
+
+        # ── Step 2: Generate SRT subtitle file ──
+        _update_job(job_id, status="encoding")
+        srt_path = os.path.join(tmp_dir, "subtitles.srt")
+        srt_content = _generate_srt_content(captions, time_start)
+        with open(srt_path, "w", encoding="utf-8") as f:
+            f.write(srt_content)
+        logger.info(f"[export-job {job_id}] Generated SRT with {len(captions)} captions")
+
+        # ── Step 3: Burn subtitles with ffmpeg ──
+        output_path = os.path.join(tmp_dir, "output_subtitled.mp4")
+        s = _ASS_STYLES.get(style, _ASS_STYLES['box'])
+
+        # Build subtitle filter string
+        srt_escaped = srt_path.replace('\\', '/').replace(':', '\\:')
+        # Use subtitles filter with force_style for styling
+        font_size = s.get('fontsize', 22)
+        bold = s.get('bold', 1)
+        # Convert ASS color (&HAABBGGRR) to ffmpeg format
+        primary = s.get('primary_color', '&H00FFFFFF')
+        outline_c = s.get('outline_color', '&H00000000')
+        back_c = s.get('back_color', '&H80000000')
+        outline_w = s.get('outline', 2)
+        border_st = s.get('border_style', 1)
+        shadow_d = s.get('shadow', 0)
+
+        # Determine alignment from position_y
+        if position_y < 33:
+            alignment = 8
+        elif position_y < 66:
+            alignment = 5
+        else:
+            alignment = 2
+
+        force_style = (
+            f"FontName=Noto Sans CJK JP,"
+            f"FontSize={font_size},"
+            f"Bold={bold},"
+            f"PrimaryColour={primary},"
+            f"OutlineColour={outline_c},"
+            f"BackColour={back_c},"
+            f"Outline={outline_w},"
+            f"Shadow={shadow_d},"
+            f"BorderStyle={border_st},"
+            f"Alignment={alignment},"
+            f"MarginV=30"
+        )
+
+        vf = f"subtitles={srt_escaped}:force_style='{force_style}'"
+
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", video_path,
+            "-vf", vf,
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+            "-threads", "2",
+            "-c:a", "copy",
+            "-movflags", "+faststart",
+            output_path,
+        ]
+        logger.info(f"[export-job {job_id}] Running ffmpeg: {' '.join(cmd[:6])}...")
+
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=FFMPEG_TIMEOUT
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            logger.error(f"[export-job {job_id}] ffmpeg timed out after {FFMPEG_TIMEOUT}s")
+            _update_job(job_id, status="failed", error=f"Encoding timed out ({FFMPEG_TIMEOUT}s)")
+            return
+
+        if proc.returncode != 0:
+            err_msg = stderr.decode(errors='replace')[:500]
+            logger.error(f"[export-job {job_id}] ffmpeg failed (rc={proc.returncode}): {err_msg}")
+            _update_job(job_id, status="failed", error=f"ffmpeg error: {err_msg[:200]}")
+            return
+
+        output_size = os.path.getsize(output_path)
+        logger.info(f"[export-job {job_id}] Encoded: {output_size/1024/1024:.1f} MB")
+
+        # ── Step 4: Upload to Azure Blob ──
+        _update_job(job_id, status="uploading")
+        if not CONNECTION_STRING:
+            _update_job(job_id, status="failed", error="Azure storage not configured")
+            return
+
+        upload_blob_name = f"exports/{video_id}/subtitled_{uuid.uuid4().hex[:8]}.mp4"
+
+        def _upload_blob():
+            svc = BlobServiceClient.from_connection_string(CONNECTION_STRING)
+            bc = svc.get_blob_client(container=CONTAINER_NAME, blob=upload_blob_name)
+            with open(output_path, "rb") as data:
+                bc.upload_blob(data, overwrite=True,
+                               content_settings=ContentSettings(content_type="video/mp4"))
+
+        await asyncio.get_event_loop().run_in_executor(None, _upload_blob)
+        logger.info(f"[export-job {job_id}] Uploaded: {upload_blob_name}")
+
+        blob_url = f"https://{ACCOUNT_NAME}.blob.core.windows.net/{CONTAINER_NAME}/{upload_blob_name}"
+        download_url = generate_read_sas_from_url(blob_url, expires_hours=72)
+        if not download_url:
+            download_url = blob_url
+        if _BLOB_HOST and _CDN_HOST:
+            download_url = download_url.replace(_BLOB_HOST, _CDN_HOST)
+
+        _update_job(job_id, status="done", download_url=download_url, file_size=output_size)
+        logger.info(f"[export-job {job_id}] Complete! URL: {download_url[:80]}...")
+
+    except Exception as e:
+        logger.error(f"[export-job {job_id}] Failed: {e}", exc_info=True)
+        _update_job(job_id, status="failed", error=str(e)[:300])
+    finally:
+        _cleanup_tmp(tmp_dir)
+
+
 @router.post("/{video_id}/export-subtitled")
 async def export_subtitled_clip(
     video_id: str,
@@ -1088,12 +1314,9 @@ async def export_subtitled_clip(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Generate a subtitled MP4 clip using ffmpeg with ASS subtitles.
-    Downloads the source clip, generates ASS subtitle file,
-    burns subtitles into video, and returns the result URL.
+    Start a background export job. Returns job_id immediately.
+    Poll GET /{video_id}/export-subtitled/{job_id} for status.
     """
-    import shutil
-
     try:
         uuid.UUID(video_id)
     except ValueError:
@@ -1102,96 +1325,49 @@ async def export_subtitled_clip(
     if not req.captions:
         raise HTTPException(status_code=400, detail="No captions provided")
 
-    tmp_dir = tempfile.mkdtemp(prefix="export_sub_")
-    try:
-        # Step 1: Download source clip
-        video_path = os.path.join(tmp_dir, "source.mp4")
-        clip_url = req.clip_url
+    job_id = uuid.uuid4().hex[:12]
+    _save_job(job_id, {
+        "status": "queued",
+        "video_id": video_id,
+        "style": req.style,
+        "caption_count": len(req.captions),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
 
-        # Add SAS token if needed (same logic as transcribe)
-        if "blob.core.windows.net" in clip_url and "sig=" not in clip_url:
-            try:
-                from app.services.azure_storage import generate_sas_url
-                clip_url = await generate_sas_url(clip_url)
-            except Exception as _e:
-                logger.debug(f"Non-critical error suppressed: {_e}")
+    # Launch background task
+    asyncio.create_task(_run_export_job(
+        job_id, video_id, req.clip_url, req.captions,
+        req.style, req.position_x, req.position_y, req.time_start,
+    ))
 
-        import httpx
-        async with httpx.AsyncClient(timeout=120) as client:
-            resp = await client.get(clip_url)
-            resp.raise_for_status()
-            with open(video_path, "wb") as f:
-                f.write(resp.content)
-        logger.info(f"[export-sub] Downloaded clip: {os.path.getsize(video_path)} bytes")
+    return {
+        "job_id": job_id,
+        "status": "queued",
+        "video_id": video_id,
+    }
 
-        # Step 2: Generate ASS subtitle file
-        ass_path = os.path.join(tmp_dir, "subtitles.ass")
-        ass_content = _generate_ass_content(
-            [c.dict() for c in req.captions],
-            req.style,
-            req.position_x,
-            req.position_y,
-            req.time_start,
-        )
-        with open(ass_path, "w", encoding="utf-8") as f:
-            f.write(ass_content)
-        logger.info(f"[export-sub] Generated ASS file: {len(req.captions)} captions, style={req.style}")
 
-        # Step 3: Burn subtitles into video with ffmpeg
-        output_path = os.path.join(tmp_dir, "output_subtitled.mp4")
-        # Escape path for ffmpeg filter (backslashes and colons)
-        ass_escaped = ass_path.replace('\\', '/').replace(':', '\\:')
+@router.get("/{video_id}/export-subtitled/{job_id}")
+async def get_export_status(video_id: str, job_id: str):
+    """
+    Poll export job status. Returns download_url when done.
+    """
+    job = _load_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Export job not found")
 
-        proc = await asyncio.create_subprocess_exec(
-            "ffmpeg", "-y",
-            "-i", video_path,
-            "-vf", f"ass={ass_escaped}",
-            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-            "-c:a", "copy",
-            "-movflags", "+faststart",
-            output_path,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await proc.communicate()
+    result = {
+        "job_id": job_id,
+        "status": job["status"],
+        "video_id": video_id,
+    }
+    if job["status"] == "done":
+        result["download_url"] = job.get("download_url")
+        result["file_size"] = job.get("file_size")
+    elif job["status"] == "failed":
+        result["error"] = job.get("error", "Unknown error")
 
-        if proc.returncode != 0:
-            logger.error(f"[export-sub] ffmpeg failed: {stderr.decode()[:1000]}")
-            raise HTTPException(status_code=500, detail=f"ffmpeg encoding failed: {stderr.decode()[:200]}")
-
-        output_size = os.path.getsize(output_path)
-        logger.info(f"[export-sub] Generated subtitled video: {output_size/1024/1024:.1f} MB")
-
-        # Step 4: Upload to Azure Blob Storage
-        try:
-            from app.services.azure_storage import upload_file_to_blob
-            blob_name = f"exports/{video_id}/subtitled_{uuid.uuid4().hex[:8]}.mp4"
-            download_url = await upload_file_to_blob(output_path, blob_name, content_type="video/mp4")
-            logger.info(f"[export-sub] Uploaded to Azure: {blob_name}")
-        except ImportError:
-            # Fallback: return as base64 or file response
-            from fastapi.responses import FileResponse
-            return FileResponse(
-                output_path,
-                media_type="video/mp4",
-                filename=f"clip_{video_id}_subtitled.mp4",
-            )
-
-        return {
-            "video_id": video_id,
-            "download_url": download_url,
-            "style": req.style,
-            "caption_count": len(req.captions),
-            "file_size": output_size,
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"[export-sub] Export failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")
-    finally:
-        _cleanup_tmp(tmp_dir)
+    return result
 
 
 def _cleanup_tmp(tmp_dir: str):
