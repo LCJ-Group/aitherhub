@@ -273,14 +273,27 @@ def visibility_renewal_loop():
 # DB Status Helpers
 # =============================================================================
 
-def update_video_status_to_error(video_id: str):
-    """Mark a video as ERROR in the database."""
+def update_video_status_to_error(video_id: str, error_code: str = "UNKNOWN",
+                                  error_step: str = "UNKNOWN",
+                                  error_message: str = ""):
+    """Mark a video as ERROR in the database and record error log."""
     try:
         sys.path.insert(0, BATCH_DIR)
-        from db_ops import init_db_sync, update_video_status_sync, close_db_sync
+        from db_ops import init_db_sync, update_video_status_sync, close_db_sync, insert_video_error_log_sync
         from video_status import VideoStatus
         init_db_sync()
         update_video_status_sync(video_id, VideoStatus.ERROR)
+        # Also record error log so UI can display it
+        try:
+            insert_video_error_log_sync(
+                video_id=video_id,
+                error_code=error_code,
+                error_step=error_step,
+                error_message=error_message[:2000] if error_message else "Worker marked video as ERROR",
+                source="worker",
+            )
+        except Exception as log_err:
+            print(f"[worker] Failed to record error log: {log_err}")
         close_db_sync()
         print(f"[worker] Marked video {video_id} as ERROR")
     except Exception as db_err:
@@ -652,7 +665,12 @@ def process_video_job(payload: dict):
                 print(f"Suppressed: {_e}")
             proc.wait()
             log_error_type(video_id, "video_analysis", "TIMEOUT_VIDEO", f"timeout={VIDEO_PROCESS_TIMEOUT}s")
-            update_video_status_to_error(video_id)
+            update_video_status_to_error(
+                video_id,
+                error_code="TIMEOUT_VIDEO",
+                error_step="VIDEO_PROCESSING",
+                error_message=f"Video processing timed out after {VIDEO_PROCESS_TIMEOUT}s",
+            )
             return False
 
         if proc.returncode == 0:
@@ -828,7 +846,12 @@ def poll_and_process(executor: ThreadPoolExecutor):
 
                     # Step 4: Mark job as 'dead' in DB
                     if job_type in ("video_analysis", None) and job_id != "unknown":
-                        update_video_status_to_error(job_id)
+                        update_video_status_to_error(
+                            job_id,
+                            error_code="POISON_MAX_RETRY",
+                            error_step="WORKER_QUEUE",
+                            error_message=f"Video processing failed after {msg.dequeue_count} retries. Moved to dead-letter queue.",
+                        )
                     elif job_type == "generate_clip":
                         clip_id = payload.get("clip_id", job_id)
                         update_clip_status_to_dead(clip_id, reason)

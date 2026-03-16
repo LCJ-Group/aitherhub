@@ -40,7 +40,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, text
 from loguru import logger
 
 from app.schema.video_schema import (
@@ -158,6 +158,29 @@ async def upload_complete(
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         logger.exception(f"[upload_complete] Unexpected error: {exc}")
+        # Record error log to video_error_logs so UI can display it
+        try:
+            import traceback as _tb
+            from app.core.db import AsyncSessionLocal
+            async with AsyncSessionLocal() as err_db:
+                await err_db.execute(
+                    text("""
+                        INSERT INTO video_error_logs
+                            (video_id, error_code, error_step, error_message, error_detail, source)
+                        VALUES
+                            (:vid, :code, :step, :msg, :detail, 'api')
+                    """),
+                    {
+                        "vid": payload.video_id,
+                        "code": "UPLOAD_COMPLETE_FAIL",
+                        "step": "UPLOAD_COMPLETE",
+                        "msg": str(exc)[:2000],
+                        "detail": _tb.format_exc()[:10000],
+                    },
+                )
+                await err_db.commit()
+        except Exception as log_err:
+            logger.warning(f"[upload_complete] Failed to record error log: {log_err}")
         raise HTTPException(status_code=500, detail=f"Failed to complete upload: {exc}")
 
 
@@ -207,6 +230,28 @@ async def batch_upload_complete(
                 f"[batch_upload_complete] Failed for video {v.video_id}: {exc}"
             )
             failed.append({"video_id": v.video_id, "error": str(exc)})
+            # Record error log to video_error_logs so UI can display it
+            try:
+                import traceback as _tb
+                async with AsyncSessionLocal() as err_db:
+                    await err_db.execute(
+                        text("""
+                            INSERT INTO video_error_logs
+                                (video_id, error_code, error_step, error_message, error_detail, source)
+                            VALUES
+                                (:vid, :code, :step, :msg, :detail, 'api')
+                        """),
+                        {
+                            "vid": v.video_id,
+                            "code": "BATCH_UPLOAD_FAIL",
+                            "step": "UPLOAD_COMPLETE",
+                            "msg": str(exc)[:2000],
+                            "detail": _tb.format_exc()[:10000],
+                        },
+                    )
+                    await err_db.commit()
+            except Exception as log_err:
+                logger.warning(f"[batch_upload_complete] Failed to record error log: {log_err}")
 
     if not video_ids and failed:
         raise HTTPException(

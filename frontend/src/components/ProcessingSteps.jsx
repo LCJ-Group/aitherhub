@@ -769,14 +769,24 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, [videoId, currentStatus, calculateProgressFromStatus, calculateProgressCeilingFromStatus, setMonotonicProgress, handleTimingUpdate, handleProcessingComplete, startPolling]);
 
-  // Fetch error logs when status is ERROR on initial load
+  // Fetch error logs on mount and when status changes to ERROR
+  // Always fetch on mount so that previous error history is available during re-analysis
   useEffect(() => {
-    if (videoId && (currentStatus === 'ERROR' || initialStatus === 'ERROR')) {
+    if (videoId) {
       VideoService.getErrorLogs(videoId).then(res => {
         if (res?.error_logs) setErrorLogs(res.error_logs);
       }).catch(() => {});
     }
-  }, [videoId, currentStatus, initialStatus]);
+  }, [videoId]);
+
+  // Also re-fetch when status transitions to ERROR (SSE notification)
+  useEffect(() => {
+    if (videoId && currentStatus === 'ERROR') {
+      VideoService.getErrorLogs(videoId).then(res => {
+        if (res?.error_logs) setErrorLogs(res.error_logs);
+      }).catch(() => {});
+    }
+  }, [videoId, currentStatus]);
 
   // Clean up localStorage when DONE
   useEffect(() => {
@@ -1299,6 +1309,53 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* Error log history - shown even during re-analysis if previous errors exist */}
+      {!isError && errorLogs.length > 0 && (
+        <div className="mt-3">
+          <button
+            onClick={() => {
+              setShowErrorLogs(!showErrorLogs);
+            }}
+            className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600 transition-colors mx-auto"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+              <line x1="16" y1="13" x2="8" y2="13"/>
+              <line x1="16" y1="17" x2="8" y2="17"/>
+            </svg>
+            前回のエラー履歴 ({errorLogs.length}件)
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+              className={`transition-transform duration-200 ${showErrorLogs ? 'rotate-180' : ''}`}>
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
+          </button>
+
+          {showErrorLogs && (
+            <div className="mt-2 max-h-40 overflow-y-auto space-y-2">
+              {errorLogs.map((log, idx) => (
+                <div key={log.id || idx} className="p-2 bg-amber-50 border border-amber-200 rounded-md text-left">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="inline-block px-1.5 py-0.5 text-[10px] font-mono font-semibold bg-amber-100 text-amber-700 rounded">
+                      {log.error_code || 'UNKNOWN'}
+                    </span>
+                    {log.error_step && (
+                      <span className="text-[10px] text-gray-500">@ {log.error_step}</span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-gray-600 break-words">{log.error_message}</p>
+                  {log.created_at && (
+                    <p className="text-[10px] text-gray-400 mt-1">
+                      {new Date(log.created_at).toLocaleString('ja-JP')}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
