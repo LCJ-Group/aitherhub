@@ -130,32 +130,47 @@ class AutoVideoService {
   }
 
   /**
-   * Upload a video file and get a URL.
-   * Uses the existing upload endpoint.
-   * @param {File} file
+   * Upload a video file to Azure Blob Storage via SAS URL.
+   *
+   * Flow:
+   *  1. Call /api/v1/admin/generate-upload-sas to get a write SAS URL
+   *  2. PUT the file directly to Azure Blob Storage using the SAS URL
+   *  3. Return the permanent blob URL for use in auto-video/create
+   *
+   * @param {File} file - Video file to upload
    * @param {function} [onProgress] - Progress callback (0-100)
-   * @returns {Promise<string>} Video URL
+   * @returns {Promise<string>} Permanent blob URL
    */
   async uploadVideo(file, onProgress) {
-    const formData = new FormData();
-    formData.append("file", file);
-
-    const res = await axios.post(
-      `${this.baseURL}/api/v1/upload/file`,
-      formData,
+    // Step 1: Get SAS upload URL from backend
+    const videoId = `auto-video-${Date.now()}`;
+    const sasRes = await axios.post(
+      `${this.baseURL}/api/v1/admin/generate-upload-sas`,
       {
-        headers: {
-          ...this._headers(),
-          "Content-Type": "multipart/form-data",
-        },
-        onUploadProgress: (e) => {
-          if (onProgress && e.total) {
-            onProgress(Math.round((e.loaded / e.total) * 100));
-          }
-        },
-      }
+        email: "auto-video@aitherhub.com",
+        video_id: videoId,
+        filename: file.name,
+      },
+      { headers: this._headers() }
     );
-    return res.data.url || res.data.file_url;
+
+    const { upload_url, blob_url } = sasRes.data;
+
+    // Step 2: Upload file directly to Azure Blob Storage
+    await axios.put(upload_url, file, {
+      headers: {
+        "x-ms-blob-type": "BlockBlob",
+        "Content-Type": file.type || "video/mp4",
+      },
+      onUploadProgress: (e) => {
+        if (onProgress && e.total) {
+          onProgress(Math.round((e.loaded / e.total) * 100));
+        }
+      },
+    });
+
+    // Step 3: Return the permanent blob URL
+    return blob_url;
   }
 }
 

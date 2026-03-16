@@ -175,17 +175,16 @@ export default function FaceSwapPage() {
     try {
       let url = videoUrl;
 
-      // If file was selected, we need to upload it first
-      // For now, we require a URL (Azure Blob SAS URL)
+      // If file was selected, upload to Azure Blob Storage first
       if (videoFile && !videoUrl) {
-        // Upload video file to get a URL
-        // In production, this would upload to Azure Blob Storage
-        // For now, show an error asking for URL
-        setError(
-          "動画ファイルのアップロードは準備中です。Azure Blob StorageのURLを直接入力してください。"
-        );
-        setIsSubmitting(false);
-        return;
+        try {
+          url = await faceSwapService.uploadVideo(videoFile);
+        } catch (uploadErr) {
+          const msg = uploadErr.response?.data?.detail || uploadErr.message || "アップロードに失敗しました";
+          setError(`動画アップロードエラー: ${msg}`);
+          setIsSubmitting(false);
+          return;
+        }
       }
 
       if (!url) {

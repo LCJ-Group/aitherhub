@@ -100,6 +100,41 @@ class FaceSwapService {
   }
 
   /**
+   * Upload a video file to Azure Blob Storage via SAS URL.
+   * @param {File} file - Video file to upload
+   * @param {function} [onProgress] - Progress callback (0-100)
+   * @returns {Promise<string>} Permanent blob URL
+   */
+  async uploadVideo(file, onProgress) {
+    const videoId = `face-swap-${Date.now()}`;
+    const sasRes = await axios.post(
+      `${this.baseURL}/api/v1/admin/generate-upload-sas`,
+      {
+        email: "face-swap@aitherhub.com",
+        video_id: videoId,
+        filename: file.name,
+      },
+      { headers: this._headers() }
+    );
+
+    const { upload_url, blob_url } = sasRes.data;
+
+    await axios.put(upload_url, file, {
+      headers: {
+        "x-ms-blob-type": "BlockBlob",
+        "Content-Type": file.type || "video/mp4",
+      },
+      onUploadProgress: (e) => {
+        if (onProgress && e.total) {
+          onProgress(Math.round((e.loaded / e.total) * 100));
+        }
+      },
+    });
+
+    return blob_url;
+  }
+
+  /**
    * Health check for the pipeline.
    * @returns {Promise<Object>}
    */
