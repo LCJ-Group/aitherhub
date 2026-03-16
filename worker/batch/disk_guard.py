@@ -64,7 +64,7 @@ _TEMP_DIRS = {
 DISK_WARN_PCT = 70          # Log a warning
 DISK_CLEANUP_PCT = 80       # Trigger automatic cleanup
 DISK_CRITICAL_PCT = 90      # Aggressive cleanup (ignore age)
-DISK_MIN_FREE_GB = 5.0      # Minimum free space to start a new job
+DISK_MIN_FREE_GB = 2.0      # Minimum free space to start a new job (lowered from 5.0 – actual need is ~1-2GB per video)
 LOG_MAX_SIZE_MB = 200        # Rotate logs bigger than this
 
 

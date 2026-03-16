@@ -164,7 +164,7 @@ def extract_frames(
     # Estimate required space: ~120KB per frame (JPG 1280px)
     estimated_gb = (expected_frames * 120 * 1024) / (1024 ** 3) if expected_frames > 0 else 5.0
     logger.info("[FRAMES] Disk free: %.1f GB, estimated need: %.1f GB", free_gb, estimated_gb)
-    if free_gb < max(estimated_gb * 1.2, 3.0):
+    if free_gb < max(estimated_gb * 1.2, 1.5):
         raise RuntimeError(
             f"[FRAMES] Insufficient disk space: {free_gb:.1f} GB free, "
             f"need ~{estimated_gb:.1f} GB for {expected_frames} frames. "

@@ -337,7 +337,7 @@ def compress_to_1080p(
     try:
         disk = shutil.disk_usage(os.path.dirname(input_path) or ".")
         free_gb = disk.free / (1024 ** 3)
-        needed_gb = max(original_size * 1.5 / (1024 ** 3), 3.0)
+        needed_gb = max(original_size * 1.5 / (1024 ** 3), 1.0)
         logger.info("[COMPRESS] Disk free: %.1f GB, estimated need: %.1f GB", free_gb, needed_gb)
         if free_gb < needed_gb:
             logger.error(
