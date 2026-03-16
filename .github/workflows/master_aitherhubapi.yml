@@ -72,22 +72,25 @@ jobs:
           app-name: aitherhubAPI
           slot-name: Production
           package: backend
+          clean: true
+          restart: true
 
   verify_deploy:
     needs: build_and_deploy
     runs-on: ubuntu-latest
     steps:
       - name: Wait for deployment propagation
-        run: sleep 90
+        run: sleep 180
 
       - name: Verify API is responding
         run: |
-          echo "Checking aitherhubAPI health..."
+          API_URL="https://aitherhubapi-cpcjcnezbgf5f7e2.japaneast-01.azurewebsites.net"
+          echo "Checking aitherhubAPI health at $API_URL ..."
           SUCCESS=false
-          for i in 1 2 3 4 5; do
+          for i in 1 2 3 4 5 6 7 8; do
             HTTP_CODE=$(curl -s -o /tmp/response.json -w "%{http_code}" \
               --connect-timeout 10 --max-time 30 \
-              https://aitherhubapi.azurewebsites.net/ 2>/dev/null || echo "000")
+              "$API_URL/" 2>/dev/null || echo "000")
             BODY=$(cat /tmp/response.json 2>/dev/null || echo "")
             echo "Attempt $i: HTTP $HTTP_CODE — $BODY"
 
@@ -102,7 +105,7 @@ jobs:
 
           if [ "$SUCCESS" != "true" ]; then
             echo ""
-            echo "::error::DEPLOY VERIFICATION FAILED — API did not return 200 after 5 attempts"
+            echo "::error::DEPLOY VERIFICATION FAILED — API did not return 200 after 8 attempts"
             echo "The server may have crashed on startup. Check Azure App Service logs."
             exit 1
           fi
@@ -110,8 +113,9 @@ jobs:
       - name: Check version endpoint
         if: success()
         run: |
+          API_URL="https://aitherhubapi-cpcjcnezbgf5f7e2.japaneast-01.azurewebsites.net"
           RESPONSE=$(curl -sf --connect-timeout 10 --max-time 15 \
-            https://aitherhubapi.azurewebsites.net/version 2>/dev/null || echo "{}")
+            "$API_URL/version" 2>/dev/null || echo "{}")
           echo "Version info: $RESPONSE"
           echo "$RESPONSE" | python3 -c "
           import sys, json
@@ -121,3 +125,11 @@ jobs:
           print(f'Deployed commit: {commit}')
           print(f'Uptime: {uptime}s')
           " 2>/dev/null || echo "Could not parse version response"
+
+      - name: Check auto-video health
+        if: success()
+        run: |
+          API_URL="https://aitherhubapi-cpcjcnezbgf5f7e2.japaneast-01.azurewebsites.net"
+          RESPONSE=$(curl -sf --connect-timeout 10 --max-time 15 \
+            "$API_URL/api/v1/auto-video/health" 2>/dev/null || echo "{}")
+          echo "Auto-video health: $RESPONSE"
