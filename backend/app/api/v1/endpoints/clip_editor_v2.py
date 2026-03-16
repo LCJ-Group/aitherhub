@@ -1151,7 +1151,7 @@ async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, s
 
     _CDN_HOST = os.getenv("CDN_HOST", "https://cdn.aitherhub.com")
     _BLOB_HOST = f"https://{ACCOUNT_NAME}.blob.core.windows.net" if ACCOUNT_NAME else ""
-    FFMPEG_TIMEOUT = 300  # 5 minutes max for encoding
+    FFMPEG_TIMEOUT = 600  # 10 minutes max for encoding
 
     tmp_dir = tempfile.mkdtemp(prefix="export_sub_")
     try:
@@ -1238,7 +1238,8 @@ async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, s
             "ffmpeg", "-y",
             "-i", video_path,
             "-vf", vf,
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+            "-threads", "2",
             "-c:a", "copy",
             "-movflags", "+faststart",
             output_path,
