@@ -1166,6 +1166,11 @@ def _build_drawtext_filter(captions: list, style: str, position_y: float, time_o
     
     Uses drawtext filter (built-in to ffmpeg) instead of ass/subtitles filter
     which requires libass and may not be available in all environments.
+    
+    Key design decisions:
+    - Resolves overlapping time ranges so only ONE caption is visible at any time
+    - Extends short captions (Whisper ASR often produces <2s segments) to min 3s
+    - Caps extended end at the next caption's start to prevent overlap
     """
     s = _DRAWTEXT_STYLES.get(style, _DRAWTEXT_STYLES['box'])
     
@@ -1206,21 +1211,48 @@ def _build_drawtext_filter(captions: list, style: str, position_y: float, time_o
     else:
         y_expr = 'h-th-100'  # bottom
     
-    filters = []
+    # ── Pre-process captions: convert to local time, sort, de-overlap ──
+    MIN_DISPLAY = 3.0  # minimum display duration in seconds (matches frontend)
+    processed = []
     for cap in captions:
-        cap_start = _cap_get(cap, 'start', 0)
-        cap_end = _cap_get(cap, 'end', 0)
+        cap_start = float(_cap_get(cap, 'start', 0))
+        cap_end = float(_cap_get(cap, 'end', 0))
         cap_text = _cap_get(cap, 'text', '')
+        if not cap_text or not cap_text.strip():
+            continue
         local_start = cap_start - time_offset if time_offset > 0 else cap_start
         local_end = cap_end - time_offset if time_offset > 0 else cap_end
         if local_start < 0:
             local_start = 0
         if local_end <= local_start:
             continue
-        
+        processed.append({'start': local_start, 'end': local_end, 'text': cap_text})
+    
+    # Sort by start time
+    processed.sort(key=lambda c: c['start'])
+    
+    # Extend short captions and resolve overlaps:
+    # Each caption's end = max(original_end, start + MIN_DISPLAY), but capped at next caption's start
+    for i, cap in enumerate(processed):
+        raw_end = cap['end']
+        extended_end = max(raw_end, cap['start'] + MIN_DISPLAY)
+        if i + 1 < len(processed):
+            # Don't overlap with next caption
+            extended_end = min(extended_end, processed[i + 1]['start'])
+        cap['end'] = extended_end
+        # Safety: ensure end > start
+        if cap['end'] <= cap['start']:
+            cap['end'] = cap['start'] + 0.1
+    
+    logger.info(f"[drawtext] Processed {len(processed)} captions (from {len(captions)} raw)")
+    for i, cap in enumerate(processed):
+        logger.info(f"[drawtext]   [{i}] {cap['start']:.2f}-{cap['end']:.2f} \"{cap['text'][:30]}\"")
+    
+    filters = []
+    for cap in processed:
         # Escape text for drawtext filter
         # In filter_complex_script, we need to escape: ' \ : and special chars
-        text = cap_text
+        text = cap['text']
         text = text.replace('\\', '\\\\')
         text = text.replace("'", "\u2019")  # Replace apostrophe with unicode right single quote
         text = text.replace(':', '\\:')
@@ -1240,7 +1272,7 @@ def _build_drawtext_filter(captions: list, style: str, position_y: float, time_o
             f"shadowcolor={s['shadowcolor']}",
             f"x=(w-text_w)/2",
             f"y={y_expr}",
-            f"enable='between(t,{local_start:.2f},{local_end:.2f})'",
+            f"enable='between(t,{cap['start']:.2f},{cap['end']:.2f})'",
         ]
         
         # Add box background if needed
