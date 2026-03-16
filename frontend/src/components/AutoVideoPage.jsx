@@ -93,7 +93,7 @@ export default function AutoVideoPage() {
         const status = await autoVideoService.getJobStatus(currentJobId);
         setJobStatus(status);
 
-        if (status.status === "completed" || status.status === "failed") {
+        if (status.status === "completed" || status.status === "failed" || status.status === "error") {
           clearInterval(pollRef.current);
           pollRef.current = null;
           loadJobs();
@@ -274,23 +274,23 @@ export default function AutoVideoPage() {
     setError(null);
   };
 
-  // ── Step labels ──
-  const stepLabels = {
-    queued: "待機中...",
+  // ── Status labels (matches backend AutoVideoStatus + step values) ──
+  const statusLabels = {
+    pending: "準備中...",
     generating_script: "台本を生成中 (GPT)...",
-    generating_tts: "音声を生成中 (ElevenLabs)...",
+    generating_voice: "音声を生成中 (ElevenLabs)...",
     face_swapping: "顔を合成中 (FaceFusion GPU)...",
-    merging_audio: "音声を結合中...",
+    merging: "動画と音声を結合中...",
     lip_syncing: "リップシンク中 (ElevenLabs)...",
     finalizing: "最終処理中...",
     completed: "完了",
-    failed: "エラー",
+    error: "エラー",
   };
 
   // ── Progress bar color ──
   const getProgressColor = (status) => {
     if (status === "completed") return "bg-green-500";
-    if (status === "failed") return "bg-red-500";
+    if (status === "failed" || status === "error") return "bg-red-500";
     return "bg-blue-500";
   };
 
@@ -673,12 +673,14 @@ export default function AutoVideoPage() {
                   <h3 className="font-semibold flex items-center gap-2">
                     {jobStatus?.status === "completed" ? (
                       <CheckCircle size={20} className="text-green-400" />
-                    ) : jobStatus?.status === "failed" ? (
+                    ) : jobStatus?.status === "error" || jobStatus?.status === "failed" ? (
                       <AlertCircle size={20} className="text-red-400" />
                     ) : (
                       <Loader2 size={20} className="text-blue-400 animate-spin" />
                     )}
-                    {stepLabels[jobStatus?.step] || jobStatus?.step || "処理中..."}
+                    {jobStatus?.step_detail && jobStatus?.status !== "completed" && jobStatus?.status !== "error"
+                      ? jobStatus.step_detail
+                      : statusLabels[jobStatus?.status] || jobStatus?.step || "処理中..."}
                   </h3>
                   <span className="text-sm text-gray-400">
                     {jobStatus?.progress || 0}%
@@ -697,22 +699,23 @@ export default function AutoVideoPage() {
 
                 {/* Pipeline steps */}
                 <div className="flex items-center gap-2 text-xs text-gray-500 mb-4">
-                  {["generating_script", "generating_tts", "face_swapping", "lip_syncing"].map(
+                  {["generating_script", "generating_voice", "face_swapping", "lip_syncing"].map(
                     (step, i) => {
-                      const current = jobStatus?.step;
+                      const currentStatus = jobStatus?.status;
                       const steps = [
+                        "pending",
                         "generating_script",
-                        "generating_tts",
+                        "generating_voice",
                         "face_swapping",
-                        "merging_audio",
+                        "merging",
                         "lip_syncing",
                         "finalizing",
                         "completed",
                       ];
-                      const currentIdx = steps.indexOf(current);
+                      const currentIdx = steps.indexOf(currentStatus);
                       const stepIdx = steps.indexOf(step);
                       const isDone = currentIdx > stepIdx;
-                      const isActive = current === step;
+                      const isActive = currentStatus === step;
 
                       return (
                         <div key={step} className="flex items-center gap-2">
@@ -745,7 +748,7 @@ export default function AutoVideoPage() {
                 )}
 
                 {/* Error message */}
-                {jobStatus?.status === "failed" && jobStatus?.error && (
+                {(jobStatus?.status === "failed" || jobStatus?.status === "error") && jobStatus?.error && (
                   <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3 mb-3">
                     <p className="text-sm text-red-300">{jobStatus.error}</p>
                   </div>
@@ -761,7 +764,7 @@ export default function AutoVideoPage() {
 
                 {/* Actions */}
                 <div className="flex gap-2 mt-4">
-                  {jobStatus?.status === "completed" && (
+                  {(jobStatus?.status === "completed" && jobStatus?.progress === 100) && (
                     <a
                       href={jobStatus?.result_video_url || autoVideoService.getDownloadUrl(currentJobId)}
                       target="_blank"
@@ -773,7 +776,8 @@ export default function AutoVideoPage() {
                     </a>
                   )}
                   {(jobStatus?.status === "completed" ||
-                    jobStatus?.status === "failed") && (
+                    jobStatus?.status === "failed" ||
+                    jobStatus?.status === "error") && (
                     <button
                       onClick={resetForm}
                       className="flex-1 py-2.5 bg-gray-700 hover:bg-gray-600 rounded-lg font-medium transition flex items-center justify-center gap-2"
@@ -830,14 +834,14 @@ export default function AutoVideoPage() {
                           className={`text-xs px-1.5 py-0.5 rounded ${
                             job.status === "completed"
                               ? "bg-green-500/20 text-green-400"
-                              : job.status === "failed"
+                              : job.status === "failed" || job.status === "error"
                               ? "bg-red-500/20 text-red-400"
                               : "bg-blue-500/20 text-blue-400"
                           }`}
                         >
                           {job.status === "completed"
                             ? "完了"
-                            : job.status === "failed"
+                            : job.status === "failed" || job.status === "error"
                             ? "失敗"
                             : `${job.progress}%`}
                         </span>

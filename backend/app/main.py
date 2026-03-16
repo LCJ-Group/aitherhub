@@ -453,6 +453,36 @@ async def ensure_tables_exist():
 
 
 @app.on_event("startup")
+async def ensure_auto_video_jobs_table():
+    """Ensure auto_video_jobs table exists and restore jobs from DB."""
+    try:
+        from app.core.db import engine
+        from app.models.orm.auto_video_job import AutoVideoJob
+
+        async with engine.begin() as conn:
+            await conn.run_sync(
+                AutoVideoJob.__table__.create,
+                checkfirst=True,
+            )
+        logger.info("auto_video_jobs table verified/created successfully")
+    except Exception as e:
+        logger.warning(f"Failed to ensure auto_video_jobs table on startup: {e}")
+
+    # Restore completed/errored jobs from DB into memory
+    try:
+        from app.services.auto_video_db import restore_jobs_to_memory
+        from app.services.auto_video_pipeline_service import auto_video_jobs
+
+        count = await restore_jobs_to_memory(auto_video_jobs)
+        if count > 0:
+            logger.info(f"Restored {count} auto video jobs from database")
+        else:
+            logger.info("No auto video jobs to restore from database")
+    except Exception as e:
+        logger.warning(f"Failed to restore auto video jobs on startup: {e}")
+
+
+@app.on_event("startup")
 async def restore_live_sessions():
     """Restore active live sessions from DB on startup."""
     try:

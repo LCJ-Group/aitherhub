@@ -249,7 +249,8 @@ class AutoVideoPipelineService:
         job = {
             "job_id": job_id,
             "status": AutoVideoStatus.PENDING,
-            "step": "Job created",
+            "step": "pending",
+            "step_detail": "Job created",
             "progress": 0,
             "error": None,
             "video_url": video_url,
@@ -274,6 +275,10 @@ class AutoVideoPipelineService:
         auto_video_jobs[job_id] = job
         logger.info(f"[{job_id}] Auto video pipeline job created: topic={topic}")
 
+        # Persist to DB
+        from app.services.auto_video_db import save_job_to_db
+        asyncio.create_task(save_job_to_db(job))
+
         # Start processing in background
         asyncio.create_task(self._run_pipeline(job_id))
 
@@ -282,7 +287,13 @@ class AutoVideoPipelineService:
     async def get_job_status(self, job_id: str) -> Dict[str, Any]:
         """Get the current status of an auto video job."""
         if job_id not in auto_video_jobs:
-            raise ValueError(f"Job {job_id} not found")
+            # Try loading from DB (survives deploys)
+            from app.services.auto_video_db import load_job_from_db
+            db_job = await load_job_from_db(job_id)
+            if db_job:
+                auto_video_jobs[job_id] = db_job
+            else:
+                raise ValueError(f"Job {job_id} not found")
 
         job = auto_video_jobs[job_id]
         elapsed = time.time() - job["created_at"]
@@ -291,6 +302,7 @@ class AutoVideoPipelineService:
             "job_id": job_id,
             "status": job["status"],
             "step": job["step"],
+            "step_detail": job.get("step_detail", ""),
             "progress": job["progress"],
             "error": job.get("error"),
             "elapsed_sec": round(elapsed, 1),
@@ -322,7 +334,17 @@ class AutoVideoPipelineService:
         return None
 
     async def list_jobs(self, limit: int = 20) -> List[Dict[str, Any]]:
-        """List recent auto video jobs."""
+        """List recent auto video jobs (memory + DB fallback)."""
+        # Merge DB jobs into memory if not already present
+        try:
+            from app.services.auto_video_db import load_jobs_from_db
+            db_jobs = await load_jobs_from_db(limit=limit)
+            for dj in db_jobs:
+                if dj["job_id"] not in auto_video_jobs:
+                    auto_video_jobs[dj["job_id"]] = dj
+        except Exception as e:
+            logger.debug(f"DB fallback for list_jobs failed: {e}")
+
         jobs = sorted(
             auto_video_jobs.values(),
             key=lambda j: j["created_at"],
@@ -343,7 +365,13 @@ class AutoVideoPipelineService:
     async def delete_job(self, job_id: str) -> Dict[str, Any]:
         """Delete a job and cleanup temporary files."""
         if job_id not in auto_video_jobs:
-            raise ValueError(f"Job {job_id} not found")
+            # Try loading from DB
+            from app.services.auto_video_db import load_job_from_db
+            db_job = await load_job_from_db(job_id)
+            if db_job:
+                auto_video_jobs[job_id] = db_job
+            else:
+                raise ValueError(f"Job {job_id} not found")
 
         job = auto_video_jobs[job_id]
 
@@ -366,6 +394,11 @@ class AutoVideoPipelineService:
                 pass
 
         del auto_video_jobs[job_id]
+
+        # Also delete from DB
+        from app.services.auto_video_db import delete_job_from_db
+        asyncio.create_task(delete_job_from_db(job_id))
+
         return {"status": "deleted", "job_id": job_id}
 
     async def get_result_video_path(self, job_id: str) -> Optional[str]:
@@ -405,7 +438,8 @@ class AutoVideoPipelineService:
 
             # ── Step 1: Download input video ──
             job["status"] = AutoVideoStatus.PENDING
-            job["step"] = "Downloading body double video"
+            job["step"] = "pending"
+            job["step_detail"] = "Downloading body double video"
             job["progress"] = 2
             logger.info(f"[{job_id}] Step 1: Downloading video")
 
@@ -443,7 +477,8 @@ class AutoVideoPipelineService:
 
             # ── Step 2: Generate script ──
             job["status"] = AutoVideoStatus.GENERATING_SCRIPT
-            job["step"] = "Generating script with AI"
+            job["step"] = "generating_script"
+            job["step_detail"] = "Generating script with AI"
             job["progress"] = 8
             logger.info(f"[{job_id}] Step 2: Generating script")
 
@@ -472,7 +507,8 @@ class AutoVideoPipelineService:
 
             # ── Step 3: Generate TTS audio ──
             job["status"] = AutoVideoStatus.GENERATING_VOICE
-            job["step"] = "Generating voice audio (ElevenLabs TTS)"
+            job["step"] = "generating_voice"
+            job["step_detail"] = "Generating voice audio (ElevenLabs TTS)"
             job["progress"] = 18
             logger.info(f"[{job_id}] Step 3: Generating TTS audio")
 
@@ -496,7 +532,8 @@ class AutoVideoPipelineService:
 
             # ── Step 4: Face swap (GPU Worker) ──
             job["status"] = AutoVideoStatus.FACE_SWAPPING
-            job["step"] = "Face swapping video (GPU processing)"
+            job["step"] = "face_swapping"
+            job["step_detail"] = "Face swapping video (GPU processing)"
             job["progress"] = 28
             logger.info(f"[{job_id}] Step 4: Starting face swap")
 
@@ -537,10 +574,11 @@ class AutoVideoPipelineService:
                 else:
                     gpu_progress = fs_status.get("progress", 0)
                     job["progress"] = 28 + int(gpu_progress * 0.32)
-                    job["step"] = f"Face swapping: {fs_status.get('step', 'processing')}"
+                    job["step"] = "face_swapping"
+                    job["step_detail"] = f"Face swapping: {fs_status.get('step', 'processing')}"
 
             # Download face-swapped video
-            job["step"] = "Downloading face-swapped video"
+            job["step_detail"] = "Downloading face-swapped video"
             download_url = await self.face_swap.video_download_url(fs_job_id)
 
             async with httpx.AsyncClient(
@@ -559,7 +597,8 @@ class AutoVideoPipelineService:
 
             # ── Step 5: Merge face-swapped video + TTS audio ──
             job["status"] = AutoVideoStatus.MERGING
-            job["step"] = "Merging video and generated voice"
+            job["step"] = "merging"
+            job["step_detail"] = "Merging video and generated voice"
             job["progress"] = 65
             logger.info(f"[{job_id}] Step 5: Merging video + TTS audio")
 
@@ -586,7 +625,8 @@ class AutoVideoPipelineService:
             # ── Step 6: Lip sync (ElevenLabs Dubbing) ──
             if job["enable_lip_sync"]:
                 job["status"] = AutoVideoStatus.LIP_SYNCING
-                job["step"] = "Applying lip sync (ElevenLabs Dubbing)"
+                job["step"] = "lip_syncing"
+                job["step_detail"] = "Applying lip sync (ElevenLabs Dubbing)"
                 job["progress"] = 75
                 logger.info(f"[{job_id}] Step 6: Lip sync via ElevenLabs Dubbing")
 
@@ -614,7 +654,8 @@ class AutoVideoPipelineService:
 
             # ── Step 7: Finalize — Upload to Blob Storage ──
             job["status"] = AutoVideoStatus.FINALIZING
-            job["step"] = "Uploading result video"
+            job["step"] = "finalizing"
+            job["step_detail"] = "Uploading result video"
             job["progress"] = 95
 
             final_size_mb = os.path.getsize(final_path) / (1024 * 1024)
@@ -660,11 +701,12 @@ class AutoVideoPipelineService:
                 # Pipeline still completes, but result_video_url stays None
 
             job["progress"] = 97
-            job["step"] = "Preparing result"
+            job["step_detail"] = "Preparing result"
 
             # ── Done ──
             job["status"] = AutoVideoStatus.COMPLETED
-            job["step"] = "Pipeline completed"
+            job["step"] = "completed"
+            job["step_detail"] = "Pipeline completed"
             job["progress"] = 100
             job["completed_at"] = time.time()
             elapsed = job["completed_at"] - job["created_at"]
@@ -673,11 +715,20 @@ class AutoVideoPipelineService:
                 f"Output: {final_size_mb:.1f} MB"
             )
 
+            # Persist completed job to DB
+            from app.services.auto_video_db import save_job_to_db
+            await save_job_to_db(job)
+
         except Exception as e:
             logger.error(f"[{job_id}] Pipeline failed: {e}", exc_info=True)
             job["status"] = AutoVideoStatus.ERROR
-            job["step"] = "Error"
+            job["step"] = "error"
+            job["step_detail"] = str(e)
             job["error"] = str(e)
+
+            # Persist error state to DB
+            from app.services.auto_video_db import save_job_to_db
+            await save_job_to_db(job)
 
     # ──────────────────────────────────────────
     # Script Generation (GPT)
