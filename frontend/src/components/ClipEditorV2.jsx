@@ -927,10 +927,16 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                   });
                   if (res?.download_url) {
                     window.open(res.download_url, '_blank');
-                    setStatus({ ok: true, msg: '字幕付きMP4をダウンロード中...' });
+                    setStatus({ ok: true, msg: '字幕付きMP4のエクスポート完了！ダウンロードが開始されます。' });
+                    setTimeout(() => setStatus(null), 5000);
+                  } else {
+                    setStatus({ ok: true, msg: 'エクスポート完了' });
+                    setTimeout(() => setStatus(null), 3000);
                   }
                 } catch (e) {
                   setStatus({ ok: false, msg: `エクスポート失敗: ${e.message}` });
+                  // Keep error visible for 10 seconds
+                  setTimeout(() => setStatus(null), 10000);
                 } finally {
                   setExporting(false);
                 }
