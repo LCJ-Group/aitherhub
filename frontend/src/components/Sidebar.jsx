@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 
 import logo from "../assets/logo/logo.svg";
 import searchMobile from "../assets/icons/searchmobile.png";
@@ -11,7 +11,7 @@ import ForgotPasswordModal from "./modals/ForgotPasswordModal";
 import AuthService from "../base/services/userService";
 import VideoService from "../base/services/videoService";
 
-import { ChevronDown, LogOut, Settings, User, X, MoreHorizontal, Pencil, Trash2, Scissors, MessageSquareText, Radio, Video, Eye, Calendar } from "lucide-react";
+import { ChevronDown, LogOut, Settings, User, X, MoreHorizontal, Pencil, Trash2, Scissors, MessageSquareText, Radio, Video, Eye, Calendar, Sparkles, UserCircle, Clapperboard } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -263,6 +263,7 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
   const hasLiveContent = liveVideos.length > 0 || extensionSessions.length > 0;
 
   const navigate = useNavigate();
+  const location = useLocation();
 
   const handleVideoClick = (video) => {
     setSelectedVideoId(video.id);
@@ -373,6 +374,44 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={showFeedback ? "#7c3aed" : "#6b7280"} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-message-square-icon lucide-message-square transition-colors duration-200 ease-out"><path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z" /></svg>
               <span className={`text-sm transition-colors duration-200 ease-out ${showFeedback ? "text-purple-700 font-medium" : "text-muted-foreground "
                 }`}>{window.__t('feedback')}</span>
+            </div>
+
+            {/* ===== Tool Navigation ===== */}
+            <div className="mt-3 pt-3 border-t border-gray-100 space-y-1">
+              <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider px-2">Tools</span>
+              <div
+                onClick={() => { navigate('/auto-video'); onClose?.(); }}
+                className={`flex items-center gap-2 p-2 px-4 rounded-md cursor-pointer transition-all duration-200 ease-out ${
+                  location.pathname === '/auto-video'
+                    ? 'border border-purple-300 bg-purple-50 text-purple-700'
+                    : 'hover:bg-gray-100'
+                }`}
+              >
+                <Sparkles className={`w-4 h-4 transition-colors duration-200 ease-out ${location.pathname === '/auto-video' ? 'text-purple-600' : 'text-gray-500'}`} />
+                <span className={`text-sm transition-colors duration-200 ease-out ${location.pathname === '/auto-video' ? 'text-purple-700 font-medium' : 'text-muted-foreground'}`}>Auto Video</span>
+              </div>
+              <div
+                onClick={() => { navigate('/face-swap'); onClose?.(); }}
+                className={`flex items-center gap-2 p-2 px-4 rounded-md cursor-pointer transition-all duration-200 ease-out ${
+                  location.pathname === '/face-swap'
+                    ? 'border border-purple-300 bg-purple-50 text-purple-700'
+                    : 'hover:bg-gray-100'
+                }`}
+              >
+                <Clapperboard className={`w-4 h-4 transition-colors duration-200 ease-out ${location.pathname === '/face-swap' ? 'text-purple-600' : 'text-gray-500'}`} />
+                <span className={`text-sm transition-colors duration-200 ease-out ${location.pathname === '/face-swap' ? 'text-purple-700 font-medium' : 'text-muted-foreground'}`}>Face Swap</span>
+              </div>
+              <div
+                onClick={() => { navigate('/digital-human'); onClose?.(); }}
+                className={`flex items-center gap-2 p-2 px-4 rounded-md cursor-pointer transition-all duration-200 ease-out ${
+                  location.pathname === '/digital-human'
+                    ? 'border border-purple-300 bg-purple-50 text-purple-700'
+                    : 'hover:bg-gray-100'
+                }`}
+              >
+                <UserCircle className={`w-4 h-4 transition-colors duration-200 ease-out ${location.pathname === '/digital-human' ? 'text-purple-600' : 'text-gray-500'}`} />
+                <span className={`text-sm transition-colors duration-200 ease-out ${location.pathname === '/digital-human' ? 'text-purple-700 font-medium' : 'text-muted-foreground'}`}>Digital Human</span>
+              </div>
             </div>
           </div>
         </div>
