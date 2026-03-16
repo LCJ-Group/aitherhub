@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from "react";
+import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import VideoService from "../base/services/videoService";
 import ClipEditorV2 from "./ClipEditorV2";
 
@@ -40,6 +40,28 @@ export default function ClipSection({ videoData, clipStates, reports1, editorPar
   const [collapsed, setCollapsed] = useState(false);
   const [editorClip, setEditorClip] = useState(null);
   const editorAutoOpenedRef = useRef(false);
+  const [clipRatings, setClipRatings] = useState({});
+
+  // Fetch clip ratings for badge display
+  const fetchClipRatings = useCallback(async () => {
+    if (!videoData?.id) return;
+    try {
+      const resp = await VideoService.getClipRatings(videoData.id);
+      if (resp?.ratings) {
+        const map = {};
+        resp.ratings.forEach((r) => {
+          map[String(r.phase_index)] = r.rating; // 'good' | 'bad'
+        });
+        setClipRatings(map);
+      }
+    } catch (e) {
+      console.warn('[ClipSection] Failed to fetch clip ratings:', e);
+    }
+  }, [videoData?.id]);
+
+  useEffect(() => {
+    fetchClipRatings();
+  }, [fetchClipRatings]);
 
   // Get clips that are completed or generating subtitles
   const visibleClips = useMemo(() => {
@@ -244,6 +266,17 @@ export default function ClipSection({ videoData, clipStates, reports1, editorPar
                         >
                           {clip.source.label}
                         </span>
+                        {/* Rating badge */}
+                        {clipRatings[String(clip.phaseIndex)] === 'good' && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-700 border border-emerald-200">
+                            <span>👍</span> 使える
+                          </span>
+                        )}
+                        {clipRatings[String(clip.phaseIndex)] === 'bad' && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-600 border border-red-200">
+                            <span>👎</span> 微妙
+                          </span>
+                        )}
                       </div>
 
                       {/* Insight preview */}
