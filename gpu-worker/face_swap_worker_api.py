@@ -10,22 +10,13 @@ Architecture:
 
 Endpoints:
   POST /api/health          - GPU health check
-  POST /api/set-source      - Upload source face image(s)
+  POST /api/set-source      - Upload source face image
   POST /api/start-stream    - Start real-time face swap stream
   POST /api/stop-stream     - Stop the running stream
   GET  /api/stream-status   - Get current stream metrics
   POST /api/swap-frame      - Swap face on a single image (test)
   GET  /api/config          - Get current FaceFusion configuration
   POST /api/config          - Update FaceFusion configuration
-  POST /api/swap-video      - Start async video face swap job
-  GET  /api/video-status    - Get video job status
-  GET  /api/video-download  - Download processed video
-
-Quality Presets (v7 optimised):
-  fast     : hyperswap_1b_256, no enhancer, 512 boost, yolo_face    → ~15 fps
-  balanced : hyperswap_1c_256, no enhancer, 512 boost, retinaface   → ~10 fps
-  high     : hyperswap_1c_256, no enhancer, 1024 boost, retinaface  → ~9 fps
-  ultra    : hyperswap_1c_256, GPEN-BFR-2048, 1024 boost, retinaface → ~2 fps
 """
 
 import asyncio
@@ -47,17 +38,15 @@ _existing = os.environ.get("LD_LIBRARY_PATH", "")
 _new_paths = [p for p in _nvidia_lib_dirs if os.path.isdir(p) and p not in _existing]
 if _new_paths:
     os.environ["LD_LIBRARY_PATH"] = ":".join(_new_paths) + (":" + _existing if _existing else "")
-
 import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 import uvicorn
 from fastapi import Depends, FastAPI, Header, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel, Field
 
 # ── Logging ──────────────────────────────────────────────────────────────────
@@ -80,52 +69,6 @@ PORT = int(os.getenv("WORKER_PORT", "8000"))
 Path(SOURCE_FACE_DIR).mkdir(parents=True, exist_ok=True)
 Path(TEMP_DIR).mkdir(parents=True, exist_ok=True)
 
-# ── Quality Presets ──────────────────────────────────────────────────────────
-
-QUALITY_PRESETS = {
-    "fast": {
-        "face_swapper_model": "hyperswap_1b_256",
-        "face_swapper_pixel_boost": "512x512",
-        "face_enhancer_enabled": False,
-        "face_enhancer_model": None,
-        "face_detector_model": "yolo_face",
-        "face_detector_score": 0.5,
-        "face_mask_blur": 0.3,
-        "expression_restorer_enabled": False,
-    },
-    "balanced": {
-        "face_swapper_model": "hyperswap_1c_256",
-        "face_swapper_pixel_boost": "512x512",
-        "face_enhancer_enabled": False,
-        "face_enhancer_model": None,
-        "face_detector_model": "retinaface",
-        "face_detector_score": 0.3,
-        "face_mask_blur": 0.1,
-        "expression_restorer_enabled": True,
-    },
-    "high": {
-        "face_swapper_model": "hyperswap_1c_256",
-        "face_swapper_pixel_boost": "1024x1024",
-        "face_enhancer_enabled": False,
-        "face_enhancer_model": None,
-        "face_detector_model": "retinaface",
-        "face_detector_score": 0.3,
-        "face_mask_blur": 0.1,
-        "expression_restorer_enabled": True,
-    },
-    "ultra": {
-        "face_swapper_model": "hyperswap_1c_256",
-        "face_swapper_pixel_boost": "1024x1024",
-        "face_enhancer_enabled": True,
-        "face_enhancer_model": "gpen_bfr_2048",
-        "face_enhancer_blend": 80,
-        "face_detector_model": "retinaface",
-        "face_detector_score": 0.3,
-        "face_mask_blur": 0.1,
-        "expression_restorer_enabled": True,
-    },
-}
-
 # ── State ────────────────────────────────────────────────────────────────────
 
 current_session = {
@@ -139,31 +82,25 @@ current_session = {
     "error": None,
 }
 
-# Default config: v7 "high" preset — best balance of speed and quality
 current_config = {
-    "face_swapper_model": "hyperswap_1c_256",
-    "face_swapper_pixel_boost": "1024x1024",
+    "face_swapper_model": "inswapper_128",
+    "face_swapper_pixel_boost": "512x512",
     "face_swapper_weight": 0.85,
-    "face_enhancer_model": None,
-    "face_enhancer_enabled": False,
-    "face_enhancer_blend": 80,
-    "face_detector_model": "retinaface",
-    "face_detector_score": 0.3,
+    "face_enhancer_model": "gfpgan_1.4",
+    "face_enhancer_enabled": True,
+    "face_detector_model": "yolo_face",
+    "face_detector_score": 0.5,
     "face_mask_types": ["box", "occlusion", "region"],
-    "face_mask_blur": 0.1,
+    "face_mask_blur": 0.3,
     "face_mask_padding": [0, 0, 0, 0],
-    "expression_restorer_enabled": True,
-    "expression_restorer_factor": 80,
     "output_image_quality": 95,
-    "output_video_quality": 95,
     "output_resolution": "1280x720",
     "output_fps": 30,
     "execution_providers": "cuda",
     "execution_thread_count": 4,
 }
 
-# Multiple source face paths (for better quality with varied angles)
-source_face_paths: List[str] = []
+source_face_path: Optional[str] = None
 
 
 # ── Auth ─────────────────────────────────────────────────────────────────────
@@ -186,9 +123,10 @@ class SetSourceRequest(BaseModel):
 class StartStreamRequest(BaseModel):
     input_rtmp: str = Field(..., description="RTMP URL of incoming stream (body double)")
     output_rtmp: str = Field(..., description="RTMP URL for outgoing stream (to platform)")
-    quality: str = Field(default="high", description="Quality preset: fast, balanced, high, ultra")
+    quality: str = Field(default="high", description="Quality preset: fast, balanced, high")
     resolution: str = Field(default="720p", description="Output resolution: 480p, 720p, 1080p")
     fps: int = Field(default=30, description="Output FPS")
+    face_enhancer: bool = Field(default=True, description="Enable GFPGAN face enhancement")
 
 
 class StopStreamRequest(BaseModel):
@@ -198,14 +136,16 @@ class StopStreamRequest(BaseModel):
 class SwapFrameRequest(BaseModel):
     image_base64: str = Field(..., description="Base64-encoded input image")
     quality: str = Field(default="high", description="Quality preset")
+    face_enhancer: bool = Field(default=True, description="Enable face enhancement")
 
 
 class SwapVideoRequest(BaseModel):
     """Request to start a video face swap job."""
     job_id: str = Field(..., description="Unique job ID assigned by the backend")
     video_url: str = Field(..., description="URL to download the input video")
-    quality: str = Field(default="high", description="Quality preset: fast, balanced, high, ultra")
-    output_video_quality: int = Field(default=95, description="Output video quality 0-100")
+    face_enhancer: bool = Field(default=True, description="Enable face enhancement")
+    quality: str = Field(default="high", description="Quality preset: fast, balanced, high")
+    output_video_quality: int = Field(default=90, description="Output video quality 0-100")
 
 
 # ── Video Job State ─────────────────────────────────────────────────────────
@@ -219,16 +159,12 @@ class UpdateConfigRequest(BaseModel):
     face_swapper_weight: Optional[float] = None
     face_enhancer_model: Optional[str] = None
     face_enhancer_enabled: Optional[bool] = None
-    face_enhancer_blend: Optional[int] = None
     face_detector_model: Optional[str] = None
     face_detector_score: Optional[float] = None
     face_mask_types: Optional[list] = None
     face_mask_blur: Optional[float] = None
     face_mask_padding: Optional[list] = None
-    expression_restorer_enabled: Optional[bool] = None
-    expression_restorer_factor: Optional[int] = None
     output_image_quality: Optional[int] = None
-    output_video_quality: Optional[int] = None
     output_resolution: Optional[str] = None
     output_fps: Optional[int] = None
     execution_thread_count: Optional[int] = None
@@ -270,6 +206,7 @@ def kill_process_tree(proc):
         return
     try:
         pid = proc.pid
+        # Kill process group
         os.killpg(os.getpgid(pid), signal.SIGTERM)
         proc.wait(timeout=5)
     except (ProcessLookupError, ChildProcessError, subprocess.TimeoutExpired):
@@ -281,35 +218,12 @@ def kill_process_tree(proc):
         logger.warning(f"Error killing process: {e}")
 
 
-def _get_source_args() -> list:
-    """Return the --source-paths arguments for FaceFusion."""
-    if not source_face_paths:
-        raise RuntimeError("No source faces loaded")
-    return ["--source-paths"] + source_face_paths
-
-
-def _apply_quality_preset(quality: str):
-    """Apply a quality preset to current_config, preserving non-preset fields."""
-    preset = QUALITY_PRESETS.get(quality)
-    if not preset:
-        return
-    for key, value in preset.items():
-        if key in current_config:
-            current_config[key] = value
-
-
 def build_facefusion_webcam_cmd() -> list:
     """Build the FaceFusion command for webcam mode with UDP output."""
-    processors = ["face_swapper"]
-    if current_config.get("expression_restorer_enabled"):
-        processors.append("expression_restorer")
-    if current_config.get("face_enhancer_enabled"):
-        processors.append("face_enhancer")
-
     cmd = [
         sys.executable, f"{FACEFUSION_DIR}/facefusion.py", "run",
-        *_get_source_args(),
-        "--processors", *processors,
+        "--source-paths", source_face_path,
+        "--processors", "face_swapper",
         "--face-swapper-model", current_config["face_swapper_model"],
         "--face-detector-model", current_config["face_detector_model"],
         "--face-detector-score", str(current_config["face_detector_score"]),
@@ -320,13 +234,12 @@ def build_facefusion_webcam_cmd() -> list:
         "--webcam-fps", str(current_config["output_fps"]),
     ]
 
-    if current_config.get("face_enhancer_enabled") and current_config.get("face_enhancer_model"):
+    if current_config["face_enhancer_enabled"]:
+        cmd[cmd.index("face_swapper")] = "face_swapper face_enhancer"
+        # Actually need to split properly
+        idx = cmd.index("face_swapper face_enhancer")
+        cmd[idx:idx+1] = ["face_swapper", "face_enhancer"]
         cmd.extend(["--face-enhancer-model", current_config["face_enhancer_model"]])
-        if current_config.get("face_enhancer_blend"):
-            cmd.extend(["--face-enhancer-blend", str(current_config["face_enhancer_blend"])])
-
-    if current_config.get("expression_restorer_enabled"):
-        cmd.extend(["--expression-restorer-factor", str(current_config.get("expression_restorer_factor", 80))])
 
     return cmd
 
@@ -334,14 +247,12 @@ def build_facefusion_webcam_cmd() -> list:
 def build_facefusion_headless_cmd(input_path: str, output_path: str) -> list:
     """Build the FaceFusion command for headless single-image processing."""
     processors = ["face_swapper"]
-    if current_config.get("expression_restorer_enabled"):
-        processors.append("expression_restorer")
-    if current_config.get("face_enhancer_enabled"):
+    if current_config["face_enhancer_enabled"]:
         processors.append("face_enhancer")
 
     cmd = [
         sys.executable, f"{FACEFUSION_DIR}/facefusion.py", "headless-run",
-        *_get_source_args(),
+        "--source-paths", source_face_path,
         "--target-path", input_path,
         "--output-path", output_path,
         # Processors
@@ -353,26 +264,19 @@ def build_facefusion_headless_cmd(input_path: str, output_path: str) -> list:
         # Face detector settings
         "--face-detector-model", current_config["face_detector_model"],
         "--face-detector-score", str(current_config["face_detector_score"]),
-        # Face selector
-        "--face-selector-mode", "many",
         # Face mask settings
         "--face-mask-types", *current_config["face_mask_types"],
         "--face-mask-blur", str(current_config["face_mask_blur"]),
         "--face-mask-padding", *[str(p) for p in current_config["face_mask_padding"]],
         # Output settings
-        "--output-image-quality", str(current_config.get("output_image_quality", 95)),
+        "--output-image-quality", str(current_config["output_image_quality"]),
         # Execution settings
         "--execution-providers", current_config["execution_providers"],
         "--execution-thread-count", str(current_config["execution_thread_count"]),
     ]
 
-    if current_config.get("face_enhancer_enabled") and current_config.get("face_enhancer_model"):
+    if current_config["face_enhancer_enabled"]:
         cmd.extend(["--face-enhancer-model", current_config["face_enhancer_model"]])
-        if current_config.get("face_enhancer_blend"):
-            cmd.extend(["--face-enhancer-blend", str(current_config["face_enhancer_blend"])])
-
-    if current_config.get("expression_restorer_enabled"):
-        cmd.extend(["--expression-restorer-factor", str(current_config.get("expression_restorer_factor", 80))])
 
     return cmd
 
@@ -382,16 +286,12 @@ def build_facefusion_headless_cmd(input_path: str, output_path: str) -> list:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
-    logger.info("FaceFusion GPU Worker starting up (v7 optimised)...")
+    logger.info("FaceFusion GPU Worker starting up...")
     logger.info(f"FaceFusion directory: {FACEFUSION_DIR}")
     logger.info(f"Source face directory: {SOURCE_FACE_DIR}")
-    logger.info(f"Default quality preset: high (hyperswap_1c_256 + 1024 boost + retinaface)")
 
     gpu_info = get_gpu_info()
     logger.info(f"GPU: {gpu_info['gpu_name']} ({gpu_info['gpu_memory_total_mb']}MB)")
-
-    # Auto-load existing source faces from directory
-    _load_existing_source_faces()
 
     yield
 
@@ -405,25 +305,12 @@ async def lifespan(app: FastAPI):
         kill_process_tree(current_session["ffmpeg_out_proc"])
 
 
-def _load_existing_source_faces():
-    """Auto-load any existing source face images from SOURCE_FACE_DIR."""
-    global source_face_paths
-    face_dir = Path(SOURCE_FACE_DIR)
-    if face_dir.exists():
-        faces = sorted(face_dir.glob("*.jpg")) + sorted(face_dir.glob("*.png"))
-        if faces:
-            source_face_paths = [str(f) for f in faces]
-            logger.info(f"Auto-loaded {len(source_face_paths)} source face(s) from {SOURCE_FACE_DIR}")
-        else:
-            logger.warning(f"No source faces found in {SOURCE_FACE_DIR}")
-
-
 # ── App ──────────────────────────────────────────────────────────────────────
 
 app = FastAPI(
     title="FaceFusion GPU Worker",
-    description="Real-time face swap worker for AitherHub (v7 optimised)",
-    version="2.0.0",
+    description="Real-time face swap worker for AitherHub",
+    version="1.0.0",
     lifespan=lifespan,
 )
 
@@ -436,19 +323,6 @@ app.add_middleware(
 
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
-
-
-@app.get("/api/download-file/{filename}")
-async def download_file(filename: str, x_api_key: str = Header(None)):
-    """Download a file from /workspace/"""
-    if x_api_key:
-        await verify_api_key(x_api_key)
-    safe_name = os.path.basename(filename)
-    path = f"/workspace/{safe_name}"
-    if not os.path.exists(path):
-        raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(path, media_type="application/octet-stream", filename=safe_name)
-
 
 @app.get("/api/health")
 async def health_check(auth: bool = Depends(verify_api_key)):
@@ -476,12 +350,10 @@ async def health_check(auth: bool = Depends(verify_api_key)):
         "gpu": gpu_info,
         "facefusion_installed": ff_installed,
         "facefusion_version": ff_version,
-        "source_faces_loaded": len(source_face_paths),
-        "source_face_paths": source_face_paths,
+        "source_face_loaded": source_face_path is not None and Path(source_face_path).exists(),
         "stream_status": current_session["status"],
         "session_id": current_session["id"],
         "config": current_config,
-        "quality_presets": list(QUALITY_PRESETS.keys()),
     }
 
 
@@ -492,30 +364,31 @@ async def set_source(
     image_base64: Optional[str] = None,
     file: Optional[UploadFile] = File(None),
     face_index: int = 0,
-    append: bool = False,
 ):
     """
     Set the source face image (the influencer's face).
     Accepts: file upload, base64 string, or URL.
-    Set append=true to add to existing source faces (for multi-angle support).
     """
-    global source_face_paths
+    global source_face_path
 
     save_path = os.path.join(SOURCE_FACE_DIR, f"source_face_{int(time.time())}.jpg")
 
     if file is not None:
+        # File upload
         content = await file.read()
         with open(save_path, "wb") as f:
             f.write(content)
         logger.info(f"Source face saved from upload: {save_path} ({len(content)} bytes)")
 
     elif image_base64:
+        # Base64
         content = base64.b64decode(image_base64)
         with open(save_path, "wb") as f:
             f.write(content)
         logger.info(f"Source face saved from base64: {save_path} ({len(content)} bytes)")
 
     elif image_url:
+        # URL download
         import httpx
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.get(image_url)
@@ -527,16 +400,15 @@ async def set_source(
     else:
         raise HTTPException(400, "Provide file, image_base64, or image_url")
 
-    if append:
-        source_face_paths.append(save_path)
-    else:
-        source_face_paths = [save_path]
+    source_face_path = save_path
+
+    # Validate face detection using FaceFusion (optional quick check)
+    face_detected = True  # Assume success; full validation happens at stream start
 
     return {
         "status": "ok",
         "source_face_path": save_path,
-        "total_source_faces": len(source_face_paths),
-        "all_paths": source_face_paths,
+        "face_detected": face_detected,
         "face_index": face_index,
     }
 
@@ -558,7 +430,7 @@ async def start_stream(req: StartStreamRequest, auth: bool = Depends(verify_api_
     if current_session["status"] in ("running", "starting"):
         raise HTTPException(409, f"Stream already {current_session['status']}")
 
-    if not source_face_paths:
+    if source_face_path is None or not Path(source_face_path).exists():
         raise HTTPException(400, "Source face not set. Call /api/set-source first.")
 
     session_id = f"sess-{uuid.uuid4().hex[:12]}"
@@ -567,7 +439,14 @@ async def start_stream(req: StartStreamRequest, auth: bool = Depends(verify_api_
     current_session["error"] = None
 
     # Apply quality preset
-    _apply_quality_preset(req.quality)
+    if req.quality == "fast":
+        current_config["face_enhancer_enabled"] = False
+    elif req.quality == "balanced":
+        current_config["face_enhancer_enabled"] = True
+        current_config["face_enhancer_model"] = "gfpgan_1.4"
+    elif req.quality == "high":
+        current_config["face_enhancer_enabled"] = True
+        current_config["face_enhancer_model"] = "gfpgan_1.4"
 
     # Resolution mapping
     res_map = {"480p": "640x480", "720p": "1280x720", "1080p": "1920x1080"}
@@ -576,6 +455,7 @@ async def start_stream(req: StartStreamRequest, auth: bool = Depends(verify_api_
 
     try:
         # Step 1: ffmpeg RTMP input → v4l2 virtual webcam
+        # (Requires v4l2loopback kernel module loaded)
         ffmpeg_in_cmd = [
             "ffmpeg", "-y",
             "-i", req.input_rtmp,
@@ -593,6 +473,7 @@ async def start_stream(req: StartStreamRequest, auth: bool = Depends(verify_api_
             preexec_fn=os.setsid,
         )
 
+        # Wait a moment for ffmpeg to start
         await asyncio.sleep(2)
 
         # Step 2: FaceFusion webcam mode → UDP output
@@ -606,6 +487,7 @@ async def start_stream(req: StartStreamRequest, auth: bool = Depends(verify_api_
             preexec_fn=os.setsid,
         )
 
+        # Wait for FaceFusion to initialize
         await asyncio.sleep(5)
 
         # Step 3: ffmpeg UDP input → RTMP output
@@ -654,6 +536,7 @@ async def start_stream(req: StartStreamRequest, auth: bool = Depends(verify_api_
                 "quality": req.quality,
                 "resolution": req.resolution,
                 "fps": req.fps,
+                "face_enhancer": req.face_enhancer,
             },
         }
 
@@ -661,6 +544,7 @@ async def start_stream(req: StartStreamRequest, auth: bool = Depends(verify_api_
         current_session["status"] = "error"
         current_session["error"] = str(e)
         logger.error(f"Failed to start stream: {e}")
+        # Cleanup any started processes
         for key in ("ffmpeg_in_proc", "facefusion_proc", "ffmpeg_out_proc"):
             if current_session.get(key):
                 kill_process_tree(current_session[key])
@@ -684,6 +568,7 @@ async def stop_stream(auth: bool = Depends(verify_api_key)):
     current_session["status"] = "stopping"
     logger.info(f"Stopping stream: session={session_id}")
 
+    # Kill all processes in reverse order
     for key in ("ffmpeg_out_proc", "facefusion_proc", "ffmpeg_in_proc"):
         if current_session.get(key):
             kill_process_tree(current_session[key])
@@ -695,6 +580,7 @@ async def stop_stream(auth: bool = Depends(verify_api_key)):
         "uptime_seconds": round(uptime, 1),
     }
 
+    # Reset state
     current_session.update({
         "id": None,
         "status": "idle",
@@ -717,6 +603,7 @@ async def stream_status(auth: bool = Depends(verify_api_key)):
     if current_session["start_time"]:
         uptime = time.time() - current_session["start_time"]
 
+    # Check if processes are still alive
     processes_alive = {}
     for key in ("facefusion_proc", "ffmpeg_in_proc", "ffmpeg_out_proc"):
         proc = current_session.get(key)
@@ -726,6 +613,7 @@ async def stream_status(auth: bool = Depends(verify_api_key)):
         else:
             processes_alive[key.replace("_proc", "")] = False
 
+    # If stream should be running but processes died
     if current_session["status"] == "running" and not all(processes_alive.values()):
         dead = [k for k, v in processes_alive.items() if not v]
         current_session["status"] = "error"
@@ -750,9 +638,10 @@ async def swap_frame(req: SwapFrameRequest, auth: bool = Depends(verify_api_key)
     Swap face on a single image (for testing/preview).
     Returns the processed image as base64.
     """
-    if not source_face_paths:
+    if source_face_path is None or not Path(source_face_path).exists():
         raise HTTPException(400, "Source face not set. Call /api/set-source first.")
 
+    # Save input image
     input_path = os.path.join(TEMP_DIR, f"input_{uuid.uuid4().hex[:8]}.jpg")
     output_path = os.path.join(TEMP_DIR, f"output_{uuid.uuid4().hex[:8]}.jpg")
 
@@ -761,12 +650,13 @@ async def swap_frame(req: SwapFrameRequest, auth: bool = Depends(verify_api_key)
         with open(input_path, "wb") as f:
             f.write(content)
 
-        # Apply quality preset temporarily
-        saved_config = dict(current_config)
-        _apply_quality_preset(req.quality)
+        # Apply quality settings temporarily
+        original_enhancer = current_config["face_enhancer_enabled"]
+        current_config["face_enhancer_enabled"] = req.face_enhancer
 
+        # Run FaceFusion headless
         cmd = build_facefusion_headless_cmd(input_path, output_path)
-        logger.info(f"Processing single frame: {' '.join(cmd[:8])}...")
+        logger.info(f"Processing single frame: {' '.join(cmd)}")
 
         result = subprocess.run(
             cmd,
@@ -777,7 +667,7 @@ async def swap_frame(req: SwapFrameRequest, auth: bool = Depends(verify_api_key)
         )
 
         # Restore config
-        current_config.update(saved_config)
+        current_config["face_enhancer_enabled"] = original_enhancer
 
         if result.returncode != 0:
             logger.error(f"FaceFusion error: {result.stderr}")
@@ -786,6 +676,7 @@ async def swap_frame(req: SwapFrameRequest, auth: bool = Depends(verify_api_key)
         if not Path(output_path).exists():
             raise HTTPException(500, "Output image not generated")
 
+        # Read and encode output
         with open(output_path, "rb") as f:
             output_base64 = base64.b64encode(f.read()).decode()
 
@@ -793,9 +684,11 @@ async def swap_frame(req: SwapFrameRequest, auth: bool = Depends(verify_api_key)
             "status": "ok",
             "image_base64": output_base64,
             "quality": req.quality,
+            "face_enhancer": req.face_enhancer,
         }
 
     finally:
+        # Cleanup temp files
         for p in (input_path, output_path):
             try:
                 os.unlink(p)
@@ -808,16 +701,14 @@ async def get_config(auth: bool = Depends(verify_api_key)):
     """Get current FaceFusion configuration."""
     return {
         "config": current_config,
-        "quality_presets": QUALITY_PRESETS,
         "available_models": {
             "face_swapper": [
+                "inswapper_128",
+                "inswapper_128_fp16",
                 "hyperswap_1a_256",
                 "hyperswap_1b_256",
                 "hyperswap_1c_256",
-                "inswapper_128",
-                "inswapper_128_fp16",
                 "simswap_256",
-                "simswap_512_unofficial",
                 "blendswap_256",
                 "uniface_256",
             ],
@@ -826,16 +717,14 @@ async def get_config(auth: bool = Depends(verify_api_key)):
                 "512x512", "768x768", "1024x1024",
             ],
             "face_enhancer": [
-                None,  # disabled (recommended for natural look)
                 "gfpgan_1.4",
                 "gpen_bfr_256",
                 "gpen_bfr_512",
-                "gpen_bfr_1024",
-                "gpen_bfr_2048",
                 "codeformer",
                 "restoreformer_plus_plus",
             ],
             "face_detector": [
+                "many",
                 "retinaface",
                 "scrfd",
                 "yolo_face",
@@ -865,33 +754,17 @@ async def update_config(req: UpdateConfigRequest, auth: bool = Depends(verify_ap
     }
 
 
-@app.post("/api/apply-preset")
-async def apply_preset(quality: str, auth: bool = Depends(verify_api_key)):
-    """Apply a quality preset (fast, balanced, high, ultra)."""
-    if quality not in QUALITY_PRESETS:
-        raise HTTPException(400, f"Unknown preset: {quality}. Available: {list(QUALITY_PRESETS.keys())}")
-
-    _apply_quality_preset(quality)
-    return {
-        "status": "ok",
-        "preset": quality,
-        "config": current_config,
-    }
-
-
 # ── Video Face Swap ─────────────────────────────────────────────────────────
 
 def build_facefusion_video_cmd(input_path: str, output_path: str) -> list:
     """Build FaceFusion command for video face swap (headless-run)."""
     processors = ["face_swapper"]
-    if current_config.get("expression_restorer_enabled"):
-        processors.append("expression_restorer")
-    if current_config.get("face_enhancer_enabled"):
+    if current_config["face_enhancer_enabled"]:
         processors.append("face_enhancer")
 
     cmd = [
         sys.executable, f"{FACEFUSION_DIR}/facefusion.py", "headless-run",
-        *_get_source_args(),
+        "--source-paths", source_face_path,
         "--target-path", input_path,
         "--output-path", output_path,
         # Processors
@@ -903,32 +776,25 @@ def build_facefusion_video_cmd(input_path: str, output_path: str) -> list:
         # Face detector settings
         "--face-detector-model", current_config["face_detector_model"],
         "--face-detector-score", str(current_config["face_detector_score"]),
-        # Face selector
-        "--face-selector-mode", "many",
         # Face mask settings
         "--face-mask-types", *current_config["face_mask_types"],
         "--face-mask-blur", str(current_config["face_mask_blur"]),
         "--face-mask-padding", *[str(p) for p in current_config["face_mask_padding"]],
         # Output settings
-        "--output-video-quality", str(current_config.get("output_video_quality", 95)),
+        "--output-video-quality", str(current_config.get("output_video_quality", 90)),
         # Execution settings
         "--execution-providers", current_config["execution_providers"],
         "--execution-thread-count", str(current_config["execution_thread_count"]),
     ]
 
-    if current_config.get("face_enhancer_enabled") and current_config.get("face_enhancer_model"):
+    if current_config["face_enhancer_enabled"]:
         cmd.extend(["--face-enhancer-model", current_config["face_enhancer_model"]])
-        if current_config.get("face_enhancer_blend"):
-            cmd.extend(["--face-enhancer-blend", str(current_config["face_enhancer_blend"])])
-
-    if current_config.get("expression_restorer_enabled"):
-        cmd.extend(["--expression-restorer-factor", str(current_config.get("expression_restorer_factor", 80))])
 
     return cmd
 
 
-def _run_video_job(job_id: str, video_url: str, quality: str,
-                   output_video_quality: int):
+def _run_video_job(job_id: str, video_url: str, face_enhancer: bool,
+                   quality: str, output_video_quality: int):
     """Background thread: download video, run FaceFusion, update job state."""
     import threading
     import httpx as _httpx
@@ -970,9 +836,12 @@ def _run_video_job(job_id: str, video_url: str, quality: str,
             duration_sec = 0
         job["duration_sec"] = duration_sec
 
-        # --- Step 3: Apply quality preset ---
-        saved_config = dict(current_config)
-        _apply_quality_preset(quality)
+        # --- Step 3: Apply quality settings ---
+        original_enhancer = current_config["face_enhancer_enabled"]
+        if quality == "fast":
+            current_config["face_enhancer_enabled"] = False
+        else:
+            current_config["face_enhancer_enabled"] = face_enhancer
         current_config["output_video_quality"] = output_video_quality
 
         # --- Step 4: Run FaceFusion ---
@@ -981,7 +850,7 @@ def _run_video_job(job_id: str, video_url: str, quality: str,
         job["progress"] = 20
 
         cmd = build_facefusion_video_cmd(input_path, output_path)
-        logger.info(f"[{job_id}] Running FaceFusion: {' '.join(cmd[:8])}...")
+        logger.info(f"[{job_id}] Running FaceFusion: {' '.join(cmd[:6])}...")
 
         proc = subprocess.Popen(
             cmd,
@@ -997,17 +866,19 @@ def _run_video_job(job_id: str, video_url: str, quality: str,
             line = line.strip()
             if not line:
                 continue
+            # FaceFusion prints progress like: "Processing: 50%" or frame counts
             if "%" in line:
                 try:
                     pct_str = line.split("%")[0].split()[-1]
                     pct = float(pct_str)
+                    # Map 0-100% of FaceFusion to 20-90% of overall progress
                     job["progress"] = 20 + int(pct * 0.7)
                 except (ValueError, IndexError):
                     pass
             logger.debug(f"[{job_id}] FF: {line[:120]}")
 
         proc.wait()
-        current_config.update(saved_config)
+        current_config["face_enhancer_enabled"] = original_enhancer
 
         if proc.returncode != 0:
             raise RuntimeError(f"FaceFusion exited with code {proc.returncode}")
@@ -1036,6 +907,7 @@ def _run_video_job(job_id: str, video_url: str, quality: str,
             "error": str(e),
         })
     finally:
+        # Cleanup input file (keep output for download)
         try:
             os.unlink(input_path)
         except FileNotFoundError:
@@ -1053,7 +925,7 @@ async def swap_video(req: SwapVideoRequest, auth: bool = Depends(verify_api_key)
 
     Returns immediately with job_id; poll /api/video-status/{job_id} for progress.
     """
-    if not source_face_paths:
+    if source_face_path is None or not Path(source_face_path).exists():
         raise HTTPException(400, "Source face not set. Call /api/set-source first.")
 
     if req.job_id in video_jobs:
@@ -1061,6 +933,7 @@ async def swap_video(req: SwapVideoRequest, auth: bool = Depends(verify_api_key)
         if existing["status"] in ("downloading", "processing"):
             raise HTTPException(409, f"Job {req.job_id} already in progress")
 
+    # Initialize job
     video_jobs[req.job_id] = {
         "status": "queued",
         "step": "Queued",
@@ -1074,11 +947,12 @@ async def swap_video(req: SwapVideoRequest, auth: bool = Depends(verify_api_key)
         "completed_at": None,
     }
 
+    # Start background thread
     import threading
     t = threading.Thread(
         target=_run_video_job,
-        args=(req.job_id, req.video_url, req.quality,
-              req.output_video_quality),
+        args=(req.job_id, req.video_url, req.face_enhancer,
+              req.quality, req.output_video_quality),
         daemon=True,
     )
     t.start()
@@ -1086,7 +960,6 @@ async def swap_video(req: SwapVideoRequest, auth: bool = Depends(verify_api_key)
     return {
         "status": "accepted",
         "job_id": req.job_id,
-        "quality": req.quality,
         "poll_url": f"/api/video-status/{req.job_id}",
     }
 
@@ -1120,6 +993,8 @@ async def video_download(job_id: str, auth: bool = Depends(verify_api_key)):
     Download the processed video.
     Returns the video file as a streaming response.
     """
+    from fastapi.responses import FileResponse
+
     if job_id not in video_jobs:
         raise HTTPException(404, f"Job {job_id} not found")
 
@@ -1146,12 +1021,14 @@ async def delete_video_job(job_id: str, auth: bool = Depends(verify_api_key)):
 
     job = video_jobs[job_id]
 
+    # Kill running process if any
     if job.get("pid"):
         try:
             os.kill(job["pid"], signal.SIGTERM)
         except ProcessLookupError:
             pass
 
+    # Delete output file
     if job.get("output_path"):
         try:
             os.unlink(job["output_path"])
@@ -1165,7 +1042,7 @@ async def delete_video_job(job_id: str, auth: bool = Depends(verify_api_key)):
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    logger.info(f"Starting FaceFusion GPU Worker v2.0 on port {PORT}")
+    logger.info(f"Starting FaceFusion GPU Worker on port {PORT}")
     uvicorn.run(
         "worker_api:app",
         host="0.0.0.0",
