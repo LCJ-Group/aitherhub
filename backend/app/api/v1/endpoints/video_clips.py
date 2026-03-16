@@ -116,8 +116,8 @@ async def request_clip_generation(
                     }
             # If failed or stuck, create a new one
 
-        # Verify video belongs to user
-        video_sql = text("SELECT id, user_id, original_filename FROM videos WHERE id = :video_id")
+        # Verify video belongs to user (also fetch compressed_blob_url for faster clip generation)
+        video_sql = text("SELECT id, user_id, original_filename, compressed_blob_url FROM videos WHERE id = :video_id")
         vres = await db.execute(video_sql, {"video_id": video_id})
         video_row = vres.fetchone()
 
@@ -136,13 +136,31 @@ async def request_clip_generation(
             raise HTTPException(status_code=400, detail="User email not found")
 
         # Generate download SAS URL for source video
-        from app.services.storage_service import generate_download_sas
-        download_url, _ = await generate_download_sas(
-            email=email,
-            video_id=video_id,
-            filename=video_row.original_filename,
-            expires_in_minutes=1440,
-        )
+        # Prefer compressed version (1080p, ~1-2GB) over original (up to 13GB)
+        # to dramatically speed up clip generation for long videos
+        from app.services.storage_service import generate_download_sas, generate_read_sas_from_url
+        download_url = None
+        compressed_blob_url = getattr(video_row, 'compressed_blob_url', None)
+        if compressed_blob_url:
+            try:
+                # compressed_blob_url is a relative path like "email/vid_id/vid_id_preview.mp4"
+                # Build full blob URL and generate SAS
+                from app.services.storage_service import ACCOUNT_NAME, CONTAINER_NAME
+                full_compressed_url = f"https://{ACCOUNT_NAME}.blob.core.windows.net/{CONTAINER_NAME}/{compressed_blob_url}"
+                sas_url = generate_read_sas_from_url(full_compressed_url)
+                if sas_url:
+                    download_url = sas_url
+                    logger.info(f"Using compressed video for clip generation: {compressed_blob_url[:80]}")
+            except Exception as e:
+                logger.warning(f"Failed to generate SAS for compressed video, falling back to original: {e}")
+
+        if not download_url:
+            download_url, _ = await generate_download_sas(
+                email=email,
+                video_id=video_id,
+                filename=video_row.original_filename,
+                expires_in_minutes=1440,
+            )
 
         # Create clip record with job_payload for worker DB fallback
         clip_id = str(uuid_module.uuid4())

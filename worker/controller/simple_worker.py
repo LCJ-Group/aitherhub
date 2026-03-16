@@ -568,8 +568,9 @@ def process_live_capture_job(payload: dict):
 # Must match shared/config WORKER_VIDEO_TIMEOUT (24h for 9h+ recordings)
 VIDEO_PROCESS_TIMEOUT = int(os.getenv("WORKER_VIDEO_TIMEOUT", str(1440 * 60)))
 
-# Timeout for clip generation subprocess (10 minutes)
-CLIP_PROCESS_TIMEOUT = int(os.getenv("WORKER_CLIP_TIMEOUT", str(10 * 60)))
+# Timeout for clip generation subprocess (15 minutes)
+# Increased from 10min: direct URL cut is fast, but fallback full download needs more time
+CLIP_PROCESS_TIMEOUT = int(os.getenv("WORKER_CLIP_TIMEOUT", str(15 * 60)))
 
 
 def process_clip_job(payload: dict):

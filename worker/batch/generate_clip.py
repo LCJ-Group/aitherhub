@@ -1748,34 +1748,93 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
     logger.info(f"Work directory: {work_dir}")
 
     try:
-        # 1. Download source video
-        source_path = os.path.join(work_dir, "source.mp4")
-        download_video(blob_url, source_path)
+        # 1. Download ONLY the needed segment (not the entire video)
+        # Use ffmpeg -ss with URL to avoid downloading multi-GB files
+        # This is critical for 2h+ videos where full download exceeds timeout
+        update_clip_progress(clip_id, 10, "downloading")
 
-        if not os.path.exists(source_path) or os.path.getsize(source_path) == 0:
-            raise RuntimeError("Failed to download source video")
+        segment_path = os.path.join(work_dir, "segment.mp4")
+        source_path = None  # May be set if full download fallback is needed
+
+        # Try direct URL cut first (downloads only the needed portion)
+        direct_cut_ok = False
+        # Add margin for speech boundary adjustment
+        margin = 5.0  # seconds extra on each side
+        safe_start = max(0.0, time_start - margin)
+        safe_end = time_end + margin
+        safe_duration = safe_end - safe_start
+
+        logger.info(f"[DIRECT_CUT] Attempting ffmpeg cut from URL (range={safe_start:.1f}-{safe_end:.1f}s)")
+        wider_segment_path = os.path.join(work_dir, "wider_segment.mp4")
+        cmd_direct = [
+            FFMPEG_BIN, "-y",
+            "-ss", f"{safe_start:.3f}",
+            "-i", blob_url,
+            "-t", f"{safe_duration:.3f}",
+            "-c", "copy",
+            "-movflags", "+faststart",
+            "-avoid_negative_ts", "make_zero",
+            wider_segment_path,
+        ]
+        try:
+            result = subprocess.run(cmd_direct, capture_output=True, text=True, timeout=300)
+            if result.returncode == 0 and os.path.exists(wider_segment_path) and os.path.getsize(wider_segment_path) > 0:
+                actual_dur = _get_video_duration_sec(wider_segment_path)
+                if actual_dur and actual_dur > 1.0:
+                    direct_cut_ok = True
+                    source_path = wider_segment_path
+                    # Adjust time references: now relative to wider_segment start
+                    time_start_local = time_start - safe_start
+                    time_end_local = time_end - safe_start
+                    logger.info(f"[DIRECT_CUT] Success! Downloaded {os.path.getsize(wider_segment_path) / 1024 / 1024:.1f}MB "
+                                f"(duration={actual_dur:.1f}s) instead of full video")
+                else:
+                    logger.warning(f"[DIRECT_CUT] Output too short ({actual_dur}s), falling back to full download")
+            else:
+                logger.warning(f"[DIRECT_CUT] Failed (rc={result.returncode}), falling back to full download")
+                if result.stderr:
+                    logger.warning(f"[DIRECT_CUT] stderr: {result.stderr[-300:]}")
+        except subprocess.TimeoutExpired:
+            logger.warning("[DIRECT_CUT] Timed out after 300s, falling back to full download")
+        except Exception as e:
+            logger.warning(f"[DIRECT_CUT] Error: {e}, falling back to full download")
+
+        if not direct_cut_ok:
+            # Fallback: download entire video (original behavior)
+            logger.info("[FALLBACK] Downloading full video...")
+            source_path = os.path.join(work_dir, "source.mp4")
+            download_video(blob_url, source_path)
+            if not os.path.exists(source_path) or os.path.getsize(source_path) == 0:
+                raise RuntimeError("Failed to download source video")
+            time_start_local = time_start
+            time_end_local = time_end
 
         update_clip_progress(clip_id, 15, "speech_boundary")
 
         # 1.5. Speech-Aware Cut: adjust boundaries to avoid mid-sentence cuts
         logger.info("[SPEECH_CUT] Adjusting clip boundaries to speech boundaries...")
         adj_start, adj_end = adjust_cut_to_speech_boundary(
-            source_path, time_start, time_end, search_window=3.0
+            source_path, time_start_local, time_end_local, search_window=3.0
         )
-        if (adj_start, adj_end) != (time_start, time_end):
+        if (adj_start, adj_end) != (time_start_local, time_end_local):
             logger.info(
-                f"[SPEECH_CUT] Boundaries adjusted: {time_start:.2f}-{time_end:.2f} "
+                f"[SPEECH_CUT] Boundaries adjusted: {time_start_local:.2f}-{time_end_local:.2f} "
                 f"→ {adj_start:.2f}-{adj_end:.2f}"
             )
-            time_start, time_end = adj_start, adj_end
+            time_start_local, time_end_local = adj_start, adj_end
 
         update_clip_progress(clip_id, 20, "cutting")
 
-        # 2. Cut segment
-        segment_path = os.path.join(work_dir, "segment.mp4")
-        logger.info("Cutting segment...")
-        if not cut_segment(source_path, segment_path, time_start, time_end):
-            raise RuntimeError("Failed to cut segment")
+        # 2. Cut exact segment from source (or wider segment)
+        if direct_cut_ok:
+            # Re-cut from wider segment to get exact boundaries after speech adjustment
+            logger.info("Cutting exact segment from wider segment...")
+            if not cut_segment(source_path, segment_path, time_start_local, time_end_local):
+                raise RuntimeError("Failed to cut segment from wider segment")
+        else:
+            logger.info("Cutting segment from full source...")
+            if not cut_segment(source_path, segment_path, time_start_local, time_end_local):
+                raise RuntimeError("Failed to cut segment")
 
         update_clip_progress(clip_id, 30, "person_detection")
 
