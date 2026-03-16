@@ -981,32 +981,32 @@ async def transcribe_clip(
 # ASS subtitle style presets (matching frontend SUBTITLE_PRESETS)
 _ASS_STYLES = {
     'simple': {
-        'fontsize': 20, 'bold': 1, 'primary_color': '&H00FFFFFF',
-        'outline_color': '&H00000000', 'outline': 0, 'shadow': 3,
+        'fontsize': 48, 'bold': 1, 'primary_color': '&H00FFFFFF',
+        'outline_color': '&H00000000', 'outline': 2, 'shadow': 3,
         'border_style': 1, 'back_color': '&H00000000',
     },
     'box': {
-        'fontsize': 20, 'bold': 1, 'primary_color': '&H00FFFFFF',
+        'fontsize': 48, 'bold': 1, 'primary_color': '&H00FFFFFF',
         'outline_color': '&H00000000', 'outline': 0, 'shadow': 0,
         'border_style': 3, 'back_color': '&HCC000000',
     },
     'outline': {
-        'fontsize': 22, 'bold': 1, 'primary_color': '&H00FFFFFF',
-        'outline_color': '&H00000000', 'outline': 3, 'shadow': 0,
+        'fontsize': 50, 'bold': 1, 'primary_color': '&H00FFFFFF',
+        'outline_color': '&H00000000', 'outline': 4, 'shadow': 0,
         'border_style': 1, 'back_color': '&H00000000',
     },
     'pop': {
-        'fontsize': 24, 'bold': 1, 'primary_color': '&H0035E1FF',
-        'outline_color': '&H00356BFF', 'outline': 2, 'shadow': 3,
+        'fontsize': 54, 'bold': 1, 'primary_color': '&H0035E1FF',
+        'outline_color': '&H00356BFF', 'outline': 3, 'shadow': 3,
         'border_style': 1, 'back_color': '&H00000000',
     },
     'gradient': {
-        'fontsize': 20, 'bold': 1, 'primary_color': '&H00FFFFFF',
+        'fontsize': 48, 'bold': 1, 'primary_color': '&H00FFFFFF',
         'outline_color': '&H00000000', 'outline': 0, 'shadow': 0,
         'border_style': 3, 'back_color': '&HAA8B5CF6',
     },
     'karaoke': {
-        'fontsize': 22, 'bold': 1, 'primary_color': '&H8AFFFFFF',
+        'fontsize': 50, 'bold': 1, 'primary_color': '&H8AFFFFFF',
         'outline_color': '&H00000000', 'outline': 0, 'shadow': 0,
         'border_style': 3, 'back_color': '&HB3000000',
         'secondary_color': '&H0035E1FF',  # karaoke highlight color
@@ -1185,54 +1185,40 @@ async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, s
         file_size = os.path.getsize(video_path)
         logger.info(f"[export-job {job_id}] Downloaded: {file_size/1024/1024:.1f} MB")
 
-        # ── Step 2: Generate SRT subtitle file ──
+        # ── Step 2: Generate ASS subtitle file ──
         _update_job(job_id, status="encoding")
-        srt_path = os.path.join(tmp_dir, "subtitles.srt")
-        srt_content = _generate_srt_content(captions, time_start)
-        with open(srt_path, "w", encoding="utf-8") as f:
-            f.write(srt_content)
-        logger.info(f"[export-job {job_id}] Generated SRT with {len(captions)} captions")
+
+        # Normalize position_y: if value is 0-1 (ratio), convert to 0-100 (percent)
+        pos_y_pct = position_y * 100 if position_y <= 1.0 else position_y
+
+        ass_path = os.path.join(tmp_dir, "subtitles.ass")
+        ass_content = _generate_ass_content(captions, style, position_x, pos_y_pct, time_start)
+        with open(ass_path, "w", encoding="utf-8") as f:
+            f.write(ass_content)
+        logger.info(f"[export-job {job_id}] Generated ASS with {len(captions)} captions, style={style}, pos_y={pos_y_pct}")
+        logger.info(f"[export-job {job_id}] ASS content preview: {ass_content[:300]}")
 
         # ── Step 3: Burn subtitles with ffmpeg ──
         output_path = os.path.join(tmp_dir, "output_subtitled.mp4")
-        s = _ASS_STYLES.get(style, _ASS_STYLES['box'])
 
-        # Build subtitle filter string
-        srt_escaped = srt_path.replace('\\', '/').replace(':', '\\:')
-        # Use subtitles filter with force_style for styling
-        font_size = s.get('fontsize', 22)
-        bold = s.get('bold', 1)
-        # Convert ASS color (&HAABBGGRR) to ffmpeg format
-        primary = s.get('primary_color', '&H00FFFFFF')
-        outline_c = s.get('outline_color', '&H00000000')
-        back_c = s.get('back_color', '&H80000000')
-        outline_w = s.get('outline', 2)
-        border_st = s.get('border_style', 1)
-        shadow_d = s.get('shadow', 0)
+        # Build subtitle filter using ASS file directly (more reliable than SRT+force_style)
+        ass_escaped = ass_path.replace('\\', '/').replace(':', '\\:')
 
-        # Determine alignment from position_y
-        if position_y < 33:
-            alignment = 8
-        elif position_y < 66:
-            alignment = 5
-        else:
-            alignment = 2
+        # Check available fonts on the system
+        try:
+            fc_proc = await asyncio.create_subprocess_exec(
+                "fc-list", ":lang=ja",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            fc_out, _ = await asyncio.wait_for(fc_proc.communicate(), timeout=10)
+            font_list = fc_out.decode(errors='replace')[:500]
+            logger.info(f"[export-job {job_id}] Available JP fonts: {font_list}")
+        except Exception as font_err:
+            logger.warning(f"[export-job {job_id}] Could not list fonts: {font_err}")
 
-        force_style = (
-            f"FontName=Noto Sans CJK JP,"
-            f"FontSize={font_size},"
-            f"Bold={bold},"
-            f"PrimaryColour={primary},"
-            f"OutlineColour={outline_c},"
-            f"BackColour={back_c},"
-            f"Outline={outline_w},"
-            f"Shadow={shadow_d},"
-            f"BorderStyle={border_st},"
-            f"Alignment={alignment},"
-            f"MarginV=30"
-        )
-
-        vf = f"subtitles={srt_escaped}:force_style='{force_style}'"
+        # Use ass filter (not subtitles) for direct ASS rendering
+        vf = f"ass={ass_escaped}"
 
         cmd = [
             "ffmpeg", "-y",
@@ -1244,7 +1230,7 @@ async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, s
             "-movflags", "+faststart",
             output_path,
         ]
-        logger.info(f"[export-job {job_id}] Running ffmpeg: {' '.join(cmd[:6])}...")
+        logger.info(f"[export-job {job_id}] Running ffmpeg cmd: {' '.join(cmd)}")
 
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -1263,14 +1249,17 @@ async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, s
             _update_job(job_id, status="failed", error=f"Encoding timed out ({FFMPEG_TIMEOUT}s)")
             return
 
+        ffmpeg_stderr = stderr.decode(errors='replace')
+        logger.info(f"[export-job {job_id}] ffmpeg stderr (last 500): {ffmpeg_stderr[-500:]}")
+
         if proc.returncode != 0:
-            err_msg = stderr.decode(errors='replace')[:500]
+            err_msg = ffmpeg_stderr[:500]
             logger.error(f"[export-job {job_id}] ffmpeg failed (rc={proc.returncode}): {err_msg}")
             _update_job(job_id, status="failed", error=f"ffmpeg error: {err_msg[:200]}")
             return
 
         output_size = os.path.getsize(output_path)
-        logger.info(f"[export-job {job_id}] Encoded: {output_size/1024/1024:.1f} MB")
+        logger.info(f"[export-job {job_id}] Encoded: {output_size/1024/1024:.1f} MB (source was {file_size/1024/1024:.1f} MB)")
 
         # ── Step 4: Upload to Azure Blob ──
         _update_job(job_id, status="uploading")
