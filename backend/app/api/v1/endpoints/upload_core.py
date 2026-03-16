@@ -167,38 +167,41 @@ async def upload_complete(
 @router.post("/batch-upload-complete", response_model=BatchUploadCompleteResponse)
 async def batch_upload_complete(
     payload: BatchUploadCompleteRequest,
-    db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     """
     Handle batch upload completion – multiple videos sharing the same Excel files.
 
-    Each video is processed through the same UploadPipelineService to guarantee
-    consistent pipeline ordering.
+    Each video gets its own independent DB session to prevent cascade failures:
+    if one video's session encounters an error (e.g. commit/rollback), it does
+    NOT affect the remaining videos in the batch.
     """
+    from app.core.db import AsyncSessionLocal
+
     if current_user["email"] != payload.email:
         raise HTTPException(status_code=403, detail="Email does not match current user")
-
-    video_repo = VideoRepository(lambda: db)
-    pipeline = UploadPipelineService(video_repository=video_repo)
 
     video_ids = []
     failed = []
     for v in payload.videos:
         try:
-            result = await pipeline.complete_upload(
-                user_id=current_user["id"],
-                email=payload.email,
-                video_id=v.video_id,
-                original_filename=v.filename,
-                db=db,
-                upload_id=v.upload_id,
-                upload_type="clean_video",
-                excel_product_blob_url=payload.excel_product_blob_url,
-                excel_trend_blob_url=payload.excel_trend_blob_url,
-                time_offset_seconds=v.time_offset_seconds or 0,
-            )
-            video_ids.append(result.video_id)
+            # Each video gets its own DB session to isolate failures
+            async with AsyncSessionLocal() as video_db:
+                video_repo = VideoRepository(lambda _db=video_db: _db)
+                pipeline = UploadPipelineService(video_repository=video_repo)
+                result = await pipeline.complete_upload(
+                    user_id=current_user["id"],
+                    email=payload.email,
+                    video_id=v.video_id,
+                    original_filename=v.filename,
+                    db=video_db,
+                    upload_id=v.upload_id,
+                    upload_type="clean_video",
+                    excel_product_blob_url=payload.excel_product_blob_url,
+                    excel_trend_blob_url=payload.excel_trend_blob_url,
+                    time_offset_seconds=v.time_offset_seconds or 0,
+                )
+                video_ids.append(result.video_id)
         except Exception as exc:
             logger.exception(
                 f"[batch_upload_complete] Failed for video {v.video_id}: {exc}"
@@ -223,6 +226,7 @@ async def batch_upload_complete(
         video_ids=video_ids,
         status="uploaded",
         message=msg,
+        failed=failed,
     )
 
 

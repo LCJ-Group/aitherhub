@@ -196,6 +196,7 @@ class BatchUploadCompleteResponse(BaseModel):
     video_ids: List[str]
     status: str
     message: str
+    failed: List[dict] = []  # [{"video_id": "...", "error": "..."}]
 
 
 class LiveCaptureRequest(BaseModel):

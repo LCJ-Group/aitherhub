@@ -164,3 +164,4 @@ class TestUploadSchemaContract:
         assert "video_ids" in fields
         assert "status" in fields
         assert "message" in fields
+        assert "failed" in fields
