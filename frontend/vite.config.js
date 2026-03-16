@@ -16,7 +16,7 @@ export default defineConfig({
     outDir: "dist",
   },
   server: {
-    allowedHosts: [".ngrok-free.app"],
+    allowedHosts: [".ngrok-free.app", ".manus.computer"],
     proxy: {
       "/api": {
         target: "http://localhost:8000",
