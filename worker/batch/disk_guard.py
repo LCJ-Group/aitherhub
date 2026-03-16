@@ -32,31 +32,31 @@ _TEMP_DIRS = {
     "uploadedvideo": {
         "description": "Downloaded source videos",
         "pattern": "files",          # contains individual files
-        "max_age_hours": 6,
+        "max_age_hours": 2,           # reduced from 6h for batch upload scenarios
     },
     "/tmp/aitherhub": {
         "description": "Temp working directory for pipeline jobs",
         "pattern": "subdirs",
         "heavy_subdirs": None,       # remove entire subdir
-        "max_age_hours": 3,
+        "max_age_hours": 1,           # reduced from 3h
     },
     "output": {
         "description": "Per-video output artifacts (frames, audio, cache)",
         "pattern": "subdirs",        # contains {video_id}/ subdirectories
         "heavy_subdirs": ["frames", "audio", "audio_text", "cache"],
-        "max_age_hours": 6,
+        "max_age_hours": 2,           # reduced from 6h for batch upload scenarios
     },
     "splitvideo": {
         "description": "Phase-split video segments",
         "pattern": "subdirs",
         "heavy_subdirs": None,       # remove entire subdir
-        "max_age_hours": 6,
+        "max_age_hours": 2,           # reduced from 6h
     },
     "artifacts": {
         "description": "Live-capture temporary outputs",
         "pattern": "subdirs",
         "heavy_subdirs": None,
-        "max_age_hours": 12,
+        "max_age_hours": 4,           # reduced from 12h
     },
 }
 

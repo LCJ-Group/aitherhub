@@ -822,6 +822,8 @@ def main():
         # =========================
         # STEP 1 – PHASE DETECTION (YOLO)
         # =========================
+        # Disk check before heavy GPU/CPU step
+        ensure_disk_space(min_free_gb=3.0, current_video_id=video_id)
         if start_step <= 1:
             _current_step_name = VideoStatus.STEP_1_DETECT_PHASES
             update_video_status_sync(video_id, VideoStatus.STEP_1_DETECT_PHASES)
@@ -894,6 +896,8 @@ def main():
         # =========================
         # STEP 2 – PHASE METRICS
         # =========================
+        # Disk check before metrics extraction
+        ensure_disk_space(min_free_gb=2.0, current_video_id=video_id)
         if start_step <= 2:
             _current_step_name = VideoStatus.STEP_2_EXTRACT_METRICS
             update_video_status_sync(video_id, VideoStatus.STEP_2_EXTRACT_METRICS)

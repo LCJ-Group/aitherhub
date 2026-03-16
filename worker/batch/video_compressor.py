@@ -330,6 +330,37 @@ def compress_to_1080p(
         original_size / (1024 ** 3),
     )
 
+    # --- Disk space pre-check ---
+    # Compressed output is typically 30-70% of original, but we need space
+    # for the output file while the original still exists.
+    # Require at least 1.5x original size OR 3GB, whichever is larger.
+    try:
+        disk = shutil.disk_usage(os.path.dirname(input_path) or ".")
+        free_gb = disk.free / (1024 ** 3)
+        needed_gb = max(original_size * 1.5 / (1024 ** 3), 3.0)
+        logger.info("[COMPRESS] Disk free: %.1f GB, estimated need: %.1f GB", free_gb, needed_gb)
+        if free_gb < needed_gb:
+            logger.error(
+                "[COMPRESS] Insufficient disk space: %.1f GB free, need %.1f GB. "
+                "Attempting cleanup before compression...",
+                free_gb, needed_gb,
+            )
+            # Try cleanup
+            try:
+                from disk_guard import ensure_disk_space
+                ensure_disk_space(min_free_gb=needed_gb)
+            except Exception as cleanup_err:
+                logger.error("[COMPRESS] Cleanup failed: %s", cleanup_err)
+                return None
+            # Re-check after cleanup
+            disk = shutil.disk_usage(os.path.dirname(input_path) or ".")
+            free_gb = disk.free / (1024 ** 3)
+            if free_gb < needed_gb:
+                logger.error("[COMPRESS] Still insufficient after cleanup: %.1f GB free", free_gb)
+                return None
+    except Exception as disk_err:
+        logger.warning("[COMPRESS] Disk check failed (continuing anyway): %s", disk_err)
+
     # Build FFmpeg command
     # -vf scale=-2:1080 → scale to 1080p height, width auto (divisible by 2)
     # If video is already ≤ 1080p, scale filter will be a no-op effectively,

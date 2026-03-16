@@ -978,7 +978,7 @@ def acquire_lock():
 
 
 # Disk cleanup interval: run every 30 minutes
-DISK_CLEANUP_INTERVAL = 30 * 60  # 1800 seconds
+DISK_CLEANUP_INTERVAL = 5 * 60  # 300 seconds (was 30min, reduced to handle batch uploads)
 _last_disk_cleanup = 0
 
 
