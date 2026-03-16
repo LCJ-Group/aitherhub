@@ -491,10 +491,14 @@ class AutoVideoPipelineService:
                 if sas_url:
                     fs_video_url = sas_url
 
+            # Convert quality string to FaceSwapQuality enum
+            from app.services.face_swap_service import FaceSwapQuality
+            fs_quality = FaceSwapQuality(job["quality"]) if isinstance(job["quality"], str) else job["quality"]
+
             await self.face_swap.swap_video(
                 job_id=fs_job_id,
                 video_url=fs_video_url,
-                quality=job["quality"],
+                quality=fs_quality,
                 output_video_quality=95,
             )
 

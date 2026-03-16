@@ -223,7 +223,7 @@ class FaceSwapService:
         return await self._request("POST", "/api/start-stream", json={
             "input_rtmp": input_rtmp,
             "output_rtmp": output_rtmp,
-            "quality": quality.value,
+            "quality": quality.value if hasattr(quality, 'value') else str(quality),
             "resolution": resolution,
             "fps": fps,
         })
@@ -249,10 +249,9 @@ class FaceSwapService:
         """
         return await self._request("POST", "/api/swap-frame", json={
             "image_base64": image_base64,
-            "quality": quality.value,
+            "quality": quality.value if hasattr(quality, 'value') else str(quality),
         })
-
-    # ── Video Face Swap ──────────────────────────────────────────────────
+    # ── Video Face Swapp ──────────────────────────────────────────────────
 
     async def swap_video(
         self,
@@ -268,7 +267,7 @@ class FaceSwapService:
         return await self._request("POST", "/api/swap-video", json={
             "job_id": job_id,
             "video_url": video_url,
-            "quality": quality.value,
+            "quality": quality.value if hasattr(quality, 'value') else str(quality),
             "output_video_quality": output_video_quality,
         })
 
@@ -296,4 +295,5 @@ class FaceSwapService:
 
     async def apply_preset(self, quality: FaceSwapQuality) -> Dict[str, Any]:
         """Apply a quality preset (fast/balanced/high/ultra)."""
-        return await self._request("POST", f"/api/apply-preset?quality={quality.value}")
+        q = quality.value if hasattr(quality, 'value') else str(quality)
+        return await self._request("POST", f"/api/apply-preset?quality={q}")
