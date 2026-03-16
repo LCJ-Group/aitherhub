@@ -1109,6 +1109,137 @@ def _generate_ass_content(captions: list, style: str, position_x: float, positio
     return ass
 
 
+# ─── Drawtext filter styles (matching frontend SUBTITLE_PRESETS) ─────────────
+_DRAWTEXT_STYLES = {
+    'simple': {
+        'fontsize': 48, 'fontcolor': 'white', 'borderw': 3,
+        'bordercolor': 'black', 'shadowx': 2, 'shadowy': 2,
+        'shadowcolor': 'black@0.5', 'box': 0,
+    },
+    'box': {
+        'fontsize': 48, 'fontcolor': 'white', 'borderw': 0,
+        'bordercolor': 'black', 'shadowx': 0, 'shadowy': 0,
+        'shadowcolor': 'black@0.0', 'box': 1,
+        'boxcolor': 'black@0.8', 'boxborderw': 12,
+    },
+    'outline': {
+        'fontsize': 50, 'fontcolor': 'white', 'borderw': 4,
+        'bordercolor': 'black', 'shadowx': 0, 'shadowy': 0,
+        'shadowcolor': 'black@0.0', 'box': 0,
+    },
+    'pop': {
+        'fontsize': 54, 'fontcolor': '#FFE135', 'borderw': 3,
+        'bordercolor': '#FF6B35', 'shadowx': 3, 'shadowy': 3,
+        'shadowcolor': 'black@0.5', 'box': 0,
+    },
+    'gradient': {
+        'fontsize': 48, 'fontcolor': 'white', 'borderw': 0,
+        'bordercolor': 'black', 'shadowx': 0, 'shadowy': 0,
+        'shadowcolor': 'black@0.0', 'box': 1,
+        'boxcolor': '#6B5CF8@0.67', 'boxborderw': 12,
+    },
+    'karaoke': {
+        'fontsize': 50, 'fontcolor': 'white@0.55', 'borderw': 0,
+        'bordercolor': 'black', 'shadowx': 0, 'shadowy': 0,
+        'shadowcolor': 'black@0.0', 'box': 1,
+        'boxcolor': 'black@0.7', 'boxborderw': 12,
+    },
+}
+
+
+def _build_drawtext_filter(captions: list, style: str, position_y: float, time_offset: float = 0) -> str:
+    """Build ffmpeg drawtext filter chain for subtitle burning.
+    
+    Uses drawtext filter (built-in to ffmpeg) instead of ass/subtitles filter
+    which requires libass and may not be available in all environments.
+    """
+    s = _DRAWTEXT_STYLES.get(style, _DRAWTEXT_STYLES['box'])
+    
+    # Find font file - try multiple common paths
+    fontfile = None
+    for p in [
+        '/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc',
+        '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
+        '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
+        '/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc',
+        '/usr/share/fonts/noto-cjk/NotoSansCJK-Bold.ttc',
+        '/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc',
+        '/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc',
+    ]:
+        if os.path.exists(p):
+            fontfile = p
+            break
+    
+    if not fontfile:
+        # Fallback: search for any Noto CJK font
+        import glob
+        noto_fonts = glob.glob('/usr/share/fonts/**/NotoSans*CJK*', recursive=True)
+        if noto_fonts:
+            fontfile = noto_fonts[0]
+        else:
+            # Last resort: use any available font
+            all_fonts = glob.glob('/usr/share/fonts/**/*.ttf', recursive=True) + \
+                       glob.glob('/usr/share/fonts/**/*.ttc', recursive=True)
+            fontfile = all_fonts[0] if all_fonts else '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
+    
+    logger.info(f"[drawtext] Using font: {fontfile}")
+    
+    # Calculate Y position based on position_y percentage
+    if position_y < 33:
+        y_expr = '50'  # top
+    elif position_y < 66:
+        y_expr = '(h-th)/2'  # middle
+    else:
+        y_expr = 'h-th-100'  # bottom
+    
+    filters = []
+    for cap in captions:
+        local_start = cap.start - time_offset if time_offset > 0 else cap.start
+        local_end = cap.end - time_offset if time_offset > 0 else cap.end
+        if local_start < 0:
+            local_start = 0
+        if local_end <= local_start:
+            continue
+        
+        # Escape text for drawtext filter
+        # In filter_complex_script, we need to escape: ' \ : and special chars
+        text = cap.text
+        text = text.replace('\\', '\\\\')
+        text = text.replace("'", "\u2019")  # Replace apostrophe with unicode right single quote
+        text = text.replace(':', '\\:')
+        text = text.replace('%', '%%')
+        text = text.replace('\n', ' ')
+        
+        # Build drawtext params
+        params = [
+            f"fontfile='{fontfile}'",
+            f"text='{text}'",
+            f"fontsize={s['fontsize']}",
+            f"fontcolor={s['fontcolor']}",
+            f"borderw={s['borderw']}",
+            f"bordercolor={s['bordercolor']}",
+            f"shadowx={s['shadowx']}",
+            f"shadowy={s['shadowy']}",
+            f"shadowcolor={s['shadowcolor']}",
+            f"x=(w-text_w)/2",
+            f"y={y_expr}",
+            f"enable='between(t,{local_start:.2f},{local_end:.2f})'",
+        ]
+        
+        # Add box background if needed
+        if s.get('box'):
+            params.append(f"box=1")
+            params.append(f"boxcolor={s.get('boxcolor', 'black@0.5')}")
+            params.append(f"boxborderw={s.get('boxborderw', 10)}")
+        
+        filters.append('drawtext=' + ':'.join(params))
+    
+    if not filters:
+        return 'null'  # no-op filter
+    
+    return '[0:v]' + ','.join(filters) + '[v]'
+
+
 # ─── File-based export job store (survives worker recycle) ────────────────────
 _EXPORT_JOB_DIR = os.path.join(tempfile.gettempdir(), "aitherhub_export_jobs")
 os.makedirs(_EXPORT_JOB_DIR, exist_ok=True)
@@ -1185,45 +1316,30 @@ async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, s
         file_size = os.path.getsize(video_path)
         logger.info(f"[export-job {job_id}] Downloaded: {file_size/1024/1024:.1f} MB")
 
-        # ── Step 2: Generate ASS subtitle file ──
+        # ── Step 2: Build drawtext filter chain ──
         _update_job(job_id, status="encoding")
 
         # Normalize position_y: if value is 0-1 (ratio), convert to 0-100 (percent)
         pos_y_pct = position_y * 100 if position_y <= 1.0 else position_y
 
-        ass_path = os.path.join(tmp_dir, "subtitles.ass")
-        ass_content = _generate_ass_content(captions, style, position_x, pos_y_pct, time_start)
-        with open(ass_path, "w", encoding="utf-8") as f:
-            f.write(ass_content)
-        logger.info(f"[export-job {job_id}] Generated ASS with {len(captions)} captions, style={style}, pos_y={pos_y_pct}")
-        logger.info(f"[export-job {job_id}] ASS content preview: {ass_content[:300]}")
-
-        # ── Step 3: Burn subtitles with ffmpeg ──
         output_path = os.path.join(tmp_dir, "output_subtitled.mp4")
 
-        # Build subtitle filter using ASS file directly (more reliable than SRT+force_style)
-        ass_escaped = ass_path.replace('\\', '/').replace(':', '\\:')
+        # ── Step 3: Burn subtitles with ffmpeg drawtext filter ──
+        # drawtext is a built-in ffmpeg filter that doesn't depend on libass
+        vf = _build_drawtext_filter(captions, style, pos_y_pct, time_start)
+        logger.info(f"[export-job {job_id}] Built drawtext filter with {len(captions)} captions, style={style}, pos_y={pos_y_pct}")
+        logger.info(f"[export-job {job_id}] Filter preview: {vf[:300]}")
 
-        # Check available fonts on the system
-        try:
-            fc_proc = await asyncio.create_subprocess_exec(
-                "fc-list", ":lang=ja",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            fc_out, _ = await asyncio.wait_for(fc_proc.communicate(), timeout=10)
-            font_list = fc_out.decode(errors='replace')[:500]
-            logger.info(f"[export-job {job_id}] Available JP fonts: {font_list}")
-        except Exception as font_err:
-            logger.warning(f"[export-job {job_id}] Could not list fonts: {font_err}")
-
-        # Use ass filter (not subtitles) for direct ASS rendering
-        vf = f"ass={ass_escaped}"
+        # Write filter to a file to avoid shell escaping issues
+        filter_path = os.path.join(tmp_dir, "filter.txt")
+        with open(filter_path, "w", encoding="utf-8") as f:
+            f.write(vf)
 
         cmd = [
             "ffmpeg", "-y",
             "-i", video_path,
-            "-vf", vf,
+            "-filter_complex_script", filter_path,
+            "-map", "[v]", "-map", "0:a?",
             "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
             "-threads", "2",
             "-c:a", "copy",
