@@ -926,8 +926,16 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                     onProgress: (st) => setStatus({ ok: true, msg: statusLabels[st] || `処理中 (${st})...` }),
                   });
                   if (res?.download_url) {
-                    window.open(res.download_url, '_blank');
-                    setStatus({ ok: true, msg: '字幕付きMP4のエクスポート完了！ダウンロードが開始されます。' });
+                    // Use <a> tag download to avoid popup blockers
+                    const a = document.createElement('a');
+                    a.href = res.download_url;
+                    a.download = `clip_phase${clip.phase_index || ''}_subtitled.mp4`;
+                    a.target = '_blank';
+                    a.rel = 'noopener noreferrer';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    setStatus({ ok: true, msg: '字幕付きMP4のダウンロードを開始しました！' });
                     setTimeout(() => setStatus(null), 5000);
                   } else {
                     setStatus({ ok: true, msg: 'エクスポート完了' });
