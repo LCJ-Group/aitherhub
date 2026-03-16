@@ -3,6 +3,7 @@ import MainLayout from './layouts/MainLayout'
 import AdminDashboard from './components/AdminDashboard'
 import LivePage from './components/LivePage'
 import FaceSwapPage from './components/FaceSwapPage'
+import AutoVideoPage from './components/AutoVideoPage'
 import PrivacyPolicy from './components/PrivacyPolicy'
 import { Toaster } from "./components/ui/toaster";
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
@@ -18,6 +19,7 @@ function App() {
         <Route path="/live/:sessionId" element={<LivePage />} />
         <Route path="/privacy-policy" element={<PrivacyPolicy />} />
         <Route path="/face-swap" element={<FaceSwapPage />} />
+        <Route path="/auto-video" element={<AutoVideoPage />} />
       </Routes>
       <Toaster />
     </BrowserRouter>
