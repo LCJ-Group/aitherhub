@@ -45,6 +45,116 @@ logger = logging.getLogger(__name__)
 
 
 # ──────────────────────────────────────────────
+# AitherHub "Sales Brain" — Aggregate top-performing patterns
+# ──────────────────────────────────────────────
+
+async def _fetch_sales_brain_context() -> str:
+    """
+    Fetch aggregated top-performing patterns from ALL analyzed videos.
+    This is the "sales brain" — accumulated knowledge of what sells.
+
+    Returns a formatted string for injection into GPT prompts.
+    """
+    try:
+        from app.core.db import AsyncSessionLocal
+        from sqlalchemy import text
+
+        async with AsyncSessionLocal() as db:
+            # Top-performing phases across ALL videos (by GMV + engagement)
+            top_phases = await db.execute(
+                text("""
+                    SELECT
+                        p.phase_description,
+                        p.sales_psychology_tags,
+                        vp.gmv, vp.orders, vp.cta_score,
+                        vp.product_names,
+                        p.delta_view, p.delta_like
+                    FROM phases p
+                    JOIN video_phases vp ON p.id = vp.phase_id
+                    WHERE p.deleted_at IS NULL
+                      AND (vp.gmv > 0 OR vp.cta_score > 3 OR p.delta_view > 50)
+                    ORDER BY
+                        (COALESCE(vp.gmv, 0) * 0.4
+                         + COALESCE(p.delta_view, 0) * 0.25
+                         + COALESCE(p.delta_like, 0) * 0.15
+                         + COALESCE(vp.cta_score, 0) * 0.20) DESC
+                    LIMIT 15
+                """)
+            )
+            top_rows = [dict(r._mapping) for r in top_phases]
+
+            # Top speech patterns from high-performing phases
+            top_speech = await db.execute(
+                text("""
+                    SELECT ss.text
+                    FROM speech_segments ss
+                    JOIN audio_chunks ac ON ss.audio_chunk_id = ac.id
+                    JOIN phases p ON p.video_id = ac.video_id
+                        AND ss.start_ms >= p.time_start * 1000
+                        AND ss.end_ms <= p.time_end * 1000
+                    JOIN video_phases vp ON p.id = vp.phase_id
+                    WHERE p.deleted_at IS NULL AND vp.gmv > 0
+                    ORDER BY vp.gmv DESC
+                    LIMIT 30
+                """)
+            )
+            speech_rows = [r._mapping["text"] for r in top_speech]
+
+            # Aggregate psychology tags frequency
+            tag_freq = {}
+            for row in top_rows:
+                tags = row.get("sales_psychology_tags", "")
+                if tags:
+                    for tag in str(tags).split(","):
+                        tag = tag.strip()
+                        if tag:
+                            tag_freq[tag] = tag_freq.get(tag, 0) + 1
+            sorted_tags = sorted(tag_freq.items(), key=lambda x: x[1], reverse=True)
+
+            # Build context string
+            parts = []
+            parts.append("### AitherHub Sales Brain — 過去の分析から学んだ売れるパターン")
+            parts.append("")
+
+            if sorted_tags:
+                parts.append("**効果的なセールス心理タグ（頻度順）:**")
+                for tag, count in sorted_tags[:10]:
+                    parts.append(f"  - {tag} (出現{count}回)")
+                parts.append("")
+
+            if top_rows:
+                parts.append("**トップパフォーマンスフェーズ（売上・エンゲージメント上位）:**")
+                for i, row in enumerate(top_rows[:8], 1):
+                    desc = row.get("phase_description", "")
+                    gmv = row.get("gmv", 0)
+                    cta = row.get("cta_score", 0)
+                    products = row.get("product_names", "")
+                    parts.append(
+                        f"  {i}. GMV={gmv} CTA={cta} 商品={products}\n"
+                        f"     {desc[:200]}"
+                    )
+                parts.append("")
+
+            if speech_rows:
+                parts.append("**売れた時の話し方の参考（実際の発話）:**")
+                for text_seg in speech_rows[:15]:
+                    if text_seg and len(text_seg) > 5:
+                        parts.append(f"  「{text_seg[:150]}」")
+                parts.append("")
+
+            context = "\n".join(parts)
+            logger.info(
+                f"Sales brain context loaded: {len(top_rows)} phases, "
+                f"{len(speech_rows)} speech segments, {len(sorted_tags)} tags"
+            )
+            return context
+
+    except Exception as e:
+        logger.warning(f"Failed to load sales brain context: {e}")
+        return "(AitherHub分析データは現在利用できません)"
+
+
+# ──────────────────────────────────────────────
 # Configuration
 # ──────────────────────────────────────────────
 
@@ -309,12 +419,15 @@ class AutoVideoPipelineService:
                 script = job["script_text"]
                 logger.info(f"[{job_id}] Using provided script: {len(script)} chars")
             else:
+                # Load AitherHub "sales brain" context
+                sales_brain = await _fetch_sales_brain_context()
                 script = await self._generate_script(
                     topic=job["topic"],
                     product_info=job.get("product_info"),
                     language=job["language"],
                     tone=job["tone"],
                     target_duration_sec=job.get("target_duration_sec") or video_duration,
+                    sales_brain_context=sales_brain,
                 )
 
             job["generated_script"] = script
@@ -492,6 +605,7 @@ class AutoVideoPipelineService:
         language: str,
         tone: str,
         target_duration_sec: float,
+        sales_brain_context: str = "",
     ) -> str:
         """
         Generate a livestream/video script using GPT.
@@ -528,6 +642,10 @@ class AutoVideoPipelineService:
         if product_info:
             product_context = f"\n\n## 商品情報\n{product_info}"
 
+        brain_context = ""
+        if sales_brain_context:
+            brain_context = f"\n\n{sales_brain_context}"
+
         prompt = f"""あなたはライブコマース・動画コンテンツの台本作成のプロフェッショナルです。
 以下のテーマについて、インフルエンサーが読み上げる動画台本を生成してください。
 
@@ -548,6 +666,7 @@ class AutoVideoPipelineService:
 - 台本テキストのみを出力してください（メタ情報やコメントは不要）
 - 虚偽の効能表現、薬事法に抵触する表現は避ける
 - 「こんにちは」で始めない（自然な導入を工夫する）
+{brain_context}
 """
 
         try:
