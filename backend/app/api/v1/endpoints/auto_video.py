@@ -279,6 +279,7 @@ async def auto_video_health():
         "pipeline": "ok",
         "face_swap_worker": "not_configured",
         "elevenlabs_tts": "not_configured",
+        "sync_lip_sync": "not_configured",
         "script_generator": "ok",  # GPT is always available
     }
 
@@ -298,5 +299,12 @@ async def auto_video_health():
         result["elevenlabs_voices"] = el_health.get("total_voices", 0)
     except Exception as e:
         result["elevenlabs_tts"] = f"error: {str(e)[:100]}"
+
+    # Check Sync.so lip sync
+    try:
+        sync_health = await service.sync_lip_sync.health_check()
+        result["sync_lip_sync"] = sync_health.get("status", "unknown")
+    except Exception as e:
+        result["sync_lip_sync"] = f"error: {str(e)[:100]}"
 
     return result

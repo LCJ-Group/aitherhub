@@ -24,7 +24,7 @@ import autoVideoService from "../base/services/autoVideoService";
 /**
  * AutoVideoPage - Fully automated video generation pipeline UI
  *
- * Pipeline: Script (GPT) → Voice (ElevenLabs) → Face Swap (FaceFusion) → Lip Sync → Video
+ * Pipeline: Script (GPT) → Face Swap (FaceFusion) → Lip Sync + TTS (Sync.so + ElevenLabs) → Video
  *
  * User inputs:
  *  1. Body double video (upload or URL)
@@ -278,10 +278,8 @@ export default function AutoVideoPage() {
   const statusLabels = {
     pending: "準備中...",
     generating_script: "台本を生成中 (GPT)...",
-    generating_voice: "音声を生成中 (ElevenLabs)...",
     face_swapping: "顔を合成中 (FaceFusion GPU)...",
-    merging: "動画と音声を結合中...",
-    lip_syncing: "リップシンク中 (ElevenLabs)...",
+    lip_syncing: "リップシンク + 音声合成中 (Sync.so)...",
     finalizing: "最終処理中...",
     completed: "完了",
     error: "エラー",
@@ -351,18 +349,13 @@ export default function AutoVideoPage() {
                 </div>
                 <span className="text-gray-600">→</span>
                 <div className="flex items-center gap-1.5">
-                  <Volume2 size={14} className="text-blue-400" />
-                  <span>音声生成</span>
-                </div>
-                <span className="text-gray-600">→</span>
-                <div className="flex items-center gap-1.5">
                   <Video size={14} className="text-green-400" />
                   <span>顔合成</span>
                 </div>
                 <span className="text-gray-600">→</span>
                 <div className="flex items-center gap-1.5">
                   <Mic size={14} className="text-orange-400" />
-                  <span>リップシンク</span>
+                  <span>リップシンク + 音声</span>
                 </div>
               </div>
             </div>
@@ -582,7 +575,7 @@ export default function AutoVideoPage() {
                   <div>
                     <p className="text-sm font-medium">リップシンク</p>
                     <p className="text-xs text-gray-500">
-                      音声に合わせて口の動きを同期（ElevenLabs Dubbing）
+                      音声に合わせて口の動きを同期（Sync.so + ElevenLabs TTS）
                     </p>
                   </div>
                   <button
@@ -699,15 +692,13 @@ export default function AutoVideoPage() {
 
                 {/* Pipeline steps */}
                 <div className="flex items-center gap-2 text-xs text-gray-500 mb-4">
-                  {["generating_script", "generating_voice", "face_swapping", "lip_syncing"].map(
+                  {["generating_script", "face_swapping", "lip_syncing"].map(
                     (step, i) => {
                       const currentStatus = jobStatus?.status;
                       const steps = [
                         "pending",
                         "generating_script",
-                        "generating_voice",
                         "face_swapping",
-                        "merging",
                         "lip_syncing",
                         "finalizing",
                         "completed",
@@ -729,7 +720,7 @@ export default function AutoVideoPage() {
                                 : "bg-gray-800 text-gray-600"
                             }`}
                           >
-                            {["台本", "音声", "顔合成", "リップシンク"][i]}
+                            {["台本", "顔合成", "リップシンク + 音声"][i]}
                           </span>
                         </div>
                       );

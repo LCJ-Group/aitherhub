@@ -2,12 +2,11 @@
 Auto Video Pipeline Service for AitherHub
 
 Fully automated video generation pipeline:
-  1. Generate script from topic/product using GPT
-  2. Generate voice audio from script using ElevenLabs TTS
+  1. Download input video
+  2. Generate script from topic/product using GPT
   3. Face swap body double video using FaceFusion GPU Worker
-  4. Merge face-swapped video + TTS audio
-  5. Apply lip sync using ElevenLabs Dubbing API
-  6. Output final video
+  4. Lip sync + TTS via Sync.so (ElevenLabs voice integrated)
+  5. Upload to Azure Blob Storage & finalize
 
 This enables creating influencer-style videos automatically:
   - User provides: topic/product + body double video
@@ -18,8 +17,8 @@ Architecture:
   │ Topic/Product│──▶│ Auto Video Pipeline                    │──▶│ Final Video  │
   │ + Body Video │   │                                        │   │ (influencer  │
   └──────────────┘   │ ┌──────────┐  ┌──────────┐            │   │  face+voice) │
-                     │ │ GPT      │  │ ElevenLabs│            │   └──────────────┘
-                     │ │ (script) │  │ (TTS+dub) │            │
+                     │ │ GPT      │  │ Sync.so  │            │   └──────────────┘
+                     │ │ (script) │  │(TTS+lip) │            │
                      │ └──────────┘  └──────────┘            │
                      │ ┌──────────────────────┐              │
                      │ │ FaceFusion GPU Worker │              │
@@ -162,7 +161,7 @@ TEMP_DIR = os.getenv("AUTO_VIDEO_TEMP_DIR", "/tmp/auto_video_pipeline")
 os.makedirs(TEMP_DIR, exist_ok=True)
 
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
-ELEVENLABS_BASE_URL = os.getenv("ELEVENLABS_BASE_URL", "https://api.elevenlabs.io")
+SYNC_API_KEY = os.getenv("SYNC_API_KEY", "")
 
 
 # ──────────────────────────────────────────────
@@ -172,9 +171,9 @@ ELEVENLABS_BASE_URL = os.getenv("ELEVENLABS_BASE_URL", "https://api.elevenlabs.i
 class AutoVideoStatus(str, Enum):
     PENDING = "pending"
     GENERATING_SCRIPT = "generating_script"
-    GENERATING_VOICE = "generating_voice"
+    GENERATING_VOICE = "generating_voice"  # kept for backward compat (DB records)
     FACE_SWAPPING = "face_swapping"
-    MERGING = "merging"
+    MERGING = "merging"  # kept for backward compat (DB records)
     LIP_SYNCING = "lip_syncing"
     FINALIZING = "finalizing"
     COMPLETED = "completed"
@@ -209,9 +208,11 @@ class AutoVideoPipelineService:
     def __init__(self):
         from app.services.face_swap_service import FaceSwapService
         from app.services.elevenlabs_tts_service import ElevenLabsTTSService
+        from app.services.sync_lip_sync_service import SyncLipSyncService
 
         self.face_swap = FaceSwapService()
         self.tts = ElevenLabsTTSService()
+        self.sync_lip_sync = SyncLipSyncService()
 
     async def create_job(
         self,
@@ -237,7 +238,7 @@ class AutoVideoPipelineService:
             tone: Script tone (professional_friendly, energetic, calm)
             script_text: Pre-written script (skips GPT generation if provided)
             quality: Face swap quality preset (fast, balanced, high, ultra)
-            enable_lip_sync: Apply ElevenLabs lip sync after merging
+            enable_lip_sync: Apply Sync.so lip sync with TTS
             product_info: Additional product information for script generation
             target_duration_sec: Target video duration in seconds
 
@@ -269,7 +270,7 @@ class AutoVideoPipelineService:
             "generated_script": None,
             "tts_audio_duration_sec": None,
             "face_swap_job_id": None,
-            "dubbing_id": None,
+            "sync_generation_id": None,
         }
 
         auto_video_jobs[job_id] = job
@@ -384,8 +385,8 @@ class AutoVideoPipelineService:
 
         # Cleanup temp files
         for suffix in [
-            "_input.mp4", "_tts_audio.mp3", "_swapped.mp4",
-            "_merged.mp4", "_final.mp4", "_script.txt",
+            "_input.mp4", "_swapped.mp4",
+            "_final.mp4", "_script.txt",
         ]:
             path = os.path.join(TEMP_DIR, f"{job_id}{suffix}")
             try:
@@ -421,19 +422,15 @@ class AutoVideoPipelineService:
         Steps:
           1. Download input video & get duration
           2. Generate script (GPT) or use provided script
-          3. Generate TTS audio (ElevenLabs)
-          4. Face swap video (FaceFusion GPU Worker)
-          5. Merge face-swapped video + TTS audio
-          6. Apply lip sync (ElevenLabs Dubbing)
-          7. Finalize
+          3. Face swap video (FaceFusion GPU Worker)
+          4. Lip sync + TTS via Sync.so (ElevenLabs voice integrated)
+          5. Upload to Blob & Finalize
         """
         job = auto_video_jobs[job_id]
 
         try:
             input_path = os.path.join(TEMP_DIR, f"{job_id}_input.mp4")
-            tts_audio_path = os.path.join(TEMP_DIR, f"{job_id}_tts_audio.mp3")
             swapped_path = os.path.join(TEMP_DIR, f"{job_id}_swapped.mp4")
-            merged_path = os.path.join(TEMP_DIR, f"{job_id}_merged.mp4")
             final_path = os.path.join(TEMP_DIR, f"{job_id}_final.mp4")
 
             # ── Step 1: Download input video ──
@@ -505,37 +502,12 @@ class AutoVideoPipelineService:
             with open(script_path, "w", encoding="utf-8") as f:
                 f.write(script)
 
-            # ── Step 3: Generate TTS audio ──
-            job["status"] = AutoVideoStatus.GENERATING_VOICE
-            job["step"] = "generating_voice"
-            job["step_detail"] = "Generating voice audio (ElevenLabs TTS)"
-            job["progress"] = 18
-            logger.info(f"[{job_id}] Step 3: Generating TTS audio")
-
-            tts_audio = await self.tts.text_to_speech(
-                text=script,
-                voice_id=job["voice_id"],
-                output_format="mp3_44100_128",
-                language_code=job["language"],
-            )
-
-            with open(tts_audio_path, "wb") as f:
-                f.write(tts_audio)
-
-            tts_duration = await self._get_audio_duration(tts_audio_path)
-            job["tts_audio_duration_sec"] = round(tts_duration, 1)
-            job["progress"] = 25
-            logger.info(
-                f"[{job_id}] TTS audio: {len(tts_audio) / (1024*1024):.2f} MB, "
-                f"duration: {tts_duration:.1f}s"
-            )
-
-            # ── Step 4: Face swap (GPU Worker) ──
+            # ── Step 3: Face swap (GPU Worker) ──
             job["status"] = AutoVideoStatus.FACE_SWAPPING
             job["step"] = "face_swapping"
             job["step_detail"] = "Face swapping video (GPU processing)"
-            job["progress"] = 28
-            logger.info(f"[{job_id}] Step 4: Starting face swap")
+            job["progress"] = 18
+            logger.info(f"[{job_id}] Step 3: Starting face swap")
 
             fs_job_id = f"fs-{job_id}"
             job["face_swap_job_id"] = fs_job_id
@@ -573,7 +545,7 @@ class AutoVideoPipelineService:
                     )
                 else:
                     gpu_progress = fs_status.get("progress", 0)
-                    job["progress"] = 28 + int(gpu_progress * 0.32)
+                    job["progress"] = 18 + int(gpu_progress * 0.42)  # 18-60%
                     job["step"] = "face_swapping"
                     job["step_detail"] = f"Face swapping: {fs_status.get('step', 'processing')}"
 
@@ -595,64 +567,84 @@ class AutoVideoPipelineService:
                 f"{os.path.getsize(swapped_path) / (1024*1024):.1f} MB"
             )
 
-            # ── Step 5: Merge face-swapped video + TTS audio ──
-            job["status"] = AutoVideoStatus.MERGING
-            job["step"] = "merging"
-            job["step_detail"] = "Merging video and generated voice"
-            job["progress"] = 65
-            logger.info(f"[{job_id}] Step 5: Merging video + TTS audio")
-
-            merge_proc = await asyncio.create_subprocess_exec(
-                "ffmpeg", "-y",
-                "-i", swapped_path,
-                "-i", tts_audio_path,
-                "-c:v", "copy",
-                "-c:a", "aac", "-b:a", "192k",
-                "-map", "0:v:0", "-map", "1:a:0",
-                "-shortest",
-                merged_path,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            _, stderr = await merge_proc.communicate()
-            if merge_proc.returncode != 0:
-                logger.error(f"[{job_id}] Merge failed: {stderr.decode()[:300]}")
-                # Fallback: use face-swapped video without audio
-                shutil.copy2(swapped_path, merged_path)
-
-            job["progress"] = 72
-
-            # ── Step 6: Lip sync (ElevenLabs Dubbing) ──
+            # ── Step 4: Lip sync + TTS via Sync.so ──
             if job["enable_lip_sync"]:
                 job["status"] = AutoVideoStatus.LIP_SYNCING
                 job["step"] = "lip_syncing"
-                job["step_detail"] = "Applying lip sync (ElevenLabs Dubbing)"
-                job["progress"] = 75
-                logger.info(f"[{job_id}] Step 6: Lip sync via ElevenLabs Dubbing")
+                job["step_detail"] = "Applying lip sync + voice (Sync.so)"
+                job["progress"] = 65
+                logger.info(f"[{job_id}] Step 4: Lip sync + TTS via Sync.so")
 
                 try:
-                    lip_synced_path = await self._apply_lip_sync(
-                        job_id=job_id,
-                        video_path=merged_path,
-                        language=job["language"],
+                    # Upload face-swapped video to Azure Blob for Sync.so to access
+                    from app.services.storage_service import (
+                        generate_upload_sas,
+                        generate_read_sas_from_url,
                     )
-                    if lip_synced_path and os.path.exists(lip_synced_path):
-                        shutil.copy2(lip_synced_path, final_path)
-                        logger.info(f"[{job_id}] Lip sync applied successfully")
+
+                    _, swap_upload_url, swap_blob_url, _ = await generate_upload_sas(
+                        email="auto-video@aitherhub.com",
+                        video_id=f"{job_id}-swap",
+                        filename=f"{job_id}-swapped.mp4",
+                    )
+
+                    async with httpx.AsyncClient(timeout=300) as upload_client:
+                        with open(swapped_path, "rb") as f:
+                            swap_data = f.read()
+                        resp = await upload_client.put(
+                            swap_upload_url,
+                            content=swap_data,
+                            headers={
+                                "x-ms-blob-type": "BlockBlob",
+                                "Content-Type": "video/mp4",
+                            },
+                        )
+                        resp.raise_for_status()
+
+                    # Generate read SAS URL for Sync.so to download
+                    swap_sas_url = generate_read_sas_from_url(swap_blob_url)
+                    if not swap_sas_url:
+                        raise RuntimeError("Failed to generate SAS URL for swapped video")
+
+                    job["progress"] = 70
+                    job["step_detail"] = "Processing lip sync (Sync.so + ElevenLabs TTS)"
+                    logger.info(f"[{job_id}] Uploaded swapped video to blob, starting Sync.so")
+
+                    # Call Sync.so with integrated ElevenLabs TTS
+                    sync_result = await self.sync_lip_sync.lip_sync_with_tts(
+                        video_url=swap_sas_url,
+                        voice_id=job["voice_id"],
+                        script=script,
+                        model="lipsync-2",
+                        sync_mode="cut_off",
+                        max_wait_sec=600,
+                        poll_interval=5,
+                    )
+
+                    job["sync_generation_id"] = sync_result.get("generation_id")
+                    output_url = sync_result.get("output_url")
+
+                    if output_url:
+                        # Download the lip-synced video
+                        job["step_detail"] = "Downloading lip-synced video"
+                        job["progress"] = 88
+                        await self.sync_lip_sync.download_result(output_url, final_path)
+                        logger.info(f"[{job_id}] Sync.so lip sync completed successfully")
                     else:
-                        logger.warning(f"[{job_id}] Lip sync returned no result, using merged video")
-                        shutil.copy2(merged_path, final_path)
+                        raise RuntimeError("Sync.so returned no output URL")
+
                 except Exception as e:
                     logger.warning(
-                        f"[{job_id}] Lip sync failed (using merged video): {e}"
+                        f"[{job_id}] Sync.so lip sync failed, falling back to video without audio: {e}"
                     )
-                    shutil.copy2(merged_path, final_path)
+                    shutil.copy2(swapped_path, final_path)
             else:
-                shutil.copy2(merged_path, final_path)
+                # No lip sync requested — use face-swapped video as-is (no audio)
+                shutil.copy2(swapped_path, final_path)
 
-            job["progress"] = 95
+            job["progress"] = 92
 
-            # ── Step 7: Finalize — Upload to Blob Storage ──
+            # ── Step 5: Finalize — Upload to Blob Storage ──
             job["status"] = AutoVideoStatus.FINALIZING
             job["step"] = "finalizing"
             job["step_detail"] = "Uploading result video"
@@ -850,162 +842,6 @@ class AutoVideoPipelineService:
             f"Let me share its features and benefits with you.\n\n"
             f"Please watch until the end!"
         )
-
-    # ──────────────────────────────────────────
-    # Lip Sync (ElevenLabs Dubbing API)
-    # ──────────────────────────────────────────
-
-    async def _apply_lip_sync(
-        self,
-        job_id: str,
-        video_path: str,
-        language: str,
-    ) -> Optional[str]:
-        """
-        Apply lip sync to a video using ElevenLabs Dubbing API.
-
-        Uses same-language dubbing (source_lang == target_lang) to
-        synchronize lip movements with the audio track.
-
-        Returns path to the lip-synced video file, or None on failure.
-        """
-        if not ELEVENLABS_API_KEY:
-            logger.warning(f"[{job_id}] ElevenLabs API key not set, skipping lip sync")
-            return None
-
-        headers = {"xi-api-key": ELEVENLABS_API_KEY}
-
-        # Step 1: Create dubbing job
-        logger.info(f"[{job_id}] Creating ElevenLabs dubbing job")
-
-        with open(video_path, "rb") as f:
-            video_data = f.read()
-
-        async with httpx.AsyncClient(timeout=600) as client:
-            # Create dubbing
-            files = {
-                "file": ("video.mp4", video_data, "video/mp4"),
-            }
-            data = {
-                "name": f"aitherhub-{job_id}",
-                "source_lang": language,
-                "target_lang": language,  # Same language = lip sync only
-                "num_speakers": "1",
-                "highest_resolution": "true",
-                "drop_background_audio": "false",
-            }
-
-            resp = await client.post(
-                f"{ELEVENLABS_BASE_URL}/v1/dubbing",
-                headers=headers,
-                files=files,
-                data=data,
-            )
-
-            if resp.status_code != 200:
-                logger.error(
-                    f"[{job_id}] Dubbing create failed: "
-                    f"{resp.status_code} {resp.text[:300]}"
-                )
-                return None
-
-            dub_result = resp.json()
-            dubbing_id = dub_result["dubbing_id"]
-            expected_duration = dub_result.get("expected_duration_sec", 0)
-            auto_video_jobs[job_id]["dubbing_id"] = dubbing_id
-            logger.info(
-                f"[{job_id}] Dubbing job created: {dubbing_id}, "
-                f"expected: {expected_duration}s"
-            )
-
-            # Step 2: Poll for completion
-            max_wait = max(600, expected_duration * 3)
-            start_time = time.time()
-
-            while time.time() - start_time < max_wait:
-                await asyncio.sleep(5)
-
-                status_resp = await client.get(
-                    f"{ELEVENLABS_BASE_URL}/v1/dubbing/{dubbing_id}",
-                    headers=headers,
-                )
-
-                if status_resp.status_code != 200:
-                    logger.warning(
-                        f"[{job_id}] Dubbing status check failed: "
-                        f"{status_resp.status_code}"
-                    )
-                    continue
-
-                dub_status = status_resp.json()
-                status = dub_status.get("status", "")
-
-                if status == "dubbed":
-                    logger.info(f"[{job_id}] Dubbing completed")
-                    break
-                elif status in ("failed", "error"):
-                    error = dub_status.get("error", "unknown")
-                    logger.error(f"[{job_id}] Dubbing failed: {error}")
-                    return None
-                else:
-                    logger.debug(f"[{job_id}] Dubbing status: {status}")
-            else:
-                logger.error(f"[{job_id}] Dubbing timed out after {max_wait}s")
-                return None
-
-            # Step 3: Download dubbed video
-            output_path = os.path.join(TEMP_DIR, f"{job_id}_dubbed.mp4")
-
-            download_resp = await client.get(
-                f"{ELEVENLABS_BASE_URL}/v1/dubbing/{dubbing_id}/audio/{language}",
-                headers=headers,
-            )
-
-            if download_resp.status_code == 200:
-                # This returns audio only; we need the video
-                # Try the resource endpoint for video
-                video_resp = await client.get(
-                    f"{ELEVENLABS_BASE_URL}/v1/dubbing/{dubbing_id}/resource/video",
-                    headers=headers,
-                )
-                if video_resp.status_code == 200:
-                    with open(output_path, "wb") as f:
-                        f.write(video_resp.content)
-                    logger.info(
-                        f"[{job_id}] Dubbed video downloaded: "
-                        f"{len(video_resp.content) / (1024*1024):.1f} MB"
-                    )
-                    return output_path
-                else:
-                    # Fallback: merge original video with dubbed audio
-                    dubbed_audio_path = os.path.join(
-                        TEMP_DIR, f"{job_id}_dubbed_audio.mp3"
-                    )
-                    with open(dubbed_audio_path, "wb") as f:
-                        f.write(download_resp.content)
-
-                    merge_proc = await asyncio.create_subprocess_exec(
-                        "ffmpeg", "-y",
-                        "-i", video_path,
-                        "-i", dubbed_audio_path,
-                        "-c:v", "copy",
-                        "-c:a", "aac", "-b:a", "192k",
-                        "-map", "0:v:0", "-map", "1:a:0",
-                        "-shortest",
-                        output_path,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE,
-                    )
-                    await merge_proc.communicate()
-
-                    if os.path.exists(output_path):
-                        return output_path
-
-            logger.error(
-                f"[{job_id}] Failed to download dubbed content: "
-                f"{download_resp.status_code}"
-            )
-            return None
 
     # ──────────────────────────────────────────
     # Utilities
