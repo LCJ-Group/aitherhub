@@ -176,15 +176,16 @@ async def batch_upload_complete(
     Each video is processed through the same UploadPipelineService to guarantee
     consistent pipeline ordering.
     """
-    try:
-        if current_user["email"] != payload.email:
-            raise HTTPException(status_code=403, detail="Email does not match current user")
+    if current_user["email"] != payload.email:
+        raise HTTPException(status_code=403, detail="Email does not match current user")
 
-        video_repo = VideoRepository(lambda: db)
-        pipeline = UploadPipelineService(video_repository=video_repo)
+    video_repo = VideoRepository(lambda: db)
+    pipeline = UploadPipelineService(video_repository=video_repo)
 
-        video_ids = []
-        for v in payload.videos:
+    video_ids = []
+    failed = []
+    for v in payload.videos:
+        try:
             result = await pipeline.complete_upload(
                 user_id=current_user["id"],
                 email=payload.email,
@@ -198,19 +199,31 @@ async def batch_upload_complete(
                 time_offset_seconds=v.time_offset_seconds or 0,
             )
             video_ids.append(result.video_id)
+        except Exception as exc:
+            logger.exception(
+                f"[batch_upload_complete] Failed for video {v.video_id}: {exc}"
+            )
+            failed.append({"video_id": v.video_id, "error": str(exc)})
 
-        return BatchUploadCompleteResponse(
-            video_ids=video_ids,
-            status="uploaded",
-            message=f"{len(video_ids)} videos queued for analysis",
+    if not video_ids and failed:
+        raise HTTPException(
+            status_code=500,
+            detail=f"All {len(failed)} videos failed: {failed[0]['error']}",
         )
-    except HTTPException:
-        raise
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except Exception as exc:
-        logger.exception(f"[batch_upload_complete] Unexpected error: {exc}")
-        raise HTTPException(status_code=500, detail=f"Failed to complete batch upload: {exc}")
+
+    msg = f"{len(video_ids)} videos queued for analysis"
+    if failed:
+        msg += f" ({len(failed)} failed)"
+        logger.warning(
+            f"[batch_upload_complete] {len(failed)}/{len(payload.videos)} videos failed: "
+            f"{[f['video_id'] for f in failed]}"
+        )
+
+    return BatchUploadCompleteResponse(
+        video_ids=video_ids,
+        status="uploaded",
+        message=msg,
+    )
 
 
 # ──────────────────────────────────────────────
