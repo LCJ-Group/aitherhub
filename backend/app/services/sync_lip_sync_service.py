@@ -281,19 +281,30 @@ class SyncLipSyncService:
     # ──────────────────────────────────────────
 
     async def health_check(self) -> dict:
-        """Check if Sync.so API is accessible."""
+        """Check if Sync.so API is accessible.
+        
+        Uses a minimal POST to /v2/generate with an incomplete payload.
+        A 422 response means the API key is valid (auth passed, but input missing).
+        """
         if not self.api_key:
             return {"status": "unconfigured", "error": "SYNC_API_KEY not set"}
 
         try:
             async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.get(
+                resp = await client.post(
                     f"{SYNC_API_BASE}/v2/generate",
-                    headers={"x-api-key": self.api_key},
-                    params={"status": "COMPLETED"},
+                    headers={
+                        "x-api-key": self.api_key,
+                        "Content-Type": "application/json",
+                    },
+                    json={"model": "lipsync-2"},
                 )
-                if resp.status_code in (200, 401, 403):
-                    return {"status": "ok" if resp.status_code == 200 else "auth_error"}
-                return {"status": "error", "http_code": resp.status_code}
+                # 422 = auth passed, input validation failed (expected)
+                # 401/403 = auth failed
+                if resp.status_code == 422:
+                    return {"status": "ok"}
+                if resp.status_code in (401, 403):
+                    return {"status": "auth_error", "http_code": resp.status_code}
+                return {"status": "ok" if resp.status_code in (200, 201) else "error", "http_code": resp.status_code}
         except Exception as e:
             return {"status": "error", "error": str(e)}
