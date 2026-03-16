@@ -930,6 +930,30 @@ export default function VideoDetail({ videoData, editorParams }) {
         )}
         {/* SCROLL AREA */}
         <div className="flex-1 overflow-y-auto scrollbar-custom text-left px-0 md:px-4 md:mb-0">
+          {/* LiveBoost Video Player — inline player for live_boost recordings */}
+          {videoData?.upload_type === 'live_boost' && videoData?.preview_url && (
+            <div className="mx-4 mt-3 mb-4">
+              <div className="rounded-2xl border border-purple-200/60 bg-gradient-to-br from-purple-50 to-indigo-50 p-4 shadow-sm">
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="text-lg">{"\uD83C\uDFA5"}</span>
+                  <h3 className="text-sm font-semibold text-purple-900">\u9332\u753B\u6620\u50CF</h3>
+                  <span className="px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 text-[10px] font-medium">LiveBoost</span>
+                </div>
+                <div className="relative w-full flex justify-center">
+                  <div className="relative w-full max-w-md">
+                    <video
+                      src={videoData.preview_url}
+                      controls
+                      playsInline
+                      preload="metadata"
+                      className="w-full rounded-xl shadow-md bg-black"
+                      style={{ maxHeight: '70vh' }}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
           {/* CSV / Excel Info Panel */}
           <SectionErrorBoundary sectionName="CSVアセット管理">
             <CsvAssetPanel
