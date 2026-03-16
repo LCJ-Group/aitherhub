@@ -763,7 +763,9 @@ export default function AutoVideoPage() {
                 <div className="flex gap-2 mt-4">
                   {jobStatus?.status === "completed" && (
                     <a
-                      href={autoVideoService.getDownloadUrl(currentJobId)}
+                      href={jobStatus?.result_video_url || autoVideoService.getDownloadUrl(currentJobId)}
+                      target="_blank"
+                      rel="noopener noreferrer"
                       className="flex-1 py-2.5 bg-green-600 hover:bg-green-500 rounded-lg font-medium text-center transition flex items-center justify-center gap-2"
                     >
                       <Download size={16} />

@@ -298,8 +298,28 @@ class AutoVideoPipelineService:
             "generated_script": job.get("generated_script"),
             "tts_audio_duration_sec": job.get("tts_audio_duration_sec"),
             "enable_lip_sync": job.get("enable_lip_sync", True),
-            "result_video_url": job.get("result_video_url"),
+            "result_video_url": self._resolve_result_url(job),
         }
+
+    @staticmethod
+    def _resolve_result_url(job: Dict[str, Any]) -> Optional[str]:
+        """Return a fresh SAS-signed URL for the result video.
+
+        If the stored result_video_url already has a SAS token, return it as-is
+        (it was generated with a 7-day expiry during finalize).
+        If we have a raw blob URL (result_blob_url), regenerate a fresh SAS.
+        """
+        url = job.get("result_video_url")
+        if url:
+            return url
+        blob_url = job.get("result_blob_url")
+        if blob_url:
+            try:
+                from app.services.storage_service import generate_read_sas_from_url
+                return generate_read_sas_from_url(blob_url, expires_hours=168)
+            except Exception:
+                pass
+        return None
 
     async def list_jobs(self, limit: int = 20) -> List[Dict[str, Any]]:
         """List recent auto video jobs."""
@@ -592,14 +612,55 @@ class AutoVideoPipelineService:
 
             job["progress"] = 95
 
-            # ── Step 7: Finalize ──
+            # ── Step 7: Finalize — Upload to Blob Storage ──
             job["status"] = AutoVideoStatus.FINALIZING
-            job["step"] = "Preparing result"
-            job["progress"] = 97
+            job["step"] = "Uploading result video"
+            job["progress"] = 95
 
             final_size_mb = os.path.getsize(final_path) / (1024 * 1024)
             job["result_video_path"] = final_path
             job["result_video_size_mb"] = round(final_size_mb, 1)
+
+            # Upload final video to Azure Blob Storage
+            try:
+                from app.services.storage_service import generate_upload_sas
+
+                _, upload_url, blob_url, _ = await generate_upload_sas(
+                    email="auto-video@aitherhub.com",
+                    video_id=job_id,
+                    filename=f"{job_id}-final.mp4",
+                )
+
+                async with httpx.AsyncClient(timeout=300) as upload_client:
+                    with open(final_path, "rb") as f:
+                        video_data = f.read()
+                    resp = await upload_client.put(
+                        upload_url,
+                        content=video_data,
+                        headers={
+                            "x-ms-blob-type": "BlockBlob",
+                            "Content-Type": "video/mp4",
+                        },
+                    )
+                    resp.raise_for_status()
+
+                # Generate a read SAS URL so the frontend can access the video
+                # (public access is disabled on this storage account)
+                from app.services.storage_service import generate_read_sas_from_url
+                sas_url = generate_read_sas_from_url(blob_url, expires_hours=168)  # 7 days
+                job["result_video_url"] = sas_url or blob_url
+                job["result_blob_url"] = blob_url  # keep raw URL for re-generating SAS
+                logger.info(
+                    f"[{job_id}] Uploaded final video to blob: {blob_url}"
+                )
+            except Exception as upload_err:
+                logger.warning(
+                    f"[{job_id}] Failed to upload final video to blob: {upload_err}"
+                )
+                # Pipeline still completes, but result_video_url stays None
+
+            job["progress"] = 97
+            job["step"] = "Preparing result"
 
             # ── Done ──
             job["status"] = AutoVideoStatus.COMPLETED
