@@ -1032,20 +1032,30 @@ def _seconds_to_srt_time(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
+def _cap_get(cap, field, default=None):
+    """Access caption field from dict or object."""
+    if isinstance(cap, dict):
+        return cap.get(field, default)
+    return getattr(cap, field, default)
+
+
 def _generate_srt_content(captions: list, time_offset: float = 0) -> str:
     """Generate SRT subtitle file content from captions."""
     srt = ""
     idx = 1
     for cap in captions:
-        local_start = cap.start - time_offset if time_offset > 0 else cap.start
-        local_end = cap.end - time_offset if time_offset > 0 else cap.end
+        cap_start = _cap_get(cap, 'start', 0)
+        cap_end = _cap_get(cap, 'end', 0)
+        cap_text = _cap_get(cap, 'text', '')
+        local_start = cap_start - time_offset if time_offset > 0 else cap_start
+        local_end = cap_end - time_offset if time_offset > 0 else cap_end
         if local_start < 0:
             local_start = 0
         if local_end <= local_start:
             continue
         start_ts = _seconds_to_srt_time(local_start)
         end_ts = _seconds_to_srt_time(local_end)
-        text = cap.text.replace('\n', '\n')  # preserve newlines
+        text = cap_text.replace('\n', '\n')  # preserve newlines
         srt += f"{idx}\n{start_ts} --> {end_ts}\n{text}\n\n"
         idx += 1
     return srt
@@ -1082,8 +1092,12 @@ def _generate_ass_content(captions: list, style: str, position_x: float, positio
 
     for cap in captions:
         # Calculate local time (relative to clip start)
-        local_start = cap.start - time_offset if time_offset > 0 else cap.start
-        local_end = cap.end - time_offset if time_offset > 0 else cap.end
+        cap_start = _cap_get(cap, 'start', 0)
+        cap_end = _cap_get(cap, 'end', 0)
+        cap_text = _cap_get(cap, 'text', '')
+        cap_words = _cap_get(cap, 'words', None)
+        local_start = cap_start - time_offset if time_offset > 0 else cap_start
+        local_end = cap_end - time_offset if time_offset > 0 else cap_end
         if local_start < 0:
             local_start = 0
         if local_end <= local_start:
@@ -1092,10 +1106,10 @@ def _generate_ass_content(captions: list, style: str, position_x: float, positio
         start_ts = _seconds_to_ass_time(local_start)
         end_ts = _seconds_to_ass_time(local_end)
 
-        if is_karaoke and cap.words:
+        if is_karaoke and cap_words:
             # Generate karaoke timing tags (\kf for smooth fill)
             karaoke_text = ""
-            for w in cap.words:
+            for w in cap_words:
                 w_start = w.get('start', 0) - time_offset if time_offset > 0 else w.get('start', 0)
                 w_end = w.get('end', 0) - time_offset if time_offset > 0 else w.get('end', 0)
                 duration_cs = max(1, int((w_end - w_start) * 100))
@@ -1103,7 +1117,7 @@ def _generate_ass_content(captions: list, style: str, position_x: float, positio
             ass += f"Dialogue: 0,{start_ts},{end_ts},Default,,0,0,0,,{karaoke_text}\n"
         else:
             # Escape ASS special characters
-            text = cap.text.replace('\n', '\\N')
+            text = cap_text.replace('\n', '\\N')
             ass += f"Dialogue: 0,{start_ts},{end_ts},Default,,0,0,0,,{text}\n"
 
     return ass
@@ -1194,8 +1208,11 @@ def _build_drawtext_filter(captions: list, style: str, position_y: float, time_o
     
     filters = []
     for cap in captions:
-        local_start = cap.start - time_offset if time_offset > 0 else cap.start
-        local_end = cap.end - time_offset if time_offset > 0 else cap.end
+        cap_start = _cap_get(cap, 'start', 0)
+        cap_end = _cap_get(cap, 'end', 0)
+        cap_text = _cap_get(cap, 'text', '')
+        local_start = cap_start - time_offset if time_offset > 0 else cap_start
+        local_end = cap_end - time_offset if time_offset > 0 else cap_end
         if local_start < 0:
             local_start = 0
         if local_end <= local_start:
@@ -1203,7 +1220,7 @@ def _build_drawtext_filter(captions: list, style: str, position_y: float, time_o
         
         # Escape text for drawtext filter
         # In filter_complex_script, we need to escape: ' \ : and special chars
-        text = cap.text
+        text = cap_text
         text = text.replace('\\', '\\\\')
         text = text.replace("'", "\u2019")  # Replace apostrophe with unicode right single quote
         text = text.replace(':', '\\:')
