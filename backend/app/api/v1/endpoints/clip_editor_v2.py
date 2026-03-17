@@ -1347,14 +1347,7 @@ def _build_drawtext_filter(captions: list, style: str, position_y: float, time_o
                        f"time_offset={time_offset}, effective_offset={effective_offset}")
         return '[0:v]copy[v]'  # pass-through filter with [v] label
     
-    # ── Prepend drawbox to mask TikTok/platform auto-subtitles ──
-    # TikTok live streams often have auto-captions burned into the video.
-    # We cover the bottom 25% of the frame with a black box before adding
-    # our own subtitles on top, so only one line of text is visible.
-    # The drawbox uses ih*0.75 as Y start (covers bottom 25% of the frame).
-    mask_filter = "drawbox=x=0:y=ih*0.75:w=iw:h=ih*0.25:color=black:t=fill"
-    
-    return '[0:v]' + mask_filter + ',' + ','.join(filters) + '[v]'
+    return '[0:v]' + ','.join(filters) + '[v]'
 
 
 # ─── File-based export job store (survives worker recycle) ────────────────────
