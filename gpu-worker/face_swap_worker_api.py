@@ -726,7 +726,7 @@ async def get_config(auth: bool = Depends(verify_api_key)):
                 "face_swapper_model": "hyperswap_1c_256",
                 "face_swapper_pixel_boost": "1024x1024",
                 "face_enhancer_enabled": True,
-                "face_enhancer_model": "gpen_bfr_1024",
+                "face_enhancer_model": "codeformer",
                 "face_detector_model": "retinaface",
                 "face_detector_score": 0.3,
                 "face_mask_blur": 0.1,
@@ -736,7 +736,7 @@ async def get_config(auth: bool = Depends(verify_api_key)):
                 "face_swapper_model": "hyperswap_1c_256",
                 "face_swapper_pixel_boost": "1024x1024",
                 "face_enhancer_enabled": True,
-                "face_enhancer_model": "gpen_bfr_2048",
+                "face_enhancer_model": "gpen_bfr_512",
                 "face_detector_model": "retinaface",
                 "face_detector_score": 0.3,
                 "face_mask_blur": 0.1,
@@ -898,7 +898,7 @@ def _run_video_job(job_id: str, video_url: str, face_enhancer: bool,
             current_config["face_mask_blur"] = 0.3
         elif quality == "pro":
             current_config["face_enhancer_enabled"] = True
-            current_config["face_enhancer_model"] = "gpen_bfr_1024"
+            current_config["face_enhancer_model"] = "codeformer"
             current_config["face_swapper_model"] = "hyperswap_1c_256"
             current_config["face_swapper_pixel_boost"] = "1024x1024"
             current_config["face_detector_model"] = "retinaface"
@@ -906,7 +906,7 @@ def _run_video_job(job_id: str, video_url: str, face_enhancer: bool,
             current_config["face_mask_blur"] = 0.1
         elif quality == "cinema":
             current_config["face_enhancer_enabled"] = True
-            current_config["face_enhancer_model"] = "gpen_bfr_2048"
+            current_config["face_enhancer_model"] = "gpen_bfr_512"
             current_config["face_swapper_model"] = "hyperswap_1c_256"
             current_config["face_swapper_pixel_boost"] = "1024x1024"
             current_config["face_detector_model"] = "retinaface"
