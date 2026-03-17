@@ -221,11 +221,11 @@ async def get_clip_status(
     """Get clip generation status and download URL for a specific phase."""
     try:
         user_id = user.get("user_id") or user.get("id")
-
         sql = text("""
             SELECT id, status, clip_url, sas_token, sas_expireddate, error_message, created_at, captions,
                    subtitle_style, subtitle_position_x, subtitle_position_y,
-                   COALESCE(progress_pct, 0) as progress_pct, COALESCE(progress_step, '') as progress_step
+                   COALESCE(progress_pct, 0) as progress_pct, COALESCE(progress_step, '') as progress_step,
+                   updated_at, job_payload
             FROM video_clips
             WHERE video_id = :video_id AND phase_index = CAST(:phase_index AS text)
             ORDER BY created_at DESC
@@ -233,21 +233,69 @@ async def get_clip_status(
         """)
         result = await db.execute(sql, {"video_id": video_id, "phase_index": str(phase_index)})
         row = result.fetchone()
-
         if not row:
             return {
                 "status": "not_found",
                 "message": "No clip found for this phase",
             }
 
+        # ── Stuck clip detection & auto-retry ──
+        # If a clip has been in pending/processing for > 10 minutes with no progress,
+        # it likely means the worker crashed or the queue message was lost.
+        # Auto-retry by re-enqueuing the job.
+        _CLIP_STUCK_TIMEOUT = 600  # 10 minutes
+        clip_status = row.status
+        if clip_status in ("pending", "processing") and row.progress_pct == 0:
+            last_update = row.updated_at or row.created_at
+            if last_update:
+                if last_update.tzinfo is None:
+                    last_update = last_update.replace(tzinfo=timezone.utc)
+                age = (datetime.now(timezone.utc) - last_update).total_seconds()
+                if age > _CLIP_STUCK_TIMEOUT:
+                    logger.warning(f"Clip {row.id} stuck in {clip_status} for {age:.0f}s with 0% progress, auto-retrying")
+                    # Try to re-enqueue the job
+                    job_payload = row.job_payload if hasattr(row, 'job_payload') and row.job_payload else None
+                    if job_payload:
+                        if isinstance(job_payload, str):
+                            job_payload = json.loads(job_payload)
+                        try:
+                            from app.services.queue_service import enqueue_job
+                            enqueue_result = await enqueue_job(job_payload)
+                            if enqueue_result.success:
+                                logger.info(f"Clip {row.id} re-enqueued successfully")
+                                # Reset updated_at to prevent immediate re-enqueue
+                                reset_sql = text("""
+                                    UPDATE video_clips
+                                    SET updated_at = NOW(), progress_step = 'auto_retry'
+                                    WHERE id = :clip_id
+                                """)
+                                await db.execute(reset_sql, {"clip_id": str(row.id)})
+                                await db.commit()
+                            else:
+                                logger.warning(f"Clip {row.id} re-enqueue failed: {enqueue_result.error}")
+                        except Exception as retry_err:
+                            logger.warning(f"Clip {row.id} auto-retry failed: {retry_err}")
+                    else:
+                        # No job_payload stored - mark as failed
+                        logger.warning(f"Clip {row.id} stuck but no job_payload, marking as failed")
+                        fail_sql = text("""
+                            UPDATE video_clips
+                            SET status = 'failed', error_message = 'Job timed out (no progress for 10+ minutes). Please try again.',
+                                updated_at = NOW()
+                            WHERE id = :clip_id
+                        """)
+                        await db.execute(fail_sql, {"clip_id": str(row.id)})
+                        await db.commit()
+                        clip_status = "failed"
+
         response = {
             "clip_id": str(row.id),
-            "status": row.status,
+            "status": clip_status,
             "progress_pct": row.progress_pct if hasattr(row, 'progress_pct') else 0,
             "progress_step": row.progress_step if hasattr(row, 'progress_step') else "",
         }
 
-        if row.status == "completed" and row.clip_url:
+        if clip_status == "completed" and row.clip_url:
             # Generate or reuse SAS download URL
             clip_download_url = None
 
@@ -285,9 +333,9 @@ async def get_clip_status(
 
             response["clip_url"] = clip_download_url or _replace_blob_url_to_cdn(row.clip_url)
 
-        elif row.status == "failed":
-            response["error_message"] = row.error_message
-        elif row.status == "dead":
+        elif clip_status == "failed":
+            response["error_message"] = row.error_message or "Job failed. Please try again."
+        elif clip_status == "dead":
             response["error_message"] = row.error_message or "Job moved to dead-letter queue after max retries"
 
         # Include captions (subtitle data) if available

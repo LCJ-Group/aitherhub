@@ -1382,7 +1382,12 @@ def _update_job(job_id: str, **kwargs):
     """Update specific fields in a job."""
     data = _load_job(job_id) or {}
     data.update(kwargs)
+    data["updated_at"] = datetime.now(timezone.utc).isoformat()
     _save_job(job_id, data)
+
+
+# Maximum age (seconds) before a non-terminal job is considered stale
+_STALE_JOB_TIMEOUT = 600  # 10 minutes
 
 
 async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, style: str,
@@ -1399,7 +1404,7 @@ async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, s
 
     _CDN_HOST = os.getenv("CDN_HOST", "https://cdn.aitherhub.com")
     _BLOB_HOST = f"https://{ACCOUNT_NAME}.blob.core.windows.net" if ACCOUNT_NAME else ""
-    FFMPEG_TIMEOUT = 600  # 10 minutes max for encoding
+    FFMPEG_TIMEOUT = 300  # 5 minutes max for encoding (Azure B1 is slow but 5min is enough for 30-90s clips)
 
     tmp_dir = tempfile.mkdtemp(prefix="export_sub_")
     try:
@@ -1596,20 +1601,44 @@ async def export_subtitled_clip(
 async def get_export_status(video_id: str, job_id: str):
     """
     Poll export job status. Returns download_url when done.
+    Detects stale jobs (stuck in non-terminal state for too long) and marks them failed.
     """
     job = _load_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Export job not found")
 
+    status = job["status"]
+
+    # Stale job detection: if a non-terminal job hasn't been updated for too long,
+    # the background task likely crashed (container restart, OOM, etc.)
+    if status not in ("done", "failed"):
+        updated_at = job.get("updated_at") or job.get("created_at")
+        if updated_at:
+            try:
+                last_update = datetime.fromisoformat(updated_at)
+                if last_update.tzinfo is None:
+                    last_update = last_update.replace(tzinfo=timezone.utc)
+                age_seconds = (datetime.now(timezone.utc) - last_update).total_seconds()
+                if age_seconds > _STALE_JOB_TIMEOUT:
+                    logger.warning(f"[export-job {job_id}] Stale job detected: "
+                                   f"status={status}, age={age_seconds:.0f}s > {_STALE_JOB_TIMEOUT}s")
+                    _update_job(job_id, status="failed",
+                                error=f"Job timed out (stuck in '{status}' for {int(age_seconds)}s). "
+                                      f"The server may have restarted. Please try again.")
+                    status = "failed"
+                    job = _load_job(job_id)
+            except (ValueError, TypeError):
+                pass
+
     result = {
         "job_id": job_id,
-        "status": job["status"],
+        "status": status,
         "video_id": video_id,
     }
-    if job["status"] == "done":
+    if status == "done":
         result["download_url"] = job.get("download_url")
         result["file_size"] = job.get("file_size")
-    elif job["status"] == "failed":
+    elif status == "failed":
         result["error"] = job.get("error", "Unknown error")
 
     return result
