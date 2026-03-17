@@ -227,6 +227,9 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
   const [feedbackSaved, setFeedbackSaved] = useState(false);
   const [exporting, setExporting] = useState(false);
 
+  // Subtitle timing offset (seconds): positive = delay subtitles, negative = advance
+  const [captionOffset, setCaptionOffset] = useState(0);
+
   const clipDur = trimEnd - trimStart;
 
   // Determine if we're playing a clip_url (local time 0-based) or full video
@@ -266,25 +269,27 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
   // Current caption based on playback time (with offset correction)
   // Extend display: each caption stays visible until the next caption starts
   // or for a minimum of 3 seconds, whichever is longer.
+  // captionOffset: positive = delay subtitle display (subtitle appears later),
+  //                negative = advance subtitle display (subtitle appears earlier)
   const currentCaption = useMemo(() => {
     if (!captions.length) return null;
     const t = currentTime;
     const MIN_DISPLAY = 3; // minimum display duration in seconds
     for (let i = 0; i < captions.length; i++) {
       const c = captions[i];
-      const localStart = toLocalTime(c.start || 0);
-      const rawEnd = toLocalTime(c.end || (c.start + 5));
+      const localStart = toLocalTime(c.start || 0) + captionOffset;
+      const rawEnd = toLocalTime(c.end || (c.start + 5)) + captionOffset;
       // Extend end to at least MIN_DISPLAY seconds after start
       let extendedEnd = Math.max(rawEnd, localStart + MIN_DISPLAY);
       // But don't overlap with next caption's start
       if (i + 1 < captions.length) {
-        const nextStart = toLocalTime(captions[i + 1].start || 0);
+        const nextStart = toLocalTime(captions[i + 1].start || 0) + captionOffset;
         extendedEnd = Math.min(extendedEnd, nextStart);
       }
       if (t >= localStart && t < extendedEnd) return c;
     }
     return null;
-  }, [captions, currentTime, toLocalTime]);
+  }, [captions, currentTime, toLocalTime, captionOffset]);
 
   const currentPhase = useMemo(() => {
     if (!segments.length) return null;
@@ -611,8 +616,20 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
     setSavingCaps(true);
     setStatus(null);
     try {
-      // Mark all captions as saved so they get priority on next load
-      const capsToSave = captions.map(c => ({ ...c, source: 'saved' }));
+      // Apply caption offset to timestamps before saving (bake in the timing adjustment)
+      const capsToSave = captions.map(c => ({
+        ...c,
+        start: captionOffset !== 0 ? Math.max(0, (c.start || 0) + captionOffset) : (c.start || 0),
+        end: captionOffset !== 0 ? Math.max(0, (c.end || 0) + captionOffset) : (c.end || 0),
+        ...(c.words ? {
+          words: c.words.map(w => ({
+            ...w,
+            start: captionOffset !== 0 ? Math.max(0, (w.start || 0) + captionOffset) : (w.start || 0),
+            end: captionOffset !== 0 ? Math.max(0, (w.end || 0) + captionOffset) : (w.end || 0),
+          }))
+        } : {}),
+        source: 'saved',
+      }));
       await VideoService.updateClipCaptions(videoId, clip.clip_id, capsToSave);
 
       // Log caption edit for AI learning
@@ -629,7 +646,13 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
       }
 
       setCaptions(capsToSave);
-      setStatus({ ok: true, msg: "字幕を保存しました（AI学習に反映）" });
+      // Reset offset after baking it into timestamps
+      if (captionOffset !== 0) {
+        setCaptionOffset(0);
+        setStatus({ ok: true, msg: `字幕を保存しました（タイミング${captionOffset > 0 ? '+' : ''}${captionOffset.toFixed(1)}sを適用済み）` });
+      } else {
+        setStatus({ ok: true, msg: "字幕を保存しました（AI学習に反映）" });
+      }
     } catch (e) {
       setStatus({ ok: false, msg: `字幕保存失敗: ${e.message}` });
     } finally {
@@ -718,8 +741,8 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
     // If word-level timestamps are available, use them
     if (caption.words && caption.words.length > 0) {
       return caption.words.map((w, i) => {
-        const wStart = toLocalTime(w.start || 0);
-        const wEnd = toLocalTime(w.end || 0);
+        const wStart = toLocalTime(w.start || 0) + captionOffset;
+        const wEnd = toLocalTime(w.end || 0) + captionOffset;
         const isActive = t >= wStart && t <= wEnd;
         const isPast = t > wEnd;
         return (
@@ -741,8 +764,8 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
 
     // Fallback: estimate word timing from segment start/end
     const chars = [...caption.text];
-    const capStart = toLocalTime(caption.start || 0);
-    const capEnd = toLocalTime(caption.end || (caption.start + 5));
+    const capStart = toLocalTime(caption.start || 0) + captionOffset;
+    const capEnd = toLocalTime(caption.end || (caption.start + 5)) + captionOffset;
     const capDuration = capEnd - capStart;
     if (capDuration <= 0) return caption.text;
 
@@ -1116,6 +1139,11 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
               }}
             >
               {fmt(origStart)} – {fmt(origEnd)}
+              {duration > 0 && clipDur > duration + 1 && (
+                <span style={{ marginLeft: 4, opacity: 0.7, fontSize: 10, color: '#FFE135' }}>
+                  ({duration.toFixed(0)}s)
+                </span>
+              )}
               <span style={{ marginLeft: 6, opacity: 0.6, fontSize: 10 }}>
                 Phase {clip.phase_index != null && !isNaN(Number(clip.phase_index)) ? clip.phase_index : (clip.phase_index || "?")}
               </span>
@@ -1611,6 +1639,55 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
 
                 <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 14, marginTop: 4 }} />
 
+                {/* ═══ 字幕タイミング調整 ═══ */}
+                {captions.length > 0 && (
+                  <div style={{ marginBottom: 14 }}>
+                    <SectionTitle>字幕タイミング調整</SectionTitle>
+                    <p style={{ color: C.textMuted, fontSize: 11, margin: '0 0 8px', lineHeight: 1.5 }}>
+                      字幕が音声とずれている場合に調整できます。
+                      {captionOffset > 0 ? `+${captionOffset.toFixed(1)}s（字幕を遅らせる）` : captionOffset < 0 ? `${captionOffset.toFixed(1)}s（字幕を早める）` : '0s（調整なし）'}
+                    </p>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                      <span style={{ color: C.textDim, fontSize: 10, minWidth: 28 }}>-2s</span>
+                      <input
+                        type="range"
+                        min={-2}
+                        max={2}
+                        step={0.1}
+                        value={captionOffset}
+                        onChange={(e) => setCaptionOffset(parseFloat(e.target.value))}
+                        style={{
+                          flex: 1,
+                          height: 4,
+                          accentColor: C.accent,
+                          cursor: 'pointer',
+                        }}
+                      />
+                      <span style={{ color: C.textDim, fontSize: 10, minWidth: 28, textAlign: 'right' }}>+2s</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
+                      {[-0.5, -0.2, 0, 0.2, 0.5].map((v) => (
+                        <button
+                          key={v}
+                          onClick={() => setCaptionOffset(v)}
+                          style={{
+                            padding: '4px 10px',
+                            border: `1px solid ${captionOffset === v ? C.accent : C.border}`,
+                            borderRadius: 6,
+                            backgroundColor: captionOffset === v ? C.accent + '22' : C.surfaceLight,
+                            color: captionOffset === v ? C.accent : C.textMuted,
+                            fontSize: 11,
+                            fontWeight: captionOffset === v ? 600 : 400,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {v === 0 ? '0' : v > 0 ? `+${v}` : v}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {/* ═══ 字幕編集 ═══ */}
                 <SectionTitle>字幕編集</SectionTitle>
                 <p style={{ color: C.textMuted, fontSize: 11, margin: "0 0 10px", lineHeight: 1.5 }}>
@@ -1796,8 +1873,13 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                   >
                     <span style={{ color: C.textMuted, fontSize: 12 }}>クリップ長</span>
                     <span style={{ color: C.text, fontSize: 15, fontWeight: 700 }}>
-                      {clipDur.toFixed(1)}秒
+                      {(duration > 0 ? Math.min(clipDur, duration) : clipDur).toFixed(1)}秒
                     </span>
+                    {duration > 0 && clipDur > duration + 1 && (
+                      <span style={{ color: C.textDim, fontSize: 10 }}>
+                        (元: {clipDur.toFixed(0)}s → 無音除去後: {duration.toFixed(0)}s)
+                      </span>
+                    )}
                   </div>
                   <button
                     onClick={applyTrim}
@@ -1992,7 +2074,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
           <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}>
             <span style={{ color: C.textDim }}>{fmt(0)}</span>
             <span style={{ color: C.accent, fontWeight: 600, fontSize: 12 }}>
-              {fmt(trimStart)} — {fmt(trimEnd)} ({clipDur.toFixed(1)}s)
+              {fmt(trimStart)} — {fmt(trimEnd)} ({(duration > 0 ? Math.min(clipDur, duration) : clipDur).toFixed(1)}s)
             </span>
             <span style={{ color: C.textDim }}>{fmt(duration)}</span>
           </div>

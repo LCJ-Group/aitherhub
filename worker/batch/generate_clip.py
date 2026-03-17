@@ -882,8 +882,17 @@ JSON配列のみ出力（説明不要）:"""
         orig_max_end = max(s["end"] for s in segments)
         logger.info(f"Original Whisper time range: {orig_min_start:.2f} - {orig_max_end:.2f}")
 
+        # Build a flat list of original Whisper word timestamps for matching
+        orig_words_flat = []
+        for seg in segments:
+            for w in seg.get("words", []):
+                orig_words_flat.append(w)
+        logger.info(f"Original Whisper words for matching: {len(orig_words_flat)}")
+
         # Validate, clean, clamp timestamps, and reconstruct word-level timestamps
         valid_segments = []
+        orig_word_idx = 0  # Track position in original Whisper words
+
         for seg in refined:
             if isinstance(seg, dict) and "start" in seg and "end" in seg and "text" in seg:
                 text_val = seg["text"].strip()
@@ -901,15 +910,58 @@ JSON配列のみ出力（説明不要）:"""
                         if s_start >= s_end:
                             continue  # Skip if no room left
 
-                    # Reconstruct word-level timestamps by distributing time evenly per character
+                    # Try to match GPT output characters to original Whisper word timestamps
+                    # This preserves actual speech timing instead of even distribution
                     chars = list(text_val)
                     total_chars = len(chars)
                     duration = s_end - s_start
                     words = []
-                    for ci, ch in enumerate(chars):
-                        ch_start = s_start + (duration * ci / total_chars)
-                        ch_end = s_start + (duration * (ci + 1) / total_chars)
-                        words.append({"word": ch, "start": round(ch_start, 3), "end": round(ch_end, 3)})
+
+                    # Find matching original words within this segment's time range
+                    matching_orig_words = []
+                    for ow in orig_words_flat:
+                        ow_start = ow.get("start", 0)
+                        ow_end = ow.get("end", 0)
+                        # Word overlaps with this segment's time range (with 0.5s tolerance)
+                        if ow_end >= s_start - 0.5 and ow_start <= s_end + 0.5:
+                            matching_orig_words.append(ow)
+
+                    if matching_orig_words:
+                        # Map original word timestamps to character positions
+                        # Build a timeline from original words
+                        char_timestamps = []
+                        for ow in matching_orig_words:
+                            ow_text = ow.get("word", "")
+                            ow_start = max(s_start, ow.get("start", s_start))
+                            ow_end = min(s_end, ow.get("end", s_end))
+                            ow_dur = max(0.01, ow_end - ow_start)
+                            ow_chars = list(ow_text)
+                            for ci, ch in enumerate(ow_chars):
+                                ch_s = ow_start + (ow_dur * ci / max(1, len(ow_chars)))
+                                ch_e = ow_start + (ow_dur * (ci + 1) / max(1, len(ow_chars)))
+                                char_timestamps.append((ch, round(ch_s, 3), round(ch_e, 3)))
+
+                        # Match GPT output chars to original char timestamps using position ratio
+                        if char_timestamps:
+                            for ci, ch in enumerate(chars):
+                                # Map position in GPT text to position in original timestamps
+                                ratio = ci / max(1, total_chars - 1) if total_chars > 1 else 0
+                                orig_idx = min(int(ratio * len(char_timestamps)), len(char_timestamps) - 1)
+                                _, ch_start, ch_end = char_timestamps[orig_idx]
+                                words.append({"word": ch, "start": ch_start, "end": ch_end})
+                        else:
+                            # Fallback: even distribution
+                            for ci, ch in enumerate(chars):
+                                ch_start = s_start + (duration * ci / total_chars)
+                                ch_end = s_start + (duration * (ci + 1) / total_chars)
+                                words.append({"word": ch, "start": round(ch_start, 3), "end": round(ch_end, 3)})
+                    else:
+                        # No matching original words found: even distribution fallback
+                        for ci, ch in enumerate(chars):
+                            ch_start = s_start + (duration * ci / total_chars)
+                            ch_end = s_start + (duration * (ci + 1) / total_chars)
+                            words.append({"word": ch, "start": round(ch_start, 3), "end": round(ch_end, 3)})
+
                     valid_segments.append({
                         "start": round(s_start, 3),
                         "end": round(s_end, 3),
