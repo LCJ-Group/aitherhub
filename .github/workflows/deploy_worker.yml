@@ -95,6 +95,19 @@ jobs:
             sudo find /var/log -name "*.gz" -delete 2>/dev/null || true
             sudo find /var/log -name "*.1" -delete 2>/dev/null || true
             sudo find /tmp -type f -mmin +30 -delete 2>/dev/null || true
+            # Remove legacy .venv and .git from /var/www/aitherhub (rsync excludes them but old copies remain)
+            if [ -d "/var/www/aitherhub/.venv" ]; then
+              echo "Removing legacy /var/www/aitherhub/.venv..."
+              sudo find /var/www/aitherhub/.venv -delete 2>/dev/null || true
+            fi
+            if [ -d "/var/www/aitherhub/worker/.venv" ]; then
+              echo "Removing legacy /var/www/aitherhub/worker/.venv..."
+              sudo find /var/www/aitherhub/worker/.venv -delete 2>/dev/null || true
+            fi
+            if [ -d "/var/www/aitherhub/.git" ]; then
+              echo "Removing legacy /var/www/aitherhub/.git..."
+              sudo find /var/www/aitherhub/.git -delete 2>/dev/null || true
+            fi
 
             echo "=== Disk status (after cleanup) ==="
             df -h / | tail -1
