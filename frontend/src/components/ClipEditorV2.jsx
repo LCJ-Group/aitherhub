@@ -942,7 +942,8 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                     setTimeout(() => setStatus(null), 3000);
                   }
                 } catch (e) {
-                  setStatus({ ok: false, msg: `エクスポート失敗: ${e.message}` });
+                  const errMsg = (e.message || 'Unknown error').slice(-200);
+                  setStatus({ ok: false, msg: `エクスポート失敗: ${errMsg}` });
                   // Keep error visible for 10 seconds
                   setTimeout(() => setStatus(null), 10000);
                 } finally {

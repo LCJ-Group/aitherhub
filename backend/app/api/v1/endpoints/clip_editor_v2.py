@@ -1379,33 +1379,38 @@ async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, s
 
     tmp_dir = tempfile.mkdtemp(prefix="export_sub_")
     try:
-        # ── Step 1: Download clip from Azure Blob ──
+        # ── Step 1: Download clip via HTTP (SAS URL or direct) ──
         _update_job(job_id, status="downloading")
         video_path = os.path.join(tmp_dir, "source.mp4")
 
-        # Extract blob_name from clip_url (CDN or Blob URL)
-        url_path = clip_url
-        if _CDN_HOST and url_path.startswith(_CDN_HOST):
-            url_path = url_path[len(_CDN_HOST):]
-        elif f"blob.core.windows.net/{CONTAINER_NAME}" in url_path:
-            url_path = url_path.split(f"/{CONTAINER_NAME}", 1)[-1]
-        url_path = url_path.lstrip("/")
-        if url_path.startswith(f"{CONTAINER_NAME}/"):
-            url_path = url_path[len(CONTAINER_NAME) + 1:]
-        if "?" in url_path:
-            url_path = url_path.split("?", 1)[0]
-        blob_name = unquote(url_path)
-        logger.info(f"[export-job {job_id}] Downloading blob: {blob_name}")
+        download_url = clip_url
+        logger.info(f"[export-job {job_id}] clip_url received: {clip_url[:120]}...")
 
-        # Download using BlobServiceClient (wrapped in thread to avoid blocking event loop)
-        def _download_blob():
-            blob_service = BlobServiceClient.from_connection_string(CONNECTION_STRING)
-            blob_client = blob_service.get_blob_client(container=CONTAINER_NAME, blob=blob_name)
-            with open(video_path, "wb") as f:
-                download_stream = blob_client.download_blob()
-                f.write(download_stream.readall())
+        # If clip_url has no SAS token, generate one server-side
+        if "?" not in download_url or "sig=" not in download_url:
+            logger.info(f"[export-job {job_id}] No SAS token in clip_url, generating one")
+            try:
+                sas_url = generate_read_sas_from_url(clip_url, expires_hours=1)
+                if sas_url:
+                    download_url = sas_url
+                    # Convert blob URL to CDN URL for faster download
+                    if _BLOB_HOST and _CDN_HOST and _BLOB_HOST in download_url:
+                        download_url = download_url.replace(_BLOB_HOST, _CDN_HOST)
+                    logger.info(f"[export-job {job_id}] Generated SAS URL")
+            except Exception as sas_err:
+                logger.warning(f"[export-job {job_id}] SAS generation failed: {sas_err}")
 
-        await asyncio.get_event_loop().run_in_executor(None, _download_blob)
+        # Download via HTTP using httpx (handles CDN, Blob, and SAS URLs)
+        import httpx
+        def _download_http():
+            with httpx.Client(timeout=120, follow_redirects=True) as client:
+                with client.stream("GET", download_url) as resp:
+                    resp.raise_for_status()
+                    with open(video_path, "wb") as f:
+                        for chunk in resp.iter_bytes(chunk_size=1024 * 1024):
+                            f.write(chunk)
+
+        await asyncio.get_event_loop().run_in_executor(None, _download_http)
         file_size = os.path.getsize(video_path)
         logger.info(f"[export-job {job_id}] Downloaded: {file_size/1024/1024:.1f} MB")
 

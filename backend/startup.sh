@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# Force English locale for consistent ffmpeg output
+export LANG=C
+export LC_ALL=C
+
 # Install ffmpeg (required for subtitle export)
 if ! command -v ffmpeg &> /dev/null; then
     echo "[startup] Installing ffmpeg..."
