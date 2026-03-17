@@ -273,6 +273,29 @@ def _download_blob(blob_url: str, dest_path: str):
     logger.info(f"URL = {blob_url}")
     logger.info(f"DEST = {dest_path}")
 
+    # --- v5: Pre-download disk space check ---
+    # Get file size via HEAD request and ensure enough disk space
+    try:
+        head_resp = requests.head(blob_url, timeout=30, allow_redirects=True)
+        content_length = int(head_resp.headers.get("content-length", 0))
+        if content_length > 0:
+            needed_gb = (content_length / (1024 ** 3)) * 1.5  # 1.5x for safety margin
+            needed_gb = max(needed_gb, 2.0)  # minimum 2GB
+            logger.info("[DL] File size: %.2f GB, need %.1f GB free",
+                        content_length / (1024 ** 3), needed_gb)
+            try:
+                from disk_guard import ensure_disk_space
+                ensure_disk_space(min_free_gb=needed_gb)
+            except RuntimeError as disk_err:
+                logger.error("[DL] Disk space insufficient for download: %s", disk_err)
+                raise PipelineStepError("DOWNLOAD", "DOWNLOAD_DISK_FULL", disk_err) from disk_err
+        else:
+            logger.info("[DL] Could not determine file size from HEAD, proceeding anyway")
+    except PipelineStepError:
+        raise
+    except Exception as head_err:
+        logger.warning("[DL] HEAD request failed (non-fatal): %s", head_err)
+
     # Try download with original URL first, then regenerate SAS if 403
     urls_to_try = [blob_url]
 
@@ -563,11 +586,11 @@ def main():
         except Exception as e:
             logger.warning("[STATUS] Failed early status update: %s", e)
 
-        video_path, video_id = _resolve_inputs(args)
-
-        # --- PRE-FLIGHT: Clean old files and check disk space ---
+        # --- PRE-FLIGHT: Clean old files and check disk space BEFORE download ---
         logger.info("=== PRE-FLIGHT DISK CLEANUP ===")
-        ensure_disk_space(min_free_gb=2.0, current_video_id=video_id)
+        ensure_disk_space(min_free_gb=3.0, current_video_id=args.video_id)
+
+        video_path, video_id = _resolve_inputs(args)
 
         current_status = get_video_status_sync(video_id)
         raw_start_step = status_to_step_index(current_status)

@@ -32,25 +32,25 @@ _TEMP_DIRS = {
     "uploadedvideo": {
         "description": "Downloaded source videos",
         "pattern": "files",          # contains individual files
-        "max_age_hours": 2,           # reduced from 6h for batch upload scenarios
+        "max_age_hours": 1,           # aggressive: 1h (videos are re-downloadable from Blob)
     },
     "/tmp/aitherhub": {
         "description": "Temp working directory for pipeline jobs",
         "pattern": "subdirs",
         "heavy_subdirs": None,       # remove entire subdir
-        "max_age_hours": 1,           # reduced from 3h
+        "max_age_hours": 0.5,         # 30 min – temp files should be short-lived
     },
     "output": {
         "description": "Per-video output artifacts (frames, audio, cache)",
         "pattern": "subdirs",        # contains {video_id}/ subdirectories
         "heavy_subdirs": ["frames", "audio", "audio_text", "cache"],
-        "max_age_hours": 2,           # reduced from 6h for batch upload scenarios
+        "max_age_hours": 1,           # aggressive: 1h (frames are the biggest disk consumer)
     },
     "splitvideo": {
         "description": "Phase-split video segments",
         "pattern": "subdirs",
         "heavy_subdirs": None,       # remove entire subdir
-        "max_age_hours": 2,           # reduced from 6h
+        "max_age_hours": 1,           # aggressive: 1h
     },
     "artifacts": {
         "description": "Live-capture temporary outputs",
@@ -110,6 +110,15 @@ def ensure_disk_space(min_free_gb: float = DISK_MIN_FREE_GB,
     info = get_disk_info()
     if info["free_gb"] >= min_free_gb:
         logger.info("[DISK] After aggressive cleanup: %.1f GB free – OK", info["free_gb"])
+        return True
+
+    # Nuclear option: clear pip cache, apt cache, and any other system caches
+    logger.warning("[DISK] Still low (%.1f GB). Nuclear cleanup...", info["free_gb"])
+    _nuclear_cleanup()
+
+    info = get_disk_info()
+    if info["free_gb"] >= min_free_gb:
+        logger.info("[DISK] After nuclear cleanup: %.1f GB free – OK", info["free_gb"])
         return True
 
     raise RuntimeError(
@@ -266,6 +275,47 @@ def _safe_remove_dir(path: str) -> int:
     except Exception as e:
         logger.warning("[CLEANUP] Could not remove %s: %s", path, e)
     return 0
+
+
+def _nuclear_cleanup():
+    """Last-resort cleanup: clear system caches, pip cache, apt cache, etc."""
+    import subprocess
+    commands = [
+        ["pip", "cache", "purge"],
+        ["sudo", "apt-get", "clean"],
+        ["sudo", "rm", "-rf", "/tmp/pip-*"],
+        ["sudo", "rm", "-rf", "/var/cache/apt/archives/*.deb"],
+    ]
+    # Also clean /tmp files older than 1 hour (excluding /tmp/aitherhub which is handled above)
+    try:
+        for entry in os.listdir("/tmp"):
+            if entry == "aitherhub":
+                continue
+            fp = os.path.join("/tmp", entry)
+            try:
+                age_hours = (time.time() - os.path.getmtime(fp)) / 3600
+                if age_hours > 0.5:
+                    if os.path.isfile(fp):
+                        os.remove(fp)
+                        logger.info("[NUCLEAR] Removed /tmp file: %s", entry)
+                    elif os.path.isdir(fp):
+                        shutil.rmtree(fp, ignore_errors=True)
+                        logger.info("[NUCLEAR] Removed /tmp dir: %s", entry)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    for cmd in commands:
+        try:
+            subprocess.run(cmd, capture_output=True, timeout=30)
+            logger.info("[NUCLEAR] Ran: %s", " ".join(cmd))
+        except Exception:
+            pass
+
+    info = get_disk_info()
+    logger.info("[NUCLEAR] After nuclear cleanup: %.1f GB free (%.0f%% used)",
+                info["free_gb"], info["used_pct"])
 
 
 def _rotate_logs():
