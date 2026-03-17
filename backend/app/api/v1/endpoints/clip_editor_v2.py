@@ -1250,6 +1250,27 @@ def _build_drawtext_filter(captions: list, style: str, position_y: float, time_o
     
     # ── Pre-process captions: convert to local time, sort, de-overlap ──
     MIN_DISPLAY = 3.0  # minimum display duration in seconds (matches frontend)
+    
+    # Auto-detect if captions are in absolute or local time.
+    # generate_clip saves LOCAL times (0-based, relative to clip start).
+    # clip_editor_v2 transcribe saves ABSOLUTE times (offset by time_start).
+    # If the maximum caption start time is less than time_offset,
+    # the captions are already local and we should NOT subtract time_offset.
+    if time_offset > 0 and captions:
+        max_start = max(float(_cap_get(c, 'start', 0)) for c in captions)
+        if max_start < time_offset:
+            logger.info(f"[drawtext] Captions appear to be LOCAL times "
+                        f"(max_start={max_start:.2f} < time_offset={time_offset:.2f}), "
+                        f"skipping offset subtraction")
+            effective_offset = 0
+        else:
+            logger.info(f"[drawtext] Captions appear to be ABSOLUTE times "
+                        f"(max_start={max_start:.2f} >= time_offset={time_offset:.2f}), "
+                        f"subtracting offset")
+            effective_offset = time_offset
+    else:
+        effective_offset = 0
+    
     processed = []
     for cap in captions:
         cap_start = float(_cap_get(cap, 'start', 0))
@@ -1257,8 +1278,8 @@ def _build_drawtext_filter(captions: list, style: str, position_y: float, time_o
         cap_text = _cap_get(cap, 'text', '')
         if not cap_text or not cap_text.strip():
             continue
-        local_start = cap_start - time_offset if time_offset > 0 else cap_start
-        local_end = cap_end - time_offset if time_offset > 0 else cap_end
+        local_start = cap_start - effective_offset if effective_offset > 0 else cap_start
+        local_end = cap_end - effective_offset if effective_offset > 0 else cap_end
         if local_start < 0:
             local_start = 0
         if local_end <= local_start:
@@ -1321,7 +1342,10 @@ def _build_drawtext_filter(captions: list, style: str, position_y: float, time_o
         filters.append('drawtext=' + ':'.join(params))
     
     if not filters:
-        return 'null'  # no-op filter
+        logger.warning(f"[drawtext] No valid captions after processing "
+                       f"({len(captions)} raw → 0 processed). "
+                       f"time_offset={time_offset}, effective_offset={effective_offset}")
+        return '[0:v]copy[v]'  # pass-through filter with [v] label
     
     # ── Prepend drawbox to mask TikTok/platform auto-subtitles ──
     # TikTok live streams often have auto-captions burned into the video.
