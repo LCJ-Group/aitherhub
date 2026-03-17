@@ -635,7 +635,7 @@ class AutoVideoPipelineService:
                     )
 
                     # Save TTS audio locally and upload to blob
-                    tts_audio_path = os.path.join(work_dir, f"{job_id}-tts.mp3")
+                    tts_audio_path = os.path.join(TEMP_DIR, f"{job_id}-tts.mp3")
                     with open(tts_audio_path, "wb") as f:
                         f.write(tts_audio_bytes)
 
@@ -883,7 +883,7 @@ class AutoVideoPipelineService:
                 parsed = urlparse(azure_endpoint)
                 base_endpoint = f"{parsed.scheme}://{parsed.netloc}"
                 api_version = os.getenv("GPT5_API_VERSION", "2025-04-01-preview")
-                model = os.getenv("GPT5_MODEL", "gpt-4.1-mini")
+                model = os.getenv("GPT5_MODEL", "gpt-4o")
                 client = openai.AsyncAzureOpenAI(
                     api_key=azure_key,
                     azure_endpoint=base_endpoint,
@@ -900,6 +900,13 @@ class AutoVideoPipelineService:
                     "Set AZURE_OPENAI_KEY+AZURE_OPENAI_ENDPOINT or OPENAI_API_KEY."
                 )
 
+            # gpt-5.x models require max_completion_tokens instead of max_tokens
+            token_kwargs = {}
+            if model.startswith("gpt-5"):
+                token_kwargs["max_completion_tokens"] = 4096
+            else:
+                token_kwargs["max_tokens"] = 4096
+
             response = await client.chat.completions.create(
                 model=model,
                 messages=[
@@ -913,8 +920,8 @@ class AutoVideoPipelineService:
                     },
                     {"role": "user", "content": prompt},
                 ],
-                max_tokens=4096,
                 temperature=0.7,
+                **token_kwargs,
             )
             script = response.choices[0].message.content.strip()
             logger.info(f"GPT script generated: {len(script)} chars for topic: {topic}")
