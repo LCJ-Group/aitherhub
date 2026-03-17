@@ -106,6 +106,7 @@ class AutoVideoStatusResponse(BaseModel):
     generated_script: Optional[str] = None
     tts_audio_duration_sec: Optional[float] = None
     enable_lip_sync: bool
+    lip_sync_error: Optional[str] = None
     result_video_url: Optional[str] = None
 
 

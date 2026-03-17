@@ -701,13 +701,15 @@ class AutoVideoPipelineService:
                 except Exception as e:
                     error_detail = str(e)
                     logger.error(
-                        f"[{job_id}] Sync.so lip sync FAILED: {error_detail}"
+                        f"[{job_id}] Sync.so lip sync FAILED: {error_detail}",
+                        exc_info=True,
                     )
                     job["lip_sync_error"] = error_detail
-                    job["step_detail"] = f"Lip sync failed: {error_detail[:100]}"
-                    # Still produce a video, but record the failure clearly
-                    logger.warning(f"[{job_id}] Falling back to face-swapped video WITHOUT audio")
-                    shutil.copy2(swapped_path, final_path)
+                    job["step_detail"] = f"Lip sync failed: {error_detail[:200]}"
+                    # DO NOT silently fallback — raise the error so it's visible
+                    raise RuntimeError(
+                        f"Lip sync + TTS failed: {error_detail}"
+                    )
             else:
                 # No lip sync requested — use face-swapped video as-is (no audio)
                 shutil.copy2(swapped_path, final_path)
