@@ -18,6 +18,9 @@ import {
   Sparkles,
   Wand2,
   Volume2,
+  Camera,
+  ImageIcon,
+  X,
 } from "lucide-react";
 import autoVideoService from "../base/services/autoVideoService";
 
@@ -71,10 +74,17 @@ export default function AutoVideoPage() {
   // Health
   const [health, setHealth] = useState(null);
 
+  // Product images
+  const [productImages, setProductImages] = useState([]);
+  const [productImagePreviews, setProductImagePreviews] = useState([]);
+  const [imageUploadProgress, setImageUploadProgress] = useState(0);
+  const [isUploadingImages, setIsUploadingImages] = useState(false);
+
   // Settings panel
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   const fileInputRef = useRef(null);
+  const imageInputRef = useRef(null);
   const pollRef = useRef(null);
 
   // ── Load voices on mount ──
@@ -182,6 +192,31 @@ export default function AutoVideoPage() {
     }
   }, []);
 
+  // ── Product image handling ──
+  const handleImageSelect = useCallback((e) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+
+    const validFiles = files.filter((f) => f.type.startsWith("image/"));
+    if (validFiles.length === 0) {
+      setError("画像ファイルを選択してください");
+      return;
+    }
+
+    // Max 5 images
+    const newFiles = [...productImages, ...validFiles].slice(0, 5);
+    setProductImages(newFiles);
+    setProductImagePreviews(
+      newFiles.map((f) => URL.createObjectURL(f))
+    );
+    setError(null);
+  }, [productImages]);
+
+  const removeProductImage = useCallback((index) => {
+    setProductImages((prev) => prev.filter((_, i) => i !== index));
+    setProductImagePreviews((prev) => prev.filter((_, i) => i !== index));
+  }, []);
+
   // ── Submit job ──
   const handleSubmit = async () => {
     setError(null);
@@ -221,6 +256,21 @@ export default function AutoVideoPage() {
         return;
       }
 
+      // Upload product images if any
+      let productImageUrls = [];
+      if (scriptMode === "ai" && productImages.length > 0) {
+        setIsUploadingImages(true);
+        try {
+          productImageUrls = await autoVideoService.uploadProductImages(
+            productImages,
+            setImageUploadProgress
+          );
+        } finally {
+          setIsUploadingImages(false);
+          setImageUploadProgress(0);
+        }
+      }
+
       const params = {
         video_url: finalVideoUrl,
         topic: scriptMode === "ai" ? topic : `Custom: ${scriptText.slice(0, 50)}`,
@@ -230,6 +280,7 @@ export default function AutoVideoPage() {
         quality,
         enable_lip_sync: enableLipSync,
         product_info: productInfo || undefined,
+        product_image_urls: productImageUrls.length > 0 ? productImageUrls : undefined,
       };
 
       if (scriptMode === "manual") {
@@ -271,6 +322,8 @@ export default function AutoVideoPage() {
     setTopic("");
     setProductInfo("");
     setScriptText("");
+    setProductImages([]);
+    setProductImagePreviews([]);
     setError(null);
   };
 
@@ -483,6 +536,73 @@ export default function AutoVideoPage() {
                       className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2.5 focus:outline-none focus:border-purple-500"
                     />
                   </div>
+
+                  {/* Product Image Upload */}
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1 flex items-center gap-1">
+                      <Camera size={14} className="text-orange-400" />
+                      商品写真（任意・最大5枚）
+                    </label>
+                    <p className="text-xs text-gray-500 mb-2">
+                      商品写真をアップロードすると、AIが自動で商品名・特徴・価格を読み取って台本に反映します
+                    </p>
+
+                    {productImagePreviews.length > 0 && (
+                      <div className="flex gap-2 mb-2 flex-wrap">
+                        {productImagePreviews.map((preview, idx) => (
+                          <div key={idx} className="relative group">
+                            <img
+                              src={preview}
+                              alt={`商品写真 ${idx + 1}`}
+                              className="w-20 h-20 object-cover rounded-lg border border-gray-700"
+                            />
+                            <button
+                              onClick={() => removeProductImage(idx)}
+                              className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-red-500 hover:bg-red-400 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition"
+                            >
+                              <X size={10} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {productImages.length < 5 && (
+                      <button
+                        onClick={() => imageInputRef.current?.click()}
+                        className="w-full py-2.5 border-2 border-dashed border-gray-700 rounded-lg text-sm text-gray-400 hover:border-orange-500/50 hover:text-orange-300 transition flex items-center justify-center gap-2"
+                      >
+                        <ImageIcon size={16} />
+                        {productImages.length === 0
+                          ? "商品写真をアップロード"
+                          : `さらに追加（${productImages.length}/5）`}
+                      </button>
+                    )}
+                    <input
+                      ref={imageInputRef}
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      className="hidden"
+                      onChange={handleImageSelect}
+                    />
+
+                    {isUploadingImages && (
+                      <div className="mt-2">
+                        <div className="flex justify-between text-xs text-gray-400 mb-1">
+                          <span>商品写真をアップロード中...</span>
+                          <span>{imageUploadProgress}%</span>
+                        </div>
+                        <div className="w-full bg-gray-800 rounded-full h-1.5">
+                          <div
+                            className="bg-orange-500 h-1.5 rounded-full transition-all"
+                            style={{ width: `${imageUploadProgress}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
                   <div>
                     <label className="block text-sm text-gray-400 mb-1">
                       商品情報（任意）

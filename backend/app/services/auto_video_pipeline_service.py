@@ -226,6 +226,7 @@ class AutoVideoPipelineService:
         enable_lip_sync: bool = True,
         product_info: Optional[str] = None,
         target_duration_sec: Optional[int] = None,
+        product_image_urls: Optional[List[str]] = None,
     ) -> str:
         """
         Create a new auto video generation job.
@@ -264,6 +265,7 @@ class AutoVideoPipelineService:
             "enable_lip_sync": enable_lip_sync,
             "product_info": product_info,
             "target_duration_sec": target_duration_sec,
+            "product_image_urls": product_image_urls or [],
             "created_at": time.time(),
             "completed_at": None,
             "result_video_path": None,
@@ -484,11 +486,37 @@ class AutoVideoPipelineService:
                 script = job["script_text"]
                 logger.info(f"[{job_id}] Using provided script: {len(script)} chars")
             else:
+                # If product images are provided, extract product info via GPT Vision
+                product_info_from_images = ""
+                if job.get("product_image_urls"):
+                    job["step_detail"] = "Analyzing product photos with AI Vision"
+                    logger.info(
+                        f"[{job_id}] Analyzing {len(job['product_image_urls'])} "
+                        f"product image(s) with GPT Vision"
+                    )
+                    product_info_from_images = await self._analyze_product_images(
+                        image_urls=job["product_image_urls"],
+                        language=job["language"],
+                    )
+                    logger.info(
+                        f"[{job_id}] Product info extracted from images: "
+                        f"{len(product_info_from_images)} chars"
+                    )
+
+                # Merge manual product_info with image-extracted info
+                combined_product_info = ""
+                if job.get("product_info"):
+                    combined_product_info += job["product_info"]
+                if product_info_from_images:
+                    if combined_product_info:
+                        combined_product_info += "\n\n"
+                    combined_product_info += product_info_from_images
+
                 # Load AitherHub "sales brain" context
                 sales_brain = await _fetch_sales_brain_context()
                 script = await self._generate_script(
                     topic=job["topic"],
-                    product_info=job.get("product_info"),
+                    product_info=combined_product_info or None,
                     language=job["language"],
                     tone=job["tone"],
                     target_duration_sec=job.get("target_duration_sec") or video_duration,
@@ -810,19 +838,35 @@ class AutoVideoPipelineService:
         """
         Generate a livestream/video script using GPT.
 
-        Estimates ~3 characters per second for Japanese speech,
-        ~2.5 words per second for English.
+        Character count estimation for TTS duration matching:
+          - Japanese: ~4.2 chars/sec (250-300 chars/min, using midpoint 275/60)
+          - Chinese: ~3.5 chars/sec
+          - English: ~2.5 words/sec (~12.5 chars/sec)
+
+        The target is calculated with a small buffer (95%) to avoid
+        the TTS audio exceeding the video duration.
         """
         # Estimate target character count based on duration
+        # Use 95% of duration as target to leave breathing room
+        effective_duration = target_duration_sec * 0.95
+
         if language == "ja":
-            chars_per_sec = 5  # Japanese: ~5 chars/sec for natural speech
-            target_chars = int(target_duration_sec * chars_per_sec)
+            # Japanese: 250-300 chars/min → ~4.2-5.0 chars/sec
+            # Use 4.2 (conservative) to avoid TTS exceeding video length
+            chars_per_sec = 4.2
+            target_chars = int(effective_duration * chars_per_sec)
+            min_chars = int(effective_duration * 3.8)  # floor
+            max_chars = int(effective_duration * 5.0)  # ceiling
         elif language == "zh":
-            chars_per_sec = 4
-            target_chars = int(target_duration_sec * chars_per_sec)
+            chars_per_sec = 3.5
+            target_chars = int(effective_duration * chars_per_sec)
+            min_chars = int(effective_duration * 3.0)
+            max_chars = int(effective_duration * 4.0)
         else:
             words_per_sec = 2.5
-            target_chars = int(target_duration_sec * words_per_sec * 5)
+            target_chars = int(effective_duration * words_per_sec * 5)
+            min_chars = int(effective_duration * 2.0 * 5)
+            max_chars = int(effective_duration * 3.0 * 5)
 
         lang_map = {
             "ja": "日本語",
@@ -856,11 +900,15 @@ class AutoVideoPipelineService:
 ## 要件
 - 言語: {lang_name}
 - トーン: {tone_desc}
-- 目標の長さ: 約{target_chars}文字（約{target_duration_sec:.0f}秒の動画用）
+- **重要: 文字数制御** — この台本は{target_duration_sec:.0f}秒の動画用です
+  - 目標文字数: 約{target_chars}文字（{min_chars}〜{max_chars}文字の範囲内）
+  - 日本語の話速は約250〜300文字/分（約4.2〜5.0文字/秒）を基準にしています
+  - 文字数が多すぎると音声が動画より長くなるため、必ず範囲内に収めてください
 - 構成: 挨拶→テーマ導入→詳細説明→使用シーン/メリット→まとめ/CTA
 - 自然な話し言葉で、AIデジタルヒューマンが読み上げても違和感がないように
 - 視聴者への呼びかけや質問を適度に挿入
 - 句読点と改行を適切に配置（読み上げのペースを制御）
+- 「...」「〜」などの間を表す記号を適度に使い、自然なリズムを作る
 
 ## 注意事項
 - 台本テキストのみを出力してください（メタ情報やコメントは不要）
@@ -948,6 +996,149 @@ class AutoVideoPipelineService:
             f"Let me share its features and benefits with you.\n\n"
             f"Please watch until the end!"
         )
+
+    # ──────────────────────────────────────────
+    # Product Image Analysis (GPT Vision)
+    # ──────────────────────────────────────────
+
+    async def _analyze_product_images(
+        self,
+        image_urls: List[str],
+        language: str = "ja",
+    ) -> str:
+        """
+        Analyze product images using GPT-4o Vision to extract product information.
+
+        Accepts image URLs (Azure Blob Storage with SAS tokens) and returns
+        structured product information for script generation.
+
+        Args:
+            image_urls: List of image URLs (with SAS tokens if on Azure Blob)
+            language: Target language for the extracted info
+
+        Returns:
+            Extracted product information as a formatted string
+        """
+        if not image_urls:
+            return ""
+
+        try:
+            import openai
+            import base64
+
+            # Build OpenAI client (same logic as _generate_script)
+            azure_key = os.getenv("AZURE_OPENAI_KEY", "")
+            azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
+            openai_key = os.getenv("OPENAI_API_KEY", "")
+
+            if azure_key and azure_endpoint:
+                from urllib.parse import urlparse
+                parsed = urlparse(azure_endpoint)
+                base_endpoint = f"{parsed.scheme}://{parsed.netloc}"
+                api_version = os.getenv("VISION_API_VERSION", "2024-06-01")
+                vision_model = os.getenv("VISION_MODEL", "gpt-4o")
+                client = openai.AsyncAzureOpenAI(
+                    api_key=azure_key,
+                    azure_endpoint=base_endpoint,
+                    api_version=api_version,
+                )
+                logger.info(
+                    f"GPT Vision: Using Azure OpenAI model={vision_model}, "
+                    f"endpoint={base_endpoint}"
+                )
+            elif openai_key:
+                client = openai.AsyncOpenAI()
+                vision_model = "gpt-4.1-mini"
+                logger.info(f"GPT Vision: Using OpenAI model={vision_model}")
+            else:
+                logger.warning("No OpenAI API key for Vision analysis")
+                return ""
+
+            lang_map = {"ja": "日本語", "zh": "中文", "en": "English"}
+            lang_name = lang_map.get(language, "日本語")
+
+            # Build image content parts
+            image_content_parts = []
+            for i, url in enumerate(image_urls[:5]):  # Max 5 images
+                # If URL is on Azure Blob, ensure it has a SAS token
+                accessible_url = url
+                if (
+                    "aitherhub.blob.core.windows.net" in url
+                    and "?" not in url
+                ):
+                    from app.services.storage_service import (
+                        generate_read_sas_from_url,
+                    )
+                    sas_url = generate_read_sas_from_url(url)
+                    if sas_url:
+                        accessible_url = sas_url
+
+                image_content_parts.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": accessible_url,
+                        "detail": "high",
+                    },
+                })
+
+            # Build prompt
+            vision_prompt = f"""以下の商品写真を分析して、{lang_name}で商品情報を抽出してください。
+
+以下の項目を可能な限り読み取ってください:
+- 商品名（パッケージに記載されている正式名称）
+- ブランド名
+- 商品カテゴリ（シャンプー、美容液、化粧品など）
+- 主な特徴・成分（パッケージから読み取れるもの）
+- 価格（表示されている場合）
+- 容量・サイズ
+- ターゲット層（推測）
+- 商品の見た目の特徴（色、デザイン、高級感など）
+- キャッチコピーやセールスポイント（パッケージに記載されているもの）
+
+読み取れない項目は省略してください。
+台本作成に役立つ形式で、自然な日本語で出力してください。
+"""
+
+            # Combine text + images
+            user_content = [
+                {"type": "text", "text": vision_prompt},
+                *image_content_parts,
+            ]
+
+            # Token kwargs
+            token_kwargs = {}
+            if vision_model.startswith("gpt-5"):
+                token_kwargs["max_completion_tokens"] = 2000
+            else:
+                token_kwargs["max_tokens"] = 2000
+
+            response = await client.chat.completions.create(
+                model=vision_model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a product analysis expert. Extract detailed "
+                            "product information from product photos for use in "
+                            "creating sales scripts. Be accurate and detailed."
+                        ),
+                    },
+                    {"role": "user", "content": user_content},
+                ],
+                temperature=0.3,
+                **token_kwargs,
+            )
+
+            result = response.choices[0].message.content.strip()
+            logger.info(
+                f"GPT Vision extracted product info: {len(result)} chars "
+                f"from {len(image_urls)} image(s)"
+            )
+            return result
+
+        except Exception as e:
+            logger.error(f"GPT Vision product analysis failed: {e}", exc_info=True)
+            return f"(商品写真の解析に失敗しました: {str(e)[:100]})"
 
     # ──────────────────────────────────────────
     # Utilities

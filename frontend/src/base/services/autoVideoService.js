@@ -130,6 +130,51 @@ class AutoVideoService {
   }
 
   /**
+   * Upload product images to Azure Blob Storage via SAS URL.
+   *
+   * @param {File[]} files - Array of image files to upload
+   * @param {function} [onProgress] - Progress callback (0-100)
+   * @returns {Promise<string[]>} Array of permanent blob URLs
+   */
+  async uploadProductImages(files, onProgress) {
+    const urls = [];
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const imageId = `product-img-${Date.now()}-${i}`;
+      const sasRes = await axios.post(
+        `${this.baseURL}/api/v1/admin/generate-upload-sas`,
+        {
+          email: "auto-video@aitherhub.com",
+          video_id: imageId,
+          filename: file.name,
+        },
+        { headers: this._headers() }
+      );
+
+      const { upload_url, blob_url } = sasRes.data;
+
+      await axios.put(upload_url, file, {
+        headers: {
+          "x-ms-blob-type": "BlockBlob",
+          "Content-Type": file.type || "image/jpeg",
+        },
+        onUploadProgress: (e) => {
+          if (onProgress && e.total) {
+            const fileProgress = Math.round((e.loaded / e.total) * 100);
+            const overallProgress = Math.round(
+              ((i * 100 + fileProgress) / (files.length * 100)) * 100
+            );
+            onProgress(overallProgress);
+          }
+        },
+      });
+
+      urls.push(blob_url);
+    }
+    return urls;
+  }
+
+  /**
    * Upload a video file to Azure Blob Storage via SAS URL.
    *
    * Flow:

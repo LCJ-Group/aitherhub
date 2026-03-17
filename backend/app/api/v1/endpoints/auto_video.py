@@ -85,6 +85,10 @@ class CreateAutoVideoRequest(BaseModel):
         None,
         description="Target video duration in seconds (auto-detected from video if not set)",
     )
+    product_image_urls: Optional[list[str]] = Field(
+        None,
+        description="List of product image URLs for GPT Vision analysis (max 5)",
+    )
 
 
 class CreateAutoVideoResponse(BaseModel):
@@ -157,6 +161,7 @@ async def create_auto_video(req: CreateAutoVideoRequest):
             enable_lip_sync=req.enable_lip_sync,
             product_info=req.product_info,
             target_duration_sec=req.target_duration_sec,
+            product_image_urls=req.product_image_urls,
         )
 
         return CreateAutoVideoResponse(
