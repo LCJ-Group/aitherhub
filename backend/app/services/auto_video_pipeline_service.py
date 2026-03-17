@@ -455,7 +455,11 @@ class AutoVideoPipelineService:
                 else:
                     logger.warning(f"[{job_id}] Failed to generate read SAS, trying direct URL")
 
-            async with httpx.AsyncClient(timeout=300, follow_redirects=True) as client:
+            # Use per-phase timeout to prevent infinite hangs
+            dl_timeout = httpx.Timeout(
+                connect=30, read=120, write=30, pool=300
+            )
+            async with httpx.AsyncClient(timeout=dl_timeout, follow_redirects=True) as client:
                 async with client.stream("GET", download_url) as resp:
                     resp.raise_for_status()
                     total = int(resp.headers.get("content-length", 0))
@@ -920,40 +924,11 @@ class AutoVideoPipelineService:
         try:
             import openai
 
-            # Use Azure OpenAI if configured, otherwise standard OpenAI
-            azure_key = os.getenv("AZURE_OPENAI_KEY", "")
-            azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
-            openai_key = os.getenv("OPENAI_API_KEY", "")
-
-            if azure_key and azure_endpoint:
-                # Azure OpenAI — extract base endpoint (remove path/query)
-                from urllib.parse import urlparse
-                parsed = urlparse(azure_endpoint)
-                base_endpoint = f"{parsed.scheme}://{parsed.netloc}"
-                api_version = os.getenv("GPT5_API_VERSION", "2025-04-01-preview")
-                model = os.getenv("GPT5_MODEL", "gpt-4o")
-                client = openai.AsyncAzureOpenAI(
-                    api_key=azure_key,
-                    azure_endpoint=base_endpoint,
-                    api_version=api_version,
-                )
-                logger.info(f"Using Azure OpenAI: model={model}, endpoint={base_endpoint}")
-            elif openai_key:
-                client = openai.AsyncOpenAI()
-                model = "gpt-4.1-mini"
-                logger.info(f"Using OpenAI: model={model}")
-            else:
-                raise RuntimeError(
-                    "No OpenAI API key configured. "
-                    "Set AZURE_OPENAI_KEY+AZURE_OPENAI_ENDPOINT or OPENAI_API_KEY."
-                )
-
-            # gpt-5.x models require max_completion_tokens instead of max_tokens
-            token_kwargs = {}
-            if model.startswith("gpt-5"):
-                token_kwargs["max_completion_tokens"] = 4096
-            else:
-                token_kwargs["max_tokens"] = 4096
+            # Use standard OpenAI API (same as script_generator_service)
+            # Azure OpenAI had model/version issues causing silent fallback
+            client = openai.AsyncOpenAI()
+            model = "gpt-4.1-mini"
+            logger.info(f"Script generation: using OpenAI model={model}")
 
             response = await client.chat.completions.create(
                 model=model,
@@ -968,15 +943,15 @@ class AutoVideoPipelineService:
                     },
                     {"role": "user", "content": prompt},
                 ],
+                max_tokens=4096,
                 temperature=0.7,
-                **token_kwargs,
             )
             script = response.choices[0].message.content.strip()
             logger.info(f"GPT script generated: {len(script)} chars for topic: {topic}")
             return script
 
         except Exception as e:
-            logger.error(f"GPT script generation failed: {e}")
+            logger.error(f"GPT script generation failed: {e}", exc_info=True)
             # Fallback: simple template
             return self._fallback_script(topic, language)
 
@@ -1024,35 +999,11 @@ class AutoVideoPipelineService:
 
         try:
             import openai
-            import base64
 
-            # Build OpenAI client (same logic as _generate_script)
-            azure_key = os.getenv("AZURE_OPENAI_KEY", "")
-            azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
-            openai_key = os.getenv("OPENAI_API_KEY", "")
-
-            if azure_key and azure_endpoint:
-                from urllib.parse import urlparse
-                parsed = urlparse(azure_endpoint)
-                base_endpoint = f"{parsed.scheme}://{parsed.netloc}"
-                api_version = os.getenv("VISION_API_VERSION", "2024-06-01")
-                vision_model = os.getenv("VISION_MODEL", "gpt-4o")
-                client = openai.AsyncAzureOpenAI(
-                    api_key=azure_key,
-                    azure_endpoint=base_endpoint,
-                    api_version=api_version,
-                )
-                logger.info(
-                    f"GPT Vision: Using Azure OpenAI model={vision_model}, "
-                    f"endpoint={base_endpoint}"
-                )
-            elif openai_key:
-                client = openai.AsyncOpenAI()
-                vision_model = "gpt-4.1-mini"
-                logger.info(f"GPT Vision: Using OpenAI model={vision_model}")
-            else:
-                logger.warning("No OpenAI API key for Vision analysis")
-                return ""
+            # Use standard OpenAI API (same as _generate_script)
+            client = openai.AsyncOpenAI()
+            vision_model = "gpt-4.1-mini"
+            logger.info(f"GPT Vision: using OpenAI model={vision_model}")
 
             lang_map = {"ja": "日本語", "zh": "中文", "en": "English"}
             lang_name = lang_map.get(language, "日本語")
@@ -1105,13 +1056,6 @@ class AutoVideoPipelineService:
                 *image_content_parts,
             ]
 
-            # Token kwargs
-            token_kwargs = {}
-            if vision_model.startswith("gpt-5"):
-                token_kwargs["max_completion_tokens"] = 2000
-            else:
-                token_kwargs["max_tokens"] = 2000
-
             response = await client.chat.completions.create(
                 model=vision_model,
                 messages=[
@@ -1125,8 +1069,8 @@ class AutoVideoPipelineService:
                     },
                     {"role": "user", "content": user_content},
                 ],
+                max_tokens=2000,
                 temperature=0.3,
-                **token_kwargs,
             )
 
             result = response.choices[0].message.content.strip()
