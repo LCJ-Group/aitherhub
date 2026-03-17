@@ -19,6 +19,14 @@ FFMPEG_BIN = env("FFMPEG_PATH", "ffmpeg")
 # compare every Nth frame (720 for 5s interval at fps=1)
 SCORE_SAMPLE_INTERVAL = int(env("SCORE_SAMPLE_INTERVAL", "3"))
 
+# v5: Frame extraction resolution and quality
+# 640px is sufficient for phase detection (histogram/absdiff), GPT Vision,
+# and product detection. Reduces disk usage by ~75% (120KB→30KB per frame).
+FRAME_SCALE_WIDTH = int(env("FRAME_SCALE_WIDTH", "640"))
+FRAME_JPEG_QUALITY = int(env("FRAME_JPEG_QUALITY", "8"))  # 2=best, 31=worst
+# Estimated bytes per frame at current settings (for disk space pre-check)
+FRAME_ESTIMATED_BYTES = int(env("FRAME_ESTIMATED_BYTES", "30000"))  # ~30KB at 640px q8
+
 # ======================================================
 # STEP 0 – EXTRACT FRAMES
 # ======================================================
@@ -86,10 +94,10 @@ def extract_frames(
     """
     STEP 0 – Extract frames from video
 
-    v2: GPU-accelerated (NVDEC) with CPU fallback
+    v3: GPU-accelerated (NVDEC) with CPU fallback + disk-optimized
     - Uses NVIDIA CUVID hardware decoder when GPU is available (5-10x faster)
     - Falls back to CPU decoding if GPU is unavailable or codec unsupported
-    - Outputs scaled frames (max 1280px width) to reduce I/O
+    - Outputs scaled frames (max 640px width, JPEG q8) for 75% disk savings
     - on_progress(percent): optional callback for real-time progress (0-100)
     """
     out_dir = os.path.join(frames_root, "frames")
@@ -128,6 +136,9 @@ def extract_frames(
 
     use_gpu = has_gpu and cuvid_decoder is not None
 
+    _sw = FRAME_SCALE_WIDTH
+    _jq = FRAME_JPEG_QUALITY
+
     if use_gpu:
         # GPU path: NVDEC hardware decode + GPU resize + CPU JPG encode
         cmd = [
@@ -136,40 +147,52 @@ def extract_frames(
             "-hwaccel_output_format", "cuda",
             "-c:v", cuvid_decoder,
             "-i", video_path,
-            "-vf", f"fps={fps},scale_cuda=1280:-1,hwdownload,format=nv12",
-            "-q:v", "5",
+            "-vf", f"fps={fps},scale_cuda={_sw}:-1,hwdownload,format=nv12",
+            "-q:v", str(_jq),
             "-vsync", "0",
             os.path.join(out_dir, "frame_%08d.jpg"),
         ]
-        logger.info("[FRAMES] Using GPU decode: %s (codec=%s)", cuvid_decoder, codec)
+        logger.info("[FRAMES] Using GPU decode: %s (codec=%s, scale=%dpx, q=%d)",
+                    cuvid_decoder, codec, _sw, _jq)
     else:
         # CPU path: software decode + scale + JPG
         cmd = [
             FFMPEG_BIN, "-y",
             "-threads", "0",
             "-i", video_path,
-            "-vf", f"fps={fps},scale=1280:-1",
-            "-q:v", "5",
+            "-vf", f"fps={fps},scale={_sw}:-1",
+            "-q:v", str(_jq),
             "-vsync", "0",
             os.path.join(out_dir, "frame_%08d.jpg"),
         ]
-        logger.info("[FRAMES] Using CPU decode (gpu=%s, codec=%s, cuvid=%s)",
-                    has_gpu, codec, cuvid_decoder)
+        logger.info("[FRAMES] Using CPU decode (gpu=%s, codec=%s, cuvid=%s, scale=%dpx, q=%d)",
+                    has_gpu, codec, cuvid_decoder, _sw, _jq)
 
     import threading, time as _time, shutil
 
-    # --- Disk space pre-check ---
+    # --- Disk space pre-check (v3: uses FRAME_ESTIMATED_BYTES) ---
     disk = shutil.disk_usage(out_dir)
     free_gb = disk.free / (1024 ** 3)
-    # Estimate required space: ~120KB per frame (JPG 1280px)
-    estimated_gb = (expected_frames * 120 * 1024) / (1024 ** 3) if expected_frames > 0 else 5.0
-    logger.info("[FRAMES] Disk free: %.1f GB, estimated need: %.1f GB", free_gb, estimated_gb)
-    if free_gb < max(estimated_gb * 1.2, 1.5):
-        raise RuntimeError(
-            f"[FRAMES] Insufficient disk space: {free_gb:.1f} GB free, "
-            f"need ~{estimated_gb:.1f} GB for {expected_frames} frames. "
-            f"Clean up old files first."
-        )
+    estimated_gb = (expected_frames * FRAME_ESTIMATED_BYTES) / (1024 ** 3) if expected_frames > 0 else 2.0
+    logger.info("[FRAMES] Disk free: %.1f GB, estimated need: %.1f GB (scale=%dpx, q=%d, ~%dKB/frame)",
+                free_gb, estimated_gb, _sw, _jq, FRAME_ESTIMATED_BYTES // 1024)
+    if free_gb < max(estimated_gb * 1.2, 1.0):
+        # Try cleanup before giving up
+        try:
+            from disk_guard import ensure_disk_space
+            ensure_disk_space(min_free_gb=max(estimated_gb * 1.2, 1.0))
+            # Re-check after cleanup
+            disk = shutil.disk_usage(out_dir)
+            free_gb = disk.free / (1024 ** 3)
+            logger.info("[FRAMES] After cleanup: %.1f GB free", free_gb)
+        except Exception as cleanup_err:
+            logger.warning("[FRAMES] Cleanup failed: %s", cleanup_err)
+        if free_gb < max(estimated_gb * 1.2, 1.0):
+            raise RuntimeError(
+                f"[FRAMES] Insufficient disk space: {free_gb:.1f} GB free, "
+                f"need ~{estimated_gb:.1f} GB for {expected_frames} frames "
+                f"(scale={_sw}px, q={_jq}). Clean up old files first."
+            )
 
     # Run ffmpeg in background so we can monitor progress
     proc = subprocess.Popen(
@@ -261,8 +284,8 @@ def extract_frames(
             FFMPEG_BIN, "-y",
             "-threads", "0",
             "-i", video_path,
-            "-vf", f"fps={fps},scale=1280:-1",
-            "-q:v", "5",
+            "-vf", f"fps={fps},scale={_sw}:-1",
+            "-q:v", str(_jq),
             "-vsync", "0",
             os.path.join(out_dir, "frame_%08d.jpg"),
         ]

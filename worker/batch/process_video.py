@@ -670,7 +670,7 @@ def main():
                     input_path=video_path,
                     output_path=_analysis_out,
                     fps=1,
-                    scale_width=1280,
+                    scale_width=640,  # v5: match frame extraction resolution
                     crf=28,
                     preset="veryfast",
                     timeout=_analysis_timeout,
@@ -1355,6 +1355,24 @@ def main():
                 _record_step_error(video_id, "STEP_5_7_SCREEN_MOMENT", "SCREEN_MOMENT_FAIL", e)
         elif is_screen_recording and not enable_screen_moment:
             logger.info("[SCREEN_MOMENT] Feature flag ENABLE_SCREEN_MOMENT is disabled, skipping")
+
+        # =========================
+        # POST-STEP 5.7: EARLY FRAME CLEANUP
+        # =========================
+        # All frame-dependent steps (1, 2, 4, 5, 5.7) are now complete.
+        # STEP 12.5 (product_detection v4.1) works without frames.
+        # Remove frames directory to free disk space (0.5-3 GB depending on video).
+        try:
+            if os.path.isdir(frame_dir):
+                _frame_count = len([f for f in os.listdir(frame_dir) if f.endswith('.jpg')])
+                shutil.rmtree(frame_dir, ignore_errors=True)
+                logger.info(
+                    "[FRAME_CLEANUP] Removed %d frames from %s after STEP 5.7. "
+                    "All frame-dependent steps complete.",
+                    _frame_count, frame_dir,
+                )
+        except Exception as _fc_err:
+            logger.warning("[FRAME_CLEANUP] Non-fatal error: %s", _fc_err)
 
         # =========================
         # STEP 6 – PHASE DESCRIPTION
