@@ -162,7 +162,7 @@ class SyncLipSyncService:
                     "type": "text",
                     "provider": {
                         "name": "elevenlabs",
-                        "voice_id": voice_id,
+                        "voiceId": voice_id,
                         "script": script,
                         "stability": stability,
                         "similarity_boost": similarity_boost,
