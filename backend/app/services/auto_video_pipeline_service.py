@@ -256,7 +256,7 @@ class AutoVideoPipelineService:
             "error": None,
             "video_url": video_url,
             "topic": topic,
-            "voice_id": voice_id or self.tts.voice_id,
+            "voice_id": voice_id or self.tts.voice_id or os.getenv("ELEVENLABS_VOICE_ID", ""),
             "language": language,
             "tone": tone,
             "script_text": script_text,
@@ -311,6 +311,7 @@ class AutoVideoPipelineService:
             "generated_script": job.get("generated_script"),
             "tts_audio_duration_sec": job.get("tts_audio_duration_sec"),
             "enable_lip_sync": job.get("enable_lip_sync", True),
+            "lip_sync_error": job.get("lip_sync_error"),
             "result_video_url": self._resolve_result_url(job),
         }
 
@@ -575,6 +576,19 @@ class AutoVideoPipelineService:
                 job["progress"] = 65
                 logger.info(f"[{job_id}] Step 4: Lip sync + TTS via Sync.so")
 
+                # Validate voice_id before proceeding
+                effective_voice_id = job.get("voice_id") or os.getenv("ELEVENLABS_VOICE_ID", "")
+                if not effective_voice_id:
+                    error_msg = (
+                        "No voice_id configured. Set ELEVENLABS_VOICE_ID env var "
+                        "or pass voice_id when creating the job."
+                    )
+                    logger.error(f"[{job_id}] {error_msg}")
+                    job["lip_sync_error"] = error_msg
+                    raise RuntimeError(error_msg)
+                job["voice_id"] = effective_voice_id
+                logger.info(f"[{job_id}] Using voice_id: {effective_voice_id}")
+
                 try:
                     # Upload face-swapped video to Azure Blob for Sync.so to access
                     from app.services.storage_service import (
@@ -607,14 +621,65 @@ class AutoVideoPipelineService:
                         raise RuntimeError("Failed to generate SAS URL for swapped video")
 
                     job["progress"] = 70
-                    job["step_detail"] = "Processing lip sync (Sync.so + ElevenLabs TTS)"
-                    logger.info(f"[{job_id}] Uploaded swapped video to blob, starting Sync.so")
+                    logger.info(f"[{job_id}] Uploaded swapped video to blob")
 
-                    # Call Sync.so with integrated ElevenLabs TTS
-                    sync_result = await self.sync_lip_sync.lip_sync_with_tts(
+                    # ── Step 4a: Generate TTS audio via ElevenLabs ──
+                    job["step_detail"] = "Generating voice audio (ElevenLabs TTS)"
+                    logger.info(f"[{job_id}] Step 4a: Generating TTS audio with ElevenLabs")
+
+                    tts_audio_bytes = await self.tts.text_to_speech(
+                        text=script,
+                        voice_id=effective_voice_id,
+                        language_code=job.get("language", "ja"),
+                        output_format="mp3_44100_128",
+                    )
+
+                    # Save TTS audio locally and upload to blob
+                    tts_audio_path = os.path.join(work_dir, f"{job_id}-tts.mp3")
+                    with open(tts_audio_path, "wb") as f:
+                        f.write(tts_audio_bytes)
+
+                    tts_duration_sec = len(tts_audio_bytes) / (44100 * 2)  # approximate
+                    job["tts_audio_duration_sec"] = round(tts_duration_sec, 1)
+                    logger.info(
+                        f"[{job_id}] TTS audio generated: {len(tts_audio_bytes)} bytes, "
+                        f"~{tts_duration_sec:.1f}s"
+                    )
+
+                    # Upload TTS audio to Azure Blob for Sync.so to access
+                    _, tts_upload_url, tts_blob_url, _ = await generate_upload_sas(
+                        email="auto-video@aitherhub.com",
+                        video_id=f"{job_id}-tts",
+                        filename=f"{job_id}-tts.mp3",
+                    )
+
+                    async with httpx.AsyncClient(timeout=120) as tts_upload_client:
+                        resp = await tts_upload_client.put(
+                            tts_upload_url,
+                            content=tts_audio_bytes,
+                            headers={
+                                "x-ms-blob-type": "BlockBlob",
+                                "Content-Type": "audio/mpeg",
+                            },
+                        )
+                        resp.raise_for_status()
+
+                    tts_sas_url = generate_read_sas_from_url(tts_blob_url)
+                    if not tts_sas_url:
+                        raise RuntimeError("Failed to generate SAS URL for TTS audio")
+
+                    job["progress"] = 78
+
+                    # ── Step 4b: Lip sync via Sync.so (video + audio mode) ──
+                    job["step_detail"] = "Applying lip sync (Sync.so)"
+                    logger.info(
+                        f"[{job_id}] Step 4b: Lip sync via Sync.so "
+                        f"(video + audio mode)"
+                    )
+
+                    sync_result = await self.sync_lip_sync.lip_sync(
                         video_url=swap_sas_url,
-                        voice_id=job["voice_id"],
-                        script=script,
+                        audio_url=tts_sas_url,
                         model="lipsync-2",
                         sync_mode="cut_off",
                         max_wait_sec=600,
@@ -634,9 +699,14 @@ class AutoVideoPipelineService:
                         raise RuntimeError("Sync.so returned no output URL")
 
                 except Exception as e:
-                    logger.warning(
-                        f"[{job_id}] Sync.so lip sync failed, falling back to video without audio: {e}"
+                    error_detail = str(e)
+                    logger.error(
+                        f"[{job_id}] Sync.so lip sync FAILED: {error_detail}"
                     )
+                    job["lip_sync_error"] = error_detail
+                    job["step_detail"] = f"Lip sync failed: {error_detail[:100]}"
+                    # Still produce a video, but record the failure clearly
+                    logger.warning(f"[{job_id}] Falling back to face-swapped video WITHOUT audio")
                     shutil.copy2(swapped_path, final_path)
             else:
                 # No lip sync requested — use face-swapped video as-is (no audio)
