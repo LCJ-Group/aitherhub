@@ -872,9 +872,36 @@ class AutoVideoPipelineService:
         try:
             import openai
 
-            client = openai.AsyncOpenAI()
+            # Use Azure OpenAI if configured, otherwise standard OpenAI
+            azure_key = os.getenv("AZURE_OPENAI_KEY", "")
+            azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
+            openai_key = os.getenv("OPENAI_API_KEY", "")
+
+            if azure_key and azure_endpoint:
+                # Azure OpenAI — extract base endpoint (remove path/query)
+                from urllib.parse import urlparse
+                parsed = urlparse(azure_endpoint)
+                base_endpoint = f"{parsed.scheme}://{parsed.netloc}"
+                api_version = os.getenv("GPT5_API_VERSION", "2025-04-01-preview")
+                model = os.getenv("GPT5_MODEL", "gpt-4.1-mini")
+                client = openai.AsyncAzureOpenAI(
+                    api_key=azure_key,
+                    azure_endpoint=base_endpoint,
+                    api_version=api_version,
+                )
+                logger.info(f"Using Azure OpenAI: model={model}, endpoint={base_endpoint}")
+            elif openai_key:
+                client = openai.AsyncOpenAI()
+                model = "gpt-4.1-mini"
+                logger.info(f"Using OpenAI: model={model}")
+            else:
+                raise RuntimeError(
+                    "No OpenAI API key configured. "
+                    "Set AZURE_OPENAI_KEY+AZURE_OPENAI_ENDPOINT or OPENAI_API_KEY."
+                )
+
             response = await client.chat.completions.create(
-                model="gpt-4.1-mini",
+                model=model,
                 messages=[
                     {
                         "role": "system",
