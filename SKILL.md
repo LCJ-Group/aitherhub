@@ -208,6 +208,18 @@ This mapping is used in `ProcessingSteps.jsx` (detailed view) and `Sidebar.jsx` 
 - To sync: call `onUploadSuccess()` which increments `refreshKey` in `MainLayout.jsx`, triggering Sidebar re-fetch
 - **refreshKey flow**: `MainContent.onUploadSuccess()` → `MainLayout.setRefreshKey(prev+1)` → `Sidebar.useEffect([refreshKey])` → `doFetchVideos()`
 
+### Clip Processing Pipeline (generate_clip.py)
+1. Cut segment (exact time range from original video)
+2. Person detection → removes non-person scenes (video gets shorter)
+3. Silence removal → removes silence >0.8s (video gets even shorter)
+4. Whisper transcription on processed video → LOCAL timestamps (0-based)
+5. GPT refinement → text correction, emphasis marking
+6. Word timestamp reconstruction → match to original Whisper words by position ratio
+7. Create vertical clip from processed video
+8. Save captions (LOCAL timestamps) to DB
+
+**Key**: After steps 2-3, the clip file is shorter than origEnd-origStart. Whisper timestamps are relative to the shortened file.
+
 ### Frame Extraction Optimization (2026-03-18)
 - Resolution: 640px width (was 1280px) — sufficient for GPT Vision
 - JPEG quality: q:v=8 — ~30KB/frame (was ~120KB)
@@ -224,6 +236,9 @@ This mapping is used in `ProcessingSteps.jsx` (detailed view) and `Sidebar.jsx` 
 | 2026-03-18 | Worker/Frames | 640px + q:v=8 is optimal for GPT Vision (75% disk savings). After STEP_1, frames should be cleaned. |
 | 2026-03-18 | Frontend/State | Sidebar and MainContent have SEPARATE video state. Use `onUploadSuccess()` → `refreshKey` to sync. |
 | 2026-03-18 | Frontend/Subtitle | ClipEditorV2 captions may be local or absolute time. Auto-detect by checking if first caption start is close to clip start. |
+| 2026-03-18 | Frontend/Subtitle | clipDur (origEnd-origStart) is LONGER than actual video duration after silence removal + person detection. Use `min(clipDur, video.duration)` for display. |
+| 2026-03-18 | Worker/Subtitle | NEVER distribute word timestamps evenly after GPT refinement. Match to original Whisper word timestamps by position ratio. Even distribution is fallback only. |
+| 2026-03-18 | Frontend/Subtitle | captionOffset slider (-2s to +2s) allows users to fine-tune subtitle sync. Offset is baked into timestamps on save, then resets to 0. |
 | 2026-03-13 | Frontend/JSX | JSX text content does NOT interpret `\uXXXX` Unicode escapes. Use `{'\u2728'}` (JS expression) or actual Unicode chars instead. JS string literals in props/variables DO work correctly. |
 | 2026-03-13 | Frontend/Loading | Always add safety timeouts to API-dependent loading states to prevent infinite spinners. |
 | 2026-03-13 | Backend/Decorator | Empty `@router.post()` decorator without path causes import errors — always specify path. |
