@@ -237,21 +237,31 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
 
   // ─── Time offset logic ────────────────────────────────────────
   // When playing clip_url: video currentTime is 0-based (clip local time)
-  // Captions have absolute times (e.g., 428s for 7:08)
-  // We need to convert: absoluteTime -> localTime by subtracting origStart
-  // When playing full video: no offset needed
+  // Captions may be in LOCAL time (Whisper/saved: 0-based) or ABSOLUTE time
+  // (transcript/audio_text: e.g., 2490s for 41:30).
+  // Auto-detect: if max(caption.start) < origStart, captions are already local.
+  // This mirrors the backend logic in _build_drawtext_filter.
 
-  // Convert caption absolute time to video-local time for matching
+  // Auto-detect whether current captions are local or absolute
+  const captionsAreLocal = useMemo(() => {
+    if (!isClipVideo || !captions.length || origStart <= 0) return true;
+    const maxStart = Math.max(...captions.map(c => c.start || 0));
+    return maxStart < origStart;
+  }, [isClipVideo, captions, origStart]);
+
+  // Convert caption time to video-local time for matching
   const toLocalTime = useCallback((absTime) => {
     if (!isClipVideo) return absTime;
+    if (captionsAreLocal) return absTime; // already 0-based, no conversion
     return absTime - origStart;
-  }, [isClipVideo, origStart]);
+  }, [isClipVideo, captionsAreLocal, origStart]);
 
   // Convert video-local time to absolute time for display
   const toAbsTime = useCallback((localTime) => {
     if (!isClipVideo) return localTime;
+    if (captionsAreLocal) return localTime; // already local, no conversion needed
     return localTime + origStart;
-  }, [isClipVideo, origStart]);
+  }, [isClipVideo, captionsAreLocal, origStart]);
 
   // Current caption based on playback time (with offset correction)
   // Extend display: each caption stays visible until the next caption starts
