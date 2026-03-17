@@ -1462,8 +1462,10 @@ class VideoService extends BaseApiService {
    */
   async exportSubtitledClip(videoId, data, { onProgress } = {}) {
     try {
-      // Step 1: Start the export job
-      const startRes = await this.post(`/api/v1/editor/${videoId}/export-subtitled`, data);
+      // Step 1: Start the export job (Azure cold-start can take 30s+)
+      const startRes = await this.post(`/api/v1/editor/${videoId}/export-subtitled`, data, {
+        timeout: 120000, // 2 minutes for cold-start + initial processing
+      });
       const jobId = startRes?.job_id || startRes?.data?.job_id;
       if (!jobId) {
         // Fallback: old API returned download_url directly
@@ -1474,7 +1476,9 @@ class VideoService extends BaseApiService {
       const maxAttempts = 120; // 10 minutes max (5s intervals)
       for (let i = 0; i < maxAttempts; i++) {
         await new Promise(r => setTimeout(r, 5000)); // wait 5 seconds
-        const status = await this.get(`/api/v1/editor/${videoId}/export-subtitled/${jobId}`);
+        const status = await this.get(`/api/v1/editor/${videoId}/export-subtitled/${jobId}`, {
+          timeout: 30000, // 30s per poll request
+        });
         const st = status?.status || status?.data?.status;
         if (onProgress) onProgress(st);
 
