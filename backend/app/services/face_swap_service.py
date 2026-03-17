@@ -55,6 +55,9 @@ class FaceSwapQuality(str, Enum):
     BALANCED = "balanced"
     HIGH = "high"
     ULTRA = "ultra"
+    STANDARD = "standard"
+    PRO = "pro"
+    CINEMA = "cinema"
 
 
 # ── Exceptions ───────────────────────────────────────────────────────────────

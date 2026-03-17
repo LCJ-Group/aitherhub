@@ -222,7 +222,7 @@ class AutoVideoPipelineService:
         language: str = "ja",
         tone: str = "professional_friendly",
         script_text: Optional[str] = None,
-        quality: str = "high",
+        quality: str = "pro",
         enable_lip_sync: bool = True,
         product_info: Optional[str] = None,
         target_duration_sec: Optional[int] = None,

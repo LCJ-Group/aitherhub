@@ -58,7 +58,7 @@ export default function AutoVideoPage() {
   const [selectedVoiceId, setSelectedVoiceId] = useState("");
   const [voices, setVoices] = useState([]);
   const [voicesLoading, setVoicesLoading] = useState(false);
-  const [quality, setQuality] = useState("high");
+  const [quality, setQuality] = useState("pro");
   const [enableLipSync, setEnableLipSync] = useState(true);
 
   // Job state
@@ -683,10 +683,9 @@ export default function AutoVideoPage() {
                     onChange={(e) => setQuality(e.target.value)}
                     className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2.5 focus:outline-none focus:border-green-500"
                   >
-                    <option value="fast">Fast（高速 ~15fps）</option>
-                    <option value="balanced">Balanced（バランス ~10fps）</option>
-                    <option value="high">High（高品質 ~9.5fps）</option>
-                    <option value="ultra">Ultra（最高品質 ~2fps）</option>
+                    <option value="fast">Standard（プレビュー・高速）</option>
+                    <option value="pro">Pro（高品質・推奨）</option>
+                    <option value="cinema">Cinema（最高品質・時間がかかります）</option>
                   </select>
                 </div>
 

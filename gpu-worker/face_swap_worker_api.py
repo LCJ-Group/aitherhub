@@ -144,7 +144,7 @@ class SwapVideoRequest(BaseModel):
     job_id: str = Field(..., description="Unique job ID assigned by the backend")
     video_url: str = Field(..., description="URL to download the input video")
     face_enhancer: bool = Field(default=True, description="Enable face enhancement")
-    quality: str = Field(default="high", description="Quality preset: fast, balanced, high")
+    quality: str = Field(default="high", description="Quality preset: fast, balanced, high, pro, cinema")
     output_video_quality: int = Field(default=90, description="Output video quality 0-100")
 
 
@@ -701,6 +701,48 @@ async def get_config(auth: bool = Depends(verify_api_key)):
     """Get current FaceFusion configuration."""
     return {
         "config": current_config,
+        "quality_presets": {
+            "fast": {
+                "face_swapper_model": "hyperswap_1b_256",
+                "face_swapper_pixel_boost": "512x512",
+                "face_enhancer_enabled": False,
+                "face_enhancer_model": None,
+                "face_detector_model": "yolo_face",
+                "face_detector_score": 0.5,
+                "face_mask_blur": 0.3,
+                "expression_restorer_enabled": False,
+            },
+            "standard": {
+                "face_swapper_model": "hyperswap_1c_256",
+                "face_swapper_pixel_boost": "1024x1024",
+                "face_enhancer_enabled": False,
+                "face_enhancer_model": None,
+                "face_detector_model": "retinaface",
+                "face_detector_score": 0.3,
+                "face_mask_blur": 0.1,
+                "expression_restorer_enabled": True,
+            },
+            "pro": {
+                "face_swapper_model": "hyperswap_1c_256",
+                "face_swapper_pixel_boost": "1024x1024",
+                "face_enhancer_enabled": True,
+                "face_enhancer_model": "gpen_bfr_1024",
+                "face_detector_model": "retinaface",
+                "face_detector_score": 0.3,
+                "face_mask_blur": 0.1,
+                "expression_restorer_enabled": True,
+            },
+            "cinema": {
+                "face_swapper_model": "hyperswap_1c_256",
+                "face_swapper_pixel_boost": "1024x1024",
+                "face_enhancer_enabled": True,
+                "face_enhancer_model": "gpen_bfr_2048",
+                "face_detector_model": "retinaface",
+                "face_detector_score": 0.3,
+                "face_mask_blur": 0.1,
+                "expression_restorer_enabled": True,
+            },
+        },
         "available_models": {
             "face_swapper": [
                 "inswapper_128",
@@ -720,6 +762,8 @@ async def get_config(auth: bool = Depends(verify_api_key)):
                 "gfpgan_1.4",
                 "gpen_bfr_256",
                 "gpen_bfr_512",
+                "gpen_bfr_1024",
+                "gpen_bfr_2048",
                 "codeformer",
                 "restoreformer_plus_plus",
             ],
@@ -838,11 +882,44 @@ def _run_video_job(job_id: str, video_url: str, face_enhancer: bool,
 
         # --- Step 3: Apply quality settings ---
         original_enhancer = current_config["face_enhancer_enabled"]
+        original_enhancer_model = current_config.get("face_enhancer_model", "gfpgan_1.4")
+        original_pixel_boost = current_config["face_swapper_pixel_boost"]
+        original_swapper_model = current_config["face_swapper_model"]
+        original_detector = current_config["face_detector_model"]
+        original_detector_score = current_config["face_detector_score"]
+        original_mask_blur = current_config["face_mask_blur"]
+
         if quality == "fast":
             current_config["face_enhancer_enabled"] = False
+            current_config["face_swapper_model"] = "hyperswap_1b_256"
+            current_config["face_swapper_pixel_boost"] = "512x512"
+            current_config["face_detector_model"] = "yolo_face"
+            current_config["face_detector_score"] = 0.5
+            current_config["face_mask_blur"] = 0.3
+        elif quality == "pro":
+            current_config["face_enhancer_enabled"] = True
+            current_config["face_enhancer_model"] = "gpen_bfr_1024"
+            current_config["face_swapper_model"] = "hyperswap_1c_256"
+            current_config["face_swapper_pixel_boost"] = "1024x1024"
+            current_config["face_detector_model"] = "retinaface"
+            current_config["face_detector_score"] = 0.3
+            current_config["face_mask_blur"] = 0.1
+        elif quality == "cinema":
+            current_config["face_enhancer_enabled"] = True
+            current_config["face_enhancer_model"] = "gpen_bfr_2048"
+            current_config["face_swapper_model"] = "hyperswap_1c_256"
+            current_config["face_swapper_pixel_boost"] = "1024x1024"
+            current_config["face_detector_model"] = "retinaface"
+            current_config["face_detector_score"] = 0.3
+            current_config["face_mask_blur"] = 0.1
         else:
+            # standard / high / balanced — use face_enhancer param as-is
             current_config["face_enhancer_enabled"] = face_enhancer
+
         current_config["output_video_quality"] = output_video_quality
+        logger.info(f"[{job_id}] Quality preset: {quality}, "
+                    f"enhancer={current_config['face_enhancer_enabled']}, "
+                    f"enhancer_model={current_config.get('face_enhancer_model')}")
 
         # --- Step 4: Run FaceFusion ---
         job["status"] = "processing"
@@ -878,7 +955,14 @@ def _run_video_job(job_id: str, video_url: str, face_enhancer: bool,
             logger.debug(f"[{job_id}] FF: {line[:120]}")
 
         proc.wait()
+        # Restore all config to original values
         current_config["face_enhancer_enabled"] = original_enhancer
+        current_config["face_enhancer_model"] = original_enhancer_model
+        current_config["face_swapper_pixel_boost"] = original_pixel_boost
+        current_config["face_swapper_model"] = original_swapper_model
+        current_config["face_detector_model"] = original_detector
+        current_config["face_detector_score"] = original_detector_score
+        current_config["face_mask_blur"] = original_mask_blur
 
         if proc.returncode != 0:
             raise RuntimeError(f"FaceFusion exited with code {proc.returncode}")

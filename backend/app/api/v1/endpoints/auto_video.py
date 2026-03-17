@@ -70,8 +70,8 @@ class CreateAutoVideoRequest(BaseModel):
         description="Pre-written script (skips AI generation if provided)",
     )
     quality: str = Field(
-        "high",
-        description="Face swap quality preset: fast, balanced, high, ultra",
+        "pro",
+        description="Face swap quality preset: fast, standard, pro, cinema",
     )
     enable_lip_sync: bool = Field(
         True,
