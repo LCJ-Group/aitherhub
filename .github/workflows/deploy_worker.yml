@@ -51,18 +51,50 @@ jobs:
             echo "=== Disk status (before cleanup) ==="
             df -h / | tail -1
 
+            echo "=== Disk investigation (top-level dirs) ==="
+            sudo du -sh /opt/aitherhub 2>/dev/null || true
+            sudo du -sh /var/www/aitherhub 2>/dev/null || true
+            sudo du -sh /tmp 2>/dev/null || true
+            sudo du -sh /var/log 2>/dev/null || true
+            sudo du -sh /var/cache 2>/dev/null || true
+            sudo du -sh /home 2>/dev/null || true
+            sudo du -sh /root 2>/dev/null || true
+            sudo du -sh /snap 2>/dev/null || true
+            sudo du -sh /usr 2>/dev/null || true
+            echo "=== Worker batch dirs ==="
+            sudo du -sh /opt/aitherhub/worker/batch/uploadedvideo 2>/dev/null || true
+            sudo du -sh /opt/aitherhub/worker/batch/output 2>/dev/null || true
+            sudo du -sh /opt/aitherhub/worker/batch/splitvideo 2>/dev/null || true
+            sudo du -sh /opt/aitherhub/worker/batch/artifacts 2>/dev/null || true
+            sudo du -sh /opt/aitherhub/.venv 2>/dev/null || true
+            sudo du -sh /opt/aitherhub/.git 2>/dev/null || true
+            echo "=== Top 20 largest files on disk ==="
+            sudo find / -xdev -type f -size +50M -exec ls -lh {} \; 2>/dev/null | sort -k5 -h -r | head -20 || true
+            echo "=== /var/www/aitherhub batch dirs ==="
+            sudo du -sh /var/www/aitherhub/worker/batch/uploadedvideo 2>/dev/null || true
+            sudo du -sh /var/www/aitherhub/worker/batch/output 2>/dev/null || true
+            sudo du -sh /var/www/aitherhub/worker/batch/splitvideo 2>/dev/null || true
+            sudo du -sh /var/www/aitherhub/worker/batch/artifacts 2>/dev/null || true
             echo "=== Aggressive disk cleanup ==="
-            sudo find /tmp/aitherhub -mindepth 1 -maxdepth 1 -mmin +60 -exec rm -rf {} + 2>/dev/null || true
-            sudo find /opt/aitherhub/worker/batch/uploadedvideo -type f -mmin +60 -delete 2>/dev/null || true
-            sudo find /opt/aitherhub/worker/batch/output -mindepth 1 -maxdepth 1 -mmin +60 -exec rm -rf {} + 2>/dev/null || true
-            sudo find /opt/aitherhub/worker/batch/splitvideo -mindepth 1 -maxdepth 1 -mmin +60 -exec rm -rf {} + 2>/dev/null || true
-            sudo find /opt/aitherhub/worker/batch/artifacts -mindepth 1 -maxdepth 1 -mmin +60 -exec rm -rf {} + 2>/dev/null || true
-            sudo rm -rf /root/.cache/pip 2>/dev/null || true
-            sudo rm -rf /home/*/.cache/pip 2>/dev/null || true
-            sudo apt-get clean 2>/dev/null || true
+            # Remove ALL old files (no age limit for batch dirs)
+            sudo rm -rf /opt/aitherhub/worker/batch/uploadedvideo/* 2>/dev/null || true
+            sudo rm -rf /opt/aitherhub/worker/batch/output/* 2>/dev/null || true
+            sudo rm -rf /opt/aitherhub/worker/batch/splitvideo/* 2>/dev/null || true
+            sudo rm -rf /opt/aitherhub/worker/batch/artifacts/* 2>/dev/null || true
+            sudo rm -rf /var/www/aitherhub/worker/batch/uploadedvideo/* 2>/dev/null || true
+            sudo rm -rf /var/www/aitherhub/worker/batch/output/* 2>/dev/null || true
+            sudo rm -rf /var/www/aitherhub/worker/batch/splitvideo/* 2>/dev/null || true
+            sudo rm -rf /var/www/aitherhub/worker/batch/artifacts/* 2>/dev/null || true
+            sudo rm -rf /tmp/aitherhub/* 2>/dev/null || true
+            sudo rm -rf /root/.cache 2>/dev/null || true
+            sudo rm -rf /home/*/.cache 2>/dev/null || true
+            sudo apt-get clean -y 2>/dev/null || true
             sudo journalctl --vacuum-time=1d 2>/dev/null || true
             sudo find /opt/aitherhub -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
             sudo find /var/www/aitherhub -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+            sudo find /var/log -name "*.gz" -delete 2>/dev/null || true
+            sudo find /var/log -name "*.1" -delete 2>/dev/null || true
+            sudo find /tmp -type f -mmin +30 -delete 2>/dev/null || true
 
             echo "=== Disk status (after cleanup) ==="
             df -h / | tail -1
