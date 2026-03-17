@@ -1437,6 +1437,8 @@ export default function MainContent({
                           // Use resume status from API response
                           const resumeStatus = result?.new_status || 'uploaded';
                           setVideoData({ ...videoData, status: resumeStatus });
+                          // Trigger Sidebar refresh immediately (optimistic UI)
+                          if (onUploadSuccess) onUploadSuccess();
                           toast({ title: '解析を再開しました', description: '動画データはそのまま保持されています。' });
                         } catch (err) {
                           console.error('Retry analysis failed:', err);
