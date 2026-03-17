@@ -979,37 +979,54 @@ async def transcribe_clip(
 # ─── ⑦ Export Subtitled Clip ──────────────────────────────────────────────
 
 # ASS subtitle style presets (matching frontend SUBTITLE_PRESETS)
+# ASS color format: &HAABBGGRR  (AA: 00=opaque, FF=transparent — opposite of CSS)
 _ASS_STYLES = {
     'simple': {
+        # CSS: white text, text-shadow for depth
         'fontsize': 48, 'bold': 1, 'primary_color': '&H00FFFFFF',
-        'outline_color': '&H00000000', 'outline': 2, 'shadow': 3,
-        'border_style': 1, 'back_color': '&H00000000',
+        'outline_color': '&H00000000', 'outline': 3, 'shadow': 2,
+        'border_style': 1, 'back_color': '&H80000000',
     },
     'box': {
+        # CSS: white text, rgba(0,0,0,0.80) background box
+        # ASS alpha = (1-0.80)*255 = 51 = 0x33
+        # Outline acts as padding when BorderStyle=3
         'fontsize': 48, 'bold': 1, 'primary_color': '&H00FFFFFF',
-        'outline_color': '&H00000000', 'outline': 0, 'shadow': 0,
-        'border_style': 3, 'back_color': '&HCC000000',
+        'outline_color': '&H00000000', 'outline': 14, 'shadow': 0,
+        'border_style': 3, 'back_color': '&H33000000',
     },
     'outline': {
+        # CSS: white text, thick black stroke
         'fontsize': 50, 'bold': 1, 'primary_color': '&H00FFFFFF',
-        'outline_color': '&H00000000', 'outline': 4, 'shadow': 0,
+        'outline_color': '&H00000000', 'outline': 5, 'shadow': 0,
         'border_style': 1, 'back_color': '&H00000000',
     },
     'pop': {
+        # CSS: #FFE135 text (yellow), #FF6B35 stroke (orange)
+        # ASS BGR: FFE135 -> R=FF,G=E1,B=35 -> &H0035E1FF
+        # ASS BGR: FF6B35 -> R=FF,G=6B,B=35 -> &H00356BFF
         'fontsize': 54, 'bold': 1, 'primary_color': '&H0035E1FF',
-        'outline_color': '&H00356BFF', 'outline': 3, 'shadow': 3,
-        'border_style': 1, 'back_color': '&H00000000',
+        'outline_color': '&H00356BFF', 'outline': 4, 'shadow': 3,
+        'border_style': 1, 'back_color': '&H70000000',
     },
     'gradient': {
+        # CSS: white text, linear-gradient(135deg, rgba(139,92,246,0.85), rgba(236,72,153,0.85)) background
+        # Use purple midpoint: rgba(187,82,200,0.85) -> ASS alpha=(1-0.85)*255=38=0x26
+        # ASS BGR: BB52C8 -> R=BB,G=52,B=C8 -> &H26C852BB
+        # Outline acts as padding when BorderStyle=3
         'fontsize': 48, 'bold': 1, 'primary_color': '&H00FFFFFF',
-        'outline_color': '&H00000000', 'outline': 0, 'shadow': 0,
-        'border_style': 3, 'back_color': '&HAA8B5CF6',
+        'outline_color': '&H00000000', 'outline': 14, 'shadow': 0,
+        'border_style': 3, 'back_color': '&H26C852BB',
     },
     'karaoke': {
-        'fontsize': 50, 'bold': 1, 'primary_color': '&H8AFFFFFF',
-        'outline_color': '&H00000000', 'outline': 0, 'shadow': 0,
-        'border_style': 3, 'back_color': '&HB3000000',
-        'secondary_color': '&H0035E1FF',  # karaoke highlight color
+        # CSS: rgba(255,255,255,0.5) text, rgba(0,0,0,0.70) background, #FFE135 highlight
+        # Primary alpha = (1-0.5)*255 = 127 = 0x7F
+        # Back alpha = (1-0.70)*255 = 76 = 0x4C
+        # Outline acts as padding when BorderStyle=3
+        'fontsize': 50, 'bold': 1, 'primary_color': '&H7FFFFFFF',
+        'outline_color': '&H00000000', 'outline': 14, 'shadow': 0,
+        'border_style': 3, 'back_color': '&H4C000000',
+        'secondary_color': '&H0035E1FF',  # karaoke highlight color (yellow in BGR)
     },
 }
 
@@ -1061,63 +1078,114 @@ def _generate_srt_content(captions: list, time_offset: float = 0) -> str:
     return srt
 
 
-def _generate_ass_content(captions: list, style: str, position_x: float, position_y: float, time_offset: float = 0) -> str:
-    """Generate ASS subtitle file content."""
+def _generate_ass_content(captions: list, style: str, position_x: float, position_y: float,
+                          time_offset: float = 0, video_width: int = 1080, video_height: int = 1920) -> str:
+    """Generate ASS subtitle file content matching frontend preview styles.
+    
+    Uses auto-detection for local vs absolute caption times (same logic as drawtext).
+    Supports all 6 frontend styles: simple, box, outline, pop, gradient, karaoke.
+    """
     s = _ASS_STYLES.get(style, _ASS_STYLES['box'])
     is_karaoke = style == 'karaoke'
 
-    # Calculate ASS position (\pos tag)
-    # ASS uses pixel coordinates, but we'll use \an (alignment) + \pos for percentage-based
-    # Map position_y to alignment: top(\an8), middle(\an5), bottom(\an2)
+    # ── Auto-detect local vs absolute caption times ──
+    if time_offset > 0 and captions:
+        max_start = max(float(_cap_get(c, 'start', 0)) for c in captions)
+        if max_start < time_offset:
+            logger.info(f"[ass] Captions are LOCAL times "
+                        f"(max_start={max_start:.2f} < time_offset={time_offset:.2f}), "
+                        f"skipping offset subtraction")
+            effective_offset = 0
+        else:
+            logger.info(f"[ass] Captions are ABSOLUTE times "
+                        f"(max_start={max_start:.2f} >= time_offset={time_offset:.2f}), "
+                        f"subtracting offset")
+            effective_offset = time_offset
+    else:
+        effective_offset = 0
+
+    # ── Calculate position ──
+    # Map position_y percentage to ASS alignment + MarginV
     if position_y < 33:
         alignment = 8  # top-center
+        margin_v = max(20, int(video_height * position_y / 100))
     elif position_y < 66:
         alignment = 5  # middle-center
+        margin_v = 30
     else:
         alignment = 2  # bottom-center
+        margin_v = max(20, int(video_height * (100 - position_y) / 100))
+
+    # ── Scale font size to video resolution ──
+    # Frontend uses CSS px on a ~360px-wide preview; video is 1080px wide
+    # Scale factor ≈ 3x, but ASS fontsize is already set for 1080p in _ASS_STYLES
+    fontsize = s['fontsize']
 
     ass = "[Script Info]\n"
     ass += "ScriptType: v4.00+\n"
-    ass += "PlayResX: 1080\n"
-    ass += "PlayResY: 1920\n"
+    ass += f"PlayResX: {video_width}\n"
+    ass += f"PlayResY: {video_height}\n"
     ass += "WrapStyle: 0\n\n"
     ass += "[V4+ Styles]\n"
     ass += "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
 
     secondary = s.get('secondary_color', '&H0000FFFF')
-    ass += f"Style: Default,Noto Sans JP,{s['fontsize']},{s['primary_color']},{secondary},{s['outline_color']},{s['back_color']},{s['bold']},0,0,0,100,100,0,0,{s['border_style']},{s['outline']},{s['shadow']},{alignment},20,20,30,1\n\n"
+    ass += (f"Style: Default,Noto Sans CJK JP,{fontsize},{s['primary_color']},{secondary},"
+            f"{s['outline_color']},{s['back_color']},{s['bold']},0,0,0,100,100,2,0,"
+            f"{s['border_style']},{s['outline']},{s['shadow']},{alignment},"
+            f"40,40,{margin_v},1\n\n")
 
     ass += "[Events]\n"
     ass += "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
 
+    # ── Pre-process captions: local time, sort, extend short segments ──
+    MIN_DISPLAY = 3.0
+    processed = []
     for cap in captions:
-        # Calculate local time (relative to clip start)
-        cap_start = _cap_get(cap, 'start', 0)
-        cap_end = _cap_get(cap, 'end', 0)
+        cap_start = float(_cap_get(cap, 'start', 0))
+        cap_end = float(_cap_get(cap, 'end', 0))
         cap_text = _cap_get(cap, 'text', '')
         cap_words = _cap_get(cap, 'words', None)
-        local_start = cap_start - time_offset if time_offset > 0 else cap_start
-        local_end = cap_end - time_offset if time_offset > 0 else cap_end
+        if not cap_text or not cap_text.strip():
+            continue
+        local_start = cap_start - effective_offset if effective_offset > 0 else cap_start
+        local_end = cap_end - effective_offset if effective_offset > 0 else cap_end
         if local_start < 0:
             local_start = 0
         if local_end <= local_start:
             continue
+        processed.append({'start': local_start, 'end': local_end, 'text': cap_text, 'words': cap_words})
 
-        start_ts = _seconds_to_ass_time(local_start)
-        end_ts = _seconds_to_ass_time(local_end)
+    processed.sort(key=lambda c: c['start'])
 
-        if is_karaoke and cap_words:
-            # Generate karaoke timing tags (\kf for smooth fill)
+    # Extend short captions, cap at next caption's start
+    for i, cap in enumerate(processed):
+        extended_end = max(cap['end'], cap['start'] + MIN_DISPLAY)
+        if i + 1 < len(processed):
+            extended_end = min(extended_end, processed[i + 1]['start'])
+        cap['end'] = max(extended_end, cap['start'] + 0.1)
+
+    logger.info(f"[ass] Processed {len(processed)} captions (from {len(captions)} raw), style={style}")
+
+    for cap in processed:
+        start_ts = _seconds_to_ass_time(cap['start'])
+        end_ts = _seconds_to_ass_time(cap['end'])
+
+        if is_karaoke and cap.get('words'):
             karaoke_text = ""
-            for w in cap_words:
-                w_start = w.get('start', 0) - time_offset if time_offset > 0 else w.get('start', 0)
-                w_end = w.get('end', 0) - time_offset if time_offset > 0 else w.get('end', 0)
+            for w in cap['words']:
+                w_start = float(w.get('start', 0))
+                w_end = float(w.get('end', 0))
+                if effective_offset > 0:
+                    w_start -= effective_offset
+                    w_end -= effective_offset
                 duration_cs = max(1, int((w_end - w_start) * 100))
-                karaoke_text += f"{{\\kf{duration_cs}}}{w.get('word', '')}"
+                word_text = w.get('word', '')
+                word_text = word_text.replace('\\', '\\\\').replace('{', '\\{').replace('}', '\\}')
+                karaoke_text += f"{{\\kf{duration_cs}}}{word_text}"
             ass += f"Dialogue: 0,{start_ts},{end_ts},Default,,0,0,0,,{karaoke_text}\n"
         else:
-            # Escape ASS special characters
-            text = cap_text.replace('\n', '\\N')
+            text = cap['text'].replace('\n', '\\N')
             ass += f"Dialogue: 0,{start_ts},{end_ts},Default,,0,0,0,,{text}\n"
 
     return ass
@@ -1436,7 +1504,7 @@ async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, s
         file_size = os.path.getsize(video_path)
         logger.info(f"[export-job {job_id}] Downloaded: {file_size/1024/1024:.1f} MB")
 
-        # ── Step 2: Build drawtext filter chain ──
+        # ── Step 2: Generate ASS subtitle file ──
         _update_job(job_id, status="encoding")
 
         # Normalize position_y: if value is 0-1 (ratio), convert to 0-100 (percent)
@@ -1444,39 +1512,68 @@ async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, s
 
         output_path = os.path.join(tmp_dir, "output_subtitled.mp4")
 
-        # ── Step 3: Burn subtitles with ffmpeg drawtext filter ──
-        # Pre-flight check: verify ffmpeg has drawtext support
+        # ── Step 2a: Detect video dimensions with ffprobe ──
+        video_w, video_h = 1080, 1920  # defaults for vertical clips
+        try:
+            probe_proc = await asyncio.create_subprocess_exec(
+                "ffprobe", "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=width,height",
+                "-of", "csv=p=0", video_path,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+            probe_out, _ = await asyncio.wait_for(probe_proc.communicate(), timeout=15)
+            dims = probe_out.decode().strip().split(',')
+            if len(dims) == 2:
+                video_w, video_h = int(dims[0]), int(dims[1])
+            logger.info(f"[export-job {job_id}] Video dimensions: {video_w}x{video_h}")
+        except Exception as e:
+            logger.warning(f"[export-job {job_id}] ffprobe failed, using defaults: {e}")
+
+        # ── Step 2b: Generate ASS subtitle content ──
+        ass_content = _generate_ass_content(
+            captions, style, position_x, pos_y_pct, time_start,
+            video_width=video_w, video_height=video_h,
+        )
+        ass_path = os.path.join(tmp_dir, "subtitles.ass")
+        with open(ass_path, "w", encoding="utf-8") as f:
+            f.write(ass_content)
+        logger.info(f"[export-job {job_id}] Generated ASS subtitle: {len(captions)} captions, "
+                    f"style={style}, pos_y={pos_y_pct}, res={video_w}x{video_h}")
+        logger.info(f"[export-job {job_id}] ASS content (first 500): {ass_content[:500]}")
+
+        # ── Step 3: Burn subtitles with ffmpeg ASS filter ──
+        # Pre-flight check: verify ffmpeg has ASS filter support
         try:
             check_proc = await asyncio.create_subprocess_exec(
                 "ffmpeg", "-hide_banner", "-filters",
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             )
             check_out, _ = await asyncio.wait_for(check_proc.communicate(), timeout=10)
-            has_drawtext = b"drawtext" in check_out
-            logger.info(f"[export-job {job_id}] ffmpeg drawtext available: {has_drawtext}")
-            if not has_drawtext:
-                _update_job(job_id, status="failed", error="ffmpeg drawtext filter not available")
-                return
+            has_ass = b" ass " in check_out or b"ass" in check_out
+            logger.info(f"[export-job {job_id}] ffmpeg ASS filter available: {has_ass}")
+            if not has_ass:
+                logger.warning(f"[export-job {job_id}] ASS filter not found, will try anyway")
         except Exception as e:
             logger.warning(f"[export-job {job_id}] ffmpeg pre-check failed: {e}")
 
-        vf = _build_drawtext_filter(captions, style, pos_y_pct, time_start)
-        logger.info(f"[export-job {job_id}] Built drawtext filter with {len(captions)} captions, style={style}, pos_y={pos_y_pct}")
-        logger.info(f"[export-job {job_id}] Filter (full): {vf}")
+        # Escape the ASS path for ffmpeg -vf
+        ass_path_escaped = ass_path.replace(':', '\\:').replace("'", "'\\''")
+        # Find font directory
+        font_dir = '/usr/share/fonts/opentype/noto'
+        if not os.path.isdir(font_dir):
+            font_dir = '/usr/share/fonts'
 
-        # Write filter to a file to avoid shell escaping issues
-        filter_path = os.path.join(tmp_dir, "filter.txt")
-        with open(filter_path, "w", encoding="utf-8") as f:
-            f.write(vf)
+        vf_filter = f"ass='{ass_path_escaped}':fontsdir='{font_dir}'"
+        logger.info(f"[export-job {job_id}] VF filter: {vf_filter}")
 
         cmd = [
             "ffmpeg", "-y", "-hide_banner",
             "-i", video_path,
-            "-filter_complex_script", filter_path,
-            "-map", "[v]", "-map", "0:a?",
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+            "-vf", vf_filter,
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
             "-threads", "2",
-            "-c:a", "copy",
+            "-c:a", "aac", "-b:a", "128k",
             "-movflags", "+faststart",
             output_path,
         ]
