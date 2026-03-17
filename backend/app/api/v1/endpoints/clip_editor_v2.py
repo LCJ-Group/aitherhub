@@ -1123,6 +1123,68 @@ def _generate_ass_content(captions: list, style: str, position_x: float, positio
     return ass
 
 
+# ─── Font discovery helper ─────────────────────────────────────────────────
+_FONT_SEARCH_PATHS = [
+    '/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc',
+    '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
+    '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
+    '/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc',
+    '/usr/share/fonts/noto-cjk/NotoSansCJK-Bold.ttc',
+    '/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc',
+    '/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc',
+]
+
+def _find_cjk_font() -> str:
+    """Find a CJK-capable font, installing if necessary."""
+    import glob, subprocess, time
+    
+    # Try known paths first
+    for p in _FONT_SEARCH_PATHS:
+        if os.path.exists(p):
+            return p
+    
+    # Search for any Noto CJK font
+    noto_fonts = glob.glob('/usr/share/fonts/**/NotoSans*CJK*', recursive=True)
+    if noto_fonts:
+        return noto_fonts[0]
+    
+    # Fonts not found — startup.sh may still be installing in background.
+    # Wait up to 60s for the background install to finish.
+    logger.warning("[font] CJK fonts not found, waiting for background install...")
+    for i in range(12):
+        time.sleep(5)
+        for p in _FONT_SEARCH_PATHS:
+            if os.path.exists(p):
+                logger.info(f"[font] CJK font appeared after {(i+1)*5}s: {p}")
+                return p
+        noto_fonts = glob.glob('/usr/share/fonts/**/NotoSans*CJK*', recursive=True)
+        if noto_fonts:
+            logger.info(f"[font] CJK font appeared after {(i+1)*5}s: {noto_fonts[0]}")
+            return noto_fonts[0]
+    
+    # Still not found — try installing synchronously
+    logger.warning("[font] CJK fonts still missing, installing synchronously...")
+    try:
+        subprocess.run(
+            ["apt-get", "install", "-y", "-qq", "--no-install-recommends", "fonts-noto-cjk"],
+            timeout=120, capture_output=True,
+        )
+        subprocess.run(["fc-cache", "-f"], timeout=30, capture_output=True)
+        for p in _FONT_SEARCH_PATHS:
+            if os.path.exists(p):
+                logger.info(f"[font] CJK font installed: {p}")
+                return p
+    except Exception as e:
+        logger.error(f"[font] Failed to install CJK fonts: {e}")
+    
+    # Last resort: use any available font
+    all_fonts = glob.glob('/usr/share/fonts/**/*.ttf', recursive=True) + \
+               glob.glob('/usr/share/fonts/**/*.ttc', recursive=True)
+    fallback = all_fonts[0] if all_fonts else '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
+    logger.warning(f"[font] Using fallback font (CJK may not render): {fallback}")
+    return fallback
+
+
 # ─── Drawtext filter styles (matching frontend SUBTITLE_PRESETS) ─────────────
 _DRAWTEXT_STYLES = {
     'simple': {
@@ -1175,32 +1237,7 @@ def _build_drawtext_filter(captions: list, style: str, position_y: float, time_o
     s = _DRAWTEXT_STYLES.get(style, _DRAWTEXT_STYLES['box'])
     
     # Find font file - try multiple common paths
-    fontfile = None
-    for p in [
-        '/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc',
-        '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
-        '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
-        '/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc',
-        '/usr/share/fonts/noto-cjk/NotoSansCJK-Bold.ttc',
-        '/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc',
-        '/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc',
-    ]:
-        if os.path.exists(p):
-            fontfile = p
-            break
-    
-    if not fontfile:
-        # Fallback: search for any Noto CJK font
-        import glob
-        noto_fonts = glob.glob('/usr/share/fonts/**/NotoSans*CJK*', recursive=True)
-        if noto_fonts:
-            fontfile = noto_fonts[0]
-        else:
-            # Last resort: use any available font
-            all_fonts = glob.glob('/usr/share/fonts/**/*.ttf', recursive=True) + \
-                       glob.glob('/usr/share/fonts/**/*.ttc', recursive=True)
-            fontfile = all_fonts[0] if all_fonts else '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
-    
+    fontfile = _find_cjk_font()
     logger.info(f"[drawtext] Using font: {fontfile}")
     
     # Calculate Y position based on position_y percentage
@@ -1381,10 +1418,24 @@ async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, s
         output_path = os.path.join(tmp_dir, "output_subtitled.mp4")
 
         # ── Step 3: Burn subtitles with ffmpeg drawtext filter ──
-        # drawtext is a built-in ffmpeg filter that doesn't depend on libass
+        # Pre-flight check: verify ffmpeg has drawtext support
+        try:
+            check_proc = await asyncio.create_subprocess_exec(
+                "ffmpeg", "-hide_banner", "-filters",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+            check_out, _ = await asyncio.wait_for(check_proc.communicate(), timeout=10)
+            has_drawtext = b"drawtext" in check_out
+            logger.info(f"[export-job {job_id}] ffmpeg drawtext available: {has_drawtext}")
+            if not has_drawtext:
+                _update_job(job_id, status="failed", error="ffmpeg drawtext filter not available")
+                return
+        except Exception as e:
+            logger.warning(f"[export-job {job_id}] ffmpeg pre-check failed: {e}")
+
         vf = _build_drawtext_filter(captions, style, pos_y_pct, time_start)
         logger.info(f"[export-job {job_id}] Built drawtext filter with {len(captions)} captions, style={style}, pos_y={pos_y_pct}")
-        logger.info(f"[export-job {job_id}] Filter preview: {vf[:300]}")
+        logger.info(f"[export-job {job_id}] Filter (full): {vf}")
 
         # Write filter to a file to avoid shell escaping issues
         filter_path = os.path.join(tmp_dir, "filter.txt")
@@ -1392,7 +1443,7 @@ async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, s
             f.write(vf)
 
         cmd = [
-            "ffmpeg", "-y",
+            "ffmpeg", "-y", "-hide_banner",
             "-i", video_path,
             "-filter_complex_script", filter_path,
             "-map", "[v]", "-map", "0:a?",
@@ -1422,12 +1473,16 @@ async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, s
             return
 
         ffmpeg_stderr = stderr.decode(errors='replace')
-        logger.info(f"[export-job {job_id}] ffmpeg stderr (last 500): {ffmpeg_stderr[-500:]}")
+        logger.info(f"[export-job {job_id}] ffmpeg stderr (last 1000): {ffmpeg_stderr[-1000:]}")
 
         if proc.returncode != 0:
-            err_msg = ffmpeg_stderr[:500]
+            # Extract meaningful error: skip version banner, take last lines
+            stderr_lines = ffmpeg_stderr.strip().split('\n')
+            # Filter out blank lines and take last 10 meaningful lines
+            meaningful = [l for l in stderr_lines if l.strip()][-10:]
+            err_msg = '\n'.join(meaningful)
             logger.error(f"[export-job {job_id}] ffmpeg failed (rc={proc.returncode}): {err_msg}")
-            _update_job(job_id, status="failed", error=f"ffmpeg error: {err_msg[:200]}")
+            _update_job(job_id, status="failed", error=f"ffmpeg error: {err_msg[-500:]}")
             return
 
         output_size = os.path.getsize(output_path)

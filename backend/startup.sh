@@ -9,17 +9,19 @@ else
     echo "[startup] ffmpeg already available: $(ffmpeg -version 2>&1 | head -1)"
 fi
 
-# Install CJK fonts in background (non-blocking) for subtitle rendering
-(
-    if ! fc-list 2>/dev/null | grep -qi "noto.*cjk"; then
-        echo "[startup-bg] Installing CJK fonts in background..."
-        apt-get update -qq && apt-get install -y -qq --no-install-recommends fonts-noto-cjk 2>&1 | tail -3
-        fc-cache -f 2>/dev/null
-        echo "[startup-bg] CJK fonts installed"
-    else
-        echo "[startup-bg] CJK fonts already available"
-    fi
-) &
+# Install CJK fonts SYNCHRONOUSLY (required before subtitle export can work)
+if ! fc-list 2>/dev/null | grep -qi "noto.*cjk"; then
+    echo "[startup] Installing CJK fonts..."
+    apt-get update -qq && apt-get install -y -qq --no-install-recommends fonts-noto-cjk 2>&1 | tail -3
+    fc-cache -f 2>/dev/null
+    echo "[startup] CJK fonts installed"
+else
+    echo "[startup] CJK fonts already available"
+fi
+
+# Log ffmpeg drawtext availability for diagnostics
+echo "[startup] ffmpeg drawtext: $(ffmpeg -hide_banner -filters 2>&1 | grep drawtext || echo 'NOT AVAILABLE')"
+echo "[startup] CJK font: $(fc-list 2>/dev/null | grep -i 'noto.*cjk' | head -1 || echo 'NONE')"
 
 # Activate the virtual environment created during deployment
 if [ -d "antenv" ]; then
