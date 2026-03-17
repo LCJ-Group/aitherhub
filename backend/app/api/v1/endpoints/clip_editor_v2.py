@@ -1465,7 +1465,7 @@ async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, s
 
     _CDN_HOST = os.getenv("CDN_HOST", "https://cdn.aitherhub.com")
     _BLOB_HOST = f"https://{ACCOUNT_NAME}.blob.core.windows.net" if ACCOUNT_NAME else ""
-    FFMPEG_TIMEOUT = 300  # 5 minutes max for encoding (Azure B1 is slow but 5min is enough for 30-90s clips)
+    FFMPEG_TIMEOUT = 600  # 10 minutes max for encoding (Azure B1 is very slow with ASS subtitle filter)
 
     tmp_dir = tempfile.mkdtemp(prefix="export_sub_")
     try:
@@ -1571,8 +1571,8 @@ async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, s
             "ffmpeg", "-y", "-hide_banner",
             "-i", video_path,
             "-vf", vf_filter,
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-            "-threads", "2",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26",
+            "-threads", "1",
             "-c:a", "aac", "-b:a", "128k",
             "-movflags", "+faststart",
             output_path,
