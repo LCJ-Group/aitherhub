@@ -227,6 +227,7 @@ class AutoVideoPipelineService:
         product_info: Optional[str] = None,
         target_duration_sec: Optional[int] = None,
         product_image_urls: Optional[List[str]] = None,
+        source_face_url: Optional[str] = None,
     ) -> str:
         """
         Create a new auto video generation job.
@@ -266,6 +267,7 @@ class AutoVideoPipelineService:
             "product_info": product_info,
             "target_duration_sec": target_duration_sec,
             "product_image_urls": product_image_urls or [],
+            "source_face_url": source_face_url,
             "created_at": time.time(),
             "completed_at": None,
             "result_video_path": None,
@@ -538,9 +540,31 @@ class AutoVideoPipelineService:
             # ── Step 3: Face swap (GPU Worker) ──
             job["status"] = AutoVideoStatus.FACE_SWAPPING
             job["step"] = "face_swapping"
+            job["step_detail"] = "Setting source face for face swap"
+            job["progress"] = 16
+            logger.info(f"[{job_id}] Step 3: Starting face swap")
+
+            # Set source face on GPU worker before starting face swap
+            source_face_url = job.get("source_face_url")
+            if not source_face_url:
+                raise RuntimeError(
+                    "Source face image URL not provided. "
+                    "Please upload a source face image to use for face swapping."
+                )
+
+            # Add SAS token if needed for Azure Blob URLs
+            if "aitherhub.blob.core.windows.net" in source_face_url and "?" not in source_face_url:
+                from app.services.storage_service import generate_read_sas_from_url
+                face_sas_url = generate_read_sas_from_url(source_face_url)
+                if face_sas_url:
+                    source_face_url = face_sas_url
+
+            logger.info(f"[{job_id}] Setting source face from URL")
+            await self.face_swap.set_source_face(image_url=source_face_url)
+            logger.info(f"[{job_id}] Source face set successfully")
+
             job["step_detail"] = "Face swapping video (GPU processing)"
             job["progress"] = 18
-            logger.info(f"[{job_id}] Step 3: Starting face swap")
 
             fs_job_id = f"fs-{job_id}"
             job["face_swap_job_id"] = fs_job_id
@@ -951,9 +975,21 @@ class AutoVideoPipelineService:
             return script
 
         except Exception as e:
-            logger.error(f"GPT script generation failed: {e}", exc_info=True)
-            # Fallback: simple template
-            return self._fallback_script(topic, language)
+            logger.error(
+                f"GPT script generation failed: {type(e).__name__}: {e}",
+                exc_info=True,
+            )
+            # Check if it's an API key issue
+            error_str = str(e).lower()
+            if "api key" in error_str or "authentication" in error_str or "unauthorized" in error_str:
+                logger.error(
+                    "OPENAI_API_KEY is likely missing or invalid. "
+                    "Set it in Azure App Service environment variables."
+                )
+            # Fallback: simple template (mark it as fallback)
+            fallback = self._fallback_script(topic, language)
+            logger.warning(f"Using fallback script template ({len(fallback)} chars)")
+            return fallback
 
     @staticmethod
     def _fallback_script(topic: str, language: str) -> str:

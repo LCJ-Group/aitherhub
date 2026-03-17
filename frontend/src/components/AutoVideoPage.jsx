@@ -74,6 +74,12 @@ export default function AutoVideoPage() {
   // Health
   const [health, setHealth] = useState(null);
 
+  // Source face image (the face to swap onto the body double)
+  const [sourceFaceFile, setSourceFaceFile] = useState(null);
+  const [sourceFacePreview, setSourceFacePreview] = useState(null);
+  const [sourceFaceUploadProgress, setSourceFaceUploadProgress] = useState(0);
+  const [isUploadingFace, setIsUploadingFace] = useState(false);
+
   // Product images
   const [productImages, setProductImages] = useState([]);
   const [productImagePreviews, setProductImagePreviews] = useState([]);
@@ -84,6 +90,7 @@ export default function AutoVideoPage() {
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   const fileInputRef = useRef(null);
+  const faceInputRef = useRef(null);
   const imageInputRef = useRef(null);
   const pollRef = useRef(null);
 
@@ -192,6 +199,26 @@ export default function AutoVideoPage() {
     }
   }, []);
 
+  // ── Source face image handling ──
+  const handleFaceSelect = useCallback((e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith("image/")) {
+      setError("画像ファイルを選択してください");
+      return;
+    }
+
+    if (file.size > 20 * 1024 * 1024) {
+      setError("顔画像は20MB以下にしてください");
+      return;
+    }
+
+    setSourceFaceFile(file);
+    setSourceFacePreview(URL.createObjectURL(file));
+    setError(null);
+  }, []);
+
   // ── Product image handling ──
   const handleImageSelect = useCallback((e) => {
     const files = Array.from(e.target.files || []);
@@ -256,6 +283,25 @@ export default function AutoVideoPage() {
         return;
       }
 
+      if (!sourceFaceFile) {
+        setError("ソース顔画像をアップロードしてください（動画に合成する顔）");
+        setIsSubmitting(false);
+        return;
+      }
+
+      // Upload source face image
+      let sourceFaceUrl = null;
+      setIsUploadingFace(true);
+      try {
+        sourceFaceUrl = await autoVideoService.uploadSourceFace(
+          sourceFaceFile,
+          setSourceFaceUploadProgress
+        );
+      } finally {
+        setIsUploadingFace(false);
+        setSourceFaceUploadProgress(0);
+      }
+
       // Upload product images if any
       let productImageUrls = [];
       if (scriptMode === "ai" && productImages.length > 0) {
@@ -281,6 +327,7 @@ export default function AutoVideoPage() {
         enable_lip_sync: enableLipSync,
         product_info: productInfo || undefined,
         product_image_urls: productImageUrls.length > 0 ? productImageUrls : undefined,
+        source_face_url: sourceFaceUrl,
       };
 
       if (scriptMode === "manual") {
@@ -324,6 +371,8 @@ export default function AutoVideoPage() {
     setScriptText("");
     setProductImages([]);
     setProductImagePreviews([]);
+    setSourceFaceFile(null);
+    setSourceFacePreview(null);
     setError(null);
   };
 
@@ -487,6 +536,71 @@ export default function AutoVideoPage() {
                   className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-purple-500"
                 />
               </div>
+            </div>
+
+            {/* Source Face Image */}
+            <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+              <h2 className="text-lg font-semibold mb-3 flex items-center gap-2">
+                <Camera size={20} className="text-pink-400" />
+                ソース顔画像 <span className="text-red-400 text-sm">*</span>
+              </h2>
+              <p className="text-xs text-gray-500 mb-3">
+                動画に合成する顔の画像をアップロードしてください。正面を向いた高解像度の写真が最適です。
+              </p>
+
+              {!sourceFacePreview ? (
+                <div
+                  className="border-2 border-dashed border-gray-700 rounded-xl p-6 text-center cursor-pointer hover:border-pink-500/50 transition"
+                  onClick={() => faceInputRef.current?.click()}
+                >
+                  <Camera size={32} className="mx-auto mb-2 text-gray-500" />
+                  <p className="text-gray-400 text-sm mb-1">
+                    クリックして顔画像を選択
+                  </p>
+                  <p className="text-gray-600 text-xs">
+                    JPG, PNG, WEBP（20MBまで）
+                  </p>
+                  <input
+                    ref={faceInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handleFaceSelect}
+                  />
+                </div>
+              ) : (
+                <div className="relative inline-block">
+                  <img
+                    src={sourceFacePreview}
+                    alt="ソース顔"
+                    className="w-32 h-32 object-cover rounded-xl border border-gray-700"
+                  />
+                  <button
+                    onClick={() => {
+                      setSourceFaceFile(null);
+                      setSourceFacePreview(null);
+                    }}
+                    className="absolute -top-2 -right-2 w-6 h-6 bg-red-500 hover:bg-red-400 rounded-full flex items-center justify-center transition"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              )}
+
+              {isUploadingFace && (
+                <div className="mt-3">
+                  <div className="flex justify-between text-xs text-gray-400 mb-1">
+                    <span>顔画像をアップロード中...</span>
+                    <span>{sourceFaceUploadProgress}%</span>
+                  </div>
+                  <div className="w-full bg-gray-800 rounded-full h-1.5">
+                    <div
+                      className="bg-pink-500 h-1.5 rounded-full transition-all"
+                      style={{ width: `${sourceFaceUploadProgress}%` }}
+                    />
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Script Section */}
@@ -763,7 +877,7 @@ export default function AutoVideoPage() {
             {!currentJobId ? (
               <button
                 onClick={handleSubmit}
-                disabled={isSubmitting || isUploading}
+                disabled={isSubmitting || isUploading || isUploadingFace}
                 className="w-full py-4 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 disabled:from-gray-700 disabled:to-gray-700 rounded-xl font-semibold text-lg transition flex items-center justify-center gap-2"
               >
                 {isSubmitting ? (

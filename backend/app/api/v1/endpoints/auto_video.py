@@ -89,6 +89,10 @@ class CreateAutoVideoRequest(BaseModel):
         None,
         description="List of product image URLs for GPT Vision analysis (max 5)",
     )
+    source_face_url: Optional[str] = Field(
+        None,
+        description="URL of the source face image (the face to swap onto the body double)",
+    )
 
 
 class CreateAutoVideoResponse(BaseModel):
@@ -162,6 +166,7 @@ async def create_auto_video(req: CreateAutoVideoRequest):
             product_info=req.product_info,
             target_duration_sec=req.target_duration_sec,
             product_image_urls=req.product_image_urls,
+            source_face_url=req.source_face_url,
         )
 
         return CreateAutoVideoResponse(
@@ -286,7 +291,7 @@ async def auto_video_health():
         "face_swap_worker": "not_configured",
         "elevenlabs_tts": "not_configured",
         "sync_lip_sync": "not_configured",
-        "script_generator": "ok",  # GPT is always available
+        "script_generator": "ok" if os.getenv("OPENAI_API_KEY") else "warning: OPENAI_API_KEY not set",
     }
 
     # Check face swap worker
