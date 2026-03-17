@@ -158,10 +158,72 @@ curl -sf -X POST -H "X-Admin-Key: aither:hub" -H "Content-Type: application/json
 
 ---
 
+## Worker VM (GPU Analysis Server)
+
+| Item | Value |
+|------|-------|
+| SSH | `ssh -i workervm_key.pem azureuser@52.185.188.19` |
+| Active code | `/opt/aitherhub/worker/` |
+| Legacy (should be empty) | `/var/www/aitherhub/` |
+| Frame storage | `/tmp/aitherhub_frames/` |
+| Logs | `journalctl -u aitherhub-worker -f` |
+| Disk (healthy) | <40GB used / >80GB free of 123GB total |
+| Deploy | Push to `master` triggers `.github/workflows/deploy_worker.yml` |
+
+---
+
+## Video Analysis Pipeline (15 Steps)
+
+| Step | Status Key | Progress % | Description |
+|------|-----------|------------|-------------|
+| 0 | STEP_COMPRESS_1080P | 1% | 1080p圧縮 |
+| 1 | STEP_0_EXTRACT_FRAMES | 5% | フレーム抽出 (640px, q:v=8) |
+| 2 | STEP_1_DETECT_PHASES | 10% | フェーズ検出 |
+| 3 | STEP_2_EXTRACT_METRICS | 20% | メトリクス抽出 |
+| 4 | STEP_3_TRANSCRIBE_AUDIO | 55% | 音声書き起こし (最長ステップ) |
+| 5 | STEP_4_IMAGE_CAPTION | 70% | 画像キャプション |
+| 6 | STEP_5_BUILD_PHASE_UNITS | 80% | フェーズユニット構築 |
+| 7 | STEP_6_BUILD_PHASE_DESCRIPTION | 85% | フェーズ説明生成 |
+| 8 | STEP_7_GROUPING | 90% | グルーピング |
+| 9 | STEP_8_UPDATE_BEST_PHASE | 92% | ベストフェーズ更新 |
+| 10 | STEP_9_BUILD_VIDEO_STRUCTURE_FEATURES | 94% | 動画構造特徴量 |
+| 11 | STEP_10_ASSIGN_VIDEO_STRUCTURE_GROUP | 95% | 構造グループ割当 |
+| 12 | STEP_11_UPDATE_VIDEO_STRUCTURE_GROUP_STATS | 96% | グループ統計更新 |
+| 13 | STEP_12_UPDATE_VIDEO_STRUCTURE_BEST | 97% | ベスト構造更新 |
+| 14 | STEP_12_5_PRODUCT_DETECTION | 98% | 商品検出 |
+| 15 | STEP_13_BUILD_REPORTS | 98% | レポート生成 |
+| 16 | STEP_14_FINALIZE | 99% | 最終処理 |
+| - | DONE | 100% | 完了 |
+
+This mapping is used in `ProcessingSteps.jsx` (detailed view) and `Sidebar.jsx` (compact "解析中 XX%").
+
+---
+
+## Key Architecture Notes
+
+### Frontend State Management
+- **Sidebar.jsx** maintains its own `videos[]` state via `doFetchVideos()` polling (15s during processing, 60s for errors)
+- **MainContent.jsx** maintains its own `videoData` state for the selected video
+- These are **separate states** — changes in MainContent do NOT auto-propagate to Sidebar
+- To sync: call `onUploadSuccess()` which increments `refreshKey` in `MainLayout.jsx`, triggering Sidebar re-fetch
+- **refreshKey flow**: `MainContent.onUploadSuccess()` → `MainLayout.setRefreshKey(prev+1)` → `Sidebar.useEffect([refreshKey])` → `doFetchVideos()`
+
+### Frame Extraction Optimization (2026-03-18)
+- Resolution: 640px width (was 1280px) — sufficient for GPT Vision
+- JPEG quality: q:v=8 — ~30KB/frame (was ~120KB)
+- 9-hour video (32K frames): 0.95GB (was 3.8GB) — 75% reduction
+- Early cleanup: frames deleted after STEP_1 (phase detection)
+
+---
+
 ## Known Lessons
 
 | Date | Category | Lesson |
 |------|----------|--------|
+| 2026-03-18 | Worker/Disk | Legacy paths `/var/www/aitherhub/` waste 19GB (.venv, .git). `deploy_worker.yml` auto-cleans. When disk >80%, check legacy paths first. |
+| 2026-03-18 | Worker/Frames | 640px + q:v=8 is optimal for GPT Vision (75% disk savings). After STEP_1, frames should be cleaned. |
+| 2026-03-18 | Frontend/State | Sidebar and MainContent have SEPARATE video state. Use `onUploadSuccess()` → `refreshKey` to sync. |
+| 2026-03-18 | Frontend/Subtitle | ClipEditorV2 captions may be local or absolute time. Auto-detect by checking if first caption start is close to clip start. |
 | 2026-03-13 | Frontend/JSX | JSX text content does NOT interpret `\uXXXX` Unicode escapes. Use `{'\u2728'}` (JS expression) or actual Unicode chars instead. JS string literals in props/variables DO work correctly. |
 | 2026-03-13 | Frontend/Loading | Always add safety timeouts to API-dependent loading states to prevent infinite spinners. |
 | 2026-03-13 | Backend/Decorator | Empty `@router.post()` decorator without path causes import errors — always specify path. |
