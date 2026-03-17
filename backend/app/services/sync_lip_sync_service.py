@@ -194,13 +194,14 @@ class SyncLipSyncService:
     ) -> dict:
         """Create a Sync.so generation and poll until completion."""
 
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, pool=None)) as client:
             # Step 1: Create generation
             logger.info(f"[sync.so] Creating generation: model={payload['model']}")
             resp = await client.post(
                 f"{SYNC_API_BASE}/v2/generate",
                 headers=headers,
                 json=payload,
+                timeout=60.0,
             )
 
             if resp.status_code not in (200, 201):
@@ -229,6 +230,7 @@ class SyncLipSyncService:
                 poll_resp = await client.get(
                     f"{SYNC_API_BASE}/v2/generate/{gen_id}",
                     headers=poll_headers,
+                    timeout=30.0,
                 )
 
                 if poll_resp.status_code != 200:
