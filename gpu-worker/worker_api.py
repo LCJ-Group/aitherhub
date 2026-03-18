@@ -95,14 +95,14 @@ QUALITY_PRESETS = {
         "face_swapper_model": "hyperswap_1c_256",
         "face_swapper_pixel_boost": "512x512",
         "face_enhancer_enabled": False,
-        "face_detector_model": "retinaface",
+        "face_detector_model": "yolo_face",
         "execution_thread_count": 8,
     },
     "high": {
         "face_swapper_model": "hyperswap_1c_256",
         "face_swapper_pixel_boost": "1024x1024",
         "face_enhancer_enabled": False,
-        "face_detector_model": "retinaface",
+        "face_detector_model": "yolo_face",
         "execution_thread_count": 8,
     },
     "ultra": {
@@ -110,7 +110,7 @@ QUALITY_PRESETS = {
         "face_swapper_pixel_boost": "1024x1024",
         "face_enhancer_enabled": True,
         "face_enhancer_model": "gfpgan_1.4",
-        "face_detector_model": "retinaface",
+        "face_detector_model": "yolo_face",
         "execution_thread_count": 4,
     },
 }
@@ -121,7 +121,7 @@ current_config = {
     "face_swapper_weight": 0.85,
     "face_enhancer_model": "gfpgan_1.4",
     "face_enhancer_enabled": False,
-    "face_detector_model": "retinaface",
+    "face_detector_model": "yolo_face",
     "face_detector_score": 0.5,
     "face_mask_types": ["box", "occlusion", "region"],
     "face_mask_blur": 0.3,
@@ -159,7 +159,7 @@ class StartStreamRequest(BaseModel):
     quality: str = Field(default="high", description="Quality preset: fast, balanced, high")
     resolution: str = Field(default="720p", description="Output resolution: 480p, 720p, 1080p")
     fps: int = Field(default=30, description="Output FPS")
-    face_enhancer: bool = Field(default=True, description="Enable GFPGAN face enhancement")
+    face_enhancer: bool = Field(default=False, description="Enable GFPGAN face enhancement (overrides preset if True)")
 
 
 class StopStreamRequest(BaseModel):
@@ -169,15 +169,15 @@ class StopStreamRequest(BaseModel):
 class SwapFrameRequest(BaseModel):
     image_base64: str = Field(..., description="Base64-encoded input image")
     quality: str = Field(default="high", description="Quality preset")
-    face_enhancer: bool = Field(default=True, description="Enable face enhancement")
+    face_enhancer: bool = Field(default=False, description="Enable face enhancement (overrides preset if True)")
 
 
 class SwapVideoRequest(BaseModel):
     """Request to start a video face swap job."""
     job_id: str = Field(..., description="Unique job ID assigned by the backend")
     video_url: str = Field(..., description="URL to download the input video")
-    face_enhancer: bool = Field(default=True, description="Enable face enhancement")
-    quality: str = Field(default="high", description="Quality preset: fast, balanced, high")
+    face_enhancer: bool = Field(default=False, description="Enable face enhancement (overrides preset if True)")
+    quality: str = Field(default="high", description="Quality preset: fast, balanced, high, ultra")
     output_video_quality: int = Field(default=90, description="Output video quality 0-100")
 
 
