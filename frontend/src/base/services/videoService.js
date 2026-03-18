@@ -1471,7 +1471,7 @@ class VideoService extends BaseApiService {
       // Cache hit: server returns done + download_url immediately
       const startStatus = startRes?.status || startRes?.data?.status;
       if (startStatus === 'done') {
-        if (onProgress) onProgress('done');
+        if (onProgress) onProgress('done', 100);
         return {
           download_url: startRes?.download_url || startRes?.data?.download_url,
           file_size: startRes?.file_size || startRes?.data?.file_size,
@@ -1495,7 +1495,8 @@ class VideoService extends BaseApiService {
           timeout: 30000,
         });
         const st = status?.status || status?.data?.status;
-        if (onProgress) onProgress(st);
+        const pct = status?.progress_pct ?? status?.data?.progress_pct ?? 0;
+        if (onProgress) onProgress(st, pct);
 
         if (st === 'done') {
           return {

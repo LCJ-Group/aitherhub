@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import axios from "axios";
 import AdminVideoList from "./admin/AdminVideoList";
 import AdminVideoDetail from "./admin/AdminVideoDetail";
@@ -36,25 +36,51 @@ export default function AdminDashboard() {
   }, []);
 
   // Fetch dashboard data after authentication
+  const fetchDashboard = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const baseURL = import.meta.env.VITE_API_BASE_URL;
+      const res = await axios.get(`${baseURL}/api/v1/admin/dashboard-public`, {
+        headers: { "X-Admin-Key": `${ADMIN_ID}:${ADMIN_PASS}` },
+        timeout: 30000, // 30s timeout to handle Azure cold start
+      });
+      setStats(res.data);
+    } catch (err) {
+      console.error("Dashboard fetch failed:", err);
+      const msg = err.code === 'ECONNABORTED'
+        ? 'サーバー接続タイムアウト。リトライしてください。'
+        : err.response?.status === 401 || err.response?.status === 403
+          ? '認証エラー。再ログインしてください。'
+          : `データの取得に失敗しました (${err.message || 'Unknown'})`;
+      setError(msg);
+      // Auto-logout on auth error
+      if (err.response?.status === 401 || err.response?.status === 403) {
+        sessionStorage.removeItem(SESSION_KEY);
+        setAuthenticated(false);
+        setStats(null);
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (!authenticated) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        setLoading(true);
-        const baseURL = import.meta.env.VITE_API_BASE_URL;
-        const res = await axios.get(`${baseURL}/api/v1/admin/dashboard-public`, {
-          headers: { "X-Admin-Key": `${ADMIN_ID}:${ADMIN_PASS}` },
-        });
-        if (!cancelled) setStats(res.data);
-      } catch (err) {
-        if (!cancelled) setError("データの取得に失敗しました");
-      } finally {
-        if (!cancelled) setLoading(false);
+    fetchDashboard();
+  }, [authenticated, fetchDashboard]);
+
+  // Safety timeout: if loading takes more than 45s, force stop
+  useEffect(() => {
+    if (!loading) return;
+    const timer = setTimeout(() => {
+      setLoading(false);
+      if (!stats) {
+        setError('読み込みがタイムアウトしました。リトライしてください。');
       }
-    })();
-    return () => { cancelled = true; };
-  }, [authenticated]);
+    }, 45000);
+    return () => clearTimeout(timer);
+  }, [loading, stats]);
 
   // Fetch feedbacks when tab switches
   useEffect(() => {
@@ -66,6 +92,7 @@ export default function AdminDashboard() {
         const baseURL = import.meta.env.VITE_API_BASE_URL;
         const res = await axios.get(`${baseURL}/api/v1/admin/feedbacks`, {
           headers: { "X-Admin-Key": `${ADMIN_ID}:${ADMIN_PASS}` },
+          timeout: 30000,
         });
         if (!cancelled) setFeedbackData(res.data);
       } catch (err) {
@@ -87,6 +114,7 @@ export default function AdminDashboard() {
         const baseURL = import.meta.env.VITE_API_BASE_URL;
         const res = await axios.get(`${baseURL}/api/v1/admin/upload-health`, {
           headers: { "X-Admin-Key": `${ADMIN_ID}:${ADMIN_PASS}` },
+          timeout: 30000,
         });
         if (!cancelled) setUploadHealth(res.data);
       } catch (err) {
@@ -156,8 +184,9 @@ export default function AdminDashboard() {
   // ── Loading ──
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center gap-4">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-orange-500"></div>
+        <p className="text-gray-400 text-sm">ダッシュボードを読み込み中...</p>
       </div>
     );
   }
@@ -165,8 +194,25 @@ export default function AdminDashboard() {
   // ── Error ──
   if (error) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center gap-4">
         <p className="text-red-500 text-lg">{error}</p>
+        <button
+          onClick={fetchDashboard}
+          className="px-6 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-lg transition-colors text-sm font-medium"
+        >
+          リトライ
+        </button>
+        <button
+          onClick={() => {
+            sessionStorage.removeItem(SESSION_KEY);
+            setAuthenticated(false);
+            setStats(null);
+            setError(null);
+          }}
+          className="text-sm text-gray-400 hover:text-gray-600 transition-colors"
+        >
+          ログイン画面に戻る
+        </button>
       </div>
     );
   }

@@ -1508,7 +1508,7 @@ async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, s
     tmp_dir = tempfile.mkdtemp(prefix="export_sub_")
     try:
         # ── Step 1: Download clip via HTTP (SAS URL or direct) ──
-        _update_job(job_id, status="downloading")
+        _update_job(job_id, status="downloading", progress_pct=5)
         video_path = os.path.join(tmp_dir, "source.mp4")
 
         download_url = clip_url
@@ -1543,7 +1543,7 @@ async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, s
         logger.info(f"[export-job {job_id}] Downloaded: {file_size/1024/1024:.1f} MB")
 
         # ── Step 2: Generate ASS subtitle file ──
-        _update_job(job_id, status="encoding")
+        _update_job(job_id, status="encoding", progress_pct=15)
 
         # Normalize position_y: if value is 0-1 (ratio), convert to 0-100 (percent)
         pos_y_pct = position_y * 100 if position_y <= 1.0 else position_y
@@ -1607,6 +1607,7 @@ async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, s
 
         cmd = [
             "ffmpeg", "-y", "-hide_banner",
+            "-progress", "pipe:1",  # output progress to stdout
             "-i", video_path,
             "-vf", vf_filter,
             "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
@@ -1617,16 +1618,59 @@ async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, s
         ]
         logger.info(f"[export-job {job_id}] Running ffmpeg cmd: {' '.join(cmd)}")
 
+        _update_job(job_id, status="encoding", progress_pct=20)
+
+        # Get source duration for progress calculation
+        source_duration_us = 0
+        try:
+            dur_proc = await asyncio.create_subprocess_exec(
+                "ffprobe", "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "csv=p=0", video_path,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+            dur_out, _ = await asyncio.wait_for(dur_proc.communicate(), timeout=10)
+            source_duration_us = int(float(dur_out.decode().strip()) * 1_000_000)
+        except Exception:
+            pass
+
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
 
+        # Read ffmpeg progress from stdout in background
+        async def _read_ffmpeg_progress():
+            """Parse ffmpeg -progress output to update job progress_pct."""
+            try:
+                while True:
+                    line = await proc.stdout.readline()
+                    if not line:
+                        break
+                    decoded = line.decode(errors='replace').strip()
+                    if decoded.startswith('out_time_us=') and source_duration_us > 0:
+                        try:
+                            current_us = int(decoded.split('=')[1])
+                            # Map encoding progress to 20-80% range
+                            ratio = min(current_us / source_duration_us, 1.0)
+                            pct = int(20 + ratio * 60)  # 20% to 80%
+                            _update_job(job_id, status="encoding", progress_pct=pct)
+                        except (ValueError, ZeroDivisionError):
+                            pass
+            except Exception:
+                pass
+
+        progress_task = asyncio.create_task(_read_ffmpeg_progress())
+
         try:
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(), timeout=FFMPEG_TIMEOUT
-            )
+            # Read stderr in parallel (avoid pipe deadlock)
+            stderr_task = asyncio.create_task(proc.stderr.read())
+            # Wait for ffmpeg to finish
+            await asyncio.wait_for(proc.wait(), timeout=FFMPEG_TIMEOUT)
+            # Cancel progress reader and get stderr
+            progress_task.cancel()
+            stderr = await stderr_task
         except asyncio.TimeoutError:
             proc.kill()
             await proc.wait()
@@ -1651,7 +1695,7 @@ async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, s
         logger.info(f"[export-job {job_id}] Encoded: {output_size/1024/1024:.1f} MB (source was {file_size/1024/1024:.1f} MB)")
 
         # ── Step 4: Upload to Azure Blob ──
-        _update_job(job_id, status="uploading")
+        _update_job(job_id, status="uploading", progress_pct=85)
         if not CONNECTION_STRING:
             _update_job(job_id, status="failed", error="Azure storage not configured")
             return
@@ -1675,7 +1719,7 @@ async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, s
         if _BLOB_HOST and _CDN_HOST:
             download_url = download_url.replace(_BLOB_HOST, _CDN_HOST)
 
-        _update_job(job_id, status="done", download_url=download_url, file_size=output_size)
+        _update_job(job_id, status="done", download_url=download_url, file_size=output_size, progress_pct=100)
         logger.info(f"[export-job {job_id}] Complete! URL: {download_url[:80]}...")
 
         # Save to cache for instant re-export
@@ -1793,10 +1837,12 @@ async def get_export_status(video_id: str, job_id: str):
         "job_id": job_id,
         "status": status,
         "video_id": video_id,
+        "progress_pct": job.get("progress_pct", 0),
     }
     if status == "done":
         result["download_url"] = job.get("download_url")
         result["file_size"] = job.get("file_size")
+        result["progress_pct"] = 100
     elif status == "failed":
         result["error"] = job.get("error", "Unknown error")
 

@@ -226,6 +226,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
   const [feedbackTags, setFeedbackTags] = useState([]);
   const [feedbackSaved, setFeedbackSaved] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState(0);
 
   // Subtitle timing offset (seconds): positive = delay subtitles, negative = advance
   const [captionOffset, setCaptionOffset] = useState(0);
@@ -934,6 +935,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
               onClick={async () => {
                 if (exporting) return;
                 setExporting(true);
+                setExportProgress(0);
                 setStatus({ ok: true, msg: '字幕付きMP4を生成中...' });
                 const statusLabels = {
                   queued: '準備中...',
@@ -956,7 +958,10 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                     position_y: subtitlePos.y,
                     time_start: clip.time_start || origStart,
                   }, {
-                    onProgress: (st) => setStatus({ ok: true, msg: statusLabels[st] || `処理中 (${st})...` }),
+                    onProgress: (st, pct) => {
+                      setExportProgress(pct || 0);
+                      setStatus({ ok: true, msg: statusLabels[st] || `処理中 (${st})...` });
+                    },
                   });
                   if (res?.download_url) {
                     // Use <a> tag download to avoid popup blockers
@@ -989,6 +994,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                   setTimeout(() => setStatus(null), 10000);
                 } finally {
                   setExporting(false);
+                  setExportProgress(0);
                 }
               }}
               disabled={exporting}
@@ -1002,9 +1008,27 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                 fontWeight: 600,
                 cursor: exporting ? 'wait' : 'pointer',
                 opacity: exporting ? 0.7 : 1,
+                position: 'relative',
+                overflow: 'hidden',
+                minWidth: exporting ? 120 : 'auto',
               }}
             >
-              {exporting ? '生成中...' : '字幕付き Export'}
+              {exporting && (
+                <span style={{
+                  position: 'absolute',
+                  left: 0,
+                  top: 0,
+                  bottom: 0,
+                  width: `${exportProgress}%`,
+                  backgroundColor: C.green,
+                  opacity: 0.3,
+                  transition: 'width 0.5s ease',
+                  borderRadius: 6,
+                }} />
+              )}
+              <span style={{ position: 'relative', zIndex: 1 }}>
+                {exporting ? `${exportProgress}%` : '字幕付き Export'}
+              </span>
             </button>
           )}
           {clip.clip_url && (
@@ -1951,7 +1975,27 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                 border: `1px solid ${status.ok ? C.green : C.red}`,
               }}
             >
-              {status.msg}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ flex: 1 }}>{status.msg}</span>
+                {exporting && <span style={{ fontWeight: 700, fontSize: 13 }}>{exportProgress}%</span>}
+              </div>
+              {exporting && exportProgress > 0 && (
+                <div style={{
+                  marginTop: 6,
+                  height: 4,
+                  borderRadius: 2,
+                  backgroundColor: 'rgba(16,185,129,0.2)',
+                  overflow: 'hidden',
+                }}>
+                  <div style={{
+                    height: '100%',
+                    width: `${exportProgress}%`,
+                    backgroundColor: C.green,
+                    borderRadius: 2,
+                    transition: 'width 0.5s ease',
+                  }} />
+                </div>
+              )}
             </div>
           )}
         </div>
