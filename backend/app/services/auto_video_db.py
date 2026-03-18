@@ -198,16 +198,50 @@ async def restore_jobs_to_memory(auto_video_jobs: Dict[str, Dict[str, Any]]) -> 
     """
     Load completed/errored jobs from DB into the in-memory store.
     Called on startup to restore job history after deploy/restart.
+    Also marks interrupted (non-terminal) jobs as error so users
+    see a clear message instead of a stuck job.
     Returns the number of jobs restored.
     """
+    TERMINAL_STATUSES = {"completed", "error"}
     try:
         jobs = await load_jobs_from_db(limit=100)
         count = 0
+        interrupted = 0
         for job_dict in jobs:
             job_id = job_dict["job_id"]
+            status = job_dict.get("status", "")
+            if hasattr(status, "value"):
+                status = status.value
+
+            # Mark interrupted jobs as error
+            if status not in TERMINAL_STATUSES:
+                old_step = job_dict.get("step", "unknown")
+                job_dict["status"] = "error"
+                job_dict["step"] = "error"
+                job_dict["step_detail"] = (
+                    f"Pipeline interrupted by server restart "
+                    f"(was at: {old_step}). Please retry."
+                )
+                job_dict["error"] = (
+                    f"Server restarted while job was in '{old_step}' step. "
+                    f"Please create a new job to retry."
+                )
+                # Persist the error state back to DB
+                await save_job_to_db(job_dict)
+                interrupted += 1
+                logger.warning(
+                    f"[{job_id}] Marked interrupted job as error "
+                    f"(was at: {old_step})"
+                )
+
             if job_id not in auto_video_jobs:
                 auto_video_jobs[job_id] = job_dict
                 count += 1
+
+        if interrupted > 0:
+            logger.info(
+                f"Marked {interrupted} interrupted auto video jobs as error"
+            )
         return count
     except Exception as e:
         logger.warning(f"Failed to restore jobs from DB: {e}")
