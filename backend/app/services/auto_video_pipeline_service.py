@@ -615,13 +615,14 @@ class AutoVideoPipelineService:
             download_url = await self.face_swap.video_download_url(fs_job_id)
 
             async with httpx.AsyncClient(
-                timeout=300,
+                timeout=httpx.Timeout(connect=30, read=300, write=30, pool=600),
                 headers={"X-Api-Key": self.face_swap.api_key},
             ) as client:
-                resp = await client.get(download_url)
-                resp.raise_for_status()
-                with open(swapped_path, "wb") as f:
-                    f.write(resp.content)
+                async with client.stream("GET", download_url) as resp:
+                    resp.raise_for_status()
+                    with open(swapped_path, "wb") as f:
+                        async for chunk in resp.aiter_bytes(chunk_size=256 * 1024):
+                            f.write(chunk)
 
             logger.info(
                 f"[{job_id}] Face swap complete: "
@@ -664,17 +665,20 @@ class AutoVideoPipelineService:
                         filename=f"{job_id}-swapped.mp4",
                     )
 
-                    async with httpx.AsyncClient(timeout=300) as upload_client:
+                    swap_file_size = os.path.getsize(swapped_path)
+                    async with httpx.AsyncClient(
+                        timeout=httpx.Timeout(connect=30, read=60, write=600, pool=900)
+                    ) as upload_client:
                         with open(swapped_path, "rb") as f:
-                            swap_data = f.read()
-                        resp = await upload_client.put(
-                            swap_upload_url,
-                            content=swap_data,
-                            headers={
-                                "x-ms-blob-type": "BlockBlob",
-                                "Content-Type": "video/mp4",
-                            },
-                        )
+                            resp = await upload_client.put(
+                                swap_upload_url,
+                                content=f,
+                                headers={
+                                    "x-ms-blob-type": "BlockBlob",
+                                    "Content-Type": "video/mp4",
+                                    "Content-Length": str(swap_file_size),
+                                },
+                            )
                         resp.raise_for_status()
 
                     # Generate read SAS URL for Sync.so to download
@@ -800,17 +804,20 @@ class AutoVideoPipelineService:
                     filename=f"{job_id}-final.mp4",
                 )
 
-                async with httpx.AsyncClient(timeout=300) as upload_client:
+                file_size = os.path.getsize(final_path)
+                async with httpx.AsyncClient(
+                    timeout=httpx.Timeout(connect=30, read=60, write=600, pool=900)
+                ) as upload_client:
                     with open(final_path, "rb") as f:
-                        video_data = f.read()
-                    resp = await upload_client.put(
-                        upload_url,
-                        content=video_data,
-                        headers={
-                            "x-ms-blob-type": "BlockBlob",
-                            "Content-Type": "video/mp4",
-                        },
-                    )
+                        resp = await upload_client.put(
+                            upload_url,
+                            content=f,
+                            headers={
+                                "x-ms-blob-type": "BlockBlob",
+                                "Content-Type": "video/mp4",
+                                "Content-Length": str(file_size),
+                            },
+                        )
                     resp.raise_for_status()
 
                 # Generate a read SAS URL so the frontend can access the video
