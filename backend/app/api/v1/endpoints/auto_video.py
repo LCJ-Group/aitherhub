@@ -299,7 +299,8 @@ async def auto_video_health():
         try:
             health = await service.face_swap.health_check()
             result["face_swap_worker"] = health.get("status", "unknown")
-            result["face_swap_gpu"] = health.get("gpu_name", "unknown")
+            gpu_info = health.get("gpu", {})
+            result["face_swap_gpu"] = gpu_info.get("gpu_name", "unknown") if isinstance(gpu_info, dict) else "unknown"
             # Include RunPod discovery info
             if health.get("runpod_pod_id"):
                 result["runpod_pod_id"] = health["runpod_pod_id"]
