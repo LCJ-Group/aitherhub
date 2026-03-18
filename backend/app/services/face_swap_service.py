@@ -15,6 +15,11 @@ Quality Presets (v7 optimised):
   balanced : hyperswap_1c_256, no enhancer, 512 boost     → ~10 fps
   high     : hyperswap_1c_256, no enhancer, 1024 boost    → ~9 fps
   ultra    : hyperswap_1c_256, GPEN-BFR-2048, 1024 boost  → ~2 fps
+
+GPU Worker URL Resolution (priority order):
+  1. Manual FACE_SWAP_WORKER_URL environment variable
+  2. Auto-discovery via RunPod API (RUNPOD_API_KEY required)
+  3. Disabled if neither is set
 """
 from __future__ import annotations
 
@@ -27,6 +32,8 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 
 import httpx
+
+from app.services.runpod_discovery_service import get_runpod_discovery
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +93,10 @@ class FaceSwapService:
     """
     Client for the FaceFusion GPU Worker API.
 
+    Now supports automatic GPU Worker URL discovery via RunPod API.
+    If FACE_SWAP_WORKER_URL is not set, the service will automatically
+    find the running GPU pod and construct the proxy URL.
+
     Usage:
         service = FaceSwapService()
         await service.health_check()
@@ -104,16 +115,36 @@ class FaceSwapService:
         worker_url: Optional[str] = None,
         api_key: Optional[str] = None,
     ):
-        self.worker_url = (worker_url or FACE_SWAP_WORKER_URL).rstrip("/")
+        self._static_worker_url = (worker_url or FACE_SWAP_WORKER_URL).rstrip("/") or None
         self.api_key = api_key or FACE_SWAP_WORKER_API_KEY
+        self._discovery = get_runpod_discovery()
 
-        if not self.worker_url:
-            logger.warning("FACE_SWAP_WORKER_URL not set — face swap features disabled")
+        if not self._static_worker_url and not self._discovery.is_configured:
+            logger.warning(
+                "Neither FACE_SWAP_WORKER_URL nor RUNPOD_API_KEY is set — "
+                "face swap features disabled"
+            )
 
     @property
     def is_configured(self) -> bool:
-        """Check if the worker URL is configured."""
-        return bool(self.worker_url)
+        """Check if the worker URL is configured (static or discoverable)."""
+        return bool(self._static_worker_url) or self._discovery.is_configured
+
+    async def _get_worker_url(self) -> str:
+        """
+        Resolve the current worker URL.
+        Uses static URL if set, otherwise auto-discovers from RunPod.
+        """
+        if self._static_worker_url:
+            return self._static_worker_url
+
+        url = await self._discovery.get_worker_url()
+        if not url:
+            raise WorkerConnectionError(
+                "GPU Worker URL not available. "
+                "Set FACE_SWAP_WORKER_URL or RUNPOD_API_KEY."
+            )
+        return url
 
     def _headers(self) -> Dict[str, str]:
         return {"X-Api-Key": self.api_key}
@@ -122,13 +153,20 @@ class FaceSwapService:
         self,
         method: str,
         path: str,
+        _retry_on_discovery: bool = True,
         **kwargs,
     ) -> Dict[str, Any]:
-        """Make an HTTP request to the GPU worker."""
-        if not self.is_configured:
-            raise WorkerConnectionError("Face swap worker URL not configured")
+        """
+        Make an HTTP request to the GPU worker.
 
-        url = f"{self.worker_url}{path}"
+        If the request fails with a connection error or 404, and auto-discovery
+        is enabled, it will invalidate the cache and retry with a fresh URL.
+        """
+        if not self.is_configured:
+            raise WorkerConnectionError("Face swap worker not configured")
+
+        worker_url = await self._get_worker_url()
+        url = f"{worker_url}{path}"
         timeout = httpx.Timeout(
             connect=WORKER_CONNECT_TIMEOUT,
             read=WORKER_READ_TIMEOUT,
@@ -151,11 +189,40 @@ class FaceSwapService:
                         detail = resp.json().get("detail", detail)
                     except Exception:
                         pass
+
+                    # If 404 and using auto-discovery, try refreshing the URL
+                    if (
+                        resp.status_code == 404
+                        and _retry_on_discovery
+                        and not self._static_worker_url
+                    ):
+                        logger.warning(
+                            f"Worker returned 404 at {url}. "
+                            f"Refreshing URL from RunPod API..."
+                        )
+                        await self._discovery.invalidate_cache()
+                        return await self._request(
+                            method, path, _retry_on_discovery=False, **kwargs
+                        )
+
                     raise WorkerAPIError(resp.status_code, detail)
 
                 return resp.json()
 
         except httpx.ConnectError as e:
+            # Connection failed — try re-discovering if possible
+            if _retry_on_discovery and not self._static_worker_url:
+                logger.warning(
+                    f"Cannot connect to worker at {url}. "
+                    f"Refreshing URL from RunPod API..."
+                )
+                await self._discovery.invalidate_cache()
+                try:
+                    return await self._request(
+                        method, path, _retry_on_discovery=False, **kwargs
+                    )
+                except Exception:
+                    pass  # Fall through to original error
             raise WorkerConnectionError(f"Cannot connect to worker at {url}: {e}")
         except httpx.TimeoutException as e:
             raise WorkerConnectionError(f"Worker request timed out: {e}")
@@ -167,7 +234,17 @@ class FaceSwapService:
         Check GPU worker health.
         Returns GPU info, FaceFusion version, source face status, stream status.
         """
-        return await self._request("GET", "/api/health")
+        result = await self._request("GET", "/api/health")
+
+        # Add discovery info to health response
+        if self._discovery._cached_pod_id:
+            result["runpod_pod_id"] = self._discovery._cached_pod_id
+        if self._discovery._cached_url:
+            result["worker_url_source"] = "auto-discovery"
+        elif self._static_worker_url:
+            result["worker_url_source"] = "static"
+
+        return result
 
     # ── Source Face ──────────────────────────────────────────────────────
 
@@ -254,7 +331,8 @@ class FaceSwapService:
             "image_base64": image_base64,
             "quality": quality.value if hasattr(quality, 'value') else str(quality),
         })
-    # ── Video Face Swapp ──────────────────────────────────────────────────
+
+    # ── Video Face Swap ──────────────────────────────────────────────────
 
     async def swap_video(
         self,
@@ -280,7 +358,8 @@ class FaceSwapService:
 
     async def video_download_url(self, job_id: str) -> str:
         """Get the download URL for a completed video job."""
-        return f"{self.worker_url}/api/video-download/{job_id}"
+        worker_url = await self._get_worker_url()
+        return f"{worker_url}/api/video-download/{job_id}"
 
     async def delete_video_job(self, job_id: str) -> Dict[str, Any]:
         """Delete a video job and its output file."""

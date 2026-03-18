@@ -300,6 +300,11 @@ async def auto_video_health():
             health = await service.face_swap.health_check()
             result["face_swap_worker"] = health.get("status", "unknown")
             result["face_swap_gpu"] = health.get("gpu_name", "unknown")
+            # Include RunPod discovery info
+            if health.get("runpod_pod_id"):
+                result["runpod_pod_id"] = health["runpod_pod_id"]
+            if health.get("worker_url_source"):
+                result["worker_url_source"] = health["worker_url_source"]
         except Exception as e:
             result["face_swap_worker"] = f"error: {str(e)[:100]}"
 
