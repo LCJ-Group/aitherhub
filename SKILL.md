@@ -247,6 +247,8 @@ This mapping is used in `ProcessingSteps.jsx` (detailed view) and `Sidebar.jsx` 
 | 2026-03-18 | Frontend/UX | Always add explicit save button for user-facing forms. Auto-save alone is insufficient — users need visual confirmation. Use dirty/saved state + success message. |
 | 2026-03-18 | ML/Feedback | Download = strongest positive ML signal. clip_download_log table tracks all exports. training-export includes label_downloaded + download_count. recordClipDownload is non-blocking. |
 | 2026-03-18 | Backend/API | Feedback Loop has 5 endpoints: ① clip-rating, ② edit-log, ③ sales-confirmation, ④ training-export, ⑤ clip-download + clip-downloads. |
+| 2026-03-18 | Backend/Export | ffmpeg: -threads 0 (auto) + -c:a copy (skip audio re-encode) = 2-3x faster. Was -threads 1 + -c:a aac. |
+| 2026-03-18 | Backend/Export | Export cache: SHA256(clip_url+captions+style+pos) → cached download_url (72h expiry). POST returns status=done instantly on cache hit. Frontend skips polling. |
 
 ---
 
