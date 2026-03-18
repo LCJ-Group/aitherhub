@@ -582,8 +582,23 @@ class AutoVideoPipelineService:
                     fs_video_url = sas_url
 
             # Convert quality string to FaceSwapQuality enum
+            # Map API-facing quality names to GPU Worker presets:
+            #   fast     -> fast     (hyperswap_1b_256, 512px, no enhancer)
+            #   standard -> balanced (hyperswap_1c_256, 512px, no enhancer)
+            #   balanced -> balanced
+            #   high     -> high     (hyperswap_1c_256, 1024px, no enhancer)
+            #   pro      -> ultra    (hyperswap_1c_256, 1024px, gpen_bfr_2048)
+            #   ultra    -> ultra
+            #   cinema   -> ultra
             from app.services.face_swap_service import FaceSwapQuality
-            fs_quality = FaceSwapQuality(job["quality"]) if isinstance(job["quality"], str) else job["quality"]
+            _quality_map = {
+                "standard": FaceSwapQuality.BALANCED,
+                "pro": FaceSwapQuality.ULTRA,
+                "cinema": FaceSwapQuality.ULTRA,
+            }
+            raw_quality = job["quality"] if isinstance(job["quality"], str) else job["quality"].value
+            fs_quality = _quality_map.get(raw_quality, FaceSwapQuality(raw_quality))
+            logger.info(f"[{job_id}] Quality mapping: {raw_quality} -> {fs_quality.value}")
 
             await self.face_swap.swap_video(
                 job_id=fs_job_id,
@@ -785,8 +800,93 @@ class AutoVideoPipelineService:
                         f"Lip sync + TTS failed: {error_detail}"
                     )
             else:
-                # No lip sync requested — use face-swapped video as-is (no audio)
-                shutil.copy2(swapped_path, final_path)
+                # No lip sync — generate TTS audio and merge with ffmpeg
+                logger.info(f"[{job_id}] Step 4 (no lip sync): Generating TTS + ffmpeg merge")
+                job["status"] = AutoVideoStatus.LIP_SYNCING
+                job["step"] = "generating_audio"
+                job["step_detail"] = "Generating voice audio (ElevenLabs TTS)"
+                job["progress"] = 65
+                from app.services.auto_video_db import save_job_to_db
+                await save_job_to_db(job)
+
+                effective_voice_id = (
+                    job.get("voice_id")
+                    or os.getenv("ELEVENLABS_VOICE_ID", "")
+                )
+
+                tts_audio_path = os.path.join(TEMP_DIR, f"{job_id}-tts.mp3")
+
+                if effective_voice_id and script:
+                    try:
+                        tts_audio_bytes = await self.tts.text_to_speech(
+                            text=script,
+                            voice_id=effective_voice_id,
+                            language_code=job.get("language", "ja"),
+                            output_format="mp3_44100_128",
+                        )
+                        with open(tts_audio_path, "wb") as f:
+                            f.write(tts_audio_bytes)
+
+                        tts_duration = await self._get_audio_duration(tts_audio_path)
+                        job["tts_audio_duration_sec"] = round(tts_duration, 1)
+                        logger.info(
+                            f"[{job_id}] TTS audio generated: "
+                            f"{len(tts_audio_bytes)} bytes, ~{tts_duration:.1f}s"
+                        )
+                    except Exception as tts_err:
+                        logger.error(
+                            f"[{job_id}] TTS generation failed: {tts_err}",
+                            exc_info=True,
+                        )
+                        # Fall back to video without audio
+                        tts_audio_path = None
+                else:
+                    logger.warning(
+                        f"[{job_id}] No voice_id or script — skipping TTS"
+                    )
+                    tts_audio_path = None
+
+                # Merge video + TTS audio with ffmpeg
+                if tts_audio_path and os.path.exists(tts_audio_path):
+                    job["step_detail"] = "Merging video and audio (ffmpeg)"
+                    job["progress"] = 80
+                    logger.info(f"[{job_id}] Merging face-swapped video with TTS audio")
+
+                    try:
+                        proc = await asyncio.create_subprocess_exec(
+                            "ffmpeg", "-y",
+                            "-i", swapped_path,
+                            "-i", tts_audio_path,
+                            "-c:v", "copy",
+                            "-c:a", "aac", "-b:a", "192k",
+                            "-map", "0:v:0",
+                            "-map", "1:a:0",
+                            "-shortest",
+                            final_path,
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE,
+                        )
+                        stdout, stderr = await proc.communicate()
+                        if proc.returncode != 0:
+                            raise RuntimeError(
+                                f"ffmpeg merge failed (code {proc.returncode}): "
+                                f"{stderr.decode()[-500:]}"
+                            )
+                        logger.info(
+                            f"[{job_id}] ffmpeg merge complete: "
+                            f"{os.path.getsize(final_path)/(1024*1024):.1f} MB"
+                        )
+                    except Exception as merge_err:
+                        logger.error(
+                            f"[{job_id}] ffmpeg merge failed: {merge_err}",
+                            exc_info=True,
+                        )
+                        # Fall back to video without audio
+                        shutil.copy2(swapped_path, final_path)
+                else:
+                    # No TTS audio available — use face-swapped video as-is
+                    logger.warning(f"[{job_id}] No TTS audio — using video without audio")
+                    shutil.copy2(swapped_path, final_path)
 
             job["progress"] = 92
 
