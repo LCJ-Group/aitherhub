@@ -587,13 +587,13 @@ class AutoVideoPipelineService:
             #   standard -> balanced (hyperswap_1c_256, 512px, no enhancer)
             #   balanced -> balanced
             #   high     -> high     (hyperswap_1c_256, 1024px, no enhancer)
-            #   pro      -> ultra    (hyperswap_1c_256, 1024px, gpen_bfr_2048)
-            #   ultra    -> ultra
+            #   pro      -> high     (hyperswap_1c_256, 1024px, no enhancer) — best quality/speed balance
+            #   ultra    -> ultra    (hyperswap_1c_256, 1024px, gfpgan_1.4 enhancer)
             #   cinema   -> ultra
             from app.services.face_swap_service import FaceSwapQuality
             _quality_map = {
                 "standard": FaceSwapQuality.BALANCED,
-                "pro": FaceSwapQuality.ULTRA,
+                "pro": FaceSwapQuality.HIGH,
                 "cinema": FaceSwapQuality.ULTRA,
             }
             raw_quality = job["quality"] if isinstance(job["quality"], str) else job["quality"].value

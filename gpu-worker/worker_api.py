@@ -82,13 +82,46 @@ current_session = {
     "error": None,
 }
 
+# Quality presets for video face swap
+QUALITY_PRESETS = {
+    "fast": {
+        "face_swapper_model": "hyperswap_1b_256",
+        "face_swapper_pixel_boost": "512x512",
+        "face_enhancer_enabled": False,
+        "face_detector_model": "yolo_face",
+        "execution_thread_count": 8,
+    },
+    "balanced": {
+        "face_swapper_model": "hyperswap_1c_256",
+        "face_swapper_pixel_boost": "512x512",
+        "face_enhancer_enabled": False,
+        "face_detector_model": "retinaface",
+        "execution_thread_count": 8,
+    },
+    "high": {
+        "face_swapper_model": "hyperswap_1c_256",
+        "face_swapper_pixel_boost": "1024x1024",
+        "face_enhancer_enabled": False,
+        "face_detector_model": "retinaface",
+        "execution_thread_count": 8,
+    },
+    "ultra": {
+        "face_swapper_model": "hyperswap_1c_256",
+        "face_swapper_pixel_boost": "1024x1024",
+        "face_enhancer_enabled": True,
+        "face_enhancer_model": "gfpgan_1.4",
+        "face_detector_model": "retinaface",
+        "execution_thread_count": 4,
+    },
+}
+
 current_config = {
-    "face_swapper_model": "inswapper_128",
-    "face_swapper_pixel_boost": "512x512",
+    "face_swapper_model": "hyperswap_1c_256",
+    "face_swapper_pixel_boost": "1024x1024",
     "face_swapper_weight": 0.85,
     "face_enhancer_model": "gfpgan_1.4",
-    "face_enhancer_enabled": True,
-    "face_detector_model": "yolo_face",
+    "face_enhancer_enabled": False,
+    "face_detector_model": "retinaface",
     "face_detector_score": 0.5,
     "face_mask_types": ["box", "occlusion", "region"],
     "face_mask_blur": 0.3,
@@ -97,7 +130,7 @@ current_config = {
     "output_resolution": "1280x720",
     "output_fps": 30,
     "execution_providers": "cuda",
-    "execution_thread_count": 4,
+    "execution_thread_count": 8,
 }
 
 source_face_path: Optional[str] = None
@@ -286,9 +319,13 @@ def build_facefusion_headless_cmd(input_path: str, output_path: str) -> list:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
-    logger.info("FaceFusion GPU Worker starting up...")
+    logger.info("FaceFusion GPU Worker starting up (v8 quality-presets)...")
     logger.info(f"FaceFusion directory: {FACEFUSION_DIR}")
     logger.info(f"Source face directory: {SOURCE_FACE_DIR}")
+    logger.info(f"Default config: model={current_config['face_swapper_model']}, "
+                f"boost={current_config['face_swapper_pixel_boost']}, "
+                f"enhancer={current_config['face_enhancer_enabled']}, "
+                f"detector={current_config['face_detector_model']}")
 
     gpu_info = get_gpu_info()
     logger.info(f"GPU: {gpu_info['gpu_name']} ({gpu_info['gpu_memory_total_mb']}MB)")
@@ -439,14 +476,11 @@ async def start_stream(req: StartStreamRequest, auth: bool = Depends(verify_api_
     current_session["error"] = None
 
     # Apply quality preset
-    if req.quality == "fast":
-        current_config["face_enhancer_enabled"] = False
-    elif req.quality == "balanced":
+    preset = QUALITY_PRESETS.get(req.quality, QUALITY_PRESETS["high"])
+    for key, value in preset.items():
+        current_config[key] = value
+    if req.face_enhancer and req.quality != "fast":
         current_config["face_enhancer_enabled"] = True
-        current_config["face_enhancer_model"] = "gfpgan_1.4"
-    elif req.quality == "high":
-        current_config["face_enhancer_enabled"] = True
-        current_config["face_enhancer_model"] = "gfpgan_1.4"
 
     # Resolution mapping
     res_map = {"480p": "640x480", "720p": "1280x720", "1080p": "1920x1080"}
@@ -836,13 +870,21 @@ def _run_video_job(job_id: str, video_url: str, face_enhancer: bool,
             duration_sec = 0
         job["duration_sec"] = duration_sec
 
-        # --- Step 3: Apply quality settings ---
-        original_enhancer = current_config["face_enhancer_enabled"]
-        if quality == "fast":
-            current_config["face_enhancer_enabled"] = False
-        else:
-            current_config["face_enhancer_enabled"] = face_enhancer
+        # --- Step 3: Apply quality preset ---
+        # Save original config to restore after processing
+        original_config = dict(current_config)
+        preset = QUALITY_PRESETS.get(quality, QUALITY_PRESETS["high"])
+        for key, value in preset.items():
+            current_config[key] = value
+        # Override face_enhancer if explicitly requested
+        if face_enhancer and quality != "fast":
+            current_config["face_enhancer_enabled"] = True
         current_config["output_video_quality"] = output_video_quality
+        logger.info(f"[{job_id}] Applied preset '{quality}': "
+                    f"model={current_config['face_swapper_model']}, "
+                    f"boost={current_config['face_swapper_pixel_boost']}, "
+                    f"enhancer={current_config['face_enhancer_enabled']}, "
+                    f"detector={current_config['face_detector_model']}")
 
         # --- Step 4: Run FaceFusion ---
         job["status"] = "processing"
@@ -878,7 +920,8 @@ def _run_video_job(job_id: str, video_url: str, face_enhancer: bool,
             logger.debug(f"[{job_id}] FF: {line[:120]}")
 
         proc.wait()
-        current_config["face_enhancer_enabled"] = original_enhancer
+        # Restore original config
+        current_config.update(original_config)
 
         if proc.returncode != 0:
             raise RuntimeError(f"FaceFusion exited with code {proc.returncode}")
@@ -1037,6 +1080,133 @@ async def delete_video_job(job_id: str, auth: bool = Depends(verify_api_key)):
 
     del video_jobs[job_id]
     return {"status": "deleted", "job_id": job_id}
+
+
+# ── Debug ────────────────────────────────────────────────────────────────────
+
+@app.get("/api/debug/test-facefusion")
+async def debug_test_facefusion(auth: bool = Depends(verify_api_key)):
+    """Run a quick FaceFusion test and return full output for debugging."""
+    import subprocess
+    result = {}
+
+    # Check source face
+    result["source_face_path"] = source_face_path
+    result["source_face_exists"] = source_face_path is not None and Path(source_face_path).exists()
+    if result["source_face_exists"]:
+        result["source_face_size"] = os.path.getsize(source_face_path)
+        # Check file format
+        try:
+            import imghdr
+            result["source_face_format"] = imghdr.what(source_face_path)
+        except Exception:
+            pass
+
+    # Check .jobs directory
+    jobs_path = os.path.join(FACEFUSION_DIR, ".jobs")
+    result["jobs_path_exists"] = os.path.isdir(jobs_path)
+
+    # Build the command that would be used
+    if source_face_path:
+        test_cmd = [
+            sys.executable, f"{FACEFUSION_DIR}/facefusion.py", "headless-run",
+            "--source-paths", source_face_path,
+            "--target-path", "/dev/null",
+            "--output-path", "/dev/null",
+            "--processors", "face_swapper",
+            "--face-swapper-model", current_config["face_swapper_model"],
+            "--help",
+        ]
+        result["test_command"] = " ".join(test_cmd)
+
+    # Run FaceFusion --help to check available args
+    try:
+        proc = subprocess.run(
+            [sys.executable, f"{FACEFUSION_DIR}/facefusion.py", "headless-run", "--help"],
+            capture_output=True, text=True, timeout=30, cwd=FACEFUSION_DIR,
+        )
+        result["help_stdout"] = proc.stdout[:3000]
+        result["help_stderr"] = proc.stderr[:3000]
+        result["help_returncode"] = proc.returncode
+    except Exception as e:
+        result["help_error"] = str(e)
+
+    # Check FaceFusion models directory
+    models_dir = os.path.join(FACEFUSION_DIR, ".assets", "models")
+    if os.path.isdir(models_dir):
+        result["models"] = os.listdir(models_dir)[:20]
+    else:
+        # Try alternative paths
+        for alt in ["/workspace/facefusion/models", "/root/.facefusion/models"]:
+            if os.path.isdir(alt):
+                result["models_path"] = alt
+                result["models"] = os.listdir(alt)[:20]
+                break
+
+    return result
+
+
+@app.post("/api/debug/run-facefusion")
+async def debug_run_facefusion(
+    auth: bool = Depends(verify_api_key),
+    target_url: str = "",
+):
+    """Run FaceFusion on a single frame and return full output."""
+    import subprocess
+    import httpx
+
+    if not source_face_path or not Path(source_face_path).exists():
+        return {"error": "No source face set"}
+
+    # Download a single frame from the target video
+    input_path = os.path.join(TEMP_DIR, "debug_input.jpg")
+    output_path = os.path.join(TEMP_DIR, "debug_output.jpg")
+
+    if target_url:
+        # Download video and extract first frame
+        video_path = os.path.join(TEMP_DIR, "debug_video.mp4")
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.get(target_url)
+            resp.raise_for_status()
+            with open(video_path, "wb") as f:
+                f.write(resp.content)
+
+        # Extract first frame
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", video_path, "-vframes", "1", "-q:v", "2", input_path],
+            capture_output=True, timeout=30,
+        )
+    else:
+        return {"error": "Provide target_url"}
+
+    if not Path(input_path).exists():
+        return {"error": "Failed to extract frame"}
+
+    # Run FaceFusion headless-run on single image
+    cmd = build_facefusion_headless_cmd(input_path, output_path)
+    result = {"command": " ".join(cmd)}
+
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=120, cwd=FACEFUSION_DIR,
+        )
+        result["stdout"] = proc.stdout[:5000]
+        result["stderr"] = proc.stderr[:5000]
+        result["returncode"] = proc.returncode
+        result["output_exists"] = Path(output_path).exists()
+        if result["output_exists"]:
+            result["output_size"] = os.path.getsize(output_path)
+    except Exception as e:
+        result["error"] = str(e)
+
+    # Cleanup
+    for p in [input_path, output_path, os.path.join(TEMP_DIR, "debug_video.mp4")]:
+        try:
+            os.unlink(p)
+        except FileNotFoundError:
+            pass
+
+    return result
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
