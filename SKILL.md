@@ -243,6 +243,8 @@ This mapping is used in `ProcessingSteps.jsx` (detailed view) and `Sidebar.jsx` 
 | 2026-03-13 | Frontend/Loading | Always add safety timeouts to API-dependent loading states to prevent infinite spinners. |
 | 2026-03-13 | Backend/Decorator | Empty `@router.post()` decorator without path causes import errors — always specify path. |
 | 2026-03-13 | Frontend/Performance | `preload="auto"` on `<video>` causes full file download (14.7GB for 9h video). Use `preload="metadata"`. Also: readyState >= 2 is sufficient for playback, `#t=` media fragment helps browser seek, and minimized thumbnails should use `preload="none"`. |
+| 2026-03-18 | Frontend/Feedback | ClipFeedbackPanel: API returns phase_index as String, prop is Number. ALWAYS use `String()` on both sides for comparison. |
+| 2026-03-18 | Frontend/UX | Always add explicit save button for user-facing forms. Auto-save alone is insufficient — users need visual confirmation. Use dirty/saved state + success message. |
 
 ---
 
