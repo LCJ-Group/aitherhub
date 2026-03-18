@@ -1467,17 +1467,32 @@ class VideoService extends BaseApiService {
         timeout: 120000, // 2 minutes for cold-start + initial processing
       });
       const jobId = startRes?.job_id || startRes?.data?.job_id;
+
+      // Cache hit: server returns done + download_url immediately
+      const startStatus = startRes?.status || startRes?.data?.status;
+      if (startStatus === 'done') {
+        if (onProgress) onProgress('done');
+        return {
+          download_url: startRes?.download_url || startRes?.data?.download_url,
+          file_size: startRes?.file_size || startRes?.data?.file_size,
+          video_id: videoId,
+        };
+      }
+
       if (!jobId) {
         // Fallback: old API returned download_url directly
         return startRes;
       }
 
-      // Step 2: Poll for completion
-      const maxAttempts = 120; // 10 minutes max (5s intervals)
+      // Step 2: Poll for completion with progressive intervals
+      // First 15s: poll every 2s (fast feedback)
+      // After 15s: poll every 4s (reduce server load)
+      const maxAttempts = 180; // ~10 minutes max
       for (let i = 0; i < maxAttempts; i++) {
-        await new Promise(r => setTimeout(r, 5000)); // wait 5 seconds
+        const delay = i < 8 ? 2000 : 4000; // 2s for first 16s, then 4s
+        await new Promise(r => setTimeout(r, delay));
         const status = await this.get(`/api/v1/editor/${videoId}/export-subtitled/${jobId}`, {
-          timeout: 30000, // 30s per poll request
+          timeout: 30000,
         });
         const st = status?.status || status?.data?.status;
         if (onProgress) onProgress(st);

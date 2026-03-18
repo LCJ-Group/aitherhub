@@ -1450,6 +1450,44 @@ def _update_job(job_id: str, **kwargs):
 # Maximum age (seconds) before a non-terminal job is considered stale
 _STALE_JOB_TIMEOUT = 600  # 10 minutes
 
+# ─── Export cache (avoid re-encoding identical exports) ────────────────────
+_EXPORT_CACHE_DIR = os.path.join(tempfile.gettempdir(), "aitherhub_export_cache")
+os.makedirs(_EXPORT_CACHE_DIR, exist_ok=True)
+
+def _export_cache_key(clip_url: str, captions: list, style: str, position_x: float, position_y: float) -> str:
+    """Generate a deterministic cache key from export parameters."""
+    import hashlib
+    # Normalize captions to just text+timing for cache key
+    cap_data = [(c.get('text',''), round(float(c.get('start',0)),1), round(float(c.get('end',0)),1)) for c in (captions if isinstance(captions, list) else [])]
+    raw = json.dumps({'url': clip_url.split('?')[0], 'caps': cap_data, 'style': style, 'px': round(position_x,1), 'py': round(position_y,1)}, sort_keys=True)
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+def _get_cached_export(cache_key: str) -> dict | None:
+    """Check if a cached export exists and return its data."""
+    path = os.path.join(_EXPORT_CACHE_DIR, f"{cache_key}.json")
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        # Cache entries expire after 72 hours (matching SAS token expiry)
+        created = datetime.fromisoformat(data.get('created_at', ''))
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        age_hours = (datetime.now(timezone.utc) - created).total_seconds() / 3600
+        if age_hours > 72:
+            os.remove(path)
+            return None
+        return data
+    except Exception:
+        return None
+
+def _save_cached_export(cache_key: str, download_url: str, file_size: int):
+    """Save export result to cache."""
+    path = os.path.join(_EXPORT_CACHE_DIR, f"{cache_key}.json")
+    with open(path, 'w') as f:
+        json.dump({'download_url': download_url, 'file_size': file_size, 'created_at': datetime.now(timezone.utc).isoformat()}, f)
+
 
 async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, style: str,
                           position_x: float, position_y: float, time_start: float):
@@ -1571,9 +1609,9 @@ async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, s
             "ffmpeg", "-y", "-hide_banner",
             "-i", video_path,
             "-vf", vf_filter,
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26",
-            "-threads", "1",
-            "-c:a", "aac", "-b:a", "128k",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+            "-threads", "0",
+            "-c:a", "copy",
             "-movflags", "+faststart",
             output_path,
         ]
@@ -1640,6 +1678,13 @@ async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, s
         _update_job(job_id, status="done", download_url=download_url, file_size=output_size)
         logger.info(f"[export-job {job_id}] Complete! URL: {download_url[:80]}...")
 
+        # Save to cache for instant re-export
+        job_data = _load_job(job_id) or {}
+        cache_key = job_data.get("cache_key")
+        if cache_key:
+            _save_cached_export(cache_key, download_url, output_size)
+            logger.info(f"[export-job {job_id}] Cached export (key={cache_key})")
+
     except Exception as e:
         logger.error(f"[export-job {job_id}] Failed: {e}", exc_info=True)
         _update_job(job_id, status="failed", error=str(e)[:300])
@@ -1665,18 +1710,42 @@ async def export_subtitled_clip(
     if not req.captions:
         raise HTTPException(status_code=400, detail="No captions provided")
 
+    # ── Cache check: return cached export instantly if available ──
+    cap_dicts = [c.dict() if hasattr(c, 'dict') else c for c in req.captions]
+    cache_key = _export_cache_key(req.clip_url, cap_dicts, req.style, req.position_x, req.position_y)
+    cached = _get_cached_export(cache_key)
+    if cached:
+        logger.info(f"[export] Cache HIT for {video_id} (key={cache_key})")
+        job_id = f"cached_{cache_key}"
+        _save_job(job_id, {
+            "status": "done",
+            "video_id": video_id,
+            "download_url": cached["download_url"],
+            "file_size": cached.get("file_size", 0),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        return {
+            "job_id": job_id,
+            "status": "done",
+            "download_url": cached["download_url"],
+            "file_size": cached.get("file_size", 0),
+            "video_id": video_id,
+        }
+
+    logger.info(f"[export] Cache MISS for {video_id} (key={cache_key}), starting encode")
     job_id = uuid.uuid4().hex[:12]
     _save_job(job_id, {
         "status": "queued",
         "video_id": video_id,
         "style": req.style,
         "caption_count": len(req.captions),
+        "cache_key": cache_key,
         "created_at": datetime.now(timezone.utc).isoformat(),
     })
 
     # Launch background task
     asyncio.create_task(_run_export_job(
-        job_id, video_id, req.clip_url, req.captions,
+        job_id, video_id, req.clip_url, cap_dicts,
         req.style, req.position_x, req.position_y, req.time_start,
     ))
 
