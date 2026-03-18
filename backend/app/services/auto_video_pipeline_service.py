@@ -666,19 +666,27 @@ class AutoVideoPipelineService:
                     )
 
                     swap_file_size = os.path.getsize(swapped_path)
+
+                    async def _read_swap_chunks(path: str, chunk_size: int = 4 * 1024 * 1024):
+                        with open(path, "rb") as fh:
+                            while True:
+                                chunk = fh.read(chunk_size)
+                                if not chunk:
+                                    break
+                                yield chunk
+
                     async with httpx.AsyncClient(
                         timeout=httpx.Timeout(connect=30, read=60, write=600, pool=900)
                     ) as upload_client:
-                        with open(swapped_path, "rb") as f:
-                            resp = await upload_client.put(
-                                swap_upload_url,
-                                content=f,
-                                headers={
-                                    "x-ms-blob-type": "BlockBlob",
-                                    "Content-Type": "video/mp4",
-                                    "Content-Length": str(swap_file_size),
-                                },
-                            )
+                        resp = await upload_client.put(
+                            swap_upload_url,
+                            content=_read_swap_chunks(swapped_path),
+                            headers={
+                                "x-ms-blob-type": "BlockBlob",
+                                "Content-Type": "video/mp4",
+                                "Content-Length": str(swap_file_size),
+                            },
+                        )
                         resp.raise_for_status()
 
                     # Generate read SAS URL for Sync.so to download
@@ -805,19 +813,32 @@ class AutoVideoPipelineService:
                 )
 
                 file_size = os.path.getsize(final_path)
+                logger.info(
+                    f"[{job_id}] Uploading final video to blob: {file_size / (1024*1024):.1f} MB"
+                )
+                # Read file in chunks to avoid loading entire file into memory
+                # httpx AsyncClient cannot accept sync file objects as content
+                async def _read_file_chunks(path: str, chunk_size: int = 4 * 1024 * 1024):
+                    """Async generator that yields file chunks."""
+                    with open(path, "rb") as fh:
+                        while True:
+                            chunk = fh.read(chunk_size)
+                            if not chunk:
+                                break
+                            yield chunk
+
                 async with httpx.AsyncClient(
                     timeout=httpx.Timeout(connect=30, read=60, write=600, pool=900)
                 ) as upload_client:
-                    with open(final_path, "rb") as f:
-                        resp = await upload_client.put(
-                            upload_url,
-                            content=f,
-                            headers={
-                                "x-ms-blob-type": "BlockBlob",
-                                "Content-Type": "video/mp4",
-                                "Content-Length": str(file_size),
-                            },
-                        )
+                    resp = await upload_client.put(
+                        upload_url,
+                        content=_read_file_chunks(final_path),
+                        headers={
+                            "x-ms-blob-type": "BlockBlob",
+                            "Content-Type": "video/mp4",
+                            "Content-Length": str(file_size),
+                        },
+                    )
                     resp.raise_for_status()
 
                 # Generate a read SAS URL so the frontend can access the video
