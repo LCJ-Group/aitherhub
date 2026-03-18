@@ -698,10 +698,11 @@ function FeedbackSection({ data, loading }) {
           <span className="text-lg">⭐</span>
           <h2 className="text-lg font-semibold text-gray-700">フィードバック概要</h2>
         </div>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
           <StatCard label="総採点数" value={summary.total_feedbacks} unit="件" color="orange" />
           <StatCard label="平均スコア" value={summary.average_rating} unit="/ 5" color="blue" />
           <StatCard label="コメント付き" value={summary.with_comments} unit="件" color="green" />
+          <StatCard label="ダウンロード済" value={summary.downloaded_clips || 0} unit="件" color="teal" />
           <div className="rounded-xl border p-4 border-purple-300 bg-purple-50 transition-all duration-200 hover:shadow-md">
             <p className="text-xs text-gray-500 mb-2">スコア分布</p>
             <div className="flex items-end gap-1 h-8">
@@ -806,6 +807,11 @@ function FeedbackCard({ fb }) {
             <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded">
               {timeRange}
             </span>
+            {fb.download_count > 0 && (
+              <span className="text-xs font-semibold text-blue-600 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-full">
+                ⬇️ {fb.download_count}回
+              </span>
+            )}
           </div>
 
           {fb.user_comment && (

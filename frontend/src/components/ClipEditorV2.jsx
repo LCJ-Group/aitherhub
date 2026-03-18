@@ -968,6 +968,14 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                     document.body.appendChild(a);
                     a.click();
                     document.body.removeChild(a);
+                    // Record download for ML training (non-blocking)
+                    VideoService.recordClipDownload(videoId, {
+                      phase_index: clip.phase_index,
+                      time_start: clip.time_start || origStart,
+                      time_end: clip.time_end || origEnd,
+                      clip_id: clip.id || null,
+                      export_type: 'subtitled',
+                    });
                     setStatus({ ok: true, msg: '字幕付きMP4のダウンロードを開始しました！' });
                     setTimeout(() => setStatus(null), 5000);
                   } else {
@@ -1003,6 +1011,16 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
             <a
               href={clip.clip_url}
               download
+              onClick={() => {
+                // Record raw download for ML training (non-blocking)
+                VideoService.recordClipDownload(videoId, {
+                  phase_index: clip.phase_index,
+                  time_start: clip.time_start || origStart,
+                  time_end: clip.time_end || origEnd,
+                  clip_id: clip.id || null,
+                  export_type: 'raw',
+                });
+              }}
               style={{
                 padding: "4px 14px",
                 backgroundColor: C.purple,

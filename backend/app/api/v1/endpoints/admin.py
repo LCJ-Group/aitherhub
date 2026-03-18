@@ -140,6 +140,20 @@ async def get_all_feedbacks(
         raise HTTPException(status_code=403, detail="Invalid admin credentials")
 
     try:
+        # Ensure download log table exists
+        await db.execute(text("""
+            CREATE TABLE IF NOT EXISTS clip_download_log (
+                id UUID PRIMARY KEY,
+                video_id UUID NOT NULL,
+                phase_index VARCHAR(50),
+                time_start FLOAT,
+                time_end FLOAT,
+                clip_id UUID,
+                export_type VARCHAR(20) DEFAULT 'raw',
+                created_at TIMESTAMP DEFAULT NOW()
+            )
+        """))
+
         sql = text("""
             SELECT
                 vp.video_id,
@@ -153,10 +167,17 @@ async def get_all_feedbacks(
                 vp.importance_score,
                 v.original_filename,
                 v.user_id,
-                u.email as user_email
+                u.email as user_email,
+                COALESCE(dl.download_count, 0) as download_count
             FROM video_phases vp
             JOIN videos v ON CAST(vp.video_id AS UUID) = v.id
             LEFT JOIN users u ON v.user_id = u.id
+            LEFT JOIN (
+                SELECT video_id, phase_index, COUNT(*) AS download_count
+                FROM clip_download_log
+                GROUP BY video_id, phase_index
+            ) dl ON CAST(vp.video_id AS VARCHAR) = CAST(dl.video_id AS VARCHAR)
+                AND CAST(vp.phase_index AS VARCHAR) = dl.phase_index
             WHERE vp.user_rating IS NOT NULL
             ORDER BY vp.rated_at DESC NULLS LAST
         """)
@@ -178,6 +199,7 @@ async def get_all_feedbacks(
                 "video_name": r.original_filename,
                 "user_id": r.user_id,
                 "user_email": r.user_email,
+                "download_count": r.download_count,
             })
 
         # Summary stats
@@ -188,6 +210,8 @@ async def get_all_feedbacks(
             if f["user_rating"] in rating_dist:
                 rating_dist[f["user_rating"]] += 1
         with_comments = sum(1 for f in feedbacks if f.get("user_comment"))
+        downloaded = sum(1 for f in feedbacks if f.get("download_count", 0) > 0)
+        total_downloads = sum(f.get("download_count", 0) for f in feedbacks)
 
         return {
             "summary": {
@@ -195,6 +219,8 @@ async def get_all_feedbacks(
                 "average_rating": round(avg_rating, 2),
                 "rating_distribution": rating_dist,
                 "with_comments": with_comments,
+                "downloaded_clips": downloaded,
+                "total_downloads": total_downloads,
             },
             "feedbacks": feedbacks,
         }

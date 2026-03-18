@@ -1500,6 +1500,22 @@ class VideoService extends BaseApiService {
     }
   }
 
+  /**
+   * Record a clip download event for ML training signals.
+   * @param {string} videoId
+   * @param {Object} data - { phase_index, time_start, time_end, clip_id?, export_type }
+   */
+  async recordClipDownload(videoId, data) {
+    try {
+      const response = await this.post(`/api/v1/feedback/${videoId}/clip-download`, data);
+      return response;
+    } catch (error) {
+      // Non-blocking: don't let download tracking failure break the export flow
+      console.warn('[recordClipDownload] Failed (non-blocking):', error.message);
+      return null;
+    }
+  }
+
   async retryAnalysis(videoId) {
     try {
       const response = await this.post(`/api/v1/videos/${videoId}/retry-analysis`);

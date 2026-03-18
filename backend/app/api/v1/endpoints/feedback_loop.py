@@ -6,6 +6,8 @@ Human-in-the-Loop AI improvement APIs:
   ② Edit Tracking:      POST /api/v1/feedback/{video_id}/edit-log
   ③ Sales Confirmation: POST /api/v1/feedback/{video_id}/sales-confirmation
   ④ Training Export:    GET  /api/v1/feedback/training-export
+  ⑤ Download Tracking:  POST /api/v1/feedback/{video_id}/clip-download
+                        GET  /api/v1/feedback/{video_id}/clip-downloads
 
 Data classification:
   - Raw Data:   NEVER modified (video, csv_metrics, transcript, etc.)
@@ -500,8 +502,166 @@ async def list_sales_confirmations(
     }
 
 
-# ─── ④ Training Data Export ──────────────────────────────────────────────────
+# ─── ⑤ Download Tracking ───────────────────────────────────────────────────────
 
+
+class ClipDownloadRequest(BaseModel):
+    phase_index: Optional[Union[int, str]] = Field(None, description="Phase index")
+    time_start: float = Field(..., description="Clip start time in seconds")
+    time_end: float = Field(..., description="Clip end time in seconds")
+    clip_id: Optional[str] = Field(None, description="UUID of video_clips row")
+    export_type: str = Field("raw", description="'raw' or 'subtitled'")
+
+
+@router.post("/{video_id}/clip-download")
+async def record_clip_download(
+    video_id: str,
+    req: ClipDownloadRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Record a clip download event.
+    Downloads are the strongest positive signal for ML training:
+    the user actually chose to use this clip.
+    """
+    if req.export_type not in ("raw", "subtitled"):
+        raise HTTPException(status_code=422, detail="export_type must be 'raw' or 'subtitled'")
+
+    try:
+        uuid.UUID(video_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid video_id UUID")
+
+    dl_id = str(uuid.uuid4())
+
+    phase_index_val = req.phase_index
+    if phase_index_val is None:
+        if req.clip_id:
+            phase_index_val = f"clip_{req.clip_id[:8]}"
+        else:
+            phase_index_val = f"t_{int(req.time_start)}_{int(req.time_end)}"
+
+    # Ensure table exists
+    await db.execute(text("""
+        CREATE TABLE IF NOT EXISTS clip_download_log (
+            id UUID PRIMARY KEY,
+            video_id UUID NOT NULL,
+            phase_index VARCHAR(50),
+            time_start FLOAT,
+            time_end FLOAT,
+            clip_id UUID,
+            export_type VARCHAR(20) DEFAULT 'raw',
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    """))
+    await db.execute(text(
+        "CREATE INDEX IF NOT EXISTS idx_cdl_video ON clip_download_log (video_id)"
+    ))
+    await db.execute(text(
+        "CREATE INDEX IF NOT EXISTS idx_cdl_phase ON clip_download_log (video_id, phase_index)"
+    ))
+
+    sql = text("""
+        INSERT INTO clip_download_log (
+            id, video_id, phase_index, time_start, time_end,
+            clip_id, export_type, created_at
+        ) VALUES (
+            :id, :video_id, :phase_index, :time_start, :time_end,
+            :clip_id, :export_type, NOW()
+        )
+        RETURNING id, video_id, phase_index, export_type, created_at
+    """)
+
+    try:
+        result = await db.execute(sql, {
+            "id": dl_id,
+            "video_id": video_id,
+            "phase_index": str(phase_index_val),
+            "time_start": req.time_start,
+            "time_end": req.time_end,
+            "clip_id": req.clip_id,
+            "export_type": req.export_type,
+        })
+        await db.commit()
+        row = result.fetchone()
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"[clip_download] DB error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to record download")
+
+    logger.info(f"[clip_download] Recorded: video={video_id} phase={phase_index_val} type={req.export_type}")
+
+    return {
+        "id": str(row.id),
+        "video_id": str(row.video_id),
+        "phase_index": row.phase_index,
+        "export_type": row.export_type,
+        "created_at": row.created_at.isoformat() if row.created_at else "",
+    }
+
+
+@router.get("/{video_id}/clip-downloads")
+async def list_clip_downloads(
+    video_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Get download counts per phase_index for a video.
+    Used by feedback UI to show download badges.
+    """
+    try:
+        uuid.UUID(video_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid video_id UUID")
+
+    # Ensure table exists
+    await db.execute(text("""
+        CREATE TABLE IF NOT EXISTS clip_download_log (
+            id UUID PRIMARY KEY,
+            video_id UUID NOT NULL,
+            phase_index VARCHAR(50),
+            time_start FLOAT,
+            time_end FLOAT,
+            clip_id UUID,
+            export_type VARCHAR(20) DEFAULT 'raw',
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    """))
+
+    sql = text("""
+        SELECT phase_index, export_type, COUNT(*) as download_count,
+               MAX(created_at) as last_downloaded_at
+        FROM clip_download_log
+        WHERE video_id = :video_id
+        GROUP BY phase_index, export_type
+        ORDER BY phase_index ASC
+    """)
+    result = await db.execute(sql, {"video_id": video_id})
+    rows = result.fetchall()
+
+    # Aggregate by phase_index
+    downloads = {}
+    for r in rows:
+        pi = r.phase_index
+        if pi not in downloads:
+            downloads[pi] = {"total": 0, "raw": 0, "subtitled": 0, "last_downloaded_at": None}
+        downloads[pi][r.export_type] = r.download_count
+        downloads[pi]["total"] += r.download_count
+        if r.last_downloaded_at:
+            ts = r.last_downloaded_at.isoformat()
+            if not downloads[pi]["last_downloaded_at"] or ts > downloads[pi]["last_downloaded_at"]:
+                downloads[pi]["last_downloaded_at"] = ts
+
+    total_downloads = sum(d["total"] for d in downloads.values())
+
+    return {
+        "video_id": video_id,
+        "downloads": downloads,
+        "total_downloads": total_downloads,
+    }
+
+
+# ─── ④ Training Data Export ──────────────────────────────────────────────────────
 @router.get("/training-export")
 async def export_training_data(
     limit: int = Query(1000, le=10000),
@@ -513,16 +673,36 @@ async def export_training_data(
     Merges: clip_rating + edit_tracking + sales_confirmation
     into a single training dataset.
     """
-    # ① Clip ratings
+    # Ensure download log table exists
+    await db.execute(text("""
+        CREATE TABLE IF NOT EXISTS clip_download_log (
+            id UUID PRIMARY KEY,
+            video_id UUID NOT NULL,
+            phase_index VARCHAR(50),
+            time_start FLOAT,
+            time_end FLOAT,
+            clip_id UUID,
+            export_type VARCHAR(20) DEFAULT 'raw',
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    """))
+
+    # ① Clip ratings + sales confirmation + download counts
     ratings_sql = text("""
         SELECT cf.video_id, cf.phase_index, cf.time_start, cf.time_end,
                cf.rating, cf.reason_tags, cf.feedback,
                cf.ai_score_at_feedback, cf.score_breakdown,
                cf.created_at,
-               sc.is_sales_moment, sc.confidence AS sales_confidence
+               sc.is_sales_moment, sc.confidence AS sales_confidence,
+               COALESCE(dl.download_count, 0) AS download_count
         FROM clip_feedback cf
         LEFT JOIN sales_confirmation sc
           ON cf.video_id = sc.video_id AND cf.phase_index = sc.phase_index
+        LEFT JOIN (
+            SELECT video_id, phase_index, COUNT(*) AS download_count
+            FROM clip_download_log
+            GROUP BY video_id, phase_index
+        ) dl ON cf.video_id = dl.video_id AND cf.phase_index = dl.phase_index
         WHERE cf.rating IS NOT NULL
         ORDER BY cf.created_at DESC
         LIMIT :limit OFFSET :offset
@@ -573,6 +753,8 @@ async def export_training_data(
             "label_rating": 1 if r.rating == "good" else 0,
             "label_adopted": 1 if r.feedback == "adopted" else 0,
             "label_sales_dna": r.is_sales_moment if r.is_sales_moment is not None else None,
+            "label_downloaded": 1 if r.download_count > 0 else 0,
+            "download_count": r.download_count,
             "sales_confidence": r.sales_confidence,
             # Feedback details
             "rating": r.rating,
