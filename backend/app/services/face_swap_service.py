@@ -266,17 +266,29 @@ class FaceSwapService:
             face_index: Index of face to use if multiple detected
             append: If True, add to existing source faces (multi-angle)
         """
-        data = {"face_index": str(face_index), "append": str(append).lower()}
+        # GPU Worker's set-source endpoint uses FastAPI query params
+        # (not form body) for image_url, image_base64, face_index.
+        # Only file uploads use multipart form data.
+        query = {"face_index": face_index}
 
         if image_bytes:
             files = {"file": ("source_face.jpg", image_bytes, "image/jpeg")}
-            return await self._request("POST", "/api/set-source", data=data, files=files)
+            return await self._request(
+                "POST", "/api/set-source",
+                params=query, files=files,
+            )
         elif image_url:
-            data["image_url"] = image_url
-            return await self._request("POST", "/api/set-source", data=data)
+            query["image_url"] = image_url
+            return await self._request(
+                "POST", "/api/set-source",
+                params=query,
+            )
         elif image_base64:
-            data["image_base64"] = image_base64
-            return await self._request("POST", "/api/set-source", data=data)
+            query["image_base64"] = image_base64
+            return await self._request(
+                "POST", "/api/set-source",
+                params=query,
+            )
         else:
             raise FaceSwapError("Provide image_bytes, image_url, or image_base64")
 

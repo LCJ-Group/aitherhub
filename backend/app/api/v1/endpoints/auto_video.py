@@ -150,7 +150,7 @@ async def create_auto_video(req: CreateAutoVideoRequest):
     if not service.face_swap.is_configured:
         raise HTTPException(
             status_code=503,
-            detail="Face swap GPU worker not configured. Set FACE_SWAP_WORKER_URL.",
+            detail="Face swap GPU worker not configured. Set FACE_SWAP_WORKER_URL or RUNPOD_API_KEY.",
         )
 
     try:
