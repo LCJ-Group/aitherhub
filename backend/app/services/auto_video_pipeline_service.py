@@ -486,6 +486,8 @@ class AutoVideoPipelineService:
             job["step"] = "generating_script"
             job["step_detail"] = "Generating script with AI"
             job["progress"] = 8
+            from app.services.auto_video_db import save_job_to_db
+            await save_job_to_db(job)
             logger.info(f"[{job_id}] Step 2: Generating script")
 
             if job["script_text"]:
@@ -542,6 +544,8 @@ class AutoVideoPipelineService:
             job["step"] = "face_swapping"
             job["step_detail"] = "Setting source face for face swap"
             job["progress"] = 16
+            from app.services.auto_video_db import save_job_to_db
+            await save_job_to_db(job)
             logger.info(f"[{job_id}] Step 3: Starting face swap")
 
             # Set source face on GPU worker before starting face swap
@@ -630,6 +634,8 @@ class AutoVideoPipelineService:
                 job["step"] = "lip_syncing"
                 job["step_detail"] = "Applying lip sync + voice (Sync.so)"
                 job["progress"] = 65
+                from app.services.auto_video_db import save_job_to_db
+                await save_job_to_db(job)
                 logger.info(f"[{job_id}] Step 4: Lip sync + TTS via Sync.so")
 
                 # Validate voice_id before proceeding
@@ -777,6 +783,8 @@ class AutoVideoPipelineService:
             job["step"] = "finalizing"
             job["step_detail"] = "Uploading result video"
             job["progress"] = 95
+            from app.services.auto_video_db import save_job_to_db
+            await save_job_to_db(job)
 
             final_size_mb = os.path.getsize(final_path) / (1024 * 1024)
             job["result_video_path"] = final_path
