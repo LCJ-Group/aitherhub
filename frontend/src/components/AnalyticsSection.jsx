@@ -194,7 +194,7 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
   const [excelData, setExcelData] = useState(null);
   const [loadingExcel, setLoadingExcel] = useState(false);
   const [excelError, setExcelError] = useState(null);
-  const [productCollapsed, setProductCollapsed] = useState(true);
+  const [productCollapsed, setProductCollapsed] = useState(false);
   const [phaseProductCollapsed, setPhaseProductCollapsed] = useState(true);
 
   // Product exposure states (merged from ProductTimeline)
