@@ -270,14 +270,16 @@ class MuseTalkService:
             }
 
         try:
-            resp = await self._request("GET", "/health")
+            resp = await self._request("GET", "/api/health")
             data = resp.json()
+            # GPU info may be nested under "gpu" key
+            gpu = data.get("gpu", {})
             return {
                 "status": "ok",
                 "worker_url": (await self._get_worker_url())[:50] + "...",
-                "gpu_name": data.get("gpu_name"),
-                "gpu_memory_used_mb": data.get("gpu_memory_used_mb"),
-                "gpu_memory_total_mb": data.get("gpu_memory_total_mb"),
+                "gpu_name": gpu.get("gpu_name") or data.get("gpu_name"),
+                "gpu_memory_used_mb": gpu.get("gpu_memory_used_mb") or data.get("gpu_memory_used_mb"),
+                "gpu_memory_total_mb": gpu.get("gpu_memory_total_mb") or data.get("gpu_memory_total_mb"),
                 "musetalk_loaded": data.get("musetalk_loaded", False),
             }
         except MuseTalkConnectionError as e:

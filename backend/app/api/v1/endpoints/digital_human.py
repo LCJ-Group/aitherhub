@@ -1076,10 +1076,14 @@ async def musetalk_generate(
     _auth: bool = Depends(verify_admin_key),
 ):
     try:
+        # Ensure URLs have SAS tokens for GPU Worker access
+        portrait_url = _ensure_sas_url(req.portrait_url)
+        audio_url = _ensure_sas_url(req.audio_url)
+
         service = get_musetalk_service()
         result = await service.generate(
-            portrait_url=req.portrait_url,
-            audio_url=req.audio_url,
+            portrait_url=portrait_url,
+            audio_url=audio_url,
             job_id=req.job_id,
             bbox_shift=req.bbox_shift,
             extra_margin=req.extra_margin,
@@ -1278,6 +1282,27 @@ import struct
 import wave
 
 
+def _ensure_sas_url(url: str) -> str:
+    """If the URL points to our Azure Blob and has no SAS token, add a read SAS."""
+    if not url:
+        return url
+    # Only process our own blob URLs
+    if "blob.core.windows.net" not in url and "aitherhub" not in url:
+        return url
+    # Already has SAS token
+    if "sig=" in url or "sv=" in url:
+        return url
+    try:
+        from app.services.storage_service import generate_read_sas_from_url
+        sas_url = generate_read_sas_from_url(url, expires_hours=24)
+        if sas_url:
+            logger.info(f"Added read SAS to blob URL: {url[:60]}...")
+            return sas_url
+    except Exception as exc:
+        logger.warning(f"Failed to add SAS to URL {url[:60]}: {exc}")
+    return url
+
+
 def _pcm_to_wav(pcm_data: bytes, sample_rate: int = 16000, channels: int = 1, sample_width: int = 2) -> bytes:
     """Convert raw PCM bytes to WAV format."""
     buf = io.BytesIO()
@@ -1372,15 +1397,19 @@ async def musetalk_generate_from_text(
         logger.info(f"[{job_id}] Step 2: Uploading TTS audio to Azure Blob...")
         audio_url = await _upload_audio_to_blob(wav_audio, job_id)
 
+        # ── Step 2.5: Add SAS tokens for GPU Worker access ──
+        audio_url = _ensure_sas_url(audio_url)
+        portrait_url = _ensure_sas_url(req.portrait_url)
+
         # ── Step 3: Start MuseTalk generation ──
         logger.info(
             f"[{job_id}] Step 3: Starting MuseTalk generation — "
-            f"portrait={req.portrait_url[:60]}..., audio={audio_url[:60]}..."
+            f"portrait={portrait_url[:60]}..., audio={audio_url[:60]}..."
         )
 
         service = get_musetalk_service()
         result = await service.generate(
-            portrait_url=req.portrait_url,
+            portrait_url=portrait_url,
             audio_url=audio_url,
             job_id=job_id,
             bbox_shift=req.bbox_shift,
