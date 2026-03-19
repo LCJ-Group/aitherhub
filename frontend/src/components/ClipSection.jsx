@@ -120,6 +120,8 @@ export default function ClipSection({ videoData, clipStates, reports1, editorPar
         return {
           phaseIndex,
           phaseIndexNum: isNumeric ? numIdx : null,
+          // displayPhaseIndex = reports_1[arrayIndex].phase_index (the user-facing phase number)
+          displayPhaseIndex: phase?.phase_index ?? null,
           clip_url: state.clip_url,
           clip_id: state.clip_id || state.id,
           time_start: state.time_start ?? phase?.time_start,
@@ -145,18 +147,39 @@ export default function ClipSection({ videoData, clipStates, reports1, editorPar
     if (!editorParams || editorAutoOpenedRef.current || visibleClips.length === 0) return;
     editorAutoOpenedRef.current = true;
 
-    // Find the clip that matches the editorParams (by phase_index or time range)
+    // Find the clip that matches the editorParams
     let targetClip = null;
     if (editorParams.phase_index != null) {
+      // 1) Match by clipStates key (array index used in video_clips table)
       targetClip = visibleClips.find(
         (c) => String(c.phaseIndex) === String(editorParams.phase_index)
       );
+      // 2) Match by displayPhaseIndex (reports_1[].phase_index, the user-facing phase number)
+      //    This is needed because AdminDashboard feedback URLs use video_phases.phase_index
+      //    which differs from video_clips.phase_index (array index)
+      if (!targetClip) {
+        targetClip = visibleClips.find(
+          (c) => c.displayPhaseIndex != null && String(c.displayPhaseIndex) === String(editorParams.phase_index)
+        );
+      }
+      // 3) Convert: find the array index for the given phase_index in reports1
+      if (!targetClip && reports1?.length) {
+        const arrayIdx = reports1.findIndex(
+          (r) => r?.phase_index != null && String(r.phase_index) === String(editorParams.phase_index)
+        );
+        if (arrayIdx >= 0) {
+          targetClip = visibleClips.find(
+            (c) => String(c.phaseIndex) === String(arrayIdx)
+          );
+        }
+      }
     }
-    // Fallback: match by time range overlap
+    // Fallback: match by time range overlap (generous 5-second tolerance)
     if (!targetClip && editorParams.time_start != null && editorParams.time_end != null) {
+      const tolerance = 5;
       targetClip = visibleClips.find((c) => {
-        const cStart = c.time_start ?? 0;
-        const cEnd = c.time_end ?? 0;
+        const cStart = (c.time_start ?? 0) - tolerance;
+        const cEnd = (c.time_end ?? 0) + tolerance;
         return cStart < editorParams.time_end && cEnd > editorParams.time_start;
       });
     }
@@ -167,7 +190,7 @@ export default function ClipSection({ videoData, clipStates, reports1, editorPar
     if (targetClip) {
       handleOpenEditor(targetClip);
     }
-  }, [editorParams, visibleClips]);
+  }, [editorParams, visibleClips, reports1]);
 
   // Don't render if no visible clips
   if (visibleClips.length === 0) return null;
