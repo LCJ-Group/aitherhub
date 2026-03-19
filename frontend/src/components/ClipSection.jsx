@@ -183,7 +183,20 @@ export default function ClipSection({ videoData, clipStates, reports1, editorPar
         return cStart < editorParams.time_end && cEnd > editorParams.time_start;
       });
     }
-    // Fallback: open the first clip
+    // Fallback: open the clip closest in time to the requested range
+    if (!targetClip && visibleClips.length > 0 && editorParams.time_start != null) {
+      const reqMid = (Number(editorParams.time_start) + Number(editorParams.time_end ?? editorParams.time_start)) / 2;
+      let bestDist = Infinity;
+      for (const c of visibleClips) {
+        const cMid = ((c.time_start ?? 0) + (c.time_end ?? 0)) / 2;
+        const dist = Math.abs(cMid - reqMid);
+        if (dist < bestDist) {
+          bestDist = dist;
+          targetClip = c;
+        }
+      }
+    }
+    // Ultimate fallback: open the first clip
     if (!targetClip && visibleClips.length > 0) {
       targetClip = visibleClips[0];
     }
