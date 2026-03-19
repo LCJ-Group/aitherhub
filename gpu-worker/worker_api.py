@@ -1653,6 +1653,186 @@ def _musetalk_inference(
         raise RuntimeError("ffmpeg failed to produce output video")
 
 
+# ── IMTalker Premium Digital Human ─────────────────────────────────────────
+
+IMTALKER_DIR = os.getenv("IMTALKER_DIR", "/workspace/IMTalker")
+
+
+class IMTalkerRequest(BaseModel):
+    """Request to generate a premium digital human video with IMTalker."""
+    job_id: str = Field(..., description="Unique job ID")
+    portrait_url: str = Field(..., description="URL of portrait image (front-facing photo)")
+    audio_url: str = Field(..., description="URL of audio file (WAV/MP3)")
+    a_cfg_scale: float = Field(default=2.0, description="Audio CFG scale (higher = more expression)")
+    nfe: int = Field(default=10, description="Number of function evaluations for ODE solver")
+    crop: bool = Field(default=True, description="Whether to crop face region")
+    output_fps: int = Field(default=25, description="Output video FPS")
+
+
+@app.post("/api/digital-human/imtalker/generate", dependencies=[Depends(verify_api_key)])
+async def imtalker_generate(req: IMTalkerRequest):
+    """Start a premium digital human video generation job using IMTalker.
+    IMTalker produces full facial animation (head movement, expressions,
+    eye blinks, gaze) in addition to lip-sync."""
+    if req.job_id in digital_human_jobs:
+        return {"error": f"Job {req.job_id} already exists"}
+
+    digital_human_jobs[req.job_id] = {
+        "status": "queued",
+        "progress": 0,
+        "output_path": None,
+        "error": None,
+        "engine": "imtalker",
+        "created_at": time.time(),
+    }
+
+    asyncio.create_task(_run_imtalker_job(req))
+    return {"job_id": req.job_id, "status": "queued", "engine": "imtalker"}
+
+
+async def _run_imtalker_job(req: IMTalkerRequest):
+    """Background task to run IMTalker inference via subprocess."""
+    import httpx
+    job = digital_human_jobs[req.job_id]
+    job["status"] = "processing"
+    job["progress"] = 5
+
+    job_dir = os.path.join(TEMP_DIR, f"imt_{req.job_id}")
+    os.makedirs(job_dir, exist_ok=True)
+
+    try:
+        # ── Step 1: Download portrait and audio ──
+        logger.info(f"[IMT {req.job_id}] Downloading portrait and audio...")
+        async with httpx.AsyncClient(timeout=60) as client:
+            r = await client.get(req.portrait_url)
+            r.raise_for_status()
+            ext = ".png" if "png" in r.headers.get("content-type", "") else ".jpg"
+            portrait_path = os.path.join(job_dir, f"portrait{ext}")
+            with open(portrait_path, "wb") as f:
+                f.write(r.content)
+
+            r = await client.get(req.audio_url)
+            r.raise_for_status()
+            audio_ext = ".wav" if "wav" in r.headers.get("content-type", "") else ".mp3"
+            audio_path = os.path.join(job_dir, f"audio{audio_ext}")
+            with open(audio_path, "wb") as f:
+                f.write(r.content)
+
+        job["progress"] = 10
+
+        # ── Step 2: Convert audio to WAV 16kHz mono ──
+        wav_path = os.path.join(job_dir, "audio_16k.wav")
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-y", "-i", audio_path, "-ar", "16000", "-ac", "1", wav_path,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        await proc.wait()
+        if os.path.exists(wav_path):
+            audio_path = wav_path
+        job["progress"] = 15
+
+        # ── Step 3: Run IMTalker inference via subprocess ──
+        logger.info(f"[IMT {req.job_id}] Running IMTalker inference...")
+        output_dir = os.path.join(job_dir, "results")
+        os.makedirs(output_dir, exist_ok=True)
+
+        cmd = [
+            sys.executable,
+            os.path.join(IMTALKER_DIR, "generator", "generate.py"),
+            "--ref_path", portrait_path,
+            "--aud_path", audio_path,
+            "--res_dir", output_dir,
+            "--generator_path", os.path.join(IMTALKER_DIR, "checkpoints", "generator.ckpt"),
+            "--renderer_path", os.path.join(IMTALKER_DIR, "checkpoints", "renderer.ckpt"),
+            "--wav2vec_model_path", os.path.join(IMTALKER_DIR, "checkpoints", "wav2vec2-base-960h"),
+            "--a_cfg_scale", str(req.a_cfg_scale),
+            "--nfe", str(req.nfe),
+            "--fps", str(req.output_fps),
+        ]
+        if req.crop:
+            cmd.append("--crop")
+
+        env = os.environ.copy()
+        env["PYTHONPATH"] = f"{IMTALKER_DIR}:{env.get('PYTHONPATH', '')}"
+
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=IMTALKER_DIR,
+            env=env,
+        )
+
+        job["progress"] = 25
+
+        # Read output for progress tracking
+        stdout_lines = []
+        while True:
+            line = await proc.stdout.readline()
+            if not line:
+                break
+            decoded = line.decode("utf-8", errors="replace").strip()
+            if decoded:
+                stdout_lines.append(decoded)
+                logger.info(f"[IMT {req.job_id}] {decoded}")
+                # Progress heuristics
+                if "Processing:" in decoded:
+                    job["progress"] = 40
+                if "Inferencing" in decoded or "Model Stats" in decoded:
+                    job["progress"] = 50
+                if "Rendering" in decoded.lower() or "render" in decoded.lower():
+                    job["progress"] = 70
+
+        await proc.wait()
+
+        if proc.returncode != 0:
+            error_output = "\n".join(stdout_lines[-15:])
+            raise RuntimeError(f"IMTalker failed (exit {proc.returncode}): {error_output}")
+
+        job["progress"] = 85
+
+        # ── Step 4: Find and finalize output video ──
+        output_files = [f for f in os.listdir(output_dir) if f.endswith(".mp4")]
+        if not output_files:
+            raise RuntimeError("IMTalker produced no output video")
+
+        src_video = os.path.join(output_dir, output_files[0])
+        final_output = os.path.join(job_dir, f"output_{req.job_id}.mp4")
+
+        import shutil
+        shutil.move(src_video, final_output)
+
+        job["progress"] = 95
+
+        if os.path.exists(final_output):
+            file_size = os.path.getsize(final_output) / (1024 * 1024)
+            logger.info(f"[IMT {req.job_id}] Output: {final_output} ({file_size:.1f} MB)")
+            job["status"] = "completed"
+            job["progress"] = 100
+            job["output_path"] = final_output
+        else:
+            raise RuntimeError("IMTalker output file not found after move")
+
+    except Exception as e:
+        logger.error(f"[IMT {req.job_id}] Error: {e}")
+        job["status"] = "error"
+        job["error"] = str(e)
+    finally:
+        # Clean up input files but keep output
+        for fname in ["portrait.png", "portrait.jpg", "audio.wav", "audio.mp3", "audio_16k.wav"]:
+            p = os.path.join(job_dir, fname)
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except Exception:
+                    pass
+        # Clean up results subdir
+        results_dir = os.path.join(job_dir, "results")
+        if os.path.isdir(results_dir):
+            import shutil
+            shutil.rmtree(results_dir, ignore_errors=True)
+
+
 # ── Admin: Remote Exec (for installation/maintenance) ────────────────────────
 
 class ExecRequest(BaseModel):

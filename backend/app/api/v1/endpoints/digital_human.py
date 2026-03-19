@@ -1496,3 +1496,298 @@ async def musetalk_list_voices(
     except Exception as e:
         logger.exception(f"Error listing voices for AI Live Creator: {e}")
         return {"success": False, "error": f"Internal error: {str(e)}", "voices": []}
+
+
+# ══════════════════════════════════════════════
+# Mode D: IMTalker Premium Digital Human
+# ══════════════════════════════════════════════
+#
+# IMTalker produces full facial animation:
+#   - Head movement
+#   - Facial expressions
+#   - Eye blinks & gaze
+#   - Lip-sync
+#
+# Uses the same GPU Worker and job tracking as MuseTalk.
+# Status/download endpoints are shared (same digital_human_jobs dict on worker).
+
+from app.schemas.digital_human_schema import (
+    IMTalkerGenerateRequest,
+    IMTalkerGenerateResponse,
+    IMTalkerTextGenerateRequest,
+    IMTalkerTextGenerateResponse,
+)
+
+
+# ──────────────────────────────────────────────
+# 23. IMTalker Generate (Audio Mode)
+# ──────────────────────────────────────────────
+
+@router.post(
+    "/imtalker/generate",
+    response_model=IMTalkerGenerateResponse,
+    summary="Generate premium digital human video (IMTalker)",
+    description=(
+        "Start a premium digital human video generation using IMTalker. "
+        "Produces full facial animation (head movement, expressions, eye blinks) "
+        "in addition to lip-sync. Requires a portrait image and audio file."
+    ),
+)
+async def imtalker_generate(
+    req: IMTalkerGenerateRequest,
+    _auth: bool = Depends(verify_admin_key),
+):
+    import uuid
+    job_id = req.job_id or f"imt-{uuid.uuid4().hex[:12]}"
+
+    try:
+        service = get_musetalk_service()  # Same GPU worker
+
+        # Ensure SAS URLs for Azure Blob access
+        portrait_url = _ensure_sas_url(req.portrait_url)
+        audio_url = _ensure_sas_url(req.audio_url)
+
+        payload = {
+            "job_id": job_id,
+            "portrait_url": portrait_url,
+            "audio_url": audio_url,
+            "a_cfg_scale": req.a_cfg_scale,
+            "nfe": req.nfe,
+            "crop": req.crop,
+            "output_fps": req.output_fps,
+        }
+
+        resp = await service._request(
+            "POST", "/api/digital-human/imtalker/generate", json=payload
+        )
+        result = resp.json()
+
+        return IMTalkerGenerateResponse(
+            success=True,
+            job_id=result.get("job_id", job_id),
+            status=result.get("status", "queued"),
+            engine="imtalker",
+        )
+
+    except MuseTalkConnectionError as e:
+        return IMTalkerGenerateResponse(
+            success=False, job_id=job_id, error=f"GPU Worker offline: {e}", engine="imtalker"
+        )
+    except MuseTalkAPIError as e:
+        return IMTalkerGenerateResponse(
+            success=False, job_id=job_id, error=f"Worker error: {e.detail}", engine="imtalker"
+        )
+    except Exception as e:
+        logger.exception(f"IMTalker generate error: {e}")
+        return IMTalkerGenerateResponse(
+            success=False, job_id=job_id, error=str(e), engine="imtalker"
+        )
+
+
+# ──────────────────────────────────────────────
+# 24. IMTalker Generate from Text (TTS + Premium Animation)
+# ──────────────────────────────────────────────
+
+@router.post(
+    "/imtalker/generate-from-text",
+    response_model=IMTalkerTextGenerateResponse,
+    summary="Generate premium video from text (ElevenLabs TTS + IMTalker)",
+    description=(
+        "Full pipeline: Text → ElevenLabs TTS (voice cloning) → IMTalker (premium animation). "
+        "Produces a video with full facial animation driven by AI-generated speech."
+    ),
+)
+async def imtalker_generate_from_text(
+    req: IMTalkerTextGenerateRequest,
+    _auth: bool = Depends(verify_admin_key),
+):
+    import uuid
+    import struct
+    job_id = req.job_id or f"tts-imt-{int(__import__('time').time())}"
+
+    try:
+        # ── Step 1: Generate TTS audio via ElevenLabs ──
+        logger.info(f"[{job_id}] Step 1: Generating TTS audio via ElevenLabs...")
+        el_service = get_elevenlabs_service()
+
+        voice_settings = req.voice_settings or {
+            "stability": 0.5,
+            "similarity_boost": 0.75,
+            "style": 0.0,
+            "use_speaker_boost": True,
+        }
+
+        tts_result = await el_service.text_to_speech(
+            text=req.text,
+            voice_id=req.voice_id,
+            voice_settings=voice_settings,
+            output_format="pcm_24000",
+            language_code=req.language_code,
+        )
+
+        pcm_data = tts_result.get("audio_data", b"")
+        if not pcm_data:
+            raise ValueError("ElevenLabs returned empty audio data")
+
+        tts_duration_ms = (len(pcm_data) / (24000 * 2)) * 1000
+        logger.info(f"[{job_id}] TTS audio generated: {tts_duration_ms:.0f}ms, {len(pcm_data)} bytes PCM")
+
+        # ── Step 2: Convert PCM to WAV and upload to Azure Blob ──
+        sample_rate = 24000
+        num_channels = 1
+        bits_per_sample = 16
+        byte_rate = sample_rate * num_channels * (bits_per_sample // 8)
+        block_align = num_channels * (bits_per_sample // 8)
+
+        wav_header = struct.pack(
+            '<4sI4s4sIHHIIHH4sI',
+            b'RIFF',
+            36 + len(pcm_data),
+            b'WAVE',
+            b'fmt ',
+            16,
+            1,
+            num_channels,
+            sample_rate,
+            byte_rate,
+            block_align,
+            bits_per_sample,
+            b'data',
+            len(pcm_data),
+        )
+        wav_data = wav_header + pcm_data
+
+        from app.services.storage_service import StorageService
+        storage = StorageService()
+
+        blob_name = f"ai-live-creator@aitherhub.com/ai-live-creator-tts-{job_id}.wav"
+        audio_url = await storage.upload_blob(
+            container_name="videos",
+            blob_name=blob_name,
+            data=wav_data,
+            content_type="audio/wav",
+        )
+        logger.info(f"[{job_id}] TTS audio uploaded: {audio_url}")
+
+        # ── Step 3: Start IMTalker generation ──
+        audio_url = _ensure_sas_url(audio_url)
+        portrait_url = _ensure_sas_url(req.portrait_url)
+
+        logger.info(
+            f"[{job_id}] Step 3: Starting IMTalker generation — "
+            f"portrait={portrait_url[:60]}... audio={audio_url[:60]}..."
+        )
+
+        service = get_musetalk_service()  # Same GPU worker
+        payload = {
+            "job_id": job_id,
+            "portrait_url": portrait_url,
+            "audio_url": audio_url,
+            "a_cfg_scale": req.a_cfg_scale,
+            "nfe": req.nfe,
+            "crop": req.crop,
+            "output_fps": req.output_fps,
+        }
+
+        resp = await service._request(
+            "POST", "/api/digital-human/imtalker/generate", json=payload
+        )
+        result = resp.json()
+        logger.info(f"[{job_id}] IMTalker job submitted: {result}")
+
+        return IMTalkerTextGenerateResponse(
+            success=True,
+            job_id=result.get("job_id", job_id),
+            status=result.get("status", "queued"),
+            tts_duration_ms=tts_duration_ms,
+            audio_url=audio_url,
+            engine="imtalker",
+        )
+
+    except ElevenLabsError as e:
+        return IMTalkerTextGenerateResponse(
+            success=False, job_id=job_id, error=f"TTS error: {e}", engine="imtalker"
+        )
+    except MuseTalkConnectionError as e:
+        logger.error(f"[{job_id}] GPU Worker connection error: {e}")
+        return IMTalkerTextGenerateResponse(
+            success=False, job_id=job_id, error=f"GPU Worker offline: {e}", engine="imtalker"
+        )
+    except MuseTalkAPIError as e:
+        logger.error(f"[{job_id}] GPU Worker API error: {e}")
+        return IMTalkerTextGenerateResponse(
+            success=False, job_id=job_id, error=f"Worker error: {e.detail}", engine="imtalker"
+        )
+    except Exception as e:
+        logger.exception(f"[{job_id}] Unexpected error in TTS+IMTalker pipeline: {e}")
+        return IMTalkerTextGenerateResponse(
+            success=False, job_id=job_id, error=str(e), engine="imtalker"
+        )
+
+
+# ──────────────────────────────────────────────
+# 25. IMTalker Status (reuses MuseTalk status endpoint on worker)
+# ──────────────────────────────────────────────
+
+@router.get(
+    "/imtalker/status/{job_id}",
+    response_model=MuseTalkStatusResponse,  # Same response format
+    summary="Check IMTalker job status",
+)
+async def imtalker_status(
+    job_id: str,
+    _auth: bool = Depends(verify_admin_key),
+):
+    """IMTalker shares the same job tracking system as MuseTalk on the GPU Worker."""
+    try:
+        service = get_musetalk_service()
+        result = await service.get_status(job_id)
+        return MuseTalkStatusResponse(
+            success=True,
+            job_id=job_id,
+            status=result.get("status"),
+            progress=result.get("progress"),
+            error=result.get("error"),
+        )
+    except (MuseTalkConnectionError, MuseTalkAPIError) as e:
+        return MuseTalkStatusResponse(
+            success=False, job_id=job_id, status="error", error=str(e)
+        )
+    except Exception as e:
+        return MuseTalkStatusResponse(
+            success=False, job_id=job_id, status="error", error=str(e)
+        )
+
+
+# ──────────────────────────────────────────────
+# 26. IMTalker Download (reuses MuseTalk download endpoint on worker)
+# ──────────────────────────────────────────────
+
+@router.get(
+    "/imtalker/download/{job_id}",
+    summary="Download IMTalker generated video",
+)
+async def imtalker_download(
+    job_id: str,
+    _auth: bool = Depends(verify_admin_key),
+):
+    """IMTalker shares the same download system as MuseTalk on the GPU Worker."""
+    try:
+        service = get_musetalk_service()
+        video_bytes = await service.download(job_id)
+
+        return StreamingResponse(
+            io.BytesIO(video_bytes),
+            media_type="video/mp4",
+            headers={
+                "Content-Disposition": f'attachment; filename="imtalker_{job_id}.mp4"',
+                "Content-Length": str(len(video_bytes)),
+            },
+        )
+    except MuseTalkConnectionError as e:
+        raise HTTPException(status_code=503, detail=f"GPU Worker offline: {e}")
+    except MuseTalkAPIError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
+    except Exception as e:
+        logger.exception(f"Error downloading IMTalker video: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

@@ -19,20 +19,27 @@ import {
   Type,
   FileAudio,
   ChevronDown,
+  Zap,
+  Crown,
 } from "lucide-react";
 import aiLiveCreatorService from "../base/services/aiLiveCreatorService";
 
 /**
  * AI Live Creator Page
  *
- * Two modes:
- *   1. Text Mode (default): Text → ElevenLabs TTS → MuseTalk → Video
- *   2. Audio Mode: Upload audio file → MuseTalk → Video
+ * Engine modes:
+ *   Standard (MuseTalk): Lip-sync only — fast and stable
+ *   Premium (IMTalker):  Full facial animation — head movement, expressions, blinks
  *
- * Both modes require a portrait image.
+ * Input modes:
+ *   Text Mode: Text → ElevenLabs TTS → Engine → Video
+ *   Audio Mode: Upload audio → Engine → Video
  */
 export default function AiLiveCreatorPage() {
   const navigate = useNavigate();
+
+  // ── Engine Mode ──
+  const [engine, setEngine] = useState("imtalker"); // "musetalk" | "imtalker"
 
   // ── Input Mode ──
   const [inputMode, setInputMode] = useState("text"); // "text" | "audio"
@@ -58,19 +65,25 @@ export default function AiLiveCreatorPage() {
   const [audioUploadProgress, setAudioUploadProgress] = useState(0);
   const [isUploadingAudio, setIsUploadingAudio] = useState(false);
 
-  // ── Advanced Settings ──
+  // ── Advanced Settings (shared) ──
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [outputFps, setOutputFps] = useState(25);
+  // MuseTalk-specific
   const [bboxShift, setBboxShift] = useState(0);
   const [extraMargin, setExtraMargin] = useState(10);
   const [batchSize, setBatchSize] = useState(16);
-  const [outputFps, setOutputFps] = useState(25);
+  // IMTalker-specific
+  const [aCfgScale, setACfgScale] = useState(2.0);
+  const [nfe, setNfe] = useState(10);
+  const [crop, setCrop] = useState(true);
 
   // ── Job State ──
   const [currentJobId, setCurrentJobId] = useState(null);
+  const [currentEngine, setCurrentEngine] = useState(null); // engine used for current job
   const [jobStatus, setJobStatus] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState(null);
-  const [ttsInfo, setTtsInfo] = useState(null); // { duration_ms, audio_url }
+  const [ttsInfo, setTtsInfo] = useState(null);
 
   // ── Health ──
   const [health, setHealth] = useState(null);
@@ -95,11 +108,11 @@ export default function AiLiveCreatorPage() {
 
   // ── Poll job status ──
   useEffect(() => {
-    if (!currentJobId) return;
+    if (!currentJobId || !currentEngine) return;
 
     const poll = async () => {
       try {
-        const status = await aiLiveCreatorService.getStatus(currentJobId);
+        const status = await aiLiveCreatorService.getStatus(currentJobId, currentEngine);
         setJobStatus(status);
         if (["completed", "error", "failed"].includes(status.status)) {
           clearInterval(pollRef.current);
@@ -119,7 +132,7 @@ export default function AiLiveCreatorPage() {
         pollRef.current = null;
       }
     };
-  }, [currentJobId]);
+  }, [currentJobId, currentEngine]);
 
   // ── Helpers ──
   const checkHealth = async () => {
@@ -137,7 +150,6 @@ export default function AiLiveCreatorPage() {
       const res = await aiLiveCreatorService.listVoices();
       if (res.success && res.voices) {
         setVoices(res.voices);
-        // Auto-select first cloned voice, or first voice
         const cloned = res.voices.find((v) => v.is_cloned);
         if (cloned) setSelectedVoiceId(cloned.voice_id);
         else if (res.voices.length > 0) setSelectedVoiceId(res.voices[0].voice_id);
@@ -224,14 +236,8 @@ export default function AiLiveCreatorPage() {
 
   // ── Generate (Text Mode) ──
   const handleGenerateFromText = async () => {
-    if (!portraitUrl) {
-      setError("肖像画をアップロードしてください");
-      return;
-    }
-    if (!scriptText.trim()) {
-      setError("テキストを入力してください");
-      return;
-    }
+    if (!portraitUrl) { setError("肖像画をアップロードしてください"); return; }
+    if (!scriptText.trim()) { setError("テキストを入力してください"); return; }
 
     setIsSubmitting(true);
     setError(null);
@@ -239,16 +245,30 @@ export default function AiLiveCreatorPage() {
     setTtsInfo(null);
 
     try {
-      const result = await aiLiveCreatorService.generateFromText({
-        portrait_url: portraitUrl,
-        text: scriptText.trim(),
-        voice_id: selectedVoiceId || undefined,
-        language_code: languageCode,
-        bbox_shift: bboxShift,
-        extra_margin: extraMargin,
-        batch_size: batchSize,
-        output_fps: outputFps,
-      });
+      let result;
+      if (engine === "imtalker") {
+        result = await aiLiveCreatorService.generatePremiumFromText({
+          portrait_url: portraitUrl,
+          text: scriptText.trim(),
+          voice_id: selectedVoiceId || undefined,
+          language_code: languageCode,
+          a_cfg_scale: aCfgScale,
+          nfe: nfe,
+          crop: crop,
+          output_fps: outputFps,
+        });
+      } else {
+        result = await aiLiveCreatorService.generateFromText({
+          portrait_url: portraitUrl,
+          text: scriptText.trim(),
+          voice_id: selectedVoiceId || undefined,
+          language_code: languageCode,
+          bbox_shift: bboxShift,
+          extra_margin: extraMargin,
+          batch_size: batchSize,
+          output_fps: outputFps,
+        });
+      }
 
       if (!result.success) {
         setError(result.error || "Generation failed");
@@ -256,21 +276,19 @@ export default function AiLiveCreatorPage() {
       }
 
       setCurrentJobId(result.job_id);
+      setCurrentEngine(engine);
       setJobStatus({ status: result.status || "queued", progress: 0 });
       if (result.tts_duration_ms) {
-        setTtsInfo({
-          duration_ms: result.tts_duration_ms,
-          audio_url: result.audio_url,
-        });
+        setTtsInfo({ duration_ms: result.tts_duration_ms, audio_url: result.audio_url });
       }
 
-      // Add to history
       const newJob = {
         job_id: result.job_id,
         status: "queued",
         progress: 0,
         created_at: new Date().toISOString(),
         mode: "text",
+        engine: engine,
         text_preview: scriptText.substring(0, 50),
       };
       setJobHistory((prev) => {
@@ -279,9 +297,7 @@ export default function AiLiveCreatorPage() {
         return updated;
       });
     } catch (err) {
-      setError(
-        err.response?.data?.error || err.response?.data?.detail || err.message || "Generation failed"
-      );
+      setError(err.response?.data?.error || err.response?.data?.detail || err.message || "Generation failed");
     } finally {
       setIsSubmitting(false);
     }
@@ -299,14 +315,26 @@ export default function AiLiveCreatorPage() {
     setJobStatus(null);
 
     try {
-      const result = await aiLiveCreatorService.generate({
-        portrait_url: portraitUrl,
-        audio_url: audioUrl,
-        bbox_shift: bboxShift,
-        extra_margin: extraMargin,
-        batch_size: batchSize,
-        output_fps: outputFps,
-      });
+      let result;
+      if (engine === "imtalker") {
+        result = await aiLiveCreatorService.generatePremium({
+          portrait_url: portraitUrl,
+          audio_url: audioUrl,
+          a_cfg_scale: aCfgScale,
+          nfe: nfe,
+          crop: crop,
+          output_fps: outputFps,
+        });
+      } else {
+        result = await aiLiveCreatorService.generate({
+          portrait_url: portraitUrl,
+          audio_url: audioUrl,
+          bbox_shift: bboxShift,
+          extra_margin: extraMargin,
+          batch_size: batchSize,
+          output_fps: outputFps,
+        });
+      }
 
       if (!result.success) {
         setError(result.error || "Generation failed");
@@ -314,6 +342,7 @@ export default function AiLiveCreatorPage() {
       }
 
       setCurrentJobId(result.job_id);
+      setCurrentEngine(engine);
       setJobStatus({ status: result.status || "queued", progress: 0 });
 
       const newJob = {
@@ -322,6 +351,7 @@ export default function AiLiveCreatorPage() {
         progress: 0,
         created_at: new Date().toISOString(),
         mode: "audio",
+        engine: engine,
       };
       setJobHistory((prev) => {
         const updated = [newJob, ...prev].slice(0, 20);
@@ -329,9 +359,7 @@ export default function AiLiveCreatorPage() {
         return updated;
       });
     } catch (err) {
-      setError(
-        err.response?.data?.error || err.response?.data?.detail || err.message || "Generation failed"
-      );
+      setError(err.response?.data?.error || err.response?.data?.detail || err.message || "Generation failed");
     } finally {
       setIsSubmitting(false);
     }
@@ -343,9 +371,10 @@ export default function AiLiveCreatorPage() {
   };
 
   // ── Download ──
-  const handleDownload = async (jobId) => {
+  const handleDownload = async (jobId, eng) => {
     try {
-      const blob = await aiLiveCreatorService.downloadVideo(jobId || currentJobId);
+      const downloadEngine = eng || currentEngine || "musetalk";
+      const blob = await aiLiveCreatorService.downloadVideo(jobId || currentJobId, downloadEngine);
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -369,6 +398,7 @@ export default function AiLiveCreatorPage() {
     setAudioName("");
     setAudioUrl("");
     setCurrentJobId(null);
+    setCurrentEngine(null);
     setJobStatus(null);
     setTtsInfo(null);
     setError(null);
@@ -418,7 +448,7 @@ export default function AiLiveCreatorPage() {
                 <Sparkles className="w-5 h-5 text-purple-600" />
                 AI Live Creator
               </h1>
-              <p className="text-xs text-gray-500">Portrait + Text/Audio → AI Lip-Sync Video</p>
+              <p className="text-xs text-gray-500">Portrait + Text/Audio → AI Animated Video</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -444,6 +474,64 @@ export default function AiLiveCreatorPage() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* ── Left Column: Inputs ── */}
           <div className="lg:col-span-2 space-y-4">
+
+            {/* Engine Selector */}
+            <div className="bg-white rounded-xl border border-gray-200 p-4">
+              <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Animation Engine</h2>
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  onClick={() => setEngine("musetalk")}
+                  className={`relative p-4 rounded-xl border-2 transition-all text-left ${
+                    engine === "musetalk"
+                      ? "border-blue-500 bg-blue-50/50 shadow-sm"
+                      : "border-gray-200 hover:border-gray-300 hover:bg-gray-50"
+                  }`}
+                >
+                  <div className="flex items-center gap-2 mb-2">
+                    <Zap className={`w-5 h-5 ${engine === "musetalk" ? "text-blue-600" : "text-gray-400"}`} />
+                    <span className={`text-sm font-bold ${engine === "musetalk" ? "text-blue-700" : "text-gray-700"}`}>Standard</span>
+                  </div>
+                  <p className="text-[11px] text-gray-500 leading-relaxed">リップシンクのみ。高速・安定。口元だけが動きます。</p>
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    <span className="text-[9px] bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded-full">Lip-sync</span>
+                    <span className="text-[9px] bg-green-100 text-green-600 px-1.5 py-0.5 rounded-full">Fast</span>
+                  </div>
+                  {engine === "musetalk" && (
+                    <div className="absolute top-2 right-2">
+                      <CheckCircle className="w-5 h-5 text-blue-500" />
+                    </div>
+                  )}
+                </button>
+
+                <button
+                  onClick={() => setEngine("imtalker")}
+                  className={`relative p-4 rounded-xl border-2 transition-all text-left ${
+                    engine === "imtalker"
+                      ? "border-purple-500 bg-purple-50/50 shadow-sm"
+                      : "border-gray-200 hover:border-gray-300 hover:bg-gray-50"
+                  }`}
+                >
+                  <div className="flex items-center gap-2 mb-2">
+                    <Crown className={`w-5 h-5 ${engine === "imtalker" ? "text-purple-600" : "text-gray-400"}`} />
+                    <span className={`text-sm font-bold ${engine === "imtalker" ? "text-purple-700" : "text-gray-700"}`}>Premium</span>
+                    <span className="text-[9px] bg-gradient-to-r from-purple-500 to-pink-500 text-white px-1.5 py-0.5 rounded-full font-medium">NEW</span>
+                  </div>
+                  <p className="text-[11px] text-gray-500 leading-relaxed">フル表情アニメーション。頭の動き・まばたき・表情変化。</p>
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    <span className="text-[9px] bg-purple-100 text-purple-600 px-1.5 py-0.5 rounded-full">Head motion</span>
+                    <span className="text-[9px] bg-purple-100 text-purple-600 px-1.5 py-0.5 rounded-full">Expressions</span>
+                    <span className="text-[9px] bg-purple-100 text-purple-600 px-1.5 py-0.5 rounded-full">Blinks</span>
+                    <span className="text-[9px] bg-purple-100 text-purple-600 px-1.5 py-0.5 rounded-full">Lip-sync</span>
+                  </div>
+                  {engine === "imtalker" && (
+                    <div className="absolute top-2 right-2">
+                      <CheckCircle className="w-5 h-5 text-purple-500" />
+                    </div>
+                  )}
+                </button>
+              </div>
+            </div>
+
             {/* Portrait Upload */}
             <div className="bg-white rounded-xl border border-gray-200 p-5">
               <h2 className="text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2">
@@ -520,12 +608,9 @@ export default function AiLiveCreatorPage() {
 
               <div className="p-5">
                 {inputMode === "text" ? (
-                  /* ── Text Mode ── */
                   <div className="space-y-4">
                     <div>
-                      <label className="text-xs font-medium text-gray-600 block mb-1.5">
-                        台本テキスト
-                      </label>
+                      <label className="text-xs font-medium text-gray-600 block mb-1.5">台本テキスト</label>
                       <textarea
                         value={scriptText}
                         onChange={(e) => setScriptText(e.target.value)}
@@ -535,21 +620,14 @@ export default function AiLiveCreatorPage() {
                         className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-300 focus:border-purple-400 outline-none resize-none"
                       />
                       <div className="flex justify-between mt-1">
-                        <p className="text-[10px] text-gray-400">
-                          ElevenLabs AIが自動的に音声を生成します
-                        </p>
-                        <p className="text-[10px] text-gray-400">
-                          {scriptText.length}/5000
-                        </p>
+                        <p className="text-[10px] text-gray-400">ElevenLabs AIが自動的に音声を生成します</p>
+                        <p className="text-[10px] text-gray-400">{scriptText.length}/5000</p>
                       </div>
                     </div>
 
-                    {/* Voice Selector */}
                     <div className="grid grid-cols-2 gap-4">
                       <div>
-                        <label className="text-xs font-medium text-gray-600 block mb-1.5">
-                          音声 (Voice)
-                        </label>
+                        <label className="text-xs font-medium text-gray-600 block mb-1.5">音声 (Voice)</label>
                         {loadingVoices ? (
                           <div className="flex items-center gap-2 text-xs text-gray-400 py-2">
                             <Loader2 className="w-3 h-3 animate-spin" /> Loading voices...
@@ -570,9 +648,7 @@ export default function AiLiveCreatorPage() {
                         )}
                       </div>
                       <div>
-                        <label className="text-xs font-medium text-gray-600 block mb-1.5">
-                          言語 (Language)
-                        </label>
+                        <label className="text-xs font-medium text-gray-600 block mb-1.5">言語 (Language)</label>
                         <select
                           value={languageCode}
                           onChange={(e) => setLanguageCode(e.target.value)}
@@ -586,18 +662,14 @@ export default function AiLiveCreatorPage() {
                       </div>
                     </div>
 
-                    {/* TTS Info */}
                     {ttsInfo && (
                       <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs">
                         <p className="text-blue-700 font-medium">AI音声生成完了</p>
-                        <p className="text-blue-600 mt-1">
-                          音声長: {(ttsInfo.duration_ms / 1000).toFixed(1)}秒
-                        </p>
+                        <p className="text-blue-600 mt-1">音声長: {(ttsInfo.duration_ms / 1000).toFixed(1)}秒</p>
                       </div>
                     )}
                   </div>
                 ) : (
-                  /* ── Audio Mode ── */
                   <div>
                     <p className="text-xs text-gray-500 mb-3">
                       肖像画がリップシンクする音声ファイルをアップロードしてください。WAV形式推奨。
@@ -653,37 +725,75 @@ export default function AiLiveCreatorPage() {
                 <span className="flex items-center gap-2">
                   <Sliders className="w-4 h-4 text-gray-500" />
                   Advanced Settings
+                  <span className="text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-full">
+                    {engine === "imtalker" ? "IMTalker" : "MuseTalk"}
+                  </span>
                 </span>
                 <span className="text-gray-400 text-xs">{showAdvanced ? "Hide" : "Show"}</span>
               </button>
               {showAdvanced && (
                 <div className="px-5 pb-5 space-y-4 border-t border-gray-100 pt-4">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="text-xs font-medium text-gray-600 block mb-1">Bbox Shift</label>
-                      <input type="number" value={bboxShift} onChange={(e) => setBboxShift(Number(e.target.value))} min={-50} max={50}
-                        className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-300 focus:border-purple-400 outline-none" />
-                      <p className="text-[10px] text-gray-400 mt-1">顔検出の垂直シフト (-50 to 50)</p>
+                  {engine === "imtalker" ? (
+                    /* IMTalker Settings */
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-xs font-medium text-gray-600 block mb-1">Audio CFG Scale</label>
+                        <input type="number" value={aCfgScale} onChange={(e) => setACfgScale(Number(e.target.value))} min={0.5} max={5.0} step={0.1}
+                          className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-300 focus:border-purple-400 outline-none" />
+                        <p className="text-[10px] text-gray-400 mt-1">表現力の強さ (0.5-5.0, 推奨: 2.0)</p>
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-gray-600 block mb-1">NFE Steps</label>
+                        <input type="number" value={nfe} onChange={(e) => setNfe(Number(e.target.value))} min={5} max={30}
+                          className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-300 focus:border-purple-400 outline-none" />
+                        <p className="text-[10px] text-gray-400 mt-1">品質ステップ数 (5-30, 推奨: 10)</p>
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-gray-600 block mb-1">Output FPS</label>
+                        <input type="number" value={outputFps} onChange={(e) => setOutputFps(Number(e.target.value))} min={15} max={60}
+                          className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-300 focus:border-purple-400 outline-none" />
+                        <p className="text-[10px] text-gray-400 mt-1">動画フレームレート (15-60)</p>
+                      </div>
+                      <div className="flex items-center gap-3 pt-4">
+                        <label className="relative inline-flex items-center cursor-pointer">
+                          <input type="checkbox" checked={crop} onChange={(e) => setCrop(e.target.checked)} className="sr-only peer" />
+                          <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-purple-600"></div>
+                        </label>
+                        <div>
+                          <p className="text-xs font-medium text-gray-600">Auto Crop</p>
+                          <p className="text-[10px] text-gray-400">顔領域を自動クロップ</p>
+                        </div>
+                      </div>
                     </div>
-                    <div>
-                      <label className="text-xs font-medium text-gray-600 block mb-1">Extra Margin</label>
-                      <input type="number" value={extraMargin} onChange={(e) => setExtraMargin(Number(e.target.value))} min={0} max={50}
-                        className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-300 focus:border-purple-400 outline-none" />
-                      <p className="text-[10px] text-gray-400 mt-1">顔の下の余白 (0-50)</p>
+                  ) : (
+                    /* MuseTalk Settings */
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-xs font-medium text-gray-600 block mb-1">Bbox Shift</label>
+                        <input type="number" value={bboxShift} onChange={(e) => setBboxShift(Number(e.target.value))} min={-50} max={50}
+                          className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-300 focus:border-purple-400 outline-none" />
+                        <p className="text-[10px] text-gray-400 mt-1">顔検出の垂直シフト (-50 to 50)</p>
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-gray-600 block mb-1">Extra Margin</label>
+                        <input type="number" value={extraMargin} onChange={(e) => setExtraMargin(Number(e.target.value))} min={0} max={50}
+                          className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-300 focus:border-purple-400 outline-none" />
+                        <p className="text-[10px] text-gray-400 mt-1">顔の下の余白 (0-50)</p>
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-gray-600 block mb-1">Batch Size</label>
+                        <input type="number" value={batchSize} onChange={(e) => setBatchSize(Number(e.target.value))} min={1} max={64}
+                          className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-300 focus:border-purple-400 outline-none" />
+                        <p className="text-[10px] text-gray-400 mt-1">大きい = 速い、VRAM多い (1-64)</p>
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-gray-600 block mb-1">Output FPS</label>
+                        <input type="number" value={outputFps} onChange={(e) => setOutputFps(Number(e.target.value))} min={15} max={60}
+                          className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-300 focus:border-purple-400 outline-none" />
+                        <p className="text-[10px] text-gray-400 mt-1">動画フレームレート (15-60)</p>
+                      </div>
                     </div>
-                    <div>
-                      <label className="text-xs font-medium text-gray-600 block mb-1">Batch Size</label>
-                      <input type="number" value={batchSize} onChange={(e) => setBatchSize(Number(e.target.value))} min={1} max={64}
-                        className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-300 focus:border-purple-400 outline-none" />
-                      <p className="text-[10px] text-gray-400 mt-1">大きい = 速い、VRAM多い (1-64)</p>
-                    </div>
-                    <div>
-                      <label className="text-xs font-medium text-gray-600 block mb-1">Output FPS</label>
-                      <input type="number" value={outputFps} onChange={(e) => setOutputFps(Number(e.target.value))} min={15} max={60}
-                        className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-300 focus:border-purple-400 outline-none" />
-                      <p className="text-[10px] text-gray-400 mt-1">動画フレームレート (15-60)</p>
-                    </div>
-                  </div>
+                  )}
                 </div>
               )}
             </div>
@@ -698,7 +808,9 @@ export default function AiLiveCreatorPage() {
                 disabled={!isReady || isSubmitting || isProcessing}
                 className={`w-full py-3 px-4 rounded-lg font-medium text-sm flex items-center justify-center gap-2 transition-all ${
                   isReady && !isSubmitting && !isProcessing
-                    ? "bg-purple-600 hover:bg-purple-700 text-white shadow-md hover:shadow-lg"
+                    ? engine === "imtalker"
+                      ? "bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white shadow-md hover:shadow-lg"
+                      : "bg-blue-600 hover:bg-blue-700 text-white shadow-md hover:shadow-lg"
                     : "bg-gray-100 text-gray-400 cursor-not-allowed"
                 }`}
               >
@@ -706,6 +818,8 @@ export default function AiLiveCreatorPage() {
                   <><Loader2 className="w-4 h-4 animate-spin" />Submitting...</>
                 ) : isProcessing ? (
                   <><Loader2 className="w-4 h-4 animate-spin" />Processing...</>
+                ) : engine === "imtalker" ? (
+                  <><Crown className="w-4 h-4" />Generate Premium Video</>
                 ) : (
                   <><Sparkles className="w-4 h-4" />Generate Video</>
                 )}
@@ -736,14 +850,20 @@ export default function AiLiveCreatorPage() {
                 </div>
               </div>
 
-              {/* Pipeline info for text mode */}
-              {inputMode === "text" && (
-                <div className="mt-4 pt-3 border-t border-gray-100">
-                  <p className="text-[10px] text-gray-400 leading-relaxed">
-                    Pipeline: テキスト → ElevenLabs TTS (AI音声生成) → MuseTalk (リップシンク動画生成)
-                  </p>
-                </div>
-              )}
+              {/* Pipeline info */}
+              <div className="mt-4 pt-3 border-t border-gray-100">
+                <p className="text-[10px] text-gray-400 leading-relaxed">
+                  {inputMode === "text" ? (
+                    engine === "imtalker"
+                      ? "Pipeline: テキスト → ElevenLabs TTS → IMTalker (フル表情アニメーション)"
+                      : "Pipeline: テキスト → ElevenLabs TTS → MuseTalk (リップシンク)"
+                  ) : (
+                    engine === "imtalker"
+                      ? "Pipeline: 音声 → IMTalker (フル表情アニメーション)"
+                      : "Pipeline: 音声 → MuseTalk (リップシンク)"
+                  )}
+                </p>
+              </div>
             </div>
 
             {/* Job Status */}
@@ -752,11 +872,18 @@ export default function AiLiveCreatorPage() {
                 <h3 className="text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2">
                   {getStatusIcon(jobStatus.status)}
                   Job Status
+                  {currentEngine === "imtalker" && (
+                    <span className="text-[9px] bg-purple-100 text-purple-600 px-1.5 py-0.5 rounded-full">Premium</span>
+                  )}
                 </h3>
                 <div className="space-y-3">
                   <div className="flex justify-between text-xs">
                     <span className="text-gray-500">ID</span>
                     <span className="text-gray-700 font-mono text-[10px]">{currentJobId}</span>
+                  </div>
+                  <div className="flex justify-between text-xs">
+                    <span className="text-gray-500">Engine</span>
+                    <span className="text-gray-700">{currentEngine === "imtalker" ? "Premium (IMTalker)" : "Standard (MuseTalk)"}</span>
                   </div>
                   <div className="flex justify-between text-xs">
                     <span className="text-gray-500">Status</span>
@@ -769,13 +896,18 @@ export default function AiLiveCreatorPage() {
                         <span className="text-gray-700">{jobStatus.progress || 0}%</span>
                       </div>
                       <div className="w-full bg-gray-100 rounded-full h-2">
-                        <div className="bg-purple-600 h-2 rounded-full transition-all duration-500" style={{ width: `${jobStatus.progress || 0}%` }} />
+                        <div
+                          className={`h-2 rounded-full transition-all duration-500 ${
+                            currentEngine === "imtalker" ? "bg-gradient-to-r from-purple-500 to-pink-500" : "bg-blue-600"
+                          }`}
+                          style={{ width: `${jobStatus.progress || 0}%` }}
+                        />
                       </div>
                     </div>
                   )}
                   {jobStatus.error && <p className="text-xs text-red-600 bg-red-50 p-2 rounded">{jobStatus.error}</p>}
                   {jobStatus.status === "completed" && (
-                    <button onClick={() => handleDownload(currentJobId)}
+                    <button onClick={() => handleDownload(currentJobId, currentEngine)}
                       className="w-full py-2.5 px-4 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-medium flex items-center justify-center gap-2 transition-colors">
                       <Download className="w-4 h-4" /> Download Video
                     </button>
@@ -804,12 +936,6 @@ export default function AiLiveCreatorPage() {
                       <span className="text-gray-700">{(health.gpu_memory_used_mb / 1024).toFixed(1)} / {(health.gpu_memory_total_mb / 1024).toFixed(1)} GB</span>
                     </div>
                   )}
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">MuseTalk</span>
-                    <span className={health.musetalk_loaded ? "text-green-600" : "text-yellow-600"}>
-                      {health.musetalk_loaded ? "Loaded" : "Not loaded (lazy)"}
-                    </span>
-                  </div>
                 </div>
               </div>
             )}
@@ -828,12 +954,12 @@ export default function AiLiveCreatorPage() {
                         <div className="min-w-0">
                           <p className="text-[10px] font-mono text-gray-600 truncate">{job.job_id}</p>
                           <p className="text-[10px] text-gray-400">
-                            {job.mode === "text" ? "Text" : "Audio"} — {new Date(job.created_at).toLocaleString("ja-JP")}
+                            {job.engine === "imtalker" ? "Premium" : "Standard"} / {job.mode === "text" ? "Text" : "Audio"} — {new Date(job.created_at).toLocaleString("ja-JP")}
                           </p>
                         </div>
                       </div>
                       {job.status === "completed" && (
-                        <button onClick={() => handleDownload(job.job_id)} className="p-1.5 hover:bg-gray-200 rounded transition-colors shrink-0" title="Download">
+                        <button onClick={() => handleDownload(job.job_id, job.engine)} className="p-1.5 hover:bg-gray-200 rounded transition-colors shrink-0" title="Download">
                           <Download className="w-3.5 h-3.5 text-gray-500" />
                         </button>
                       )}

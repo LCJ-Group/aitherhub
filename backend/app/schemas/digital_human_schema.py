@@ -607,3 +607,116 @@ class VoiceOption(BaseModel):
     category: Optional[str] = None
     is_cloned: bool = False
     labels: Optional[Dict[str, Any]] = None
+
+
+# ──────────────────────────────────────────────
+# IMTalker Premium Digital Human Schemas
+# ──────────────────────────────────────────────
+
+class IMTalkerGenerateRequest(BaseModel):
+    """Request to generate a premium digital human video using IMTalker."""
+    portrait_url: str = Field(
+        ...,
+        description="URL of the portrait image (front-facing photo). "
+        "Must be publicly accessible or have a SAS token."
+    )
+    audio_url: str = Field(
+        ...,
+        description="URL of the audio file (WAV/MP3). "
+        "Must be publicly accessible or have a SAS token."
+    )
+    job_id: Optional[str] = Field(
+        None,
+        description="Custom job ID. If not provided, one will be auto-generated."
+    )
+    a_cfg_scale: float = Field(
+        2.0, ge=0.5, le=5.0,
+        description="Audio classifier-free guidance scale. "
+        "Higher values = more expressive animation. Default 2.0."
+    )
+    nfe: int = Field(
+        10, ge=5, le=30,
+        description="Number of function evaluations for ODE solver. "
+        "Higher = better quality but slower. Default 10."
+    )
+    crop: bool = Field(
+        True,
+        description="Whether to auto-crop the face region from the portrait."
+    )
+    output_fps: int = Field(
+        25, ge=15, le=60,
+        description="Output video frame rate."
+    )
+
+
+class IMTalkerGenerateResponse(BaseModel):
+    """Response after starting an IMTalker generation job."""
+    success: bool
+    job_id: Optional[str] = None
+    status: Optional[str] = Field(
+        None, description="Job status: queued / processing / completed / error"
+    )
+    engine: str = Field("imtalker", description="Engine used for generation.")
+    error: Optional[str] = None
+
+
+class IMTalkerTextGenerateRequest(BaseModel):
+    """Request to generate a premium digital human video from text.
+    Pipeline: Text → ElevenLabs TTS → IMTalker → Full-animation video."""
+    portrait_url: str = Field(
+        ...,
+        description="URL of the portrait image (front-facing photo)."
+    )
+    text: str = Field(
+        ..., min_length=1, max_length=5000,
+        description="Text to convert to speech. The portrait will animate to this text."
+    )
+    voice_id: Optional[str] = Field(
+        None,
+        description="ElevenLabs voice ID. If not provided, uses the default configured voice."
+    )
+    language_code: Optional[str] = Field(
+        "ja",
+        description="Language code for TTS (e.g., 'ja' for Japanese, 'en' for English)."
+    )
+    voice_settings: Optional[Dict[str, Any]] = Field(
+        None,
+        description="ElevenLabs voice settings override."
+    )
+    job_id: Optional[str] = Field(
+        None,
+        description="Custom job ID. If not provided, one will be auto-generated."
+    )
+    a_cfg_scale: float = Field(
+        2.0, ge=0.5, le=5.0,
+        description="Audio CFG scale. Higher = more expressive."
+    )
+    nfe: int = Field(
+        10, ge=5, le=30,
+        description="ODE solver steps. Higher = better quality but slower."
+    )
+    crop: bool = Field(
+        True,
+        description="Whether to auto-crop the face region."
+    )
+    output_fps: int = Field(
+        25, ge=15, le=60,
+        description="Output video frame rate."
+    )
+
+
+class IMTalkerTextGenerateResponse(BaseModel):
+    """Response after starting a TTS + IMTalker generation job."""
+    success: bool
+    job_id: Optional[str] = None
+    status: Optional[str] = Field(
+        None, description="Job status: tts_generating / queued / processing / completed / error"
+    )
+    tts_duration_ms: Optional[float] = Field(
+        None, description="Duration of the generated TTS audio in milliseconds."
+    )
+    audio_url: Optional[str] = Field(
+        None, description="URL of the generated TTS audio."
+    )
+    engine: str = Field("imtalker", description="Engine used for generation.")
+    error: Optional[str] = None
