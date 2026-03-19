@@ -1032,10 +1032,24 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
             </button>
           )}
           {clip.clip_url && (
-            <a
-              href={clip.clip_url}
-              download
-              onClick={() => {
+            <button
+              onClick={async () => {
+                // Fetch fresh SAS URL before downloading to avoid expired token errors
+                try {
+                  const freshRes = await VideoService.getClipStatus(videoId, clip.phase_index);
+                  const freshUrl = freshRes?.clip_url || clip.clip_url;
+                  const a = document.createElement('a');
+                  a.href = freshUrl;
+                  a.download = `clip_phase${clip.phase_index || ''}.mp4`;
+                  a.target = '_blank';
+                  a.rel = 'noopener noreferrer';
+                  document.body.appendChild(a);
+                  a.click();
+                  document.body.removeChild(a);
+                } catch (e) {
+                  console.warn('[ClipEditor] Failed to fetch fresh URL, using cached:', e);
+                  window.open(clip.clip_url, '_blank', 'noopener,noreferrer');
+                }
                 // Record raw download for ML training (non-blocking)
                 VideoService.recordClipDownload(videoId, {
                   phase_index: clip.phase_index,
@@ -1050,13 +1064,14 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                 backgroundColor: C.purple,
                 color: "#fff",
                 borderRadius: 6,
-                textDecoration: "none",
+                border: "none",
                 fontSize: 12,
                 fontWeight: 600,
+                cursor: 'pointer',
               }}
             >
               Export MP4
-            </a>
+            </button>
           )}
           <button
             onClick={onClose}

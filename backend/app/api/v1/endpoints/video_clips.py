@@ -224,6 +224,7 @@ async def get_clip_status(
         sql = text("""
             SELECT id, status, clip_url, sas_token, sas_expireddate, error_message, created_at, captions,
                    subtitle_style, subtitle_position_x, subtitle_position_y,
+                   time_start, time_end,
                    COALESCE(progress_pct, 0) as progress_pct, COALESCE(progress_step, '') as progress_step,
                    updated_at, job_payload
             FROM video_clips
@@ -293,6 +294,8 @@ async def get_clip_status(
             "status": clip_status,
             "progress_pct": row.progress_pct if hasattr(row, 'progress_pct') else 0,
             "progress_step": row.progress_step if hasattr(row, 'progress_step') else "",
+            "time_start": row.time_start if hasattr(row, 'time_start') else None,
+            "time_end": row.time_end if hasattr(row, 'time_end') else None,
         }
 
         if clip_status == "completed" and row.clip_url:

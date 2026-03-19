@@ -416,7 +416,7 @@ export default function VideoDetail({ videoData, editorParams }) {
         // Show subtitle generation status while transcribing
         setClipStates(prev => ({
           ...prev,
-          [phaseIndex]: { status: 'generating_subtitles', clip_url: res.clip_url, clip_id: res.clip_id },
+          [phaseIndex]: { status: 'generating_subtitles', clip_url: res.clip_url, clip_id: res.clip_id, time_start: timeStart, time_end: timeEnd },
         }));
         // Await subtitle generation before marking as completed
         try {
@@ -443,7 +443,7 @@ export default function VideoDetail({ videoData, editorParams }) {
         // Mark as fully completed (video + subtitles)
         setClipStates(prev => ({
           ...prev,
-          [phaseIndex]: { status: 'completed', clip_url: res.clip_url, clip_id: res.clip_id },
+          [phaseIndex]: { status: 'completed', clip_url: res.clip_url, clip_id: res.clip_id, time_start: timeStart, time_end: timeEnd },
         }));
         return;
       }
@@ -466,7 +466,7 @@ export default function VideoDetail({ videoData, editorParams }) {
             // Show subtitle generation status
             setClipStates(prev => ({
               ...prev,
-              [phaseIndex]: { status: 'generating_subtitles', clip_url: statusRes.clip_url, clip_id: statusRes.clip_id, progress_pct: 100 },
+              [phaseIndex]: { status: 'generating_subtitles', clip_url: statusRes.clip_url, clip_id: statusRes.clip_id, progress_pct: 100, time_start: statusRes.time_start ?? timeStart, time_end: statusRes.time_end ?? timeEnd },
             }));
             // Await subtitle generation before marking as completed
             try {
@@ -493,7 +493,7 @@ export default function VideoDetail({ videoData, editorParams }) {
             // Mark as fully completed (video + subtitles)
             setClipStates(prev => ({
               ...prev,
-              [phaseIndex]: { status: 'completed', clip_url: statusRes.clip_url, clip_id: statusRes.clip_id },
+              [phaseIndex]: { status: 'completed', clip_url: statusRes.clip_url, clip_id: statusRes.clip_id, time_start: statusRes.time_start ?? timeStart, time_end: statusRes.time_end ?? timeEnd },
             }));
           } else if (statusRes.status === 'failed' || statusRes.status === 'dead') {
             setClipStates(prev => ({
@@ -503,10 +503,10 @@ export default function VideoDetail({ videoData, editorParams }) {
             clearInterval(clipPollingRef.current[phaseIndex]);
             delete clipPollingRef.current[phaseIndex];
           } else {
-            // Update progress
+            // Update progress (preserve time_start/time_end)
             setClipStates(prev => ({
               ...prev,
-              [phaseIndex]: { ...prev[phaseIndex], status: statusRes.status, progress_pct: statusRes.progress_pct || 0, progress_step: statusRes.progress_step || '' },
+              [phaseIndex]: { ...prev[phaseIndex], status: statusRes.status, progress_pct: statusRes.progress_pct || 0, progress_step: statusRes.progress_step || '', time_start: statusRes.time_start ?? prev[phaseIndex]?.time_start ?? timeStart, time_end: statusRes.time_end ?? prev[phaseIndex]?.time_end ?? timeEnd },
             }));
           }
         } catch (e) {

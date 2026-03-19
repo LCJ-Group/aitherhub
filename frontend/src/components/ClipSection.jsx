@@ -3,6 +3,31 @@ import VideoService from "../base/services/videoService";
 import ClipEditorV2 from "./ClipEditorV2";
 
 /**
+ * Download a clip by fetching a fresh SAS URL from the API first.
+ * Falls back to the cached URL if the API call fails.
+ */
+async function handleDownloadClip(videoId, phaseIndex, fallbackUrl) {
+  try {
+    const res = await VideoService.getClipStatus(videoId, phaseIndex);
+    const freshUrl = res?.clip_url || fallbackUrl;
+    if (freshUrl) {
+      const a = document.createElement('a');
+      a.href = freshUrl;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+  } catch (e) {
+    console.warn('[ClipSection] Failed to fetch fresh download URL, using cached:', e);
+    if (fallbackUrl) {
+      window.open(fallbackUrl, '_blank', 'noopener,noreferrer');
+    }
+  }
+}
+
+/**
  * Detect the source/detection method from phase_index naming convention.
  * Returns { label, color, bgColor } for rendering a badge.
  */
@@ -310,18 +335,16 @@ export default function ClipSection({ videoData, clipStates, reports1, editorPar
                           </svg>
                           編集
                         </button>
-                        {/* Download button */}
-                        <a
-                          href={clip.clip_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
+                        {/* Download button - fetches fresh SAS URL on click */}
+                        <button
+                          onClick={() => handleDownloadClip(videoData?.id, clip.phaseIndex, clip.clip_url)}
                           className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-gradient-to-r from-purple-500 to-pink-500 text-white text-sm font-medium hover:from-purple-600 hover:to-pink-600 transition-all shadow-sm hover:shadow-md group-hover:shadow-lg"
                         >
                           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
                           </svg>
                           ダウンロード
-                        </a>
+                        </button>
                       </div>
                       )}
                     </div>
