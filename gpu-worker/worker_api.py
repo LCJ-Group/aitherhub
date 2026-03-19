@@ -1209,8 +1209,477 @@ async def debug_run_facefusion(
     return result
 
 
-# ── Main ─────────────────────────────────────────────────────────────────────
+# ── MuseTalk Digital Human ─────────────────────────────────────────────────
 
+MUSETALK_DIR = os.getenv("MUSETALK_DIR", "/workspace/MuseTalk")
+MUSETALK_MODELS_DIR = os.path.join(MUSETALK_DIR, "models")
+
+# MuseTalk model cache (lazy loaded)
+musetalk_models = {
+    "loaded": False,
+    "vae": None,
+    "unet": None,
+    "pe": None,
+    "whisper": None,
+    "audio_processor": None,
+    "fp": None,
+    "device": None,
+    "timesteps": None,
+}
+
+def load_musetalk_models():
+    """Lazy-load MuseTalk v1.5 models into GPU memory."""
+    if musetalk_models["loaded"]:
+        return True
+    # MuseTalk uses relative paths internally (e.g. 'models/sd-vae'),
+    # so we must chdir to MUSETALK_DIR before loading.
+    original_cwd = os.getcwd()
+    try:
+        os.chdir(MUSETALK_DIR)
+        import torch
+        if MUSETALK_DIR not in sys.path:
+            sys.path.insert(0, MUSETALK_DIR)
+        from musetalk.utils.utils import load_all_model
+        from musetalk.utils.face_parsing import FaceParsing
+        from musetalk.utils.audio_processor import AudioProcessor
+        from transformers import WhisperModel
+
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+        unet_model_path = os.path.join(MUSETALK_MODELS_DIR, "musetalkV15", "unet.pth")
+        unet_config = os.path.join(MUSETALK_MODELS_DIR, "musetalkV15", "musetalk.json")
+        whisper_dir = os.path.join(MUSETALK_MODELS_DIR, "whisper")
+
+        vae, unet, pe = load_all_model(
+            unet_model_path=unet_model_path,
+            vae_type="sd-vae",
+            unet_config=unet_config,
+            device=device,
+        )
+
+        # Half precision for speed
+        pe = pe.half().to(device)
+        vae.vae = vae.vae.half().to(device)
+        unet.model = unet.model.half().to(device)
+
+        audio_processor = AudioProcessor(feature_extractor_path=whisper_dir)
+        weight_dtype = unet.model.dtype
+        whisper = WhisperModel.from_pretrained(whisper_dir)
+        whisper = whisper.to(device=device, dtype=weight_dtype).eval()
+        whisper.requires_grad_(False)
+
+        fp = FaceParsing()
+
+        musetalk_models.update({
+            "loaded": True,
+            "vae": vae,
+            "unet": unet,
+            "pe": pe,
+            "whisper": whisper,
+            "audio_processor": audio_processor,
+            "fp": fp,
+            "device": device,
+            "timesteps": torch.tensor([0], device=device),
+        })
+        logger.info("MuseTalk v1.5 models loaded successfully")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to load MuseTalk models: {e}")
+        return False
+    finally:
+        os.chdir(original_cwd)
+
+
+class DigitalHumanRequest(BaseModel):
+    """Request to generate a digital human video."""
+    job_id: str = Field(..., description="Unique job ID")
+    portrait_url: str = Field(..., description="URL of portrait image (front-facing photo)")
+    audio_url: str = Field(..., description="URL of audio file (WAV/MP3)")
+    bbox_shift: int = Field(default=0, description="Vertical shift for face bounding box")
+    extra_margin: int = Field(default=10, description="Extra margin below face for v1.5")
+    batch_size: int = Field(default=16, description="Inference batch size")
+    output_fps: int = Field(default=25, description="Output video FPS")
+
+
+# Digital human job state
+digital_human_jobs: dict = {}  # job_id -> {status, progress, output_path, error, ...}
+
+
+@app.post("/api/digital-human/generate", dependencies=[Depends(verify_api_key)])
+async def digital_human_generate(req: DigitalHumanRequest):
+    """Start a digital human video generation job using MuseTalk."""
+    if req.job_id in digital_human_jobs:
+        return {"error": f"Job {req.job_id} already exists"}
+
+    digital_human_jobs[req.job_id] = {
+        "status": "queued",
+        "progress": 0,
+        "output_path": None,
+        "error": None,
+        "created_at": time.time(),
+    }
+
+    asyncio.create_task(_run_digital_human_job(req))
+    return {"job_id": req.job_id, "status": "queued"}
+
+
+@app.get("/api/digital-human/status/{job_id}", dependencies=[Depends(verify_api_key)])
+async def digital_human_status(job_id: str):
+    """Get the status of a digital human generation job."""
+    job = digital_human_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    return {
+        "job_id": job_id,
+        "status": job["status"],
+        "progress": job["progress"],
+        "error": job.get("error"),
+    }
+
+
+from fastapi.responses import FileResponse
+
+@app.get("/api/digital-human/download/{job_id}", dependencies=[Depends(verify_api_key)])
+async def digital_human_download(job_id: str):
+    """Download the generated digital human video."""
+    job = digital_human_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    if job["status"] != "completed":
+        raise HTTPException(status_code=400, detail=f"Job not completed: {job['status']}")
+    if not job.get("output_path") or not os.path.exists(job["output_path"]):
+        raise HTTPException(status_code=404, detail="Output file not found")
+    return FileResponse(
+        job["output_path"],
+        media_type="video/mp4",
+        filename=f"digital_human_{job_id}.mp4",
+    )
+
+
+async def _run_digital_human_job(req: DigitalHumanRequest):
+    """Background task to run MuseTalk inference."""
+    import httpx
+    job = digital_human_jobs[req.job_id]
+    job["status"] = "processing"
+    job["progress"] = 5
+
+    job_dir = os.path.join(TEMP_DIR, f"dh_{req.job_id}")
+    os.makedirs(job_dir, exist_ok=True)
+
+    try:
+        # Step 1: Download portrait and audio
+        logger.info(f"[DH {req.job_id}] Downloading portrait and audio...")
+        async with httpx.AsyncClient(timeout=60) as client:
+            # Download portrait
+            r = await client.get(req.portrait_url)
+            r.raise_for_status()
+            ext = ".png" if "png" in r.headers.get("content-type", "") else ".jpg"
+            portrait_path = os.path.join(job_dir, f"portrait{ext}")
+            with open(portrait_path, "wb") as f:
+                f.write(r.content)
+
+            # Download audio
+            r = await client.get(req.audio_url)
+            r.raise_for_status()
+            audio_ext = ".wav" if "wav" in r.headers.get("content-type", "") else ".mp3"
+            audio_path = os.path.join(job_dir, f"audio{audio_ext}")
+            with open(audio_path, "wb") as f:
+                f.write(r.content)
+
+        job["progress"] = 10
+
+        # Convert MP3 to WAV if needed
+        if audio_ext == ".mp3":
+            wav_path = os.path.join(job_dir, "audio.wav")
+            proc = await asyncio.create_subprocess_exec(
+                "ffmpeg", "-y", "-i", audio_path, "-ar", "16000", "-ac", "1", wav_path,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+            await proc.wait()
+            audio_path = wav_path
+
+        job["progress"] = 15
+
+        # Step 2: Load MuseTalk models (lazy)
+        logger.info(f"[DH {req.job_id}] Loading MuseTalk models...")
+        loop = asyncio.get_event_loop()
+        loaded = await loop.run_in_executor(None, load_musetalk_models)
+        if not loaded:
+            raise RuntimeError("Failed to load MuseTalk models")
+        job["progress"] = 25
+
+        # Step 3: Run MuseTalk inference in a thread
+        logger.info(f"[DH {req.job_id}] Running MuseTalk inference...")
+        output_path = os.path.join(job_dir, f"output_{req.job_id}.mp4")
+
+        def run_musetalk_inference():
+            return _musetalk_inference(
+                portrait_path=portrait_path,
+                audio_path=audio_path,
+                output_path=output_path,
+                job_id=req.job_id,
+                bbox_shift=req.bbox_shift,
+                extra_margin=req.extra_margin,
+                batch_size=req.batch_size,
+                fps=req.output_fps,
+            )
+
+        result_path = await loop.run_in_executor(None, run_musetalk_inference)
+
+        if result_path and os.path.exists(result_path):
+            job["status"] = "completed"
+            job["progress"] = 100
+            job["output_path"] = result_path
+            logger.info(f"[DH {req.job_id}] Completed: {result_path}")
+        else:
+            raise RuntimeError("MuseTalk inference produced no output")
+
+    except Exception as e:
+        logger.error(f"[DH {req.job_id}] Error: {e}")
+        job["status"] = "error"
+        job["error"] = str(e)
+    finally:
+        # Clean up input files but keep output
+        for f in ["portrait.png", "portrait.jpg", "audio.wav", "audio.mp3"]:
+            p = os.path.join(job_dir, f)
+            if os.path.exists(p):
+                os.remove(p)
+
+
+def _musetalk_inference(
+    portrait_path: str,
+    audio_path: str,
+    output_path: str,
+    job_id: str,
+    bbox_shift: int = 0,
+    extra_margin: int = 10,
+    batch_size: int = 16,
+    fps: int = 25,
+) -> str:
+    """Run MuseTalk v1.5 inference synchronously (called from thread pool)."""
+    import torch
+    import cv2
+    import copy
+    import numpy as np
+    import pickle
+    import shutil
+
+    sys.path.insert(0, MUSETALK_DIR)
+    from musetalk.utils.utils import datagen, get_video_fps, get_file_type
+    from musetalk.utils.preprocessing import get_landmark_and_bbox, read_imgs, coord_placeholder
+    from musetalk.utils.blending import get_image
+
+    m = musetalk_models
+    device = m["device"]
+    vae, unet, pe = m["vae"], m["unet"], m["pe"]
+    whisper_model = m["whisper"]
+    audio_processor = m["audio_processor"]
+    fp = m["fp"]
+    timesteps = m["timesteps"]
+    weight_dtype = unet.model.dtype
+
+    job = digital_human_jobs.get(job_id, {})
+    job_dir = os.path.dirname(output_path)
+
+    # Determine input type (image or video)
+    file_type = get_file_type(portrait_path)
+    logger.info(f"[DH {job_id}] Input type: {file_type}")
+
+    # Prepare frames from portrait
+    input_img_dir = os.path.join(job_dir, "input_frames")
+    os.makedirs(input_img_dir, exist_ok=True)
+
+    if file_type == "image":
+        # Single image: duplicate to create a short loop
+        img = cv2.imread(portrait_path)
+        if img is None:
+            raise RuntimeError(f"Failed to read portrait image: {portrait_path}")
+        # Save as single frame
+        cv2.imwrite(os.path.join(input_img_dir, "00000000.png"), img)
+        input_img_list = sorted([
+            os.path.join(input_img_dir, f) for f in os.listdir(input_img_dir)
+            if f.endswith(".png")
+        ])
+    elif file_type == "video":
+        # Extract frames from video
+        cap = cv2.VideoCapture(portrait_path)
+        idx = 0
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            cv2.imwrite(os.path.join(input_img_dir, f"{idx:08d}.png"), frame)
+            idx += 1
+        cap.release()
+        input_img_list = sorted([
+            os.path.join(input_img_dir, f) for f in os.listdir(input_img_dir)
+            if f.endswith(".png")
+        ])
+    else:
+        raise RuntimeError(f"Unsupported input type: {file_type}")
+
+    if not input_img_list:
+        raise RuntimeError("No input frames found")
+
+    logger.info(f"[DH {job_id}] Input frames: {len(input_img_list)}")
+    job["progress"] = 30
+
+    # Extract audio features
+    logger.info(f"[DH {job_id}] Extracting audio features...")
+    whisper_input_features, librosa_length = audio_processor.get_audio_feature(
+        audio_path,
+        weight_dtype=weight_dtype,
+    )
+    if whisper_input_features is None:
+        raise RuntimeError(f"Failed to extract audio features from {audio_path}")
+    logger.info(f"[DH {job_id}] Audio features extracted, librosa_length={librosa_length}")
+
+    whisper_chunks = audio_processor.get_whisper_chunk(
+        whisper_input_features=whisper_input_features,
+        device=device,
+        weight_dtype=weight_dtype,
+        whisper=whisper_model,
+        librosa_length=librosa_length,
+        fps=fps,
+    )
+    logger.info(f"[DH {job_id}] Audio chunks: {len(whisper_chunks)}")
+    job["progress"] = 40
+
+    # Get face landmarks and bounding boxes
+    logger.info(f"[DH {job_id}] Extracting face landmarks...")
+    coord_list, frame_list = get_landmark_and_bbox(input_img_list, bbox_shift)
+    job["progress"] = 50
+
+    # Process input latents
+    input_latent_list = []
+    for bbox, frame in zip(coord_list, frame_list):
+        if bbox == coord_placeholder:
+            continue
+        x1, y1, x2, y2 = bbox
+        y2 = min(y2 + extra_margin, frame.shape[0])
+        crop_frame = frame[y1:y2, x1:x2]
+        crop_frame = cv2.resize(crop_frame, (256, 256), interpolation=cv2.INTER_LANCZOS4)
+        latents = vae.get_latents_for_unet(crop_frame)
+        input_latent_list.append(latents)
+
+    if not input_latent_list:
+        raise RuntimeError("No valid face detected in portrait")
+
+    # Create cycled lists for looping
+    frame_list_cycle = frame_list + frame_list[::-1]
+    coord_list_cycle = coord_list + coord_list[::-1]
+    input_latent_list_cycle = input_latent_list + input_latent_list[::-1]
+
+    job["progress"] = 55
+
+    # Batch inference
+    logger.info(f"[DH {job_id}] Running inference ({len(whisper_chunks)} chunks, batch_size={batch_size})...")
+    video_num = len(whisper_chunks)
+    gen = datagen(
+        whisper_chunks=whisper_chunks,
+        vae_encode_latents=input_latent_list_cycle,
+        batch_size=batch_size,
+        delay_frame=0,
+        device=device,
+    )
+
+    res_frame_list = []
+    total_batches = int(np.ceil(float(video_num) / batch_size))
+
+    with torch.no_grad():
+        for i, (whisper_batch, latent_batch) in enumerate(gen):
+            audio_feature_batch = pe(whisper_batch)
+            latent_batch = latent_batch.to(dtype=unet.model.dtype)
+            pred_latents = unet.model(
+                latent_batch, timesteps, encoder_hidden_states=audio_feature_batch
+            ).sample
+            recon = vae.decode_latents(pred_latents)
+            for res_frame in recon:
+                res_frame_list.append(res_frame)
+
+            # Update progress (55% -> 85%)
+            progress = 55 + int(30 * (i + 1) / total_batches)
+            job["progress"] = min(progress, 85)
+
+    logger.info(f"[DH {job_id}] Generated {len(res_frame_list)} frames")
+    job["progress"] = 85
+
+    # Compose output frames
+    logger.info(f"[DH {job_id}] Composing output frames...")
+    result_img_dir = os.path.join(job_dir, "result_frames")
+    os.makedirs(result_img_dir, exist_ok=True)
+
+    for i, res_frame in enumerate(res_frame_list):
+        bbox = coord_list_cycle[i % len(coord_list_cycle)]
+        ori_frame = copy.deepcopy(frame_list_cycle[i % len(frame_list_cycle)])
+        x1, y1, x2, y2 = bbox
+        y2 = min(y2 + extra_margin, ori_frame.shape[0])
+        try:
+            res_frame = cv2.resize(res_frame.astype(np.uint8), (x2 - x1, y2 - y1))
+        except Exception:
+            continue
+        combine_frame = get_image(ori_frame, res_frame, [x1, y1, x2, y2], fp=fp)
+        cv2.imwrite(os.path.join(result_img_dir, f"{i:08d}.png"), combine_frame)
+
+    job["progress"] = 90
+
+    # Encode video with ffmpeg
+    logger.info(f"[DH {job_id}] Encoding video...")
+    temp_vid = os.path.join(job_dir, "temp_video.mp4")
+    ffmpeg_cmd = (
+        f"ffmpeg -y -v warning -r {fps} -f image2 "
+        f"-i {result_img_dir}/%08d.png "
+        f"-vcodec libx264 -vf format=yuv420p -crf 18 {temp_vid}"
+    )
+    os.system(ffmpeg_cmd)
+
+    # Merge audio
+    merge_cmd = f"ffmpeg -y -v warning -i {audio_path} -i {temp_vid} -c:v copy -c:a aac {output_path}"
+    os.system(merge_cmd)
+
+    job["progress"] = 95
+
+    # Clean up temp files
+    shutil.rmtree(input_img_dir, ignore_errors=True)
+    shutil.rmtree(result_img_dir, ignore_errors=True)
+    if os.path.exists(temp_vid):
+        os.remove(temp_vid)
+
+    if os.path.exists(output_path):
+        file_size = os.path.getsize(output_path) / (1024 * 1024)
+        logger.info(f"[DH {job_id}] Output: {output_path} ({file_size:.1f} MB)")
+        return output_path
+    else:
+        raise RuntimeError("ffmpeg failed to produce output video")
+
+
+# ── Admin: Remote Exec (for installation/maintenance) ────────────────────────
+
+class ExecRequest(BaseModel):
+    command: str
+    timeout: int = Field(default=300, ge=1, le=3600)
+
+@app.post("/api/admin/exec", dependencies=[Depends(verify_api_key)])
+async def admin_exec(req: ExecRequest):
+    """Execute a shell command on the GPU server (admin only)."""
+    try:
+        proc = await asyncio.create_subprocess_shell(
+            req.command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd="/workspace",
+        )
+        try:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=req.timeout)
+            output = stdout.decode("utf-8", errors="replace")
+        except asyncio.TimeoutError:
+            proc.kill()
+            output = "TIMEOUT: command exceeded time limit"
+        return {"exit_code": proc.returncode, "output": output}
+    except Exception as e:
+        return {"exit_code": -1, "output": str(e)}
+
+# ── Main ─────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     logger.info(f"Starting FaceFusion GPU Worker on port {PORT}")
     uvicorn.run(
