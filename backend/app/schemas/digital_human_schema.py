@@ -443,3 +443,89 @@ class FullHealthResponse(BaseModel):
     )
     capabilities: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
+
+
+# ──────────────────────────────────────────────
+# Mode C: MuseTalk Lip-Sync Schemas
+# ──────────────────────────────────────────────
+
+
+class MuseTalkGenerateRequest(BaseModel):
+    """Request to generate a lip-synced video using MuseTalk."""
+    portrait_url: str = Field(
+        ...,
+        description="Publicly accessible URL of the portrait image (front-facing photo). "
+        "Supported formats: JPEG, PNG. Recommended: 512x512 or larger, clear face."
+    )
+    audio_url: str = Field(
+        ...,
+        description="Publicly accessible URL of the audio file. "
+        "Supported formats: WAV (16kHz recommended), MP3. "
+        "The audio will drive the lip-sync animation."
+    )
+    job_id: Optional[str] = Field(
+        None,
+        description="Custom job ID. If not provided, one will be auto-generated."
+    )
+    bbox_shift: int = Field(
+        0,
+        ge=-50,
+        le=50,
+        description="Vertical shift for face bounding box detection. "
+        "Positive values shift down, negative values shift up."
+    )
+    extra_margin: int = Field(
+        10,
+        ge=0,
+        le=50,
+        description="Extra margin below face for MuseTalk v1.5 (pixels)."
+    )
+    batch_size: int = Field(
+        16,
+        ge=1,
+        le=64,
+        description="Inference batch size. Higher = faster but more VRAM."
+    )
+    output_fps: int = Field(
+        25,
+        ge=15,
+        le=60,
+        description="Output video frame rate."
+    )
+
+
+class MuseTalkGenerateResponse(BaseModel):
+    """Response after starting a MuseTalk generation job."""
+    success: bool
+    job_id: Optional[str] = None
+    status: Optional[str] = Field(
+        None, description="Job status: queued / processing / completed / error"
+    )
+    error: Optional[str] = None
+
+
+class MuseTalkStatusResponse(BaseModel):
+    """Response with MuseTalk job status."""
+    success: bool
+    job_id: Optional[str] = None
+    status: Optional[str] = Field(
+        None, description="queued / processing / completed / error"
+    )
+    progress: Optional[int] = Field(
+        None, ge=0, le=100, description="Progress percentage (0-100)"
+    )
+    error: Optional[str] = None
+
+
+class MuseTalkHealthResponse(BaseModel):
+    """Health check response for the MuseTalk GPU worker."""
+    success: bool
+    status: Optional[str] = Field(
+        None, description="ok / unreachable / error / not_configured"
+    )
+    gpu_name: Optional[str] = None
+    gpu_memory_used_mb: Optional[float] = None
+    gpu_memory_total_mb: Optional[float] = None
+    musetalk_loaded: Optional[bool] = None
+    worker_url: Optional[str] = None
+    error: Optional[str] = None

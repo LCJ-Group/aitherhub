@@ -1010,3 +1010,248 @@ async def full_health_check(
             success=False,
             error=f"Health check failed: {str(e)}",
         )
+
+
+
+# ══════════════════════════════════════════════
+# MODE C: MUSETALK LIP-SYNC VIDEO GENERATION
+# ══════════════════════════════════════════════
+#
+# These endpoints proxy to the GPU Worker's MuseTalk pipeline.
+# Given a portrait image and audio file, MuseTalk generates a
+# lip-synced video where the portrait appears to speak the audio.
+#
+# This is useful for:
+#   - Creating product review videos with a consistent presenter
+#   - Generating multilingual versions of the same presentation
+#   - Pre-producing content for social media / e-commerce
+#
+# Architecture:
+#   Portrait + Audio → GPU Worker (MuseTalk v1.5) → H.264+AAC Video
+# ══════════════════════════════════════════════
+
+from app.services.musetalk_service import (
+    MuseTalkService,
+    MuseTalkError,
+    MuseTalkConnectionError,
+    MuseTalkAPIError,
+)
+from app.schemas.digital_human_schema import (
+    MuseTalkGenerateRequest,
+    MuseTalkGenerateResponse,
+    MuseTalkStatusResponse,
+    MuseTalkHealthResponse,
+)
+from fastapi.responses import StreamingResponse
+import io
+
+# MuseTalk service singleton
+_musetalk_service: Optional[MuseTalkService] = None
+
+
+def get_musetalk_service() -> MuseTalkService:
+    global _musetalk_service
+    if _musetalk_service is None:
+        _musetalk_service = MuseTalkService()
+    return _musetalk_service
+
+
+# ──────────────────────────────────────────────
+# 17. MuseTalk Generate
+# ──────────────────────────────────────────────
+
+@router.post(
+    "/musetalk/generate",
+    response_model=MuseTalkGenerateResponse,
+    summary="Generate a lip-synced video using MuseTalk",
+    description=(
+        "Start a MuseTalk lip-sync video generation job. "
+        "Provide a portrait image URL and an audio file URL. "
+        "The GPU worker will generate a video where the portrait appears to speak the audio. "
+        "Use the status endpoint to poll for completion, then download the result."
+    ),
+)
+async def musetalk_generate(
+    req: MuseTalkGenerateRequest,
+    _auth: bool = Depends(verify_admin_key),
+):
+    try:
+        service = get_musetalk_service()
+        result = await service.generate(
+            portrait_url=req.portrait_url,
+            audio_url=req.audio_url,
+            job_id=req.job_id,
+            bbox_shift=req.bbox_shift,
+            extra_margin=req.extra_margin,
+            batch_size=req.batch_size,
+            output_fps=req.output_fps,
+        )
+
+        return MuseTalkGenerateResponse(
+            success=True,
+            job_id=result.get("job_id"),
+            status=result.get("status", "queued"),
+        )
+
+    except MuseTalkConnectionError as e:
+        logger.error(f"MuseTalk worker connection error: {e}")
+        return MuseTalkGenerateResponse(
+            success=False,
+            error=f"GPU worker unreachable: {str(e)}",
+        )
+    except MuseTalkAPIError as e:
+        logger.error(f"MuseTalk worker API error: {e}")
+        return MuseTalkGenerateResponse(
+            success=False,
+            error=f"GPU worker error ({e.status_code}): {e.detail}",
+        )
+    except MuseTalkError as e:
+        return MuseTalkGenerateResponse(success=False, error=str(e))
+    except Exception as e:
+        logger.exception(f"Unexpected error in MuseTalk generate: {e}")
+        return MuseTalkGenerateResponse(
+            success=False, error=f"Internal error: {str(e)}"
+        )
+
+
+# ──────────────────────────────────────────────
+# 18. MuseTalk Status
+# ──────────────────────────────────────────────
+
+@router.get(
+    "/musetalk/status/{job_id}",
+    response_model=MuseTalkStatusResponse,
+    summary="Check MuseTalk job status",
+    description=(
+        "Poll the status of a MuseTalk generation job. "
+        "Returns progress (0-100) and status (queued/processing/completed/error)."
+    ),
+)
+async def musetalk_status(
+    job_id: str,
+    _auth: bool = Depends(verify_admin_key),
+):
+    try:
+        service = get_musetalk_service()
+        result = await service.get_status(job_id)
+
+        return MuseTalkStatusResponse(
+            success=True,
+            job_id=result.get("job_id", job_id),
+            status=result.get("status"),
+            progress=result.get("progress"),
+            error=result.get("error"),
+        )
+
+    except MuseTalkConnectionError as e:
+        return MuseTalkStatusResponse(
+            success=False,
+            job_id=job_id,
+            error=f"GPU worker unreachable: {str(e)}",
+        )
+    except MuseTalkAPIError as e:
+        return MuseTalkStatusResponse(
+            success=False,
+            job_id=job_id,
+            error=f"GPU worker error ({e.status_code}): {e.detail}",
+        )
+    except Exception as e:
+        logger.exception(f"Error checking MuseTalk status: {e}")
+        return MuseTalkStatusResponse(
+            success=False,
+            job_id=job_id,
+            error=f"Internal error: {str(e)}",
+        )
+
+
+# ──────────────────────────────────────────────
+# 19. MuseTalk Download
+# ──────────────────────────────────────────────
+
+@router.get(
+    "/musetalk/download/{job_id}",
+    summary="Download MuseTalk generated video",
+    description=(
+        "Download the generated lip-synced video (MP4). "
+        "The job must be in 'completed' status."
+    ),
+    responses={
+        200: {
+            "content": {"video/mp4": {}},
+            "description": "The generated video file",
+        },
+    },
+)
+async def musetalk_download(
+    job_id: str,
+    _auth: bool = Depends(verify_admin_key),
+):
+    try:
+        service = get_musetalk_service()
+
+        # First check status
+        status_result = await service.get_status(job_id)
+        if status_result.get("status") != "completed":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Job not completed: {status_result.get('status')}",
+            )
+
+        # Download video
+        video_bytes = await service.download(job_id)
+
+        return StreamingResponse(
+            io.BytesIO(video_bytes),
+            media_type="video/mp4",
+            headers={
+                "Content-Disposition": f'attachment; filename="musetalk_{job_id}.mp4"',
+                "Content-Length": str(len(video_bytes)),
+            },
+        )
+
+    except HTTPException:
+        raise
+    except MuseTalkConnectionError as e:
+        raise HTTPException(status_code=502, detail=f"GPU worker unreachable: {str(e)}")
+    except MuseTalkAPIError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
+    except Exception as e:
+        logger.exception(f"Error downloading MuseTalk video: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
+
+
+# ──────────────────────────────────────────────
+# 20. MuseTalk Health Check
+# ──────────────────────────────────────────────
+
+@router.get(
+    "/musetalk/health",
+    response_model=MuseTalkHealthResponse,
+    summary="Health check for MuseTalk GPU worker",
+    description="Check connectivity and status of the MuseTalk GPU worker.",
+)
+async def musetalk_health_check(
+    _auth: bool = Depends(verify_admin_key),
+):
+    try:
+        service = get_musetalk_service()
+        result = await service.health_check()
+
+        return MuseTalkHealthResponse(
+            success=result.get("status") in ("ok", "not_configured"),
+            status=result.get("status"),
+            gpu_name=result.get("gpu_name"),
+            gpu_memory_used_mb=result.get("gpu_memory_used_mb"),
+            gpu_memory_total_mb=result.get("gpu_memory_total_mb"),
+            musetalk_loaded=result.get("musetalk_loaded"),
+            worker_url=result.get("worker_url"),
+            error=result.get("error"),
+        )
+
+    except Exception as e:
+        logger.exception(f"MuseTalk health check error: {e}")
+        return MuseTalkHealthResponse(
+            success=False,
+            status="error",
+            error=f"Health check failed: {str(e)}",
+        )
