@@ -529,3 +529,81 @@ class MuseTalkHealthResponse(BaseModel):
     musetalk_loaded: Optional[bool] = None
     worker_url: Optional[str] = None
     error: Optional[str] = None
+
+
+# ──────────────────────────────────────────────
+# Mode C+: MuseTalk + ElevenLabs TTS (Text → Video)
+# ──────────────────────────────────────────────
+
+
+class MuseTalkTextGenerateRequest(BaseModel):
+    """Request to generate a lip-synced video from text using ElevenLabs TTS + MuseTalk."""
+    portrait_url: str = Field(
+        ...,
+        description="Publicly accessible URL of the portrait image (front-facing photo). "
+        "Supported formats: JPEG, PNG. Recommended: 512x512 or larger, clear face."
+    )
+    text: str = Field(
+        ...,
+        min_length=1,
+        max_length=5000,
+        description="Text to convert to speech. The portrait will lip-sync to this text. "
+        "Supports Japanese and other languages."
+    )
+    voice_id: Optional[str] = Field(
+        None,
+        description="ElevenLabs voice ID. If not provided, uses the default configured voice."
+    )
+    language_code: Optional[str] = Field(
+        "ja",
+        description="Language code for TTS (e.g., 'ja' for Japanese, 'en' for English)."
+    )
+    voice_settings: Optional[Dict[str, Any]] = Field(
+        None,
+        description="ElevenLabs voice settings override (stability, similarity_boost, etc.)."
+    )
+    job_id: Optional[str] = Field(
+        None,
+        description="Custom job ID. If not provided, one will be auto-generated."
+    )
+    bbox_shift: int = Field(
+        0, ge=-50, le=50,
+        description="Vertical shift for face bounding box detection."
+    )
+    extra_margin: int = Field(
+        10, ge=0, le=50,
+        description="Extra margin below face for MuseTalk v1.5 (pixels)."
+    )
+    batch_size: int = Field(
+        16, ge=1, le=64,
+        description="Inference batch size. Higher = faster but more VRAM."
+    )
+    output_fps: int = Field(
+        25, ge=15, le=60,
+        description="Output video frame rate."
+    )
+
+
+class MuseTalkTextGenerateResponse(BaseModel):
+    """Response after starting a TTS + MuseTalk generation job."""
+    success: bool
+    job_id: Optional[str] = None
+    status: Optional[str] = Field(
+        None, description="Job status: tts_generating / queued / processing / completed / error"
+    )
+    tts_duration_ms: Optional[float] = Field(
+        None, description="Duration of the generated TTS audio in milliseconds."
+    )
+    audio_url: Optional[str] = Field(
+        None, description="URL of the generated TTS audio (stored in Azure Blob)."
+    )
+    error: Optional[str] = None
+
+
+class VoiceOption(BaseModel):
+    """A single voice option for the voice selector."""
+    voice_id: str
+    name: str
+    category: Optional[str] = None
+    is_cloned: bool = False
+    labels: Optional[Dict[str, Any]] = None

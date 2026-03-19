@@ -1255,3 +1255,215 @@ async def musetalk_health_check(
             status="error",
             error=f"Health check failed: {str(e)}",
         )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Mode C+: MuseTalk + ElevenLabs TTS  (Text → Lip-Synced Video)
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# Pipeline:
+#   1. Text → ElevenLabs TTS → WAV audio bytes
+#   2. WAV audio → Upload to Azure Blob → public URL
+#   3. Portrait URL + Audio URL → MuseTalk GPU Worker → Lip-synced MP4
+#
+# This endpoint combines steps 1-3 into a single API call.
+# ══════════════════════════════════════════════════════════════════════════════
+
+from app.schemas.digital_human_schema import (
+    MuseTalkTextGenerateRequest,
+    MuseTalkTextGenerateResponse,
+)
+import uuid
+import struct
+import wave
+
+
+def _pcm_to_wav(pcm_data: bytes, sample_rate: int = 16000, channels: int = 1, sample_width: int = 2) -> bytes:
+    """Convert raw PCM bytes to WAV format."""
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(channels)
+        wf.setsampwidth(sample_width)
+        wf.setframerate(sample_rate)
+        wf.writeframes(pcm_data)
+    return buf.getvalue()
+
+
+async def _upload_audio_to_blob(audio_wav: bytes, job_id: str) -> str:
+    """Upload WAV audio bytes to Azure Blob Storage and return the public URL."""
+    from app.services.storage_service import generate_upload_sas
+    import httpx as _httpx
+
+    vid, upload_url, blob_url, expiry = await generate_upload_sas(
+        email="ai-live-creator@aitherhub.com",
+        video_id=f"tts-audio-{job_id}",
+        filename=f"tts_{job_id}.wav",
+    )
+
+    # Upload the WAV bytes directly to Azure Blob via SAS URL
+    async with _httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.put(
+            upload_url,
+            content=audio_wav,
+            headers={
+                "x-ms-blob-type": "BlockBlob",
+                "Content-Type": "audio/wav",
+            },
+        )
+        if resp.status_code not in (200, 201):
+            raise MuseTalkError(
+                f"Failed to upload TTS audio to blob: HTTP {resp.status_code}"
+            )
+
+    logger.info(f"TTS audio uploaded to blob: {blob_url} ({len(audio_wav)} bytes)")
+    return blob_url
+
+
+# ──────────────────────────────────────────────
+# 21. MuseTalk Generate from Text (TTS + Lip-Sync)
+# ──────────────────────────────────────────────
+
+@router.post(
+    "/musetalk/generate-from-text",
+    response_model=MuseTalkTextGenerateResponse,
+    summary="Generate lip-synced video from text (ElevenLabs TTS + MuseTalk)",
+    description=(
+        "Complete pipeline: Text → ElevenLabs TTS (voice synthesis) → "
+        "MuseTalk GPU Worker (lip-sync video generation). "
+        "Provide a portrait image URL and text. The AI will generate speech audio "
+        "from the text, then create a video where the portrait lip-syncs to the audio. "
+        "Use /musetalk/status/{job_id} to poll for completion."
+    ),
+)
+async def musetalk_generate_from_text(
+    req: MuseTalkTextGenerateRequest,
+    _auth: bool = Depends(verify_admin_key),
+):
+    job_id = req.job_id or f"tts-mt-{int(__import__('time').time())}"
+
+    try:
+        # ── Step 1: Generate TTS audio via ElevenLabs ──
+        logger.info(
+            f"[{job_id}] Step 1: ElevenLabs TTS — text_len={len(req.text)}, "
+            f"voice={req.voice_id or 'default'}, lang={req.language_code}"
+        )
+
+        el_service = get_elevenlabs_service()
+
+        # Generate PCM audio (16kHz, 16bit, mono)
+        pcm_audio = await el_service.text_to_speech(
+            text=req.text,
+            voice_id=req.voice_id,
+            language_code=req.language_code,
+            voice_settings=req.voice_settings,
+            output_format="pcm_16000",
+        )
+
+        # Convert PCM to WAV (MuseTalk needs WAV format)
+        wav_audio = _pcm_to_wav(pcm_audio, sample_rate=16000)
+        tts_duration_ms = len(pcm_audio) / (16000 * 2) * 1000  # PCM 16kHz 16bit
+
+        logger.info(
+            f"[{job_id}] TTS complete: {len(wav_audio)} bytes WAV, "
+            f"~{tts_duration_ms:.0f}ms duration"
+        )
+
+        # ── Step 2: Upload WAV to Azure Blob ──
+        logger.info(f"[{job_id}] Step 2: Uploading TTS audio to Azure Blob...")
+        audio_url = await _upload_audio_to_blob(wav_audio, job_id)
+
+        # ── Step 3: Start MuseTalk generation ──
+        logger.info(
+            f"[{job_id}] Step 3: Starting MuseTalk generation — "
+            f"portrait={req.portrait_url[:60]}..., audio={audio_url[:60]}..."
+        )
+
+        service = get_musetalk_service()
+        result = await service.generate(
+            portrait_url=req.portrait_url,
+            audio_url=audio_url,
+            job_id=job_id,
+            bbox_shift=req.bbox_shift,
+            extra_margin=req.extra_margin,
+            batch_size=req.batch_size,
+            output_fps=req.output_fps,
+        )
+
+        logger.info(f"[{job_id}] MuseTalk job submitted: {result}")
+
+        return MuseTalkTextGenerateResponse(
+            success=True,
+            job_id=result.get("job_id", job_id),
+            status=result.get("status", "queued"),
+            tts_duration_ms=round(tts_duration_ms, 1),
+            audio_url=audio_url,
+        )
+
+    except ElevenLabsError as e:
+        logger.error(f"[{job_id}] ElevenLabs TTS error: {e}")
+        return MuseTalkTextGenerateResponse(
+            success=False,
+            job_id=job_id,
+            error=f"TTS error: {str(e)}",
+        )
+    except MuseTalkConnectionError as e:
+        logger.error(f"[{job_id}] MuseTalk worker connection error: {e}")
+        return MuseTalkTextGenerateResponse(
+            success=False,
+            job_id=job_id,
+            error=f"GPU worker unreachable: {str(e)}",
+        )
+    except MuseTalkAPIError as e:
+        logger.error(f"[{job_id}] MuseTalk worker API error: {e}")
+        return MuseTalkTextGenerateResponse(
+            success=False,
+            job_id=job_id,
+            error=f"GPU worker error ({e.status_code}): {e.detail}",
+        )
+    except Exception as e:
+        logger.exception(f"[{job_id}] Unexpected error in TTS+MuseTalk pipeline: {e}")
+        return MuseTalkTextGenerateResponse(
+            success=False,
+            job_id=job_id,
+            error=f"Internal error: {str(e)}",
+        )
+
+
+# ──────────────────────────────────────────────
+# 22. List ElevenLabs Voices (for AI Live Creator voice selector)
+# ──────────────────────────────────────────────
+
+@router.get(
+    "/musetalk/voices",
+    summary="List available ElevenLabs voices for AI Live Creator",
+    description="List all voices including cloned voices available for TTS in AI Live Creator.",
+)
+async def musetalk_list_voices(
+    _auth: bool = Depends(verify_admin_key),
+):
+    try:
+        el_service = get_elevenlabs_service()
+        voices = await el_service.list_voices()
+
+        voice_list = []
+        for v in voices:
+            is_cloned = v.get("category") == "cloned"
+            voice_list.append({
+                "voice_id": v.get("voice_id"),
+                "name": v.get("name"),
+                "category": v.get("category"),
+                "is_cloned": is_cloned,
+                "labels": v.get("labels", {}),
+            })
+
+        return {
+            "success": True,
+            "voices": voice_list,
+            "total_count": len(voice_list),
+        }
+
+    except ElevenLabsError as e:
+        return {"success": False, "error": str(e), "voices": []}
+    except Exception as e:
+        logger.exception(f"Error listing voices for AI Live Creator: {e}")
+        return {"success": False, "error": f"Internal error: {str(e)}", "voices": []}

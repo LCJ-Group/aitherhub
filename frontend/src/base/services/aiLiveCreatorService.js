@@ -100,6 +100,42 @@ class AiLiveCreatorService {
    * @param {function} [onProgress] - Progress callback (0-100)
    * @returns {Promise<string>} The permanent blob URL
    */
+  /**
+   * Start a MuseTalk lip-sync video generation from TEXT (TTS + MuseTalk pipeline).
+   * Backend handles: Text → ElevenLabs TTS → Azure Blob → MuseTalk GPU Worker
+   * @param {Object} params
+   * @param {string} params.portrait_url - URL of the portrait image
+   * @param {string} params.text - Text to convert to speech
+   * @param {string} [params.voice_id] - ElevenLabs voice ID
+   * @param {string} [params.language_code] - Language code (default: 'ja')
+   * @param {Object} [params.voice_settings] - ElevenLabs voice settings
+   * @param {number} [params.bbox_shift] - Face bounding box vertical shift
+   * @param {number} [params.extra_margin] - Extra margin below face
+   * @param {number} [params.batch_size] - Inference batch size
+   * @param {number} [params.output_fps] - Output video FPS
+   * @returns {Promise<Object>} { success, job_id, status, tts_duration_ms, audio_url, error }
+   */
+  async generateFromText(params) {
+    const res = await axios.post(
+      `${this.baseURL}/api/v1/digital-human/musetalk/generate-from-text`,
+      params,
+      { headers: this._headers() }
+    );
+    return res.data;
+  }
+
+  /**
+   * List available ElevenLabs voices for the voice selector.
+   * @returns {Promise<Object>} { success, voices: [{voice_id, name, category, is_cloned}], total_count }
+   */
+  async listVoices() {
+    const res = await axios.get(
+      `${this.baseURL}/api/v1/digital-human/musetalk/voices`,
+      { headers: this._headers() }
+    );
+    return res.data;
+  }
+
   async uploadFile(file, type, onProgress) {
     const fileId = `ai-live-creator-${type}-${Date.now()}`;
     const sasRes = await axios.post(
