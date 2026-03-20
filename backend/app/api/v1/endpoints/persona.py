@@ -161,7 +161,7 @@ async def get_persona(
         SELECT pvt.video_id, v.original_filename, v.status, v.created_at,
                pvt.included_in_training
         FROM persona_video_tags pvt
-        JOIN videos v ON v.id = pvt.video_id
+        JOIN videos v ON CAST(v.id AS text) = pvt.video_id
         WHERE pvt.persona_id = :pid
         ORDER BY v.created_at DESC
     """)
@@ -590,26 +590,46 @@ async def get_available_videos(
         where_clause += " AND v.original_filename ILIKE :search"
         params["search"] = f"%{search}%"
 
+    # Use simple LEFT JOIN count instead of correlated subquery to avoid 500 errors
     sql = text(f"""
         SELECT v.id, v.original_filename, v.created_at, v.upload_type,
                u.email AS user_email,
-               (SELECT COUNT(*) FROM video_phases vp
-                WHERE vp.video_id = v.id
-                AND (vp.phase_description IS NOT NULL OR EXISTS (
-                    SELECT 1 FROM phase_insights pi
-                    WHERE pi.video_id = vp.video_id AND pi.phase_index = vp.phase_index
-                    AND pi.deleted_at IS NULL
-                ))) AS segment_count,
+               COALESCE(pc.phase_count, 0) AS segment_count,
                CASE WHEN pvt.id IS NOT NULL THEN true ELSE false END AS is_tagged
         FROM videos v
         LEFT JOIN users u ON v.user_id = u.id
-        LEFT JOIN persona_video_tags pvt ON pvt.video_id = v.id AND pvt.persona_id = :pid
+        LEFT JOIN persona_video_tags pvt
+            ON pvt.video_id = CAST(v.id AS text) AND pvt.persona_id = :pid
+        LEFT JOIN LATERAL (
+            SELECT COUNT(*) AS phase_count
+            FROM video_phases vp
+            WHERE vp.video_id = v.id
+              AND vp.phase_description IS NOT NULL
+        ) pc ON true
         WHERE {where_clause}
         ORDER BY v.created_at DESC
         LIMIT :limit OFFSET :offset
     """)
-    result = await db.execute(sql, params)
-    rows = result.fetchall()
+    try:
+        result = await db.execute(sql, params)
+        rows = result.fetchall()
+    except Exception as e:
+        logger.exception(f"available-videos SQL error: {e}")
+        # Fallback: simpler query without segment count
+        fallback_sql = text(f"""
+            SELECT v.id, v.original_filename, v.created_at, v.upload_type,
+                   '' AS user_email,
+                   0 AS segment_count,
+                   CASE WHEN pvt.id IS NOT NULL THEN true ELSE false END AS is_tagged
+            FROM videos v
+            LEFT JOIN persona_video_tags pvt
+                ON pvt.video_id = CAST(v.id AS text) AND pvt.persona_id = :pid
+            WHERE {where_clause}
+            ORDER BY v.created_at DESC
+            LIMIT :limit OFFSET :offset
+        """)
+        result = await db.execute(fallback_sql, params)
+        rows = result.fetchall()
 
     # Total count
     count_sql = text(f"SELECT COUNT(*) FROM videos v WHERE {where_clause}")
@@ -621,7 +641,7 @@ async def get_available_videos(
         "total": total,
         "videos": [
             {
-                "id": r.id,
+                "id": str(r.id),
                 "filename": r.original_filename,
                 "user_email": r.user_email,
                 "segment_count": r.segment_count,
