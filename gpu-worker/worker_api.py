@@ -1791,16 +1791,131 @@ async def _run_imtalker_job(req: IMTalkerRequest):
 
         job["progress"] = 85
 
-        # ── Step 4: Find and finalize output video ──
+        # ── Step 4: Find IMTalker output video (512x512) ──
         output_files = [f for f in os.listdir(output_dir) if f.endswith(".mp4")]
         if not output_files:
             raise RuntimeError("IMTalker produced no output video")
 
         src_video = os.path.join(output_dir, output_files[0])
+        job["progress"] = 85
+
+        # ── Step 5: Composite onto original portrait in 9:16 ──
+        logger.info(f"[IMT {req.job_id}] Compositing to 9:16 portrait video...")
         final_output = os.path.join(job_dir, f"output_{req.job_id}.mp4")
 
-        import shutil
-        shutil.move(src_video, final_output)
+        # Strategy: Use the original portrait image as background (9:16),
+        # overlay the IMTalker animated face on top, aligned to face position.
+        # ffmpeg approach: scale portrait to 9:16, overlay animated face.
+        #
+        # Since IMTalker crops the face, we need to:
+        # 1. Detect face position in original portrait
+        # 2. Overlay the animated face at that position
+        # OR simpler: place animated face centered on a blurred/original background
+
+        try:
+            from PIL import Image
+            img = Image.open(portrait_path)
+            orig_w, orig_h = img.size
+
+            # Target: 9:16 aspect ratio
+            # Use 720x1280 as default, or scale based on original image
+            target_w, target_h = 720, 1280
+            if orig_w >= 1080:
+                target_w, target_h = 1080, 1920
+
+            # Calculate face region in original image for overlay positioning
+            # Use face_alignment if available, otherwise center the face
+            face_cx, face_cy = orig_w // 2, int(orig_h * 0.4)  # default: center-top
+
+            try:
+                import face_alignment
+                fa = face_alignment.FaceAlignment(
+                    face_alignment.LandmarksType.TWO_D,
+                    device="cuda", flip_input=False
+                )
+                import numpy as np
+                img_np = np.array(img)
+                landmarks = fa.get_landmarks(img_np)
+                if landmarks and len(landmarks) > 0:
+                    lm = landmarks[0]  # first face
+                    face_cx = int(lm[:, 0].mean())
+                    face_cy = int(lm[:, 1].mean())
+                    # Estimate face size from landmarks
+                    face_w = int((lm[:, 0].max() - lm[:, 0].min()) * 1.6)
+                    face_h = int((lm[:, 1].max() - lm[:, 1].min()) * 1.8)
+                    logger.info(f"[IMT {req.job_id}] Face detected at ({face_cx},{face_cy}), size ~{face_w}x{face_h}")
+                del fa
+            except Exception as e:
+                logger.warning(f"[IMT {req.job_id}] Face detection for composite failed: {e}, using center")
+
+            # Scale original to fill 9:16 canvas
+            scale = max(target_w / orig_w, target_h / orig_h)
+            scaled_w = int(orig_w * scale)
+            scaled_h = int(orig_h * scale)
+
+            # Scale face center coordinates
+            s_face_cx = int(face_cx * scale)
+            s_face_cy = int(face_cy * scale)
+
+            # Crop offset to center face in frame
+            crop_x = max(0, min(s_face_cx - target_w // 2, scaled_w - target_w))
+            crop_y = max(0, min(s_face_cy - target_h // 3, scaled_h - target_h))  # face at 1/3 from top
+
+            # IMTalker output is 512x512 - determine overlay size
+            # Scale the overlay to match the face size in the final frame
+            overlay_size = min(int(target_w * 0.95), 680)  # ~95% of width or 680px
+
+            # Overlay position (centered horizontally, face-aligned vertically)
+            overlay_x = (target_w - overlay_size) // 2
+            overlay_y = max(0, int(target_h * 0.08))  # 8% from top
+
+            # Build ffmpeg filter for compositing:
+            # 1. Scale original portrait → fill 9:16, crop to exact size
+            # 2. Scale IMTalker video → overlay size
+            # 3. Overlay animated face on portrait background
+            # 4. Add audio from IMTalker output
+            filter_complex = (
+                f"[1:v]scale={scaled_w}:{scaled_h},"
+                f"crop={target_w}:{target_h}:{crop_x}:{crop_y}[bg];"
+                f"[0:v]scale={overlay_size}:{overlay_size}[face];"
+                f"[bg][face]overlay={overlay_x}:{overlay_y}[out]"
+            )
+
+            composite_cmd = [
+                "ffmpeg", "-y",
+                "-i", src_video,                    # input 0: IMTalker animated face
+                "-loop", "1", "-i", portrait_path,  # input 1: original portrait image
+                "-filter_complex", filter_complex,
+                "-map", "[out]",
+                "-map", "0:a?",                      # keep audio from IMTalker
+                "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+                "-c:a", "aac", "-b:a", "128k",
+                "-shortest",
+                "-pix_fmt", "yuv420p",
+                final_output,
+            ]
+
+            logger.info(f"[IMT {req.job_id}] Compositing: {target_w}x{target_h}, overlay {overlay_size}x{overlay_size} at ({overlay_x},{overlay_y})")
+
+            comp_proc = await asyncio.create_subprocess_exec(
+                *composite_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                cwd=job_dir,
+            )
+            comp_out, _ = await comp_proc.communicate()
+            if comp_proc.returncode != 0:
+                logger.warning(f"[IMT {req.job_id}] Composite failed, falling back to raw output")
+                logger.warning(f"[IMT {req.job_id}] ffmpeg output: {comp_out.decode('utf-8', errors='replace')[-500:]}")
+                import shutil
+                shutil.move(src_video, final_output)
+            else:
+                logger.info(f"[IMT {req.job_id}] Composite success: {target_w}x{target_h}")
+
+        except Exception as e:
+            logger.warning(f"[IMT {req.job_id}] Composite failed ({e}), using raw 512x512 output")
+            import shutil
+            shutil.move(src_video, final_output)
 
         job["progress"] = 95
 
@@ -1811,7 +1926,7 @@ async def _run_imtalker_job(req: IMTalkerRequest):
             job["progress"] = 100
             job["output_path"] = final_output
         else:
-            raise RuntimeError("IMTalker output file not found after move")
+            raise RuntimeError("IMTalker output file not found")
 
     except Exception as e:
         logger.error(f"[IMT {req.job_id}] Error: {e}")
