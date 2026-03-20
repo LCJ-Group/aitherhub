@@ -3396,14 +3396,14 @@ async def debug_excel_urls(
     x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
     db: AsyncSession = Depends(get_db),
 ):
+    """Temporary debug endpoint to test Excel URL accessibility."""
     expected_key = os.getenv("ADMIN_API_KEY", "aither:hub")
     if x_admin_key != expected_key:
         raise HTTPException(status_code=403, detail="Forbidden")
-    """Temporary debug endpoint to test Excel URL accessibility."""
-    import requests as req_lib
-    from app.services.storage_service import generate_read_sas_from_url
-
     try:
+        import httpx
+        from app.services.storage_service import generate_read_sas_from_url
+
         row = (await db.execute(
             text("SELECT excel_product_blob_url, excel_trend_blob_url FROM videos WHERE id = :vid"),
             {"vid": video_id},
@@ -3419,30 +3419,36 @@ async def debug_excel_urls(
                 continue
 
             info = {
-                "raw_url_prefix": url[:80] if url else None,
-                "has_sas": "sig=" in (url or ""),
+                "raw_url_len": len(url),
+                "raw_url_prefix": url[:120],
+                "has_sas": "sig=" in url,
             }
 
             # Try to generate fresh SAS
-            fresh_url = generate_read_sas_from_url(url, expires_hours=1)
-            info["fresh_sas_generated"] = fresh_url is not None
-            if fresh_url:
-                info["fresh_url_prefix"] = fresh_url[:80]
-
-            # Try to download with raw URL
             try:
-                r = req_lib.head(url, timeout=10)
-                info["raw_download_status"] = r.status_code
+                fresh_url = generate_read_sas_from_url(url, expires_hours=1)
+                info["fresh_sas_generated"] = fresh_url is not None
+                if fresh_url:
+                    info["fresh_url_prefix"] = fresh_url[:120]
             except Exception as e:
-                info["raw_download_error"] = str(e)[:100]
+                info["fresh_sas_error"] = str(e)[:200]
 
-            # Try to download with fresh URL
+            # Try HEAD with raw URL
+            try:
+                async with httpx.AsyncClient(timeout=10) as client:
+                    r = await client.head(url)
+                    info["raw_status"] = r.status_code
+            except Exception as e:
+                info["raw_error"] = str(e)[:200]
+
+            # Try HEAD with fresh URL
             if fresh_url:
                 try:
-                    r = req_lib.head(fresh_url, timeout=10)
-                    info["fresh_download_status"] = r.status_code
+                    async with httpx.AsyncClient(timeout=10) as client:
+                        r = await client.head(fresh_url)
+                        info["fresh_status"] = r.status_code
                 except Exception as e:
-                    info["fresh_download_error"] = str(e)[:100]
+                    info["fresh_error"] = str(e)[:200]
 
             results[label] = info
 
@@ -3450,4 +3456,5 @@ async def debug_excel_urls(
     except HTTPException:
         raise
     except Exception as e:
+        logger.exception(f"debug-excel-urls failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
