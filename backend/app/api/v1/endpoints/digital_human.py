@@ -2679,3 +2679,68 @@ def _generate_filler_script(language: str) -> str:
         "en": "Hello everyone! Welcome to our livestream! We have some amazing products to show you today. Drop your questions in the comments!",
     }
     return fillers.get(language, fillers["zh"])
+
+
+# ──────────────────────────────────────────────
+# DEBUG: GPT Provider Test (temporary)
+# ──────────────────────────────────────────────
+
+@router.get("/debug/gpt-test", summary="Test GPT providers (debug)")
+async def debug_gpt_test(_auth: bool = Depends(verify_admin_key)):
+    """Temporary debug endpoint to test GPT provider availability."""
+    import os
+    results = {
+        "azure_openai_key_set": bool(os.getenv("AZURE_OPENAI_KEY")),
+        "azure_openai_endpoint_set": bool(os.getenv("AZURE_OPENAI_ENDPOINT")),
+        "openai_api_key_set": bool(os.getenv("OPENAI_API_KEY")),
+        "openai_base_url_set": bool(os.getenv("OPENAI_BASE_URL")),
+        "gpt5_model": os.getenv("GPT5_MODEL", "not set"),
+        "gpt5_deployment": os.getenv("GPT5_DEPLOYMENT", "not set"),
+        "gpt5_api_version": os.getenv("GPT5_API_VERSION", "not set"),
+    }
+
+    # Test Azure OpenAI
+    azure_key = os.getenv("AZURE_OPENAI_KEY", "")
+    azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
+    azure_model = os.getenv("GPT5_MODEL") or os.getenv("GPT5_DEPLOYMENT") or "gpt-4.1-mini"
+    if azure_key and azure_endpoint:
+        try:
+            import openai
+            client = openai.AsyncAzureOpenAI(
+                api_key=azure_key,
+                azure_endpoint=azure_endpoint,
+                api_version=os.getenv("GPT5_API_VERSION", "2024-12-01-preview"),
+            )
+            response = await client.chat.completions.create(
+                model=azure_model,
+                messages=[{"role": "user", "content": "Say hello in Japanese"}],
+                max_tokens=50,
+                temperature=0.5,
+            )
+            results["azure_openai_test"] = "SUCCESS"
+            results["azure_openai_response"] = response.choices[0].message.content.strip()[:100]
+        except Exception as e:
+            results["azure_openai_test"] = f"FAILED: {str(e)[:200]}"
+    else:
+        results["azure_openai_test"] = "SKIPPED (no credentials)"
+
+    # Test OpenAI-compatible API
+    openai_key = os.getenv("OPENAI_API_KEY", "")
+    if openai_key:
+        try:
+            import openai
+            client = openai.AsyncOpenAI()
+            response = await client.chat.completions.create(
+                model="gpt-4.1-mini",
+                messages=[{"role": "user", "content": "Say hello in Japanese"}],
+                max_tokens=50,
+                temperature=0.5,
+            )
+            results["openai_test"] = "SUCCESS"
+            results["openai_response"] = response.choices[0].message.content.strip()[:100]
+        except Exception as e:
+            results["openai_test"] = f"FAILED: {str(e)[:200]}"
+    else:
+        results["openai_test"] = "SKIPPED (no OPENAI_API_KEY)"
+
+    return results
