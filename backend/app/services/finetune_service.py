@@ -2,6 +2,11 @@
 """
 Service for building fine-tuning datasets from persona-tagged videos
 and managing OpenAI fine-tuning jobs.
+
+Data sources (priority order):
+  1. video_phases.phase_description  – Whisper transcript per phase
+  2. phase_insights.insight          – GPT analysis per phase
+Both are joined to build rich training examples.
 """
 import json
 import logging
@@ -37,13 +42,16 @@ async def build_training_dataset(
     persona_id: str,
 ) -> dict:
     """
-    Collect speech segments from all persona-tagged videos and build
-    a JSONL training dataset for OpenAI fine-tuning.
+    Collect phase descriptions and insights from all persona-tagged videos
+    and build a JSONL training dataset for OpenAI fine-tuning.
+
+    Uses video_phases (phase_description = transcript text per phase)
+    and phase_insights (insight = GPT analysis) as data sources.
 
     Returns: {
-        "examples": [...],       # list of training examples
+        "examples": [...],
         "video_count": int,
-        "segment_count": int,
+        "segment_count": int,    # number of phases with text
         "duration_hours": float,
     }
     """
@@ -79,8 +87,60 @@ async def build_training_dataset(
 
     system_prompt = _build_system_prompt(persona)
 
-    # 3. Collect speech segments grouped by video and phase
-    # Join speech_segments → audio_chunks → videos, and also get phase context
+    # 3. Collect phases with descriptions and insights from video_phases + phase_insights
+    # video_phases.phase_description contains the transcript/description per phase
+    # phase_insights.insight contains GPT analysis per phase
+    phases_sql = text("""
+        SELECT
+            vp.video_id,
+            vp.phase_index,
+            vp.phase_description,
+            vp.time_start,
+            vp.time_end,
+            COALESCE(vp.product_names, '') AS product_names,
+            pi.insight
+        FROM video_phases vp
+        LEFT JOIN phase_insights pi
+            ON pi.video_id = vp.video_id
+            AND pi.phase_index = vp.phase_index
+            AND pi.deleted_at IS NULL
+        WHERE vp.video_id = ANY(:vids)
+          AND (vp.phase_description IS NOT NULL OR pi.insight IS NOT NULL)
+        ORDER BY vp.video_id, vp.phase_index ASC
+    """)
+    phase_result = await db.execute(phases_sql, {"vids": video_ids})
+    all_phases = phase_result.fetchall()
+
+    logger.info(f"Collected {len(all_phases)} phases with text data")
+
+    if not all_phases:
+        # Fallback: try speech_segments if available
+        return await _build_from_speech_segments(db, video_ids, system_prompt)
+
+    # 4. Group phases into conversational turns (sliding window by time)
+    examples = _build_conversation_examples_from_phases(all_phases, system_prompt)
+
+    # 5. Calculate stats
+    total_duration_sec = sum(
+        (p.time_end - p.time_start)
+        for p in all_phases
+        if p.time_start is not None and p.time_end is not None
+    )
+
+    return {
+        "examples": examples,
+        "video_count": len(video_ids),
+        "segment_count": len(all_phases),
+        "duration_hours": round(total_duration_sec / 3600, 2),
+    }
+
+
+async def _build_from_speech_segments(
+    db: AsyncSession,
+    video_ids: list,
+    system_prompt: str,
+) -> dict:
+    """Fallback: try speech_segments if video_phases has no data."""
     segments_sql = text("""
         SELECT
             ss.text AS segment_text,
@@ -88,32 +148,31 @@ async def build_training_dataset(
             ss.end_ms,
             ss.confidence,
             ac.video_id,
-            ac.chunk_index,
-            vp.phase_description,
-            vp.phase_index,
-            pi.insight
+            ac.chunk_index
         FROM speech_segments ss
         JOIN audio_chunks ac ON ss.audio_chunk_id = ac.id
-        LEFT JOIN video_phases vp ON vp.video_id = ac.video_id
-            AND ss.start_ms >= (vp.time_start * 1000)
-            AND ss.start_ms < (vp.time_end * 1000)
-        LEFT JOIN phase_insights pi ON pi.video_id = ac.video_id
-            AND pi.phase_index = vp.phase_index
         WHERE ac.video_id = ANY(:vids)
           AND ss.confidence >= 0.5
         ORDER BY ac.video_id, ss.start_ms ASC
     """)
-    seg_result = await db.execute(segments_sql, {"vids": video_ids})
-    all_segments = seg_result.fetchall()
+    try:
+        seg_result = await db.execute(segments_sql, {"vids": video_ids})
+        all_segments = seg_result.fetchall()
+    except Exception:
+        all_segments = []
 
-    logger.info(f"Collected {len(all_segments)} speech segments")
+    if not all_segments:
+        return {
+            "examples": [],
+            "video_count": len(video_ids),
+            "segment_count": 0,
+            "duration_hours": 0.0,
+        }
 
-    # 4. Group segments into conversational turns (sliding window)
-    examples = _build_conversation_examples(all_segments, system_prompt)
-
-    # 5. Calculate stats
+    examples = _build_conversation_examples_from_segments(all_segments, system_prompt)
     total_duration_ms = sum(
         (s.end_ms - s.start_ms) for s in all_segments
+        if s.end_ms and s.start_ms
     )
 
     return {
@@ -146,82 +205,94 @@ def _build_system_prompt(persona) -> str:
     return prompt.strip()
 
 
-def _build_conversation_examples(segments, system_prompt: str) -> list:
+def _build_conversation_examples_from_phases(phases, system_prompt: str) -> list:
     """
-    Build fine-tuning examples from speech segments.
+    Build fine-tuning examples from video phase data.
 
-    Strategy: Group consecutive segments into ~30-60 second windows.
-    Each window becomes one assistant message. The user message provides
-    context (phase description, viewer comments, etc.).
+    Strategy:
+    - Group consecutive phases from the same video into ~60-90 second windows
+    - phase_description = what the streamer actually said (transcript)
+    - insight = GPT analysis of the scene (used as context/user prompt)
+    - Each example: system prompt + user context → assistant response (transcript)
     """
     examples = []
     current_window = []
-    window_start_ms = 0
+    window_start_sec = 0
     current_video_id = None
-    current_phase_desc = None
-    current_insight = None
 
-    WINDOW_SIZE_MS = 45_000  # 45 seconds per example
+    WINDOW_SIZE_SEC = 75  # ~75 seconds per example
 
-    for seg in segments:
+    for phase in phases:
         # New video = flush window
-        if seg.video_id != current_video_id:
+        if phase.video_id != current_video_id:
             if current_window:
-                ex = _flush_window(
-                    current_window, system_prompt,
-                    current_phase_desc, current_insight
-                )
+                ex = _flush_phase_window(current_window, system_prompt)
                 if ex:
                     examples.append(ex)
             current_window = []
-            current_video_id = seg.video_id
-            window_start_ms = seg.start_ms
-            current_phase_desc = seg.phase_description
-            current_insight = seg.insight
+            current_video_id = phase.video_id
+            window_start_sec = phase.time_start or 0
 
         # Window full = flush
-        if seg.start_ms - window_start_ms > WINDOW_SIZE_MS and current_window:
-            ex = _flush_window(
-                current_window, system_prompt,
-                current_phase_desc, current_insight
-            )
+        time_start = phase.time_start or 0
+        if time_start - window_start_sec > WINDOW_SIZE_SEC and current_window:
+            ex = _flush_phase_window(current_window, system_prompt)
             if ex:
                 examples.append(ex)
             current_window = []
-            window_start_ms = seg.start_ms
-            current_phase_desc = seg.phase_description
-            current_insight = seg.insight
+            window_start_sec = time_start
 
-        current_window.append(seg)
+        current_window.append(phase)
 
     # Flush remaining
     if current_window:
-        ex = _flush_window(
-            current_window, system_prompt,
-            current_phase_desc, current_insight
-        )
+        ex = _flush_phase_window(current_window, system_prompt)
         if ex:
             examples.append(ex)
 
     return examples
 
 
-def _flush_window(segments, system_prompt, phase_desc, insight) -> Optional[dict]:
-    """Convert a window of segments into a fine-tuning example."""
-    text_parts = [s.segment_text for s in segments if s.segment_text]
-    combined_text = " ".join(text_parts).strip()
+def _flush_phase_window(phases, system_prompt: str) -> Optional[dict]:
+    """Convert a window of phases into a fine-tuning example."""
+    # Collect transcript text from phase_description
+    transcript_parts = []
+    insight_parts = []
+    product_parts = []
 
-    if len(combined_text) < 20:
+    for p in phases:
+        if p.phase_description:
+            transcript_parts.append(p.phase_description.strip())
+        if p.insight:
+            insight_parts.append(p.insight.strip())
+        if p.product_names:
+            product_parts.append(p.product_names.strip())
+
+    # The assistant response is the actual transcript
+    combined_transcript = " ".join(transcript_parts).strip()
+
+    # If no transcript, use insight as the assistant response
+    if not combined_transcript and insight_parts:
+        combined_transcript = " ".join(insight_parts).strip()
+
+    if len(combined_transcript) < 20:
         return None  # Too short, skip
 
     # Build user context message
     context_parts = []
-    if phase_desc:
-        context_parts.append(f"現在のシーン: {phase_desc}")
-    if insight:
-        # Truncate insight to avoid too long context
-        truncated = insight[:300] if len(insight) > 300 else insight
-        context_parts.append(f"分析: {truncated}")
+
+    if insight_parts:
+        # Use insight as context for what's happening in the scene
+        combined_insight = " ".join(insight_parts)
+        # Truncate to reasonable length
+        if len(combined_insight) > 500:
+            combined_insight = combined_insight[:500] + "..."
+        context_parts.append(f"シーンの状況: {combined_insight}")
+
+    if product_parts:
+        unique_products = list(set(p for p in product_parts if p))
+        if unique_products:
+            context_parts.append(f"紹介中の商品: {', '.join(unique_products)}")
 
     if context_parts:
         user_msg = "\n".join(context_parts) + "\n\nこの場面で自然に話してください。"
@@ -232,6 +303,59 @@ def _flush_window(segments, system_prompt, phase_desc, insight) -> Optional[dict
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_msg},
+            {"role": "assistant", "content": combined_transcript},
+        ]
+    }
+
+
+def _build_conversation_examples_from_segments(segments, system_prompt: str) -> list:
+    """Fallback: Build examples from speech_segments."""
+    examples = []
+    current_window = []
+    window_start_ms = 0
+    current_video_id = None
+
+    WINDOW_SIZE_MS = 45_000
+
+    for seg in segments:
+        if seg.video_id != current_video_id:
+            if current_window:
+                ex = _flush_segment_window(current_window, system_prompt)
+                if ex:
+                    examples.append(ex)
+            current_window = []
+            current_video_id = seg.video_id
+            window_start_ms = seg.start_ms
+
+        if seg.start_ms - window_start_ms > WINDOW_SIZE_MS and current_window:
+            ex = _flush_segment_window(current_window, system_prompt)
+            if ex:
+                examples.append(ex)
+            current_window = []
+            window_start_ms = seg.start_ms
+
+        current_window.append(seg)
+
+    if current_window:
+        ex = _flush_segment_window(current_window, system_prompt)
+        if ex:
+            examples.append(ex)
+
+    return examples
+
+
+def _flush_segment_window(segments, system_prompt: str) -> Optional[dict]:
+    """Convert a window of speech segments into a fine-tuning example."""
+    text_parts = [s.segment_text for s in segments if s.segment_text]
+    combined_text = " ".join(text_parts).strip()
+
+    if len(combined_text) < 20:
+        return None
+
+    return {
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": "ライブ配信を続けてください。自然に話してください。"},
             {"role": "assistant", "content": combined_text},
         ]
     }

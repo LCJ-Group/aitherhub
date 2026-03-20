@@ -593,9 +593,13 @@ async def get_available_videos(
     sql = text(f"""
         SELECT v.id, v.original_filename, v.created_at, v.upload_type,
                u.email AS user_email,
-               (SELECT COUNT(*) FROM audio_chunks ac
-                JOIN speech_segments ss ON ss.audio_chunk_id = ac.id
-                WHERE ac.video_id = v.id) AS segment_count,
+               (SELECT COUNT(*) FROM video_phases vp
+                WHERE vp.video_id = v.id
+                AND (vp.phase_description IS NOT NULL OR EXISTS (
+                    SELECT 1 FROM phase_insights pi
+                    WHERE pi.video_id = vp.video_id AND pi.phase_index = vp.phase_index
+                    AND pi.deleted_at IS NULL
+                ))) AS segment_count,
                CASE WHEN pvt.id IS NOT NULL THEN true ELSE false END AS is_tagged
         FROM videos v
         LEFT JOIN users u ON v.user_id = u.id
