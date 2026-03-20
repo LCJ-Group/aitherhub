@@ -2592,6 +2592,7 @@ async def autopilot_start(
             "total_speaks": 0,
             "previous_script": "",
             "persona": req.persona or {},
+            "persona_id": req.persona_id,
         }
 
         return AutoPilotStartResponse(
@@ -2680,6 +2681,25 @@ async def autopilot_next(
         product_price = product.get("price", product.get("product_price", ""))
         product_features = product.get("features", product.get("product_features", []))
 
+        # Resolve fine-tuned model if persona_id is set
+        finetune_model_id = None
+        persona_id = autopilot.get("persona_id")
+        if persona_id:
+            try:
+                from app.models.orm.persona import Persona
+                from app.core.db import AsyncSessionLocal
+                from sqlalchemy import select
+                async with AsyncSessionLocal() as db_session:
+                    result = await db_session.execute(
+                        select(Persona).where(Persona.id == persona_id)
+                    )
+                    persona_obj = result.scalar_one_or_none()
+                    if persona_obj and persona_obj.finetune_model_id:
+                        finetune_model_id = persona_obj.finetune_model_id
+                        logger.info(f"Using fine-tuned model: {finetune_model_id} for persona {persona_id}")
+            except Exception as e:
+                logger.warning(f"Failed to load persona model: {e}")
+
         # Generate script using Sales Brain (with context, comments, persona)
         from app.services.live_session_service import generate_product_script
         script_text = await generate_product_script(
@@ -2693,6 +2713,7 @@ async def autopilot_next(
             previous_script=previous_script,
             pending_comments=req.pending_comments if has_comments else None,
             persona=persona if persona else None,
+            model_override=finetune_model_id,
         )
         if not script_text:
             script_text = f"この{product_name}は本当に素晴らしい商品です！"

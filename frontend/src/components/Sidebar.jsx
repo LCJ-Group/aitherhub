@@ -11,7 +11,7 @@ import ForgotPasswordModal from "./modals/ForgotPasswordModal";
 import AuthService from "../base/services/userService";
 import VideoService from "../base/services/videoService";
 
-import { ChevronDown, LogOut, Settings, User, X, MoreHorizontal, Pencil, Trash2, Scissors, MessageSquareText, Radio, Video, Eye, Calendar, Sparkles, UserCircle, Clapperboard, Wand2 } from "lucide-react";
+import { ChevronDown, LogOut, Settings, User, Users, X, MoreHorizontal, Pencil, Trash2, Scissors, MessageSquareText, Radio, Video, Eye, Calendar, Sparkles, UserCircle, Clapperboard, Wand2 } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -422,6 +422,17 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
               >
                 <Wand2 className={`w-4 h-4 transition-colors duration-200 ease-out ${location.pathname === '/ai-live-creator' ? 'text-purple-600' : 'text-gray-500'}`} />
                 <span className={`text-sm transition-colors duration-200 ease-out ${location.pathname === '/ai-live-creator' ? 'text-purple-700 font-medium' : 'text-muted-foreground'}`}>AI Live Creator</span>
+              </div>
+              <div
+                onClick={() => { navigate('/persona'); onClose?.(); }}
+                className={`flex items-center gap-2 p-2 px-4 rounded-md cursor-pointer transition-all duration-200 ease-out ${
+                  location.pathname === '/persona'
+                    ? 'border border-pink-300 bg-pink-50 text-pink-700'
+                    : 'hover:bg-gray-100'
+                }`}
+              >
+                <Users className={`w-4 h-4 transition-colors duration-200 ease-out ${location.pathname === '/persona' ? 'text-pink-600' : 'text-gray-500'}`} />
+                <span className={`text-sm transition-colors duration-200 ease-out ${location.pathname === '/persona' ? 'text-pink-700 font-medium' : 'text-muted-foreground'}`}>Liver Clone</span>
               </div>
             </div>
           </div>

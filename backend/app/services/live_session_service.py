@@ -251,6 +251,7 @@ async def generate_product_script(
     previous_script: str = "",
     pending_comments: Optional[List[Dict[str, str]]] = None,
     persona: Optional[Dict[str, str]] = None,
+    model_override: Optional[str] = None,
 ) -> str:
     """
     Generate a livestream script for a product using GPT (Sales Brain).
@@ -355,12 +356,13 @@ async def generate_product_script(
 - テキストのみ出力"""
 
     try:
+        gpt_model = model_override or "gpt-4.1-mini"
         script = await _call_gpt(
             messages=[
                 {"role": "system", "content": SALES_BRAIN_SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
             ],
-            model="gpt-4.1-mini",
+            model=gpt_model,
             max_tokens=1024,
             temperature=0.7,
         )

@@ -956,6 +956,10 @@ class AutoPilotStartRequest(BaseModel):
         None,
         description="Livestreamer persona settings: {speaking_style, catchphrases, personality, expertise}"
     )
+    persona_id: Optional[str] = Field(
+        None,
+        description="ID of a trained persona/clone to use for script generation. If set, uses the fine-tuned model."
+    )
 
 
 class AutoPilotStartResponse(BaseModel):

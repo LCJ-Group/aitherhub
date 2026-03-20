@@ -511,3 +511,19 @@ async def restore_live_sessions():
         start_stuck_video_monitor()
     except Exception as e:
         logger.warning(f"Failed to start stuck video monitor: {e}")
+
+
+@app.on_event("startup")
+async def ensure_persona_tables():
+    """Ensure persona-related tables exist on startup."""
+    try:
+        from app.core.db import engine
+        from app.models.orm.persona import Persona, PersonaVideoTag, PersonaTrainingLog
+
+        async with engine.begin() as conn:
+            await conn.run_sync(Persona.__table__.create, checkfirst=True)
+            await conn.run_sync(PersonaVideoTag.__table__.create, checkfirst=True)
+            await conn.run_sync(PersonaTrainingLog.__table__.create, checkfirst=True)
+        logger.info("Persona tables verified/created successfully")
+    except Exception as e:
+        logger.warning(f"Failed to ensure persona tables on startup: {e}")

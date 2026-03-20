@@ -35,6 +35,7 @@ import {
   Globe,
 } from "lucide-react";
 import aiLiveCreatorService from "../base/services/aiLiveCreatorService";
+import personaService from "../base/services/personaService";
 
 /**
  * LiveStreamPanel — Livestream Control Panel for AI Live Creator
@@ -95,6 +96,10 @@ const LiveStreamPanel = forwardRef(function LiveStreamPanel({
   const [isStartingAutoPilot, setIsStartingAutoPilot] = useState(false);
   const [autoPilotLog, setAutoPilotLog] = useState([]);
   const [autoPilotStats, setAutoPilotStats] = useState({ totalSpeaks: 0, currentProduct: "", currentScript: "" });
+  // ── Persona (Liver Clone) ──
+  const [personas, setPersonas] = useState([]);
+  const [selectedPersonaId, setSelectedPersonaId] = useState("");
+  const [loadingPersonas, setLoadingPersonas] = useState(false);
 
   // ── Session ──
   const [isCreatingSession, setIsCreatingSession] = useState(false);
@@ -112,6 +117,22 @@ const LiveStreamPanel = forwardRef(function LiveStreamPanel({
   useEffect(() => { onProductsUpdate?.(products); }, [products]);
   useEffect(() => { onCommentHistoryUpdate?.(commentHistory); }, [commentHistory]);
   useEffect(() => { onQueueUpdate?.(videoQueue); }, [videoQueue]);
+
+  // ── Load personas for AutoPilot ──
+  useEffect(() => {
+    const loadPersonas = async () => {
+      setLoadingPersonas(true);
+      try {
+        const data = await personaService.listPersonas();
+        setPersonas(data.personas || []);
+      } catch (err) {
+        console.error('Failed to load personas:', err);
+      } finally {
+        setLoadingPersonas(false);
+      }
+    };
+    loadPersonas();
+  }, []);
 
   // ── Poll queue status ──
   useEffect(() => {
@@ -436,7 +457,7 @@ const LiveStreamPanel = forwardRef(function LiveStreamPanel({
     setIsStartingAutoPilot(true);
     showToast('info', 'Starting AutoPilot...');
     try {
-      const res = await aiLiveCreatorService.startAutoPilot(sessionId, {
+      const startParams = {
         products: products.map((p) => ({
           name: p.name,
           description: p.description || '',
@@ -446,7 +467,20 @@ const LiveStreamPanel = forwardRef(function LiveStreamPanel({
         voice_id: voiceId,
         language: language || 'zh',
         cycle_duration_sec: 30,
-      });
+      };
+      if (selectedPersonaId) {
+        startParams.persona_id = selectedPersonaId;
+        const selectedPersona = personas.find(p => p.id === selectedPersonaId);
+        if (selectedPersona) {
+          startParams.persona = {
+            speaking_style: selectedPersona.speaking_style || '',
+            catchphrases: selectedPersona.catchphrases || '',
+            personality: selectedPersona.personality || '',
+            expertise: selectedPersona.expertise || '',
+          };
+        }
+      }
+      const res = await aiLiveCreatorService.startAutoPilot(sessionId, startParams);
       if (res.success) {
         onAutoPilotToggle?.(true);
         setAutoPilotLog((prev) => [
@@ -1264,6 +1298,47 @@ const LiveStreamPanel = forwardRef(function LiveStreamPanel({
                     {portraitUrl ? <CheckCircle className="w-3 h-3" /> : <AlertCircle className="w-3 h-3" />}
                     {portraitUrl ? 'Portrait video ready' : 'Upload a portrait video'}
                   </div>
+                </div>
+              )}
+
+              {/* Persona (Liver Clone) Selection */}
+              {!autoPilotActive && (
+                <div className="mt-3 p-3 bg-gradient-to-r from-purple-50 to-pink-50 rounded-lg border border-purple-200">
+                  <label className="text-xs font-semibold text-purple-800 flex items-center gap-1.5 mb-2">
+                    <Brain className="w-3.5 h-3.5" />
+                    Liver Clone (Persona)
+                  </label>
+                  <select
+                    value={selectedPersonaId}
+                    onChange={(e) => setSelectedPersonaId(e.target.value)}
+                    className="w-full text-xs border border-purple-300 rounded-lg px-3 py-2 bg-white focus:ring-2 focus:ring-purple-400 focus:border-purple-400"
+                  >
+                    <option value="">Default AI (No Clone)</option>
+                    {personas.filter(p => p.status === 'ready').map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} {p.finetune_model_id ? '\u2713 Trained' : '(Not trained)'}
+                      </option>
+                    ))}
+                  </select>
+                  {personas.length === 0 && !loadingPersonas && (
+                    <p className="text-[10px] text-gray-500 mt-1">
+                      No personas yet. <a href="/persona" className="text-purple-600 underline">Create one</a>
+                    </p>
+                  )}
+                  {selectedPersonaId && (() => {
+                    const sp = personas.find(p => p.id === selectedPersonaId);
+                    return sp ? (
+                      <div className="mt-2 text-[10px] text-gray-600 space-y-0.5">
+                        {sp.speaking_style && <p><span className="font-medium">Style:</span> {sp.speaking_style}</p>}
+                        {sp.catchphrases && <p><span className="font-medium">Catchphrases:</span> {sp.catchphrases}</p>}
+                        {sp.finetune_model_id ? (
+                          <p className="text-green-600 font-medium">\u2713 Fine-tuned model active</p>
+                        ) : (
+                          <p className="text-amber-600">\u26a0 Persona style only (not fine-tuned yet)</p>
+                        )}
+                      </div>
+                    ) : null;
+                  })()}
                 </div>
               )}
             </div>

@@ -22,6 +22,7 @@ from app.api.v1.endpoints.dev_safety import router as dev_safety_router
 from app.api.v1.endpoints.digital_human import router as digital_human_router
 from app.api.v1.endpoints.face_swap_video import router as face_swap_video_router
 from app.api.v1.endpoints.auto_video import router as auto_video_router
+from app.api.v1.endpoints.persona import router as persona_router
 
 routers = APIRouter()
 routers.include_router(auth_router, prefix="/auth", tags=["Auth"])
@@ -46,3 +47,4 @@ routers.include_router(dev_safety_router)
 routers.include_router(digital_human_router)
 routers.include_router(face_swap_video_router)
 routers.include_router(auto_video_router)
+routers.include_router(persona_router)
