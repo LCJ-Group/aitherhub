@@ -149,34 +149,48 @@ async def get_persona(
     """Get persona details including tagged videos."""
     _check_admin(x_admin_key)
 
-    # Persona info
-    p_sql = text("SELECT * FROM personas WHERE id = :pid AND deleted_at IS NULL")
-    p_result = await db.execute(p_sql, {"pid": persona_id})
-    persona = p_result.fetchone()
-    if not persona:
-        raise HTTPException(status_code=404, detail="Persona not found")
+    try:
+        # Persona info
+        p_sql = text("SELECT * FROM personas WHERE id = :pid AND deleted_at IS NULL")
+        p_result = await db.execute(p_sql, {"pid": persona_id})
+        persona = p_result.fetchone()
+        if not persona:
+            raise HTTPException(status_code=404, detail="Persona not found")
 
-    # Tagged videos
-    v_sql = text("""
-        SELECT pvt.video_id, v.original_filename, v.status, v.created_at,
-               pvt.included_in_training
-        FROM persona_video_tags pvt
-        JOIN videos v ON CAST(v.id AS text) = pvt.video_id
-        WHERE pvt.persona_id = :pid
-        ORDER BY v.created_at DESC
-    """)
-    v_result = await db.execute(v_sql, {"pid": persona_id})
-    tagged_videos = v_result.fetchall()
+        # Tagged videos
+        try:
+            v_sql = text("""
+                SELECT pvt.video_id, v.original_filename, v.status, v.created_at,
+                       pvt.included_in_training
+                FROM persona_video_tags pvt
+                JOIN videos v ON CAST(v.id AS text) = pvt.video_id
+                WHERE pvt.persona_id = :pid
+                ORDER BY v.created_at DESC
+            """)
+            v_result = await db.execute(v_sql, {"pid": persona_id})
+            tagged_videos = v_result.fetchall()
+        except Exception as e:
+            logger.exception(f"Error fetching tagged videos: {e}")
+            tagged_videos = []
 
-    # Training logs
-    t_sql = text("""
-        SELECT * FROM persona_training_logs
-        WHERE persona_id = :pid
-        ORDER BY created_at DESC
-        LIMIT 10
-    """)
-    t_result = await db.execute(t_sql, {"pid": persona_id})
-    training_logs = t_result.fetchall()
+        # Training logs
+        try:
+            t_sql = text("""
+                SELECT * FROM persona_training_logs
+                WHERE persona_id = :pid
+                ORDER BY created_at DESC
+                LIMIT 10
+            """)
+            t_result = await db.execute(t_sql, {"pid": persona_id})
+            training_logs = t_result.fetchall()
+        except Exception as e:
+            logger.exception(f"Error fetching training logs: {e}")
+            training_logs = []
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error in get_persona: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
 
     return {
         "persona": {
@@ -347,7 +361,11 @@ async def dataset_preview(
     """Preview the training dataset that would be generated."""
     _check_admin(x_admin_key)
 
-    dataset = await finetune_service.build_training_dataset(db, persona_id)
+    try:
+        dataset = await finetune_service.build_training_dataset(db, persona_id)
+    except Exception as e:
+        logger.exception(f"dataset-preview error: {e}")
+        raise HTTPException(status_code=500, detail=f"Dataset build error: {str(e)}")
 
     return {
         "video_count": dataset["video_count"],
@@ -580,9 +598,19 @@ async def get_available_videos(
     x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
     db: AsyncSession = Depends(get_db),
 ):
-    """List videos available for tagging (DONE status, with speech segments)."""
+    """List videos available for tagging (DONE status, with training data)."""
     _check_admin(x_admin_key)
 
+    try:
+        return await _get_available_videos_impl(persona_id, search, limit, offset, db)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"available-videos error: {e}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+async def _get_available_videos_impl(persona_id, search, limit, offset, db):
     where_clause = "v.status = 'DONE'"
     params = {"pid": persona_id, "limit": limit, "offset": offset}
 
