@@ -90,6 +90,15 @@ export default function LiveStreamPanel({
   // ── Session ──
   const [isCreatingSession, setIsCreatingSession] = useState(false);
 
+  // ── Toast Notification ──
+  const [toast, setToast] = useState(null); // { type: 'success'|'error'|'info', message: string }
+  const toastTimeoutRef = useRef(null);
+  const showToast = (type, message) => {
+    setToast({ type, message });
+    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+    toastTimeoutRef.current = setTimeout(() => setToast(null), 4000);
+  };
+
   // ── Notify parent of state changes ──
   useEffect(() => { onProductsUpdate?.(products); }, [products]);
   useEffect(() => { onCommentHistoryUpdate?.(commentHistory); }, [commentHistory]);
@@ -121,9 +130,14 @@ export default function LiveStreamPanel({
   // ══════════════════════════════════════════════
 
   const handleCreateSession = async () => {
-    if (!portraitUrl) return;
+    if (!portraitUrl) {
+      showToast('error', 'Portrait is required to start a session');
+      return;
+    }
     setIsCreatingSession(true);
+    showToast('info', 'Creating session...');
     try {
+      console.log('[LiveStreamPanel] Creating session...', { portraitUrl, engine, voiceId, language, products: products.length });
       const res = await aiLiveCreatorService.createLiveSession({
         portrait_url: portraitUrl,
         engine: engine || "imtalker",
@@ -136,11 +150,16 @@ export default function LiveStreamPanel({
           features: p.features ? p.features.split(",").map((f) => f.trim()) : [],
         })),
       });
+      console.log('[LiveStreamPanel] Create session result:', res);
       if (res.success) {
         setSessionId(res.session_id);
+        showToast('success', `Session started: ${res.session_id}`);
+      } else {
+        showToast('error', res.error || 'Failed to create session');
       }
     } catch (err) {
       console.error("Create session error:", err);
+      showToast('error', `Session error: ${err.message}`);
     } finally {
       setIsCreatingSession(false);
     }
@@ -169,7 +188,9 @@ export default function LiveStreamPanel({
     if (!tiktokUrl.trim()) return;
     setIsImportingTiktok(true);
     setImportError("");
+    showToast('info', 'Importing TikTok product...');
     try {
+      console.log('[LiveStreamPanel] Importing TikTok product:', tiktokUrl);
       const res = await aiLiveCreatorService.importTikTokProduct({
         product_url: tiktokUrl.trim(),
         language: language || "ja",
@@ -212,7 +233,9 @@ export default function LiveStreamPanel({
 
   const handleGenerateScript = async (product) => {
     setGeneratingScript(product.name);
+    showToast('info', `Generating ${scriptType} script for "${product.name}"...`);
     try {
+      console.log('[LiveStreamPanel] Generating script:', { sessionId, productName: product.name, scriptType, scriptTone });
       const res = await aiLiveCreatorService.generateProductScript({
         session_id: sessionId,
         product_name: product.name,
@@ -223,6 +246,7 @@ export default function LiveStreamPanel({
         language: language || "ja",
         script_type: scriptType,
       });
+      console.log('[LiveStreamPanel] Script generation result:', res);
       if (res.success) {
         setScripts((prev) => ({
           ...prev,
@@ -231,19 +255,29 @@ export default function LiveStreamPanel({
             [scriptType]: res.script_text,
           },
         }));
+        showToast('success', `Script generated! (${res.script_text?.length || 0} chars)`);
+      } else {
+        showToast('error', res.error || 'Failed to generate script');
       }
     } catch (err) {
       console.error("Script generation error:", err);
+      showToast('error', `Script error: ${err.response?.data?.error || err.message}`);
     } finally {
       setGeneratingScript(null);
     }
   };
 
   const handleGenerateAllScripts = async () => {
-    if (!sessionId) return;
+    if (!sessionId) {
+      showToast('error', 'No active session. Start a session first.');
+      return;
+    }
     setGeneratingScript("__all__");
+    showToast('info', 'Generating scripts for all products...');
     try {
+      console.log('[LiveStreamPanel] Generating all scripts for session:', sessionId);
       const res = await aiLiveCreatorService.generateAllSessionScripts(sessionId);
+      console.log('[LiveStreamPanel] Generate all scripts result:', res);
       if (res.success && res.scripts) {
         const newScripts = {};
         for (const s of res.scripts) {
@@ -251,9 +285,13 @@ export default function LiveStreamPanel({
           newScripts[s.product_name][s.script_type] = s.script_text;
         }
         setScripts((prev) => ({ ...prev, ...newScripts }));
+        showToast('success', `Generated ${res.scripts.length} script(s)!`);
+      } else {
+        showToast('error', res.error || 'Failed to generate scripts');
       }
     } catch (err) {
       console.error("Generate all scripts error:", err);
+      showToast('error', `Script error: ${err.message}`);
     } finally {
       setGeneratingScript(null);
     }
@@ -264,14 +302,24 @@ export default function LiveStreamPanel({
   // ══════════════════════════════════════════════
 
   const handleGenerateVideo = async (text, productName, queueType = "product_intro") => {
-    if (!sessionId || !text) return;
+    if (!sessionId) {
+      showToast('error', 'No active session. Start a session first.');
+      return;
+    }
+    if (!text) {
+      showToast('error', 'No script text to generate video from.');
+      return;
+    }
     setIsGeneratingVideo(true);
+    showToast('info', `Generating video for "${productName}"...`);
     try {
+      console.log('[LiveStreamPanel] Generating video:', { sessionId, text: text.substring(0, 50), productName, queueType });
       const res = await aiLiveCreatorService.generateAndQueueVideo(sessionId, {
         text,
         queue_type: queueType,
         product_name: productName,
       });
+      console.log('[LiveStreamPanel] Generate video result:', res);
       if (res.success) {
         setVideoQueue((prev) => [
           ...prev,
@@ -284,9 +332,15 @@ export default function LiveStreamPanel({
           },
         ]);
         onVideoGenerated?.(res.job_id);
+        showToast('success', `Video queued! Job: ${res.job_id}`);
+        // Auto-switch to Queue tab
+        setActiveTab('queue');
+      } else {
+        showToast('error', res.error || 'Failed to generate video');
       }
     } catch (err) {
       console.error("Generate video error:", err);
+      showToast('error', `Video error: ${err.response?.data?.error || err.message}`);
     } finally {
       setIsGeneratingVideo(false);
     }
@@ -297,8 +351,12 @@ export default function LiveStreamPanel({
   // ══════════════════════════════════════════════
 
   const handleCommentResponse = async () => {
-    if (!commentText.trim()) return;
+    if (!commentText.trim()) {
+      showToast('error', 'Please enter a comment');
+      return;
+    }
     setIsGeneratingReply(true);
+    showToast('info', 'AI is generating a reply...');
 
     const currentProduct = products.length > 0 ? {
       name: products[0].name,
@@ -307,6 +365,7 @@ export default function LiveStreamPanel({
     } : null;
 
     try {
+      console.log('[LiveStreamPanel] Generating comment response:', { commentText, commenterName, sessionId });
       const res = await aiLiveCreatorService.generateCommentResponse({
         session_id: sessionId,
         comment_text: commentText,
@@ -318,6 +377,7 @@ export default function LiveStreamPanel({
         engine: engine || "musetalk", // Use fast engine for comments
         voice_id: voiceId,
       });
+      console.log('[LiveStreamPanel] Comment response result:', res);
       if (res.success) {
         setCommentHistory((prev) => [
           {
@@ -331,9 +391,13 @@ export default function LiveStreamPanel({
         ]);
         setCommentText("");
         setCommenterName("");
+        showToast('success', `AI replied: "${(res.reply_text || '').substring(0, 50)}..."`);
+      } else {
+        showToast('error', res.error || 'Failed to generate reply');
       }
     } catch (err) {
       console.error("Comment response error:", err);
+      showToast('error', `Reply error: ${err.response?.data?.error || err.message}`);
     } finally {
       setIsGeneratingReply(false);
     }
@@ -375,7 +439,28 @@ export default function LiveStreamPanel({
   // ══════════════════════════════════════════════
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden relative">
+      {/* Toast Notification */}
+      {toast && (
+        <div
+          className={`absolute top-2 left-2 right-2 z-50 px-3 py-2 rounded-lg text-xs font-medium shadow-lg flex items-center gap-2 animate-fade-in ${
+            toast.type === 'success'
+              ? 'bg-green-500 text-white'
+              : toast.type === 'error'
+              ? 'bg-red-500 text-white'
+              : 'bg-blue-500 text-white'
+          }`}
+        >
+          {toast.type === 'success' && <CheckCircle className="w-3.5 h-3.5 flex-shrink-0" />}
+          {toast.type === 'error' && <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />}
+          {toast.type === 'info' && <Loader2 className="w-3.5 h-3.5 flex-shrink-0 animate-spin" />}
+          <span className="truncate">{toast.message}</span>
+          <button onClick={() => setToast(null)} className="ml-auto flex-shrink-0 hover:opacity-80">
+            <X className="w-3 h-3" />
+          </button>
+        </div>
+      )}
+
       {/* Panel Header */}
       <div className="bg-gradient-to-r from-indigo-600 to-purple-600 px-4 py-3">
         <div className="flex items-center justify-between">
