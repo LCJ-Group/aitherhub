@@ -54,6 +54,9 @@ export default function LiveStreamPanel({
   voiceId,
   language,
   onVideoGenerated,
+  onQueueUpdate,
+  onCommentHistoryUpdate,
+  onProductsUpdate,
 }) {
   // ── Tab State ──
   const [activeTab, setActiveTab] = useState("products"); // products | comments | queue
@@ -87,6 +90,11 @@ export default function LiveStreamPanel({
   // ── Session ──
   const [isCreatingSession, setIsCreatingSession] = useState(false);
 
+  // ── Notify parent of state changes ──
+  useEffect(() => { onProductsUpdate?.(products); }, [products]);
+  useEffect(() => { onCommentHistoryUpdate?.(commentHistory); }, [commentHistory]);
+  useEffect(() => { onQueueUpdate?.(videoQueue); }, [videoQueue]);
+
   // ── Poll queue status ──
   useEffect(() => {
     if (!sessionId) return;
@@ -95,6 +103,7 @@ export default function LiveStreamPanel({
         const res = await aiLiveCreatorService.getSessionQueue(sessionId);
         if (res.success && res.queue) {
           setVideoQueue(res.queue);
+          onQueueUpdate?.(res.queue);
         }
       } catch (err) {
         console.error("Queue poll error:", err);
