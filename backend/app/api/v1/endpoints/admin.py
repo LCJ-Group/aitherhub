@@ -3401,60 +3401,45 @@ async def debug_excel_urls(
     if x_admin_key != expected_key:
         raise HTTPException(status_code=403, detail="Forbidden")
     try:
-        import httpx
         from app.services.storage_service import generate_read_sas_from_url
 
         row = (await db.execute(
-            text("SELECT excel_product_blob_url, excel_trend_blob_url FROM videos WHERE id = :vid"),
+            text("SELECT excel_product_blob_url, excel_trend_blob_url, status FROM videos WHERE id = :vid"),
             {"vid": video_id},
         )).fetchone()
 
         if not row:
             raise HTTPException(status_code=404, detail="Video not found")
 
-        results = {}
-        for label, url in [("product", row[0]), ("trend", row[1])]:
-            if not url:
-                results[label] = {"status": "no_url"}
-                continue
+        product_url = row[0]
+        trend_url = row[1]
+        status = row[2]
 
-            info = {
-                "raw_url_len": len(url),
-                "raw_url_prefix": url[:120],
-                "has_sas": "sig=" in url,
-            }
+        results = {
+            "video_id": video_id,
+            "status": status,
+            "product_url_exists": product_url is not None,
+            "trend_url_exists": trend_url is not None,
+        }
 
-            # Try to generate fresh SAS
+        if product_url:
+            results["product_url_prefix"] = product_url[:150]
+            results["product_has_sas"] = "sig=" in product_url
             try:
-                fresh_url = generate_read_sas_from_url(url, expires_hours=1)
-                info["fresh_sas_generated"] = fresh_url is not None
-                if fresh_url:
-                    info["fresh_url_prefix"] = fresh_url[:120]
+                fresh = generate_read_sas_from_url(product_url, expires_hours=1)
+                results["product_fresh_sas"] = fresh is not None
+                if fresh:
+                    results["product_fresh_prefix"] = fresh[:150]
             except Exception as e:
-                info["fresh_sas_error"] = str(e)[:200]
+                results["product_sas_error"] = str(e)[:200]
 
-            # Try HEAD with raw URL
-            try:
-                async with httpx.AsyncClient(timeout=10) as client:
-                    r = await client.head(url)
-                    info["raw_status"] = r.status_code
-            except Exception as e:
-                info["raw_error"] = str(e)[:200]
+        if trend_url:
+            results["trend_url_prefix"] = trend_url[:150]
+            results["trend_has_sas"] = "sig=" in trend_url
 
-            # Try HEAD with fresh URL
-            if fresh_url:
-                try:
-                    async with httpx.AsyncClient(timeout=10) as client:
-                        r = await client.head(fresh_url)
-                        info["fresh_status"] = r.status_code
-                except Exception as e:
-                    info["fresh_error"] = str(e)[:200]
-
-            results[label] = info
-
-        return {"video_id": video_id, "results": results}
+        return results
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception(f"debug-excel-urls failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("debug-excel-urls failed: %s", e)
+        return {"error": str(e), "type": type(e).__name__}
