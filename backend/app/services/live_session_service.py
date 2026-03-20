@@ -382,6 +382,74 @@ TikTok Shopの商品タイトルと画像URLから、ライブコマース配信
 3. JSONのみ出力（説明文やマークダウンは不要）"""
 
 
+async def _resolve_tiktok_url(product_url: str) -> str:
+    """Resolve TikTok short URL to full URL by following redirects (using requests in thread)."""
+    import asyncio
+    import requests as sync_requests
+
+    def _follow_redirects(url: str) -> str:
+        try:
+            resp = sync_requests.head(
+                url,
+                allow_redirects=True,
+                timeout=15,
+                headers={"User-Agent": "Mozilla/5.0 (compatible; AitherHub/1.0)"}
+            )
+            return resp.url
+        except Exception:
+            # Fallback: try GET
+            try:
+                resp = sync_requests.get(
+                    url,
+                    allow_redirects=True,
+                    timeout=15,
+                    headers={"User-Agent": "Mozilla/5.0 (compatible; AitherHub/1.0)"},
+                    stream=True,
+                )
+                final_url = resp.url
+                resp.close()
+                return final_url
+            except Exception:
+                return url
+
+    loop = asyncio.get_event_loop()
+    resolved = await loop.run_in_executor(None, _follow_redirects, product_url)
+    return str(resolved)
+
+
+async def _analyze_product_with_gpt(
+    product_title: str,
+    product_id: str,
+    product_image: str,
+    language: str,
+) -> str:
+    """Use GPT to analyze product title and return structured JSON."""
+    import openai
+
+    lang_map = {"ja": "日本語", "zh": "中文", "en": "English"}
+    lang_name = lang_map.get(language, "日本語")
+
+    prompt = f"""以下のTikTok Shop商品のタイトルから、商品情報を{lang_name}で構造化してください。
+
+商品タイトル: {product_title}
+商品ID: {product_id}
+商品画像URL: {product_image or '(なし)'}
+
+JSONのみ出力してください。"""
+
+    client = openai.AsyncOpenAI()
+    response = await client.chat.completions.create(
+        model="gpt-4.1-nano",
+        messages=[
+            {"role": "system", "content": TIKTOK_PRODUCT_ANALYSIS_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        max_tokens=512,
+        temperature=0.3,
+    )
+    return response.choices[0].message.content.strip()
+
+
 async def import_tiktok_product(
     product_url: str,
     language: str = "ja",
@@ -394,11 +462,10 @@ async def import_tiktok_product(
       - Full URLs: https://www.tiktok.com/view/product/...
 
     Flow:
-      1. Follow redirect to get full URL with og_info
+      1. Follow redirect to get full URL with og_info (using requests, not httpx)
       2. Parse og_info for product title + image
-      3. Use GPT to analyze and structure the product data
+      3. Use GPT to analyze and structure the product data (separate function)
     """
-    import httpx
     import json as json_module
     import urllib.parse
     import re
@@ -409,21 +476,8 @@ async def import_tiktok_product(
     original_url = product_url
 
     try:
-        # ── Step 1: Resolve short URL → full URL ──
-        async with httpx.AsyncClient(follow_redirects=False, timeout=15) as client:
-            redirect_url = product_url
-
-            # Follow up to 5 redirects manually to capture the final URL
-            for _ in range(5):
-                resp = await client.head(redirect_url, follow_redirects=False)
-                if resp.status_code in (301, 302, 303, 307, 308):
-                    redirect_url = str(resp.headers.get("location", ""))
-                    if not redirect_url.startswith("http"):
-                        # Relative redirect
-                        break
-                else:
-                    break
-
+        # ── Step 1: Resolve short URL → full URL (using requests, not httpx) ──
+        redirect_url = await _resolve_tiktok_url(product_url)
         logger.info(f"TikTok URL resolved: {redirect_url[:200]}")
 
         # ── Step 2: Parse og_info from URL parameters ──
@@ -444,7 +498,6 @@ async def import_tiktok_product(
 
         # Fallback: try to extract from encode_params or other fields
         if not product_title:
-            # Try unique_id (shop name)
             shop_name = params.get("unique_id", [""])[0]
             if product_id:
                 product_title = f"TikTok Product #{product_id}"
@@ -457,31 +510,13 @@ async def import_tiktok_product(
                 "error": "商品情報を取得できませんでした。URLを確認してください。",
             }
 
-        # ── Step 3: GPT Analysis — Enrich product data ──
-        lang_map = {"ja": "日本語", "zh": "中文", "en": "English"}
-        lang_name = lang_map.get(language, "日本語")
-
-        prompt = f"""以下のTikTok Shop商品のタイトルから、商品情報を{lang_name}で構造化してください。
-
-商品タイトル: {product_title}
-商品ID: {product_id}
-商品画像URL: {product_image or '(なし)'}
-
-JSONのみ出力してください。"""
-
-        import openai
-        client = openai.AsyncOpenAI()
-        response = await client.chat.completions.create(
-            model="gpt-4.1-nano",
-            messages=[
-                {"role": "system", "content": TIKTOK_PRODUCT_ANALYSIS_PROMPT},
-                {"role": "user", "content": prompt},
-            ],
-            max_tokens=512,
-            temperature=0.3,
+        # ── Step 3: GPT Analysis (separate function to isolate openai client) ──
+        raw_text = await _analyze_product_with_gpt(
+            product_title=product_title,
+            product_id=product_id,
+            product_image=product_image,
+            language=language,
         )
-
-        raw_text = response.choices[0].message.content.strip()
 
         # Parse JSON from response (handle markdown code blocks)
         json_text = raw_text
@@ -513,7 +548,6 @@ JSONのみ出力してください。"""
 
     except json_module.JSONDecodeError as e:
         logger.error(f"TikTok product GPT response parse error: {e}")
-        # Return basic data even if GPT parsing fails
         return {
             "success": True,
             "product": {
