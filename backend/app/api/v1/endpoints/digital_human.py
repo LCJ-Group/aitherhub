@@ -1601,8 +1601,6 @@ async def imtalker_generate_from_text(
     req: IMTalkerTextGenerateRequest,
     _auth: bool = Depends(verify_admin_key),
 ):
-    import uuid
-    import struct
     job_id = req.job_id or f"tts-imt-{int(__import__('time').time())}"
 
     try:
@@ -1617,59 +1615,28 @@ async def imtalker_generate_from_text(
             "use_speaker_boost": True,
         }
 
-        tts_result = await el_service.text_to_speech(
+        # Generate PCM audio (16kHz, 16bit, mono — same as MuseTalk)
+        pcm_audio = await el_service.text_to_speech(
             text=req.text,
             voice_id=req.voice_id,
             voice_settings=voice_settings,
-            output_format="pcm_24000",
+            output_format="pcm_16000",
             language_code=req.language_code,
         )
 
-        pcm_data = tts_result.get("audio_data", b"")
-        if not pcm_data:
+        if not pcm_audio:
             raise ValueError("ElevenLabs returned empty audio data")
 
-        tts_duration_ms = (len(pcm_data) / (24000 * 2)) * 1000
-        logger.info(f"[{job_id}] TTS audio generated: {tts_duration_ms:.0f}ms, {len(pcm_data)} bytes PCM")
+        # Convert PCM to WAV using shared helper
+        wav_data = _pcm_to_wav(pcm_audio, sample_rate=16000)
+        tts_duration_ms = len(pcm_audio) / (16000 * 2) * 1000
+        logger.info(f"[{job_id}] TTS audio generated: {tts_duration_ms:.0f}ms, {len(pcm_audio)} bytes PCM")
 
-        # ── Step 2: Convert PCM to WAV and upload to Azure Blob ──
-        sample_rate = 24000
-        num_channels = 1
-        bits_per_sample = 16
-        byte_rate = sample_rate * num_channels * (bits_per_sample // 8)
-        block_align = num_channels * (bits_per_sample // 8)
+        # ── Step 2: Upload WAV to Azure Blob ──
+        logger.info(f"[{job_id}] Step 2: Uploading TTS audio to Azure Blob...")
+        audio_url = await _upload_audio_to_blob(wav_data, job_id)
 
-        wav_header = struct.pack(
-            '<4sI4s4sIHHIIHH4sI',
-            b'RIFF',
-            36 + len(pcm_data),
-            b'WAVE',
-            b'fmt ',
-            16,
-            1,
-            num_channels,
-            sample_rate,
-            byte_rate,
-            block_align,
-            bits_per_sample,
-            b'data',
-            len(pcm_data),
-        )
-        wav_data = wav_header + pcm_data
-
-        from app.services.storage_service import StorageService
-        storage = StorageService()
-
-        blob_name = f"ai-live-creator@aitherhub.com/ai-live-creator-tts-{job_id}.wav"
-        audio_url = await storage.upload_blob(
-            container_name="videos",
-            blob_name=blob_name,
-            data=wav_data,
-            content_type="audio/wav",
-        )
-        logger.info(f"[{job_id}] TTS audio uploaded: {audio_url}")
-
-        # ── Step 3: Start IMTalker generation ──
+        # ── Step 2.5: Add SAS tokens for GPU Worker access ──
         audio_url = _ensure_sas_url(audio_url)
         portrait_url = _ensure_sas_url(req.portrait_url)
 
