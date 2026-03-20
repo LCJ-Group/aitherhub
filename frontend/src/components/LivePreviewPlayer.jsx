@@ -14,9 +14,6 @@ import {
   ShoppingBag,
   MessageSquare,
   Loader2,
-  Wifi,
-  WifiOff,
-  ChevronRight,
   Sparkles,
   Crown,
 } from "lucide-react";
@@ -27,7 +24,7 @@ import aiLiveCreatorService from "../base/services/aiLiveCreatorService";
  *
  * Features:
  *   - 9:16 vertical video playback (TikTok Live format)
- *   - Auto-play video queue in sequence
+ *   - Auto-play video queue in sequence (uses blob URLs to bypass auth headers)
  *   - TikTok-style comment overlay
  *   - Product info overlay
  *   - Live status indicators (viewer count, likes, etc.)
@@ -64,16 +61,20 @@ export default function LivePreviewPlayer({
   const [visibleComments, setVisibleComments] = useState([]);
   const [floatingHearts, setFloatingHearts] = useState([]);
 
+  // ── Track which job_ids we've already played / loaded ──
+  const [loadedJobIds, setLoadedJobIds] = useState(new Set());
+
   // ── Refs ──
   const videoRef = useRef(null);
   const containerRef = useRef(null);
   const heartIdRef = useRef(0);
+  const blobUrlRef = useRef(null); // Track current blob URL for cleanup
 
   // ── Completed videos from queue ──
   const completedVideos = videoQueue.filter((v) => v.status === "completed");
 
   // ══════════════════════════════════════════════
-  // Auto-play next video from queue
+  // Play video using blob URL (bypasses auth header requirement)
   // ══════════════════════════════════════════════
 
   const playVideo = useCallback(
@@ -84,16 +85,31 @@ export default function LivePreviewPlayer({
       setCurrentVideoIndex(index);
 
       try {
+        // Clean up previous blob URL
+        if (blobUrlRef.current) {
+          URL.revokeObjectURL(blobUrlRef.current);
+          blobUrlRef.current = null;
+        }
+
+        // Download video as blob (this uses axios with auth headers)
         const enginePrefix = engine === "imtalker" ? "imtalker" : "musetalk";
-        const url = aiLiveCreatorService.getDownloadUrl(
+        const blob = await aiLiveCreatorService.downloadVideo(
           queueItem.job_id,
           enginePrefix
         );
-        setCurrentVideoUrl(url);
+
+        // Create blob URL for video element
+        const blobUrl = URL.createObjectURL(blob);
+        blobUrlRef.current = blobUrl;
+
+        setCurrentVideoUrl(blobUrl);
         setIsPlaying(true);
+        setLoadedJobIds((prev) => new Set([...prev, queueItem.job_id]));
       } catch (err) {
         console.error("Failed to load video:", err);
-        setVideoError("Failed to load video");
+        setVideoError(`Failed to load video: ${err.message || "Unknown error"}`);
+        // Still mark as loaded to avoid infinite retry
+        setLoadedJobIds((prev) => new Set([...prev, queueItem.job_id]));
       } finally {
         setIsLoadingVideo(false);
       }
@@ -101,16 +117,40 @@ export default function LivePreviewPlayer({
     [engine]
   );
 
-  // Auto-play first completed video when available
+  // Cleanup blob URL on unmount
   useEffect(() => {
-    if (
-      completedVideos.length > 0 &&
-      currentVideoIndex === -1 &&
-      !currentVideoUrl
-    ) {
+    return () => {
+      if (blobUrlRef.current) {
+        URL.revokeObjectURL(blobUrlRef.current);
+      }
+    };
+  }, []);
+
+  // ── Auto-play first completed video when available ──
+  useEffect(() => {
+    if (completedVideos.length > 0 && currentVideoIndex === -1 && !currentVideoUrl && !isLoadingVideo) {
       playVideo(completedVideos[0], 0);
     }
-  }, [completedVideos.length, currentVideoIndex, currentVideoUrl, playVideo]);
+  }, [completedVideos.length, currentVideoIndex, currentVideoUrl, isLoadingVideo, playVideo]);
+
+  // ── Auto-play NEW completed videos as they arrive ──
+  useEffect(() => {
+    if (completedVideos.length === 0 || isLoadingVideo) return;
+
+    // Find the first completed video that hasn't been loaded yet
+    const newCompleted = completedVideos.find(
+      (v) => v.job_id && !loadedJobIds.has(v.job_id)
+    );
+
+    if (newCompleted) {
+      const newIndex = completedVideos.indexOf(newCompleted);
+      // If nothing is currently playing, or current video has ended, play the new one
+      if (!isPlaying && !isLoadingVideo) {
+        playVideo(newCompleted, newIndex);
+      }
+      // If something is playing, we'll pick it up when current video ends
+    }
+  }, [completedVideos, loadedJobIds, isPlaying, isLoadingVideo, playVideo]);
 
   // ── Handle video ended → play next ──
   const handleVideoEnded = useCallback(() => {
@@ -188,7 +228,7 @@ export default function LivePreviewPlayer({
     const base = 128;
     setViewerCount(base + Math.floor(Math.random() * 50));
     const interval = setInterval(() => {
-      setViewerCount((v) => v + Math.floor(Math.random() * 5) - 2);
+      setViewerCount((v) => Math.max(1, v + Math.floor(Math.random() * 5) - 2));
       setLikeCount((l) => l + Math.floor(Math.random() * 3));
     }, 3000);
     return () => clearInterval(interval);
@@ -258,11 +298,12 @@ export default function LivePreviewPlayer({
           onTimeUpdate={handleTimeUpdate}
           onPlay={() => setIsPlaying(true)}
           onPause={() => setIsPlaying(false)}
-          onError={() => {
+          onError={(e) => {
+            console.error("Video playback error:", e);
             setVideoError("Video playback error");
-            handleVideoEnded();
+            // Try next video after error
+            setTimeout(() => handleVideoEnded(), 1000);
           }}
-          crossOrigin="anonymous"
         />
       ) : (
         /* ── Idle / Waiting Screen ── */
@@ -307,6 +348,15 @@ export default function LivePreviewPlayer({
           <div className="text-center">
             <Loader2 className="w-8 h-8 text-white animate-spin mx-auto mb-2" />
             <p className="text-white text-xs">Loading video...</p>
+          </div>
+        </div>
+      )}
+
+      {/* ── Video Error Overlay ── */}
+      {videoError && !isLoadingVideo && (
+        <div className="absolute top-16 left-3 right-3 z-20">
+          <div className="bg-red-900/60 backdrop-blur-sm text-red-200 text-[10px] px-3 py-1.5 rounded-lg">
+            {videoError}
           </div>
         </div>
       )}
@@ -435,11 +485,11 @@ export default function LivePreviewPlayer({
       {floatingHearts.map((heart) => (
         <div
           key={heart.id}
-          className="absolute z-30 pointer-events-none animate-float-heart"
+          className="absolute z-30 pointer-events-none"
           style={{
             right: `${heart.x}%`,
             bottom: "35%",
-            animationDelay: `${heart.delay}s`,
+            animation: `float-heart 2s ease-out ${heart.delay}s forwards`,
           }}
         >
           <Heart
@@ -595,20 +645,13 @@ export default function LivePreviewPlayer({
             opacity: 1;
           }
           50% {
-            transform: translateY(-80px) scale(1.2) translateX(${
-              Math.random() > 0.5 ? "" : "-"
-            }15px);
+            transform: translateY(-80px) scale(1.2) translateX(15px);
             opacity: 0.8;
           }
           100% {
-            transform: translateY(-160px) scale(0.6) translateX(${
-              Math.random() > 0.5 ? "" : "-"
-            }30px);
+            transform: translateY(-160px) scale(0.6) translateX(-10px);
             opacity: 0;
           }
-        }
-        .animate-float-heart {
-          animation: float-heart 2s ease-out forwards;
         }
       `}</style>
     </div>
