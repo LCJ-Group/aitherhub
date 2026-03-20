@@ -32,6 +32,69 @@ logger = logging.getLogger(__name__)
 
 
 # ══════════════════════════════════════════════
+# GPT Client — Azure OpenAI primary, OpenAI fallback
+# ══════════════════════════════════════════════
+
+async def _call_gpt(
+    messages: List[Dict[str, str]],
+    model: str = "gpt-4.1-mini",
+    max_tokens: int = 1024,
+    temperature: float = 0.7,
+) -> str:
+    """
+    Call GPT using the best available provider.
+    Priority: Azure OpenAI → OpenAI-compatible API → raise error.
+    """
+    errors = []
+
+    # --- Strategy 1: Azure OpenAI (used in production) ---
+    azure_key = os.getenv("AZURE_OPENAI_KEY", "")
+    azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
+    azure_model = os.getenv("GPT5_MODEL") or os.getenv("GPT5_DEPLOYMENT") or "gpt-4.1-mini"
+    if azure_key and azure_endpoint:
+        try:
+            import openai
+            client = openai.AsyncAzureOpenAI(
+                api_key=azure_key,
+                azure_endpoint=azure_endpoint,
+                api_version=os.getenv("GPT5_API_VERSION", "2024-12-01-preview"),
+            )
+            response = await client.chat.completions.create(
+                model=azure_model,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+            result = response.choices[0].message.content.strip()
+            logger.info(f"_call_gpt: Azure OpenAI success ({len(result)} chars, model={azure_model})")
+            return result
+        except Exception as e:
+            errors.append(f"Azure OpenAI: {e}")
+            logger.warning(f"_call_gpt Azure OpenAI failed: {e}")
+
+    # --- Strategy 2: OpenAI-compatible API (OPENAI_API_KEY + OPENAI_BASE_URL) ---
+    openai_key = os.getenv("OPENAI_API_KEY", "")
+    if openai_key:
+        try:
+            import openai
+            client = openai.AsyncOpenAI()
+            response = await client.chat.completions.create(
+                model=model,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+            result = response.choices[0].message.content.strip()
+            logger.info(f"_call_gpt: OpenAI success ({len(result)} chars, model={model})")
+            return result
+        except Exception as e:
+            errors.append(f"OpenAI: {e}")
+            logger.warning(f"_call_gpt OpenAI failed: {e}")
+
+    raise RuntimeError(f"All GPT providers failed: {'; '.join(errors)}")
+
+
+# ══════════════════════════════════════════════
 # In-Memory Session Store
 # ══════════════════════════════════════════════
 
@@ -218,18 +281,15 @@ async def generate_product_script(
 - テキストのみ出力"""
 
     try:
-        import openai
-        client = openai.AsyncOpenAI()
-        response = await client.chat.completions.create(
-            model="gpt-4.1-mini",
+        script = await _call_gpt(
             messages=[
                 {"role": "system", "content": SALES_BRAIN_SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
             ],
+            model="gpt-4.1-mini",
             max_tokens=1024,
             temperature=0.7,
         )
-        script = response.choices[0].message.content.strip()
         logger.info(f"Sales Brain script generated: {len(script)} chars for '{product_name}'")
         return script
 
@@ -295,18 +355,15 @@ async def generate_comment_response(
 テキストのみ出力してください。"""
 
     try:
-        import openai
-        client = openai.AsyncOpenAI()
-        response = await client.chat.completions.create(
-            model="gpt-4.1-nano",  # Fast model for real-time responses
+        reply = await _call_gpt(
             messages=[
                 {"role": "system", "content": COMMENT_RESPONSE_SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
             ],
+            model="gpt-4.1-nano",
             max_tokens=256,
             temperature=0.8,
         )
-        reply = response.choices[0].message.content.strip()
         logger.info(f"Comment response generated: {len(reply)} chars for '{comment_text[:50]}'")
         return reply
 
