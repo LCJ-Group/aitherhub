@@ -3384,3 +3384,67 @@ async def bulk_retry_product_detection(
     except Exception as e:
         logger.exception(f"Failed to bulk retry product detection: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+
+# ──────────────────────────────────────────────
+# TEMPORARY DEBUG: Test Excel URL download
+# ──────────────────────────────────────────────
+@router.get("/debug-excel-urls/{video_id}")
+async def debug_excel_urls(
+    video_id: str,
+    db: AsyncSession = Depends(get_db),
+    _admin=Depends(require_admin),
+):
+    """Temporary debug endpoint to test Excel URL accessibility."""
+    import requests as req_lib
+    from app.services.storage_service import generate_read_sas_from_url
+
+    try:
+        row = (await db.execute(
+            text("SELECT excel_product_blob_url, excel_trend_blob_url FROM videos WHERE id = :vid"),
+            {"vid": video_id},
+        )).fetchone()
+
+        if not row:
+            raise HTTPException(status_code=404, detail="Video not found")
+
+        results = {}
+        for label, url in [("product", row[0]), ("trend", row[1])]:
+            if not url:
+                results[label] = {"status": "no_url"}
+                continue
+
+            info = {
+                "raw_url_prefix": url[:80] if url else None,
+                "has_sas": "sig=" in (url or ""),
+            }
+
+            # Try to generate fresh SAS
+            fresh_url = generate_read_sas_from_url(url, expires_hours=1)
+            info["fresh_sas_generated"] = fresh_url is not None
+            if fresh_url:
+                info["fresh_url_prefix"] = fresh_url[:80]
+
+            # Try to download with raw URL
+            try:
+                r = req_lib.head(url, timeout=10)
+                info["raw_download_status"] = r.status_code
+            except Exception as e:
+                info["raw_download_error"] = str(e)[:100]
+
+            # Try to download with fresh URL
+            if fresh_url:
+                try:
+                    r = req_lib.head(fresh_url, timeout=10)
+                    info["fresh_download_status"] = r.status_code
+                except Exception as e:
+                    info["fresh_download_error"] = str(e)[:100]
+
+            results[label] = info
+
+        return {"video_id": video_id, "results": results}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
