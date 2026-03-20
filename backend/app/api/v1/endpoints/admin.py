@@ -3286,3 +3286,79 @@ async def admin_generate_read_sas(
         "read_url": url,
         "expires_at": expiry.isoformat(),
     }
+
+
+
+# =========================
+# BULK RETRY PRODUCT DETECTION
+# =========================
+@router.post("/bulk-retry-product-detection")
+async def bulk_retry_product_detection(
+    db: AsyncSession = Depends(get_db),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """
+    Find all DONE videos with PRODUCT_DATA_MISMATCH errors and re-enqueue them
+    from STEP_12_5_PRODUCT_DETECTION.
+    """
+    if x_admin_key != f"{ADMIN_ID}:{ADMIN_PASS}":
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    try:
+        # Find affected videos
+        sql = text("""
+            SELECT DISTINCT vel.video_id, v.original_filename, v.user_id, u.email
+            FROM video_error_logs vel
+            JOIN videos v ON v.id = vel.video_id::uuid
+            LEFT JOIN users u ON v.user_id = u.id
+            WHERE vel.error_code = 'PRODUCT_DATA_MISMATCH'
+              AND v.status = 'DONE'
+              AND NOT EXISTS (
+                  SELECT 1 FROM video_product_exposures vpe
+                  WHERE vpe.video_id = vel.video_id::uuid
+              )
+        """)
+        result = await db.execute(sql)
+        rows = result.fetchall()
+
+        if not rows:
+            return {"status": "ok", "message": "No affected videos found", "count": 0}
+
+        from app.services.storage_service import generate_download_sas
+        from app.services.queue_service import enqueue_job
+
+        enqueued = []
+        failed = []
+        for row in rows:
+            try:
+                vid = str(row.video_id)
+                download_url, expiry = await generate_download_sas(
+                    email=row.email,
+                    video_id=vid,
+                    filename=row.original_filename,
+                    expires_in_minutes=1440,
+                )
+                await db.execute(
+                    text("UPDATE videos SET status = 'STEP_12_5_PRODUCT_DETECTION', step_progress = 0 WHERE id = :vid"),
+                    {"vid": vid},
+                )
+                await db.commit()
+                await enqueue_job({
+                    "video_id": vid,
+                    "blob_url": download_url,
+                    "original_filename": row.original_filename,
+                })
+                enqueued.append({"video_id": vid, "filename": row.original_filename})
+            except Exception as e:
+                failed.append({"video_id": str(row.video_id), "error": str(e)})
+
+        return {
+            "status": "ok",
+            "enqueued": len(enqueued),
+            "failed": len(failed),
+            "videos": enqueued,
+            "errors": failed,
+        }
+    except Exception as e:
+        logger.exception(f"Failed to bulk retry product detection: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

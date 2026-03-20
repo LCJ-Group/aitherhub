@@ -1659,6 +1659,24 @@ def main():
                     product_list = excel_data.get("products", [])
                     logger.info("[PRODUCT] Using %d products from Excel", len(product_list))
 
+                # ★ FALLBACK: excel_dataが初期ロードで失敗した場合、再ロードを試みる
+                if not product_list:
+                    try:
+                        _fb_urls = get_video_excel_urls_sync(video_id)
+                        if _fb_urls and _fb_urls.get("excel_product_blob_url"):
+                            logger.info("[PRODUCT] excel_data missing, retrying Excel load (fallback)...")
+                            _fb_excel = load_excel_data(video_id, _fb_urls)
+                            if _fb_excel and _fb_excel.get("has_product_data"):
+                                product_list = _fb_excel.get("products", [])
+                                excel_data = _fb_excel  # Update for Report 3
+                                if not time_offset_seconds:
+                                    time_offset_seconds = _fb_urls.get("time_offset_seconds", 0)
+                                logger.info("[PRODUCT] Fallback loaded %d products from Excel", len(product_list))
+                            else:
+                                logger.warning("[PRODUCT] Fallback Excel load returned no products")
+                    except Exception as _fb_err:
+                        logger.warning("[PRODUCT] Fallback Excel load failed: %s", _fb_err)
+
                 if product_list:
                     # Load transcription segments from audio_text .txt files
                     transcription_segments = None
