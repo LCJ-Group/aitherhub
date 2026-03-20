@@ -249,6 +249,51 @@ class AiLiveCreatorService {
     );
     return res.data;
   }
+
+  // ══════════════════════════════════════════════════════════
+  // Real-time TTS Speak (Video Loop + Audio Overlay)
+  // ══════════════════════════════════════════════════════════
+
+  /**
+   * Generate TTS audio for real-time playback over looping video.
+   * Returns an MP3 audio URL that the frontend plays alongside the video loop.
+   */
+  async speak(sessionId, params) {
+    const res = await axios.post(
+      `${this.baseURL}/api/v1/digital-human/live-session/${sessionId}/speak`,
+      params,
+      { headers: this._headers() }
+    );
+    return res.data;
+  }
+
+  /**
+   * Start the auto-pilot livestream brain.
+   * The brain will automatically cycle through greeting → product intro →
+   * comment response → sales pitch → next product.
+   */
+  async startAutoPilot(sessionId, params = {}) {
+    const res = await axios.post(
+      `${this.baseURL}/api/v1/digital-human/live-session/${sessionId}/autopilot/start`,
+      params,
+      { headers: this._headers() }
+    );
+    return res.data;
+  }
+
+  /**
+   * Get the next speech segment from the auto-pilot brain.
+   * Call this after each audio finishes playing.
+   * Returns: { action, audio_url, text, script_type, product_name, next_state }
+   */
+  async getAutoPilotNext(sessionId, params) {
+    const res = await axios.post(
+      `${this.baseURL}/api/v1/digital-human/live-session/${sessionId}/autopilot/next`,
+      params,
+      { headers: this._headers() }
+    );
+    return res.data;
+  }
 }
 
 const aiLiveCreatorService = new AiLiveCreatorService();

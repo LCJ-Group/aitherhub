@@ -903,3 +903,93 @@ class TikTokProductImportResponse(BaseModel):
         None, description="Whether the product was added to the live session"
     )
     error: Optional[str] = None
+
+
+# ══════════════════════════════════════════════
+# Real-time TTS Speak (Video Loop + Audio Overlay)
+# ══════════════════════════════════════════════
+
+
+class TTSSpeakRequest(BaseModel):
+    """Generate TTS audio for real-time playback over looping portrait video."""
+    text: str = Field(
+        ..., min_length=1, max_length=5000,
+        description="Text to convert to speech"
+    )
+    voice_id: Optional[str] = Field(
+        None, description="ElevenLabs voice ID. Uses session default if not set."
+    )
+    language: str = Field("zh", description="Language code: zh / ja / en")
+    speak_type: str = Field(
+        "script",
+        description="Type: script / comment_reply / greeting / closing"
+    )
+    product_name: Optional[str] = Field(None, description="Associated product name")
+
+
+class TTSSpeakResponse(BaseModel):
+    success: bool
+    audio_url: Optional[str] = Field(
+        None, description="URL to download the generated MP3 audio"
+    )
+    audio_duration_ms: Optional[float] = Field(
+        None, description="Audio duration in milliseconds"
+    )
+    text: Optional[str] = Field(None, description="The text that was spoken")
+    speak_type: Optional[str] = None
+    error: Optional[str] = None
+
+
+class AutoPilotStartRequest(BaseModel):
+    """Start the auto-pilot livestream brain."""
+    products: Optional[List[dict]] = Field(
+        None,
+        description="Override product list. If not set, uses session products."
+    )
+    language: str = Field("zh", description="Language for scripts: zh / ja / en")
+    voice_id: Optional[str] = Field(None, description="ElevenLabs voice ID")
+    cycle_duration_sec: int = Field(
+        30,
+        description="Approximate duration per script segment in seconds"
+    )
+
+
+class AutoPilotStartResponse(BaseModel):
+    success: bool
+    status: Optional[str] = None
+    error: Optional[str] = None
+
+
+class AutoPilotNextRequest(BaseModel):
+    """Request the next speech segment from the auto-pilot brain."""
+    current_state: str = Field(
+        "idle",
+        description="Current state: idle / greeting_done / product_intro / comment_break / promotion / closing"
+    )
+    current_product_index: int = Field(0, description="Index of current product")
+    current_script_type: str = Field(
+        "introduction",
+        description="Last script type: introduction / highlight / promotion / closing"
+    )
+    pending_comments: Optional[List[dict]] = Field(
+        None, description="Unresponded viewer comments"
+    )
+    language: str = Field("zh", description="Language for scripts")
+    voice_id: Optional[str] = Field(None, description="ElevenLabs voice ID")
+
+
+class AutoPilotNextResponse(BaseModel):
+    success: bool
+    action: Optional[str] = Field(
+        None,
+        description="Next action: speak_script / reply_comment / switch_product / end_cycle"
+    )
+    audio_url: Optional[str] = Field(None, description="Generated MP3 audio URL")
+    audio_duration_ms: Optional[float] = None
+    text: Optional[str] = Field(None, description="The generated script text")
+    script_type: Optional[str] = None
+    product_name: Optional[str] = None
+    product_index: Optional[int] = None
+    next_state: Optional[str] = None
+    error: Optional[str] = None
+

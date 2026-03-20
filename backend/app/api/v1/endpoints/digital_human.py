@@ -2295,3 +2295,385 @@ async def tiktok_product_import(
             success=False,
             error=f"Internal error: {str(e)}",
         )
+
+
+
+# ══════════════════════════════════════════════
+# Real-time TTS Speak (Video Loop + Audio Overlay)
+# ══════════════════════════════════════════════
+from app.schemas.digital_human_schema import (
+    TTSSpeakRequest,
+    TTSSpeakResponse,
+    AutoPilotStartRequest,
+    AutoPilotStartResponse,
+    AutoPilotNextRequest,
+    AutoPilotNextResponse,
+)
+
+
+async def _upload_mp3_to_blob(mp3_data: bytes, audio_id: str) -> str:
+    """Upload MP3 audio bytes to Azure Blob Storage and return the public URL."""
+    from app.services.storage_service import generate_upload_sas
+    import httpx as _httpx
+
+    vid, upload_url, blob_url, expiry = await generate_upload_sas(
+        email="ai-live-creator@aitherhub.com",
+        video_id=f"tts-mp3-{audio_id}",
+        filename=f"speak_{audio_id}.mp3",
+    )
+
+    async with _httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.put(
+            upload_url,
+            content=mp3_data,
+            headers={
+                "x-ms-blob-type": "BlockBlob",
+                "Content-Type": "audio/mpeg",
+            },
+        )
+        if resp.status_code not in (200, 201):
+            raise RuntimeError(
+                f"Failed to upload MP3 audio to blob: HTTP {resp.status_code}"
+            )
+
+    logger.info(f"TTS MP3 uploaded to blob: {blob_url} ({len(mp3_data)} bytes)")
+    return blob_url
+
+
+# ──────────────────────────────────────────────
+# 37. TTS Speak — Generate audio for real-time playback
+# ──────────────────────────────────────────────
+@router.post(
+    "/live-session/{session_id}/speak",
+    response_model=TTSSpeakResponse,
+    summary="Generate TTS audio for real-time playback over looping video",
+    description=(
+        "Generate speech audio (MP3) from text using ElevenLabs TTS. "
+        "The audio is uploaded to Azure Blob and a SAS URL is returned. "
+        "The frontend plays this audio over the continuously looping portrait video. "
+        "No GPU video generation needed — instant response."
+    ),
+)
+async def tts_speak(
+    session_id: str,
+    req: TTSSpeakRequest,
+    _auth: bool = Depends(verify_admin_key),
+):
+    session = get_session(session_id)
+    if not session:
+        return TTSSpeakResponse(
+            success=False, error=f"Session {session_id} not found"
+        )
+
+    try:
+        el_service = get_elevenlabs_service()
+        voice_id = req.voice_id or session.get("voice_id")
+        language = req.language or session.get("language", "zh")
+
+        # Generate MP3 audio (browser-compatible format)
+        mp3_audio = await el_service.text_to_speech(
+            text=req.text,
+            voice_id=voice_id,
+            output_format="mp3_44100_128",
+            language_code=language,
+        )
+
+        # Calculate duration from MP3 size (approximate: 128kbps = 16KB/s)
+        duration_ms = len(mp3_audio) / 16.0  # 128kbps / 8 = 16 bytes/ms
+
+        # Upload to Azure Blob
+        audio_id = f"speak-{int(time.time())}-{session_id[:8]}"
+        blob_url = await _upload_mp3_to_blob(mp3_audio, audio_id)
+        audio_url = _ensure_sas_url(blob_url)
+
+        # Track in session
+        speak_item = {
+            "audio_id": audio_id,
+            "type": req.speak_type,
+            "text": req.text[:200],
+            "product_name": req.product_name,
+            "audio_url": audio_url,
+            "duration_ms": duration_ms,
+            "timestamp": time.time(),
+        }
+        if "speak_history" not in session:
+            session["speak_history"] = []
+        session["speak_history"].append(speak_item)
+
+        return TTSSpeakResponse(
+            success=True,
+            audio_url=audio_url,
+            audio_duration_ms=round(duration_ms, 1),
+            text=req.text,
+            speak_type=req.speak_type,
+        )
+
+    except ElevenLabsError as e:
+        return TTSSpeakResponse(
+            success=False, error=f"TTS error: {str(e)}"
+        )
+    except Exception as e:
+        logger.exception(f"Error in TTS speak: {e}")
+        return TTSSpeakResponse(
+            success=False, error=f"Internal error: {str(e)}"
+        )
+
+
+# ──────────────────────────────────────────────
+# 38. AutoPilot Start — Initialize the livestream brain
+# ──────────────────────────────────────────────
+@router.post(
+    "/live-session/{session_id}/autopilot/start",
+    response_model=AutoPilotStartResponse,
+    summary="Start the auto-pilot livestream brain",
+    description=(
+        "Initialize the auto-pilot state machine for a live session. "
+        "The brain will automatically cycle through greeting → product intro → "
+        "comment response → sales pitch → next product."
+    ),
+)
+async def autopilot_start(
+    session_id: str,
+    req: AutoPilotStartRequest,
+    _auth: bool = Depends(verify_admin_key),
+):
+    session = get_session(session_id)
+    if not session:
+        return AutoPilotStartResponse(
+            success=False, error=f"Session {session_id} not found"
+        )
+
+    try:
+        # Update session with autopilot config
+        if req.products:
+            session["products"] = req.products
+        if req.voice_id:
+            session["voice_id"] = req.voice_id
+        session["language"] = req.language
+        session["autopilot"] = {
+            "active": True,
+            "state": "idle",
+            "product_index": 0,
+            "script_type": "introduction",
+            "cycle_duration_sec": req.cycle_duration_sec,
+            "started_at": time.time(),
+            "total_speaks": 0,
+        }
+
+        return AutoPilotStartResponse(
+            success=True,
+            status="autopilot_started",
+        )
+
+    except Exception as e:
+        logger.exception(f"Error starting autopilot: {e}")
+        return AutoPilotStartResponse(
+            success=False, error=f"Internal error: {str(e)}"
+        )
+
+
+# ──────────────────────────────────────────────
+# 39. AutoPilot Next — Get next speech segment
+# ──────────────────────────────────────────────
+@router.post(
+    "/live-session/{session_id}/autopilot/next",
+    response_model=AutoPilotNextResponse,
+    summary="Get the next speech segment from the auto-pilot brain",
+    description=(
+        "The frontend calls this after each audio finishes playing. "
+        "The brain decides what to say next based on state, products, "
+        "and pending comments. Returns generated script text + TTS audio URL."
+    ),
+)
+async def autopilot_next(
+    session_id: str,
+    req: AutoPilotNextRequest,
+    _auth: bool = Depends(verify_admin_key),
+):
+    session = get_session(session_id)
+    if not session:
+        return AutoPilotNextResponse(
+            success=False, error=f"Session {session_id} not found"
+        )
+
+    products = session.get("products", [])
+    autopilot = session.get("autopilot", {})
+
+    try:
+        # Priority 1: Respond to pending comments
+        if req.pending_comments and len(req.pending_comments) > 0:
+            comment = req.pending_comments[0]
+            comment_text = comment.get("text", comment.get("comment", ""))
+            commenter = comment.get("name", comment.get("commenter_name", "观众"))
+
+            # Get current product for context
+            current_product = None
+            if products and req.current_product_index < len(products):
+                current_product = products[req.current_product_index]
+
+            from app.services.live_session_service import generate_comment_response
+            reply_result = await generate_comment_response(
+                comment_text=comment_text,
+                commenter_name=commenter,
+                current_product=current_product,
+                language=req.language,
+            )
+            reply_text = reply_result.get("reply_text", f"谢谢{commenter}的留言！")
+
+            # Generate TTS
+            el_service = get_elevenlabs_service()
+            voice_id = req.voice_id or session.get("voice_id")
+            mp3_audio = await el_service.text_to_speech(
+                text=reply_text,
+                voice_id=voice_id,
+                output_format="mp3_44100_128",
+                language_code=req.language,
+            )
+            duration_ms = len(mp3_audio) / 16.0
+            audio_id = f"reply-{int(time.time())}"
+            blob_url = await _upload_mp3_to_blob(mp3_audio, audio_id)
+            audio_url = _ensure_sas_url(blob_url)
+
+            autopilot["total_speaks"] = autopilot.get("total_speaks", 0) + 1
+
+            return AutoPilotNextResponse(
+                success=True,
+                action="reply_comment",
+                audio_url=audio_url,
+                audio_duration_ms=round(duration_ms, 1),
+                text=reply_text,
+                script_type="comment_reply",
+                product_name=current_product.get("name") if current_product else None,
+                product_index=req.current_product_index,
+                next_state=req.current_state,
+            )
+
+        # Priority 2: Product scripts cycle
+        if not products:
+            # No products — generate a generic greeting/filler
+            filler_text = _generate_filler_script(req.language)
+            el_service = get_elevenlabs_service()
+            voice_id = req.voice_id or session.get("voice_id")
+            mp3_audio = await el_service.text_to_speech(
+                text=filler_text,
+                voice_id=voice_id,
+                output_format="mp3_44100_128",
+                language_code=req.language,
+            )
+            duration_ms = len(mp3_audio) / 16.0
+            audio_id = f"filler-{int(time.time())}"
+            blob_url = await _upload_mp3_to_blob(mp3_audio, audio_id)
+            audio_url = _ensure_sas_url(blob_url)
+
+            return AutoPilotNextResponse(
+                success=True,
+                action="speak_script",
+                audio_url=audio_url,
+                audio_duration_ms=round(duration_ms, 1),
+                text=filler_text,
+                script_type="greeting",
+                next_state="idle",
+            )
+
+        # Determine next script based on state
+        product_index = req.current_product_index
+        script_type = req.current_script_type
+        next_script_type, next_product_index, next_state = _advance_script_state(
+            script_type, product_index, len(products)
+        )
+
+        product = products[next_product_index]
+        product_name = product.get("name", product.get("product_name", "商品"))
+        product_desc = product.get("description", product.get("product_description", ""))
+        product_price = product.get("price", product.get("product_price", ""))
+        product_features = product.get("features", product.get("product_features", []))
+
+        # Generate script using Sales Brain
+        from app.services.live_session_service import generate_product_script
+        script_result = await generate_product_script(
+            product_name=product_name,
+            product_description=product_desc,
+            product_price=product_price,
+            product_features=product_features,
+            tone="energetic",
+            language=req.language,
+            script_type=next_script_type,
+        )
+        script_text = script_result.get("script_text", f"这款{product_name}真的很不错！")
+
+        # Generate TTS
+        el_service = get_elevenlabs_service()
+        voice_id = req.voice_id or session.get("voice_id")
+        mp3_audio = await el_service.text_to_speech(
+            text=script_text,
+            voice_id=voice_id,
+            output_format="mp3_44100_128",
+            language_code=req.language,
+        )
+        duration_ms = len(mp3_audio) / 16.0
+        audio_id = f"script-{int(time.time())}"
+        blob_url = await _upload_mp3_to_blob(mp3_audio, audio_id)
+        audio_url = _ensure_sas_url(blob_url)
+
+        # Update autopilot state
+        autopilot["state"] = next_state
+        autopilot["product_index"] = next_product_index
+        autopilot["script_type"] = next_script_type
+        autopilot["total_speaks"] = autopilot.get("total_speaks", 0) + 1
+
+        action = "switch_product" if next_product_index != product_index else "speak_script"
+
+        return AutoPilotNextResponse(
+            success=True,
+            action=action,
+            audio_url=audio_url,
+            audio_duration_ms=round(duration_ms, 1),
+            text=script_text,
+            script_type=next_script_type,
+            product_name=product_name,
+            product_index=next_product_index,
+            next_state=next_state,
+        )
+
+    except ElevenLabsError as e:
+        return AutoPilotNextResponse(
+            success=False, error=f"TTS error: {str(e)}"
+        )
+    except Exception as e:
+        logger.exception(f"Error in autopilot next: {e}")
+        return AutoPilotNextResponse(
+            success=False, error=f"Internal error: {str(e)}"
+        )
+
+
+def _advance_script_state(
+    current_type: str, current_index: int, total_products: int
+) -> tuple:
+    """
+    State machine for script cycling:
+    introduction → highlight → promotion → closing → (next product) introduction → ...
+    Returns: (next_script_type, next_product_index, next_state)
+    """
+    script_cycle = ["introduction", "highlight", "promotion", "closing"]
+    try:
+        current_pos = script_cycle.index(current_type)
+    except ValueError:
+        current_pos = -1
+
+    next_pos = current_pos + 1
+    if next_pos >= len(script_cycle):
+        # Completed cycle for this product → move to next product
+        next_index = (current_index + 1) % total_products
+        return "introduction", next_index, "product_intro"
+    else:
+        return script_cycle[next_pos], current_index, "product_intro"
+
+
+def _generate_filler_script(language: str) -> str:
+    """Generate a filler script when no products are available."""
+    fillers = {
+        "zh": "大家好！欢迎来到我们的直播间！今天给大家带来了很多好东西，大家可以在评论区留言，我会一一回复大家的问题。",
+        "ja": "皆さん、こんにちは！ライブ配信にようこそ！今日は素敵な商品をたくさんご紹介します。コメントでご質問をどうぞ！",
+        "en": "Hello everyone! Welcome to our livestream! We have some amazing products to show you today. Drop your questions in the comments!",
+    }
+    return fillers.get(language, fillers["zh"])

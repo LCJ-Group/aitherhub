@@ -16,41 +16,62 @@ import {
   Loader2,
   Sparkles,
   Crown,
+  Mic,
+  MicOff,
 } from "lucide-react";
 import aiLiveCreatorService from "../base/services/aiLiveCreatorService";
 
 /**
  * LivePreviewPlayer — TikTok Live-style 9:16 Preview Player
  *
+ * NEW Architecture (Real-time TTS):
+ *   - Portrait VIDEO loops continuously (muted) — just for visual appearance
+ *   - TTS AUDIO plays on top via separate <audio> element
+ *   - No GPU video generation needed per script
+ *   - Supports AutoPilot mode: brain auto-generates scripts + TTS
+ *
  * Features:
- *   - 9:16 vertical video playback (TikTok Live format)
- *   - Auto-play video queue in sequence (uses blob URLs to bypass auth headers)
+ *   - 9:16 vertical video loop playback
+ *   - Real-time TTS audio overlay
+ *   - AutoPilot: automatic script cycling with TTS
  *   - TikTok-style comment overlay
  *   - Product info overlay
- *   - Live status indicators (viewer count, likes, etc.)
+ *   - Live status indicators
  *   - Fullscreen toggle
  */
 export default function LivePreviewPlayer({
   sessionId,
   engine,
+  portraitVideoUrl,
   videoQueue = [],
   commentHistory = [],
   products = [],
   currentProduct,
   isLive = false,
+  autoPilotActive = false,
   onVideoEnded,
   onRequestNextVideo,
+  onAutoPilotStateChange,
+  onSpeakingChange,
 }) {
-  // ── Playback State ──
+  // ── Video Loop State ──
   const [isPlaying, setIsPlaying] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [currentVideoIndex, setCurrentVideoIndex] = useState(-1);
-  const [currentVideoUrl, setCurrentVideoUrl] = useState(null);
-  const [isLoadingVideo, setIsLoadingVideo] = useState(false);
-  const [videoError, setVideoError] = useState(null);
-  const [playbackProgress, setPlaybackProgress] = useState(0);
-  const [videoDuration, setVideoDuration] = useState(0);
+  const [videoReady, setVideoReady] = useState(false);
+
+  // ── TTS Audio State ──
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [currentSpeechText, setCurrentSpeechText] = useState("");
+  const [currentScriptType, setCurrentScriptType] = useState("");
+  const [audioLoading, setAudioLoading] = useState(false);
+  const [speechQueue, setSpeechQueue] = useState([]);
+
+  // ── AutoPilot State ──
+  const [autoPilotState, setAutoPilotState] = useState("idle");
+  const [autoPilotProductIndex, setAutoPilotProductIndex] = useState(0);
+  const [autoPilotScriptType, setAutoPilotScriptType] = useState("introduction");
+  const [totalSpeaks, setTotalSpeaks] = useState(0);
 
   // ── Simulated Live Stats ──
   const [viewerCount, setViewerCount] = useState(0);
@@ -61,133 +82,259 @@ export default function LivePreviewPlayer({
   const [visibleComments, setVisibleComments] = useState([]);
   const [floatingHearts, setFloatingHearts] = useState([]);
 
-  // ── Track which job_ids we've already played / loaded ──
-  const [loadedJobIds, setLoadedJobIds] = useState(new Set());
+  // ── Subtitle Display ──
+  const [subtitleText, setSubtitleText] = useState("");
+  const [showSubtitle, setShowSubtitle] = useState(false);
 
   // ── Refs ──
   const videoRef = useRef(null);
+  const audioRef = useRef(null);
   const containerRef = useRef(null);
   const heartIdRef = useRef(0);
-  const blobUrlRef = useRef(null); // Track current blob URL for cleanup
+  const autoPilotTimerRef = useRef(null);
+  const isSpeakingRef = useRef(false);
+  const autoPilotActiveRef = useRef(false);
 
-  // ── Completed videos from queue ──
-  const completedVideos = videoQueue.filter((v) => v.status === "completed");
+  // Keep refs in sync
+  useEffect(() => {
+    isSpeakingRef.current = isSpeaking;
+  }, [isSpeaking]);
+  useEffect(() => {
+    autoPilotActiveRef.current = autoPilotActive;
+  }, [autoPilotActive]);
 
   // ══════════════════════════════════════════════
-  // Play video using blob URL (bypasses auth header requirement)
+  // Video Loop — Portrait video plays continuously
   // ══════════════════════════════════════════════
 
-  const playVideo = useCallback(
-    async (queueItem, index) => {
-      if (!queueItem?.job_id) return;
-      setIsLoadingVideo(true);
-      setVideoError(null);
-      setCurrentVideoIndex(index);
-
-      try {
-        // Clean up previous blob URL
-        if (blobUrlRef.current) {
-          URL.revokeObjectURL(blobUrlRef.current);
-          blobUrlRef.current = null;
-        }
-
-        // Download video as blob (this uses axios with auth headers)
-        const enginePrefix = engine === "imtalker" ? "imtalker" : "musetalk";
-        const blob = await aiLiveCreatorService.downloadVideo(
-          queueItem.job_id,
-          enginePrefix
-        );
-
-        // Create blob URL for video element
-        const blobUrl = URL.createObjectURL(blob);
-        blobUrlRef.current = blobUrl;
-
-        setCurrentVideoUrl(blobUrl);
-        setIsPlaying(true);
-        setLoadedJobIds((prev) => new Set([...prev, queueItem.job_id]));
-      } catch (err) {
-        console.error("Failed to load video:", err);
-        setVideoError(`Failed to load video: ${err.message || "Unknown error"}`);
-        // Still mark as loaded to avoid infinite retry
-        setLoadedJobIds((prev) => new Set([...prev, queueItem.job_id]));
-      } finally {
-        setIsLoadingVideo(false);
-      }
-    },
-    [engine]
-  );
-
-  // Cleanup blob URL on unmount
+  // Start video loop when portrait URL is available
   useEffect(() => {
-    return () => {
-      if (blobUrlRef.current) {
-        URL.revokeObjectURL(blobUrlRef.current);
-      }
-    };
-  }, []);
-
-  // ── Auto-play first completed video when available ──
-  useEffect(() => {
-    if (completedVideos.length > 0 && currentVideoIndex === -1 && !currentVideoUrl && !isLoadingVideo) {
-      playVideo(completedVideos[0], 0);
+    if (portraitVideoUrl && videoRef.current) {
+      videoRef.current.src = portraitVideoUrl;
+      videoRef.current.load();
     }
-  }, [completedVideos.length, currentVideoIndex, currentVideoUrl, isLoadingVideo, playVideo]);
+  }, [portraitVideoUrl]);
 
-  // ── Auto-play NEW completed videos as they arrive ──
-  useEffect(() => {
-    if (completedVideos.length === 0 || isLoadingVideo) return;
-
-    // Find the first completed video that hasn't been loaded yet
-    const newCompleted = completedVideos.find(
-      (v) => v.job_id && !loadedJobIds.has(v.job_id)
-    );
-
-    if (newCompleted) {
-      const newIndex = completedVideos.indexOf(newCompleted);
-      // If nothing is currently playing, or current video has ended, play the new one
-      if (!isPlaying && !isLoadingVideo) {
-        playVideo(newCompleted, newIndex);
-      }
-      // If something is playing, we'll pick it up when current video ends
-    }
-  }, [completedVideos, loadedJobIds, isPlaying, isLoadingVideo, playVideo]);
-
-  // ── Handle video ended → play next + request new content ──
-  const handleVideoEnded = useCallback(() => {
-    onVideoEnded?.();
-
-    // Always request next video generation for infinite loop
-    onRequestNextVideo?.();
-
-    const nextIndex = currentVideoIndex + 1;
-    if (nextIndex < completedVideos.length) {
-      // Play next video in queue
-      playVideo(completedVideos[nextIndex], nextIndex);
-    } else if (completedVideos.length > 0) {
-      // Loop back to first video while waiting for new content
-      playVideo(completedVideos[0], 0);
-      // Reset loaded job IDs so we can detect new videos
-      setLoadedJobIds(new Set(completedVideos.map(v => v.job_id)));
-    }
-  }, [
-    currentVideoIndex,
-    completedVideos,
-    playVideo,
-    onVideoEnded,
-    onRequestNextVideo,
-  ]);
-
-  // ── Skip to next video ──
-  const handleSkipNext = () => {
-    const nextIndex = currentVideoIndex + 1;
-    if (nextIndex < completedVideos.length) {
-      playVideo(completedVideos[nextIndex], nextIndex);
-    } else if (completedVideos.length > 0) {
-      playVideo(completedVideos[0], 0);
+  const handleVideoCanPlay = () => {
+    setVideoReady(true);
+    if (videoRef.current && (isLive || autoPilotActive)) {
+      videoRef.current.play().catch(() => {});
+      setIsPlaying(true);
     }
   };
 
-  // ── Toggle play/pause ──
+  const handleVideoLoop = () => {
+    // Video ended — loop it
+    if (videoRef.current) {
+      videoRef.current.currentTime = 0;
+      videoRef.current.play().catch(() => {});
+    }
+  };
+
+  // ══════════════════════════════════════════════
+  // TTS Audio Playback
+  // ══════════════════════════════════════════════
+
+  /**
+   * Play TTS audio from a URL. Shows subtitle text while speaking.
+   */
+  const playTTSAudio = useCallback((audioUrl, text, scriptType) => {
+    if (!audioRef.current) return;
+
+    setAudioLoading(true);
+    setCurrentSpeechText(text || "");
+    setCurrentScriptType(scriptType || "");
+
+    audioRef.current.src = audioUrl;
+    audioRef.current.load();
+
+    audioRef.current.oncanplaythrough = () => {
+      setAudioLoading(false);
+      setIsSpeaking(true);
+      isSpeakingRef.current = true;
+      setShowSubtitle(true);
+      setSubtitleText(text || "");
+      onSpeakingChange?.(true);
+      audioRef.current.play().catch((err) => {
+        console.error("TTS audio play error:", err);
+        setIsSpeaking(false);
+        isSpeakingRef.current = false;
+        onSpeakingChange?.(false);
+      });
+    };
+
+    audioRef.current.onerror = (e) => {
+      console.error("TTS audio load error:", e);
+      setAudioLoading(false);
+      setIsSpeaking(false);
+      isSpeakingRef.current = false;
+      onSpeakingChange?.(false);
+      // If autopilot, request next after error
+      if (autoPilotActiveRef.current) {
+        setTimeout(() => requestAutoPilotNext(), 2000);
+      }
+    };
+  }, [onSpeakingChange]);
+
+  const handleAudioEnded = useCallback(() => {
+    setIsSpeaking(false);
+    isSpeakingRef.current = false;
+    setShowSubtitle(false);
+    setSubtitleText("");
+    onSpeakingChange?.(false);
+
+    // If autopilot is active, request next segment after a brief pause
+    if (autoPilotActiveRef.current) {
+      setTimeout(() => requestAutoPilotNext(), 1500);
+    }
+  }, [onSpeakingChange]);
+
+  // ══════════════════════════════════════════════
+  // AutoPilot — Brain auto-generates scripts + TTS
+  // ══════════════════════════════════════════════
+
+  const requestAutoPilotNext = useCallback(async () => {
+    if (!sessionId || !autoPilotActiveRef.current || isSpeakingRef.current) return;
+
+    try {
+      setAudioLoading(true);
+
+      // Collect pending comments
+      const pendingComments = commentHistory
+        .filter((c) => !c.replied)
+        .slice(0, 3)
+        .map((c) => ({
+          text: c.comment,
+          name: c.commenter,
+        }));
+
+      const result = await aiLiveCreatorService.getAutoPilotNext(sessionId, {
+        current_state: autoPilotState,
+        current_product_index: autoPilotProductIndex,
+        current_script_type: autoPilotScriptType,
+        pending_comments: pendingComments.length > 0 ? pendingComments : null,
+        language: "zh",
+      });
+
+      if (!result.success) {
+        console.error("AutoPilot next error:", result.error);
+        setAudioLoading(false);
+        // Retry after delay
+        if (autoPilotActiveRef.current) {
+          setTimeout(() => requestAutoPilotNext(), 5000);
+        }
+        return;
+      }
+
+      // Update autopilot state
+      if (result.next_state) setAutoPilotState(result.next_state);
+      if (result.product_index !== undefined && result.product_index !== null) {
+        setAutoPilotProductIndex(result.product_index);
+      }
+      if (result.script_type) setAutoPilotScriptType(result.script_type);
+      setTotalSpeaks((prev) => prev + 1);
+
+      onAutoPilotStateChange?.({
+        state: result.next_state,
+        productIndex: result.product_index,
+        scriptType: result.script_type,
+        action: result.action,
+        text: result.text,
+        productName: result.product_name,
+      });
+
+      // Play the TTS audio
+      if (result.audio_url) {
+        playTTSAudio(result.audio_url, result.text, result.script_type);
+      } else {
+        setAudioLoading(false);
+        // No audio — try again
+        if (autoPilotActiveRef.current) {
+          setTimeout(() => requestAutoPilotNext(), 3000);
+        }
+      }
+    } catch (err) {
+      console.error("AutoPilot next request failed:", err);
+      setAudioLoading(false);
+      if (autoPilotActiveRef.current) {
+        setTimeout(() => requestAutoPilotNext(), 5000);
+      }
+    }
+  }, [
+    sessionId,
+    autoPilotState,
+    autoPilotProductIndex,
+    autoPilotScriptType,
+    commentHistory,
+    playTTSAudio,
+    onAutoPilotStateChange,
+  ]);
+
+  // Start/stop autopilot
+  useEffect(() => {
+    if (autoPilotActive && sessionId && !isSpeaking && !audioLoading) {
+      // Start video loop
+      if (videoRef.current && portraitVideoUrl) {
+        videoRef.current.play().catch(() => {});
+        setIsPlaying(true);
+      }
+      // Request first segment
+      requestAutoPilotNext();
+    }
+
+    if (!autoPilotActive) {
+      // Stop autopilot
+      if (autoPilotTimerRef.current) {
+        clearTimeout(autoPilotTimerRef.current);
+        autoPilotTimerRef.current = null;
+      }
+    }
+  }, [autoPilotActive, sessionId]);
+
+  // ══════════════════════════════════════════════
+  // Manual TTS Speak (from external trigger)
+  // ══════════════════════════════════════════════
+
+  // Expose speak function via callback
+  const speakText = useCallback(
+    async (text, scriptType = "script", productName = null) => {
+      if (!sessionId || !text) return;
+
+      try {
+        setAudioLoading(true);
+        const result = await aiLiveCreatorService.speak(sessionId, {
+          text,
+          speak_type: scriptType,
+          product_name: productName,
+          language: "zh",
+        });
+
+        if (result.success && result.audio_url) {
+          playTTSAudio(result.audio_url, text, scriptType);
+        } else {
+          setAudioLoading(false);
+          console.error("Speak failed:", result.error);
+        }
+      } catch (err) {
+        setAudioLoading(false);
+        console.error("Speak request failed:", err);
+      }
+    },
+    [sessionId, playTTSAudio]
+  );
+
+  // Attach speakText to window for external access
+  useEffect(() => {
+    window.__livePlayerSpeak = speakText;
+    return () => {
+      delete window.__livePlayerSpeak;
+    };
+  }, [speakText]);
+
+  // ══════════════════════════════════════════════
+  // Controls
+  // ══════════════════════════════════════════════
+
   const togglePlayPause = () => {
     if (!videoRef.current) return;
     if (videoRef.current.paused) {
@@ -199,14 +346,13 @@ export default function LivePreviewPlayer({
     }
   };
 
-  // ── Toggle mute ──
   const toggleMute = () => {
-    if (!videoRef.current) return;
-    videoRef.current.muted = !videoRef.current.muted;
-    setIsMuted(videoRef.current.muted);
+    if (audioRef.current) {
+      audioRef.current.muted = !audioRef.current.muted;
+    }
+    setIsMuted((prev) => !prev);
   };
 
-  // ── Fullscreen toggle ──
   const toggleFullscreen = () => {
     if (!containerRef.current) return;
     if (!document.fullscreenElement) {
@@ -218,19 +364,9 @@ export default function LivePreviewPlayer({
     }
   };
 
-  // ── Video time update ──
-  const handleTimeUpdate = () => {
-    if (!videoRef.current) return;
-    const { currentTime, duration } = videoRef.current;
-    if (duration > 0) {
-      setPlaybackProgress((currentTime / duration) * 100);
-      setVideoDuration(duration);
-    }
-  };
-
   // ── Simulated viewer/like counts ──
   useEffect(() => {
-    if (!isLive && !isPlaying) return;
+    if (!isLive && !isPlaying && !autoPilotActive) return;
     const base = 128;
     setViewerCount(base + Math.floor(Math.random() * 50));
     const interval = setInterval(() => {
@@ -238,7 +374,7 @@ export default function LivePreviewPlayer({
       setLikeCount((l) => l + Math.floor(Math.random() * 3));
     }, 3000);
     return () => clearInterval(interval);
-  }, [isLive, isPlaying]);
+  }, [isLive, isPlaying, autoPilotActive]);
 
   // ── Comment overlay animation ──
   useEffect(() => {
@@ -266,14 +402,11 @@ export default function LivePreviewPlayer({
     setLikeCount((l) => l + 1);
   };
 
-  // ── Current queue item info ──
-  const currentQueueItem =
-    currentVideoIndex >= 0 ? completedVideos[currentVideoIndex] : null;
+  // ── Current product ──
   const activeProduct =
     currentProduct ||
-    (currentQueueItem?.product_name
-      ? products.find((p) => p.name === currentQueueItem.product_name)
-      : products[0]);
+    (autoPilotActive && products[autoPilotProductIndex]) ||
+    products[0];
 
   // ══════════════════════════════════════════════
   // Render
@@ -291,24 +424,29 @@ export default function LivePreviewPlayer({
         width: isFullscreen ? "100%" : undefined,
       }}
     >
-      {/* ── Video Layer ── */}
-      {currentVideoUrl ? (
+      {/* ── Hidden Audio Element for TTS ── */}
+      <audio
+        ref={audioRef}
+        onEnded={handleAudioEnded}
+        muted={isMuted}
+        style={{ display: "none" }}
+      />
+
+      {/* ── Video Layer (Looping Portrait) ── */}
+      {portraitVideoUrl ? (
         <video
           ref={videoRef}
-          src={currentVideoUrl}
           className="absolute inset-0 w-full h-full object-cover bg-black"
           autoPlay
           playsInline
-          muted={isMuted}
-          onEnded={handleVideoEnded}
-          onTimeUpdate={handleTimeUpdate}
+          muted
+          loop
+          onCanPlay={handleVideoCanPlay}
+          onEnded={handleVideoLoop}
           onPlay={() => setIsPlaying(true)}
           onPause={() => setIsPlaying(false)}
           onError={(e) => {
-            console.error("Video playback error:", e);
-            setVideoError("Video playback error");
-            // Try next video after error
-            setTimeout(() => handleVideoEnded(), 1000);
+            console.error("Video loop error:", e);
           }}
         />
       ) : (
@@ -324,45 +462,52 @@ export default function LivePreviewPlayer({
           </div>
           <h3 className="text-white text-lg font-bold mb-1">AI Live Creator</h3>
           <p className="text-gray-400 text-xs mb-4">
-            Waiting for video content...
+            Upload a portrait video to start
           </p>
-          {videoQueue.filter((v) => v.status === "processing").length > 0 && (
-            <div className="flex items-center gap-2 bg-white/10 px-4 py-2 rounded-full">
-              <Loader2 className="w-4 h-4 text-blue-400 animate-spin" />
-              <span className="text-blue-300 text-xs">
-                Generating{" "}
-                {videoQueue.filter((v) => v.status === "processing").length}{" "}
-                video(s)...
-              </span>
-            </div>
-          )}
-          {completedVideos.length === 0 &&
-            videoQueue.filter((v) => v.status === "processing").length === 0 && (
-              <div className="text-center mt-4 px-8">
-                <p className="text-gray-500 text-[11px] leading-relaxed">
-                  Add products, generate scripts, and click "Video" to start
-                  building your livestream content.
-                </p>
-              </div>
-            )}
+          <p className="text-gray-500 text-[11px] leading-relaxed text-center px-8">
+            Upload a 9:16 digital human video, add products, then start the AI autopilot
+            to begin your live stream.
+          </p>
         </div>
       )}
 
-      {/* ── Loading Overlay ── */}
-      {isLoadingVideo && (
-        <div className="absolute inset-0 bg-black/60 flex items-center justify-center z-10">
-          <div className="text-center">
-            <Loader2 className="w-8 h-8 text-white animate-spin mx-auto mb-2" />
-            <p className="text-white text-xs">Loading video...</p>
+      {/* ── Speaking Indicator ── */}
+      {(isSpeaking || audioLoading) && (
+        <div className="absolute top-14 left-1/2 -translate-x-1/2 z-30">
+          <div className="flex items-center gap-2 bg-black/60 backdrop-blur-sm px-3 py-1.5 rounded-full">
+            {audioLoading ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 text-cyan-400 animate-spin" />
+                <span className="text-[10px] text-cyan-300">Generating speech...</span>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center gap-0.5">
+                  {[1, 2, 3, 4, 5].map((i) => (
+                    <div
+                      key={i}
+                      className="w-0.5 bg-cyan-400 rounded-full"
+                      style={{
+                        height: `${6 + Math.random() * 10}px`,
+                        animation: `pulse-bar 0.6s ease-in-out ${i * 0.1}s infinite alternate`,
+                      }}
+                    />
+                  ))}
+                </div>
+                <span className="text-[10px] text-cyan-300">Speaking</span>
+              </>
+            )}
           </div>
         </div>
       )}
 
-      {/* ── Video Error Overlay ── */}
-      {videoError && !isLoadingVideo && (
-        <div className="absolute top-16 left-3 right-3 z-20">
-          <div className="bg-red-900/60 backdrop-blur-sm text-red-200 text-[10px] px-3 py-1.5 rounded-lg">
-            {videoError}
+      {/* ── Subtitle Overlay ── */}
+      {showSubtitle && subtitleText && (
+        <div className="absolute bottom-44 left-3 right-3 z-25">
+          <div className="bg-black/70 backdrop-blur-sm rounded-lg px-3 py-2 text-center">
+            <p className="text-white text-[12px] leading-relaxed line-clamp-3">
+              {subtitleText}
+            </p>
           </div>
         </div>
       )}
@@ -374,17 +519,17 @@ export default function LivePreviewPlayer({
           <div className="flex items-center gap-2">
             <div
               className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold ${
-                isPlaying
+                autoPilotActive || isPlaying
                   ? "bg-red-500 text-white"
                   : "bg-gray-600/80 text-gray-300"
               }`}
             >
               <span
                 className={`w-1.5 h-1.5 rounded-full ${
-                  isPlaying ? "bg-white animate-pulse" : "bg-gray-400"
+                  autoPilotActive || isPlaying ? "bg-white animate-pulse" : "bg-gray-400"
                 }`}
               />
-              {isPlaying ? "LIVE" : "PREVIEW"}
+              {autoPilotActive ? "LIVE" : isPlaying ? "PREVIEW" : "OFFLINE"}
             </div>
             <div className="flex items-center gap-1 bg-black/40 px-2 py-1 rounded-full">
               <Eye className="w-3 h-3 text-white/70" />
@@ -419,22 +564,21 @@ export default function LivePreviewPlayer({
           </div>
         </div>
 
-        {/* Engine Badge */}
-        <div className="mt-2 flex items-center gap-2">
-          {engine === "imtalker" ? (
-            <span className="text-[9px] bg-purple-500/30 text-purple-200 px-2 py-0.5 rounded-full flex items-center gap-1 backdrop-blur-sm">
-              <Crown className="w-2.5 h-2.5" /> Premium
-            </span>
-          ) : (
-            <span className="text-[9px] bg-blue-500/30 text-blue-200 px-2 py-0.5 rounded-full backdrop-blur-sm">
-              Standard
+        {/* Status Badges */}
+        <div className="mt-2 flex items-center gap-2 flex-wrap">
+          {autoPilotActive && (
+            <span className="text-[9px] bg-green-500/30 text-green-200 px-2 py-0.5 rounded-full flex items-center gap-1 backdrop-blur-sm">
+              <Sparkles className="w-2.5 h-2.5" /> AutoPilot
             </span>
           )}
-          {currentQueueItem && (
+          {isSpeaking && (
+            <span className="text-[9px] bg-cyan-500/30 text-cyan-200 px-2 py-0.5 rounded-full flex items-center gap-1 backdrop-blur-sm">
+              <Mic className="w-2.5 h-2.5" /> {currentScriptType || "Speaking"}
+            </span>
+          )}
+          {totalSpeaks > 0 && (
             <span className="text-[9px] bg-white/10 text-white/70 px-2 py-0.5 rounded-full backdrop-blur-sm">
-              {currentQueueItem.type === "comment_reply"
-                ? "Comment Reply"
-                : "Product Intro"}
+              {totalSpeaks} segments
             </span>
           )}
         </div>
@@ -473,18 +617,25 @@ export default function LivePreviewPlayer({
           <span className="text-[9px] text-white/80 font-medium">Gift</span>
         </div>
 
-        {/* Skip Next */}
-        {completedVideos.length > 1 && (
-          <button
-            onClick={handleSkipNext}
-            className="flex flex-col items-center gap-0.5"
+        {/* Speaking Status */}
+        <div className="flex flex-col items-center gap-0.5">
+          <div
+            className={`w-10 h-10 backdrop-blur-sm rounded-full flex items-center justify-center ${
+              isSpeaking
+                ? "bg-cyan-500/40 ring-2 ring-cyan-400/50"
+                : "bg-black/30"
+            }`}
           >
-            <div className="w-10 h-10 bg-black/30 backdrop-blur-sm rounded-full flex items-center justify-center hover:bg-white/20 transition-colors">
-              <SkipForward className="w-5 h-5 text-white" />
-            </div>
-            <span className="text-[9px] text-white/80 font-medium">Next</span>
-          </button>
-        )}
+            {isSpeaking ? (
+              <Mic className="w-5 h-5 text-cyan-300" />
+            ) : (
+              <MicOff className="w-5 h-5 text-white/50" />
+            )}
+          </div>
+          <span className="text-[9px] text-white/80 font-medium">
+            {isSpeaking ? "Live" : "Muted"}
+          </span>
+        </div>
       </div>
 
       {/* ── Floating Hearts Animation ── */}
@@ -516,9 +667,7 @@ export default function LivePreviewPlayer({
           >
             <div className="flex-shrink-0 w-6 h-6 rounded-full bg-gradient-to-r from-indigo-500 to-purple-500 flex items-center justify-center">
               <span className="text-[8px] text-white font-bold">
-                {item.commenter
-                  ? item.commenter[0].toUpperCase()
-                  : "?"}
+                {item.commenter ? item.commenter[0].toUpperCase() : "?"}
               </span>
             </div>
             <div className="bg-black/30 backdrop-blur-sm rounded-lg px-2 py-1 max-w-[85%]">
@@ -584,24 +733,13 @@ export default function LivePreviewPlayer({
         </div>
       )}
 
-      {/* ── Bottom: Playback Controls ── */}
+      {/* ── Bottom Bar ── */}
       <div className="absolute bottom-0 left-0 right-0 z-20">
-        {/* Progress Bar */}
-        {currentVideoUrl && (
-          <div className="h-0.5 bg-white/20 mx-3 mb-2 rounded-full overflow-hidden">
-            <div
-              className="h-full bg-white/80 rounded-full transition-all duration-300"
-              style={{ width: `${playbackProgress}%` }}
-            />
-          </div>
-        )}
-
-        {/* Bottom Bar */}
         <div className="bg-gradient-to-t from-black/80 to-transparent px-3 pb-3 pt-6">
           <div className="flex items-center justify-between">
             {/* Play/Pause */}
             <div className="flex items-center gap-2">
-              {currentVideoUrl && (
+              {portraitVideoUrl && (
                 <button
                   onClick={togglePlayPause}
                   className="p-1.5 bg-white/10 hover:bg-white/20 rounded-full transition-colors"
@@ -613,29 +751,24 @@ export default function LivePreviewPlayer({
                   )}
                 </button>
               )}
-              {videoDuration > 0 && (
-                <span className="text-[10px] text-white/60">
-                  {Math.floor(
-                    (playbackProgress / 100) * videoDuration
-                  )}
-                  s / {Math.floor(videoDuration)}s
+              {autoPilotActive && (
+                <span className="text-[10px] text-green-400">
+                  AutoPilot Active
                 </span>
               )}
             </div>
 
-            {/* Queue Info */}
+            {/* Status Info */}
             <div className="flex items-center gap-2">
-              {completedVideos.length > 0 && (
+              {products.length > 0 && (
                 <span className="text-[9px] text-white/50 bg-white/10 px-2 py-0.5 rounded-full">
-                  {currentVideoIndex + 1} / {completedVideos.length}
+                  Product {autoPilotProductIndex + 1}/{products.length}
                 </span>
               )}
-              {videoQueue.filter((v) => v.status === "processing").length >
-                0 && (
-                <span className="text-[9px] text-blue-300 bg-blue-500/20 px-2 py-0.5 rounded-full flex items-center gap-1">
-                  <Loader2 className="w-2.5 h-2.5 animate-spin" />
-                  {videoQueue.filter((v) => v.status === "processing").length}{" "}
-                  generating
+              {isSpeaking && (
+                <span className="text-[9px] text-cyan-300 bg-cyan-500/20 px-2 py-0.5 rounded-full flex items-center gap-1">
+                  <Mic className="w-2.5 h-2.5" />
+                  Speaking
                 </span>
               )}
             </div>
@@ -643,7 +776,7 @@ export default function LivePreviewPlayer({
         </div>
       </div>
 
-      {/* ── CSS for floating hearts ── */}
+      {/* ── CSS Animations ── */}
       <style>{`
         @keyframes float-heart {
           0% {
@@ -658,6 +791,10 @@ export default function LivePreviewPlayer({
             transform: translateY(-160px) scale(0.6) translateX(-10px);
             opacity: 0;
           }
+        }
+        @keyframes pulse-bar {
+          0% { height: 4px; }
+          100% { height: 14px; }
         }
       `}</style>
     </div>

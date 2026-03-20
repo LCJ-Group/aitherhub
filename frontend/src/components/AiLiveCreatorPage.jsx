@@ -107,6 +107,9 @@ export default function AiLiveCreatorPage() {
   // ── Live Session ──
   const [liveSessionId, setLiveSessionId] = useState(null);
 
+  // ── AutoPilot State ──
+  const [autoPilotActive, setAutoPilotActive] = useState(false);
+
   // ── Preview Player State (shared with LiveStreamPanel) ──
   const [previewVideoQueue, setPreviewVideoQueue] = useState([]);
   const [previewCommentHistory, setPreviewCommentHistory] = useState([]);
@@ -587,16 +590,25 @@ export default function AiLiveCreatorPage() {
               <LivePreviewPlayer
                 sessionId={liveSessionId}
                 engine={engine}
+                portraitVideoUrl={portraitType === "video" ? portraitPreview : null}
                 videoQueue={previewVideoQueue}
                 commentHistory={previewCommentHistory}
                 products={previewProducts}
                 currentProduct={previewProducts[autoGenerateIndexRef.current % Math.max(previewProducts.length, 1)]}
                 isLive={!!liveSessionId}
+                autoPilotActive={autoPilotActive}
                 onRequestNextVideo={() => {
-                  // Auto-generate next video for infinite loop
                   if (liveStreamPanelRef.current?.generateNextVideo) {
                     liveStreamPanelRef.current.generateNextVideo();
                   }
+                }}
+                onAutoPilotStateChange={(stateInfo) => {
+                  if (liveStreamPanelRef.current?.handleAutoPilotStateUpdate) {
+                    liveStreamPanelRef.current.handleAutoPilotStateUpdate(stateInfo);
+                  }
+                }}
+                onSpeakingChange={(speaking) => {
+                  // Could update UI indicators here
                 }}
               />
             </div>
@@ -881,6 +893,8 @@ export default function AiLiveCreatorPage() {
                 engine={engine}
                 voiceId={selectedVoiceId}
                 language={languageCode}
+                autoPilotActive={autoPilotActive}
+                onAutoPilotToggle={(active) => setAutoPilotActive(active)}
                 onVideoGenerated={(jobId) => {
                   setCurrentJobId(jobId);
                   setCurrentEngine(engine);
@@ -1369,6 +1383,8 @@ export default function AiLiveCreatorPage() {
                 engine={engine}
                 voiceId={selectedVoiceId}
                 language={languageCode}
+                autoPilotActive={autoPilotActive}
+                onAutoPilotToggle={(active) => setAutoPilotActive(active)}
                 onVideoGenerated={(jobId) => {
                   setCurrentJobId(jobId);
                   setCurrentEngine(engine);

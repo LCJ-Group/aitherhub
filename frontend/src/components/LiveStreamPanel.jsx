@@ -58,9 +58,12 @@ const LiveStreamPanel = forwardRef(function LiveStreamPanel({
   onQueueUpdate,
   onCommentHistoryUpdate,
   onProductsUpdate,
+  onAutoPilotToggle,
+  autoPilotActive = false,
+  autoPilotState: externalAutoPilotState,
 }, ref) {
   // ── Tab State ──
-  const [activeTab, setActiveTab] = useState("products"); // products | comments | queue
+  const [activeTab, setActiveTab] = useState("products"); // products | comments | queue | autopilot
 
   // ── Products ──
   const [products, setProducts] = useState([]);
@@ -87,6 +90,11 @@ const LiveStreamPanel = forwardRef(function LiveStreamPanel({
   const [videoQueue, setVideoQueue] = useState([]);
   const [isGeneratingVideo, setIsGeneratingVideo] = useState(false);
   const queuePollRef = useRef(null);
+
+  // ── AutoPilot ──
+  const [isStartingAutoPilot, setIsStartingAutoPilot] = useState(false);
+  const [autoPilotLog, setAutoPilotLog] = useState([]);
+  const [autoPilotStats, setAutoPilotStats] = useState({ totalSpeaks: 0, currentProduct: "", currentScript: "" });
 
   // ── Session ──
   const [isCreatingSession, setIsCreatingSession] = useState(false);
@@ -412,10 +420,86 @@ const LiveStreamPanel = forwardRef(function LiveStreamPanel({
     }
   }, [sessionId, products, scripts, language, isGeneratingVideo, handleGenerateVideo]);
 
-  // Expose generateNextVideo to parent via ref
+  // ══════════════════════════════════════════════
+  // AutoPilot Start/Stop
+  // ══════════════════════════════════════════════
+
+  const handleStartAutoPilot = async () => {
+    if (!sessionId) {
+      showToast('error', 'No active session. Start a session first.');
+      return;
+    }
+    if (products.length === 0) {
+      showToast('error', 'Add at least one product before starting AutoPilot.');
+      return;
+    }
+    setIsStartingAutoPilot(true);
+    showToast('info', 'Starting AutoPilot...');
+    try {
+      const res = await aiLiveCreatorService.startAutoPilot(sessionId, {
+        products: products.map((p) => ({
+          name: p.name,
+          description: p.description || '',
+          price: p.price || '',
+          features: p.features ? (typeof p.features === 'string' ? p.features.split(',').map(f => f.trim()) : p.features) : [],
+        })),
+        voice_id: voiceId,
+        language: language || 'zh',
+        cycle_duration_sec: 30,
+      });
+      if (res.success) {
+        onAutoPilotToggle?.(true);
+        setAutoPilotLog((prev) => [
+          { time: new Date().toLocaleTimeString(), action: 'started', text: 'AutoPilot started' },
+          ...prev,
+        ]);
+        showToast('success', 'AutoPilot started! AI is now live.');
+        setActiveTab('autopilot');
+      } else {
+        showToast('error', res.error || 'Failed to start AutoPilot');
+      }
+    } catch (err) {
+      console.error('AutoPilot start error:', err);
+      showToast('error', `AutoPilot error: ${err.message}`);
+    } finally {
+      setIsStartingAutoPilot(false);
+    }
+  };
+
+  const handleStopAutoPilot = () => {
+    onAutoPilotToggle?.(false);
+    setAutoPilotLog((prev) => [
+      { time: new Date().toLocaleTimeString(), action: 'stopped', text: 'AutoPilot stopped' },
+      ...prev,
+    ]);
+    showToast('info', 'AutoPilot stopped.');
+  };
+
+  // Update autopilot log when external state changes
+  const handleAutoPilotStateUpdate = useCallback((stateInfo) => {
+    if (!stateInfo) return;
+    setAutoPilotStats({
+      totalSpeaks: (autoPilotStats.totalSpeaks || 0) + 1,
+      currentProduct: stateInfo.productName || '',
+      currentScript: stateInfo.scriptType || '',
+    });
+    setAutoPilotLog((prev) => [
+      {
+        time: new Date().toLocaleTimeString(),
+        action: stateInfo.action || 'speak',
+        text: stateInfo.text ? stateInfo.text.substring(0, 80) + '...' : '',
+        product: stateInfo.productName,
+        scriptType: stateInfo.scriptType,
+      },
+      ...prev.slice(0, 49), // Keep last 50 entries
+    ]);
+  }, [autoPilotStats]);
+
+  // Expose functions to parent via ref
   useImperativeHandle(ref, () => ({
     generateNextVideo,
-  }), [generateNextVideo]);
+    handleAutoPilotStateUpdate,
+  }), [generateNextVideo, handleAutoPilotStateUpdate]);
 
   // ══════════════════════════════════════════════
   // Comment Response
@@ -570,6 +654,7 @@ const LiveStreamPanel = forwardRef(function LiveStreamPanel({
           { id: "products", icon: ShoppingBag, label: "Products", count: products.length },
           { id: "comments", icon: MessageSquare, label: "Comments", count: commentHistory.length },
           { id: "queue", icon: ListOrdered, label: "Queue", count: videoQueue.length },
+          { id: "autopilot", icon: Zap, label: "AutoPilot", count: autoPilotActive ? 1 : 0 },
         ].map((tab) => (
           <button
             key={tab.id}
@@ -1104,6 +1189,177 @@ const LiveStreamPanel = forwardRef(function LiveStreamPanel({
                 Refresh Queue
               </button>
             )}
+          </div>
+        )}
+
+        {/* ══════════════════════════════════════════════ */}
+        {/* AutoPilot Tab */}
+        {/* ══════════════════════════════════════════════ */}
+        {activeTab === "autopilot" && (
+          <div className="space-y-3">
+            {/* AutoPilot Status Card */}
+            <div className={`rounded-xl p-4 border-2 ${
+              autoPilotActive
+                ? 'bg-gradient-to-r from-green-50 to-emerald-50 border-green-300'
+                : 'bg-gradient-to-r from-gray-50 to-slate-50 border-gray-200'
+            }`}>
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
+                    autoPilotActive ? 'bg-green-500' : 'bg-gray-400'
+                  }`}>
+                    <Zap className="w-4 h-4 text-white" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-gray-800">AutoPilot</h3>
+                    <p className={`text-[10px] font-medium ${
+                      autoPilotActive ? 'text-green-600' : 'text-gray-500'
+                    }`}>
+                      {autoPilotActive ? 'Running — AI is live streaming' : 'Stopped'}
+                    </p>
+                  </div>
+                </div>
+                {autoPilotActive ? (
+                  <button
+                    onClick={handleStopAutoPilot}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-red-500 hover:bg-red-600 text-white text-xs font-medium rounded-lg transition-colors"
+                  >
+                    <Pause className="w-3.5 h-3.5" />
+                    Stop
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleStartAutoPilot}
+                    disabled={!sessionId || products.length === 0 || isStartingAutoPilot}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white text-xs font-medium rounded-lg transition-all disabled:opacity-50"
+                  >
+                    {isStartingAutoPilot ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Play className="w-3.5 h-3.5" />
+                    )}
+                    Start AutoPilot
+                  </button>
+                )}
+              </div>
+
+              {/* Requirements Check */}
+              {!autoPilotActive && (
+                <div className="space-y-1.5 mt-2">
+                  <div className={`flex items-center gap-2 text-[10px] ${
+                    sessionId ? 'text-green-600' : 'text-red-500'
+                  }`}>
+                    {sessionId ? <CheckCircle className="w-3 h-3" /> : <AlertCircle className="w-3 h-3" />}
+                    {sessionId ? 'Session active' : 'Start a session first'}
+                  </div>
+                  <div className={`flex items-center gap-2 text-[10px] ${
+                    products.length > 0 ? 'text-green-600' : 'text-red-500'
+                  }`}>
+                    {products.length > 0 ? <CheckCircle className="w-3 h-3" /> : <AlertCircle className="w-3 h-3" />}
+                    {products.length > 0 ? `${products.length} product(s) ready` : 'Add at least one product'}
+                  </div>
+                  <div className={`flex items-center gap-2 text-[10px] ${
+                    portraitUrl ? 'text-green-600' : 'text-red-500'
+                  }`}>
+                    {portraitUrl ? <CheckCircle className="w-3 h-3" /> : <AlertCircle className="w-3 h-3" />}
+                    {portraitUrl ? 'Portrait video ready' : 'Upload a portrait video'}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* AutoPilot Stats */}
+            {autoPilotActive && (
+              <div className="grid grid-cols-3 gap-2">
+                <div className="bg-cyan-50 rounded-lg p-2 text-center">
+                  <p className="text-lg font-bold text-cyan-700">{autoPilotStats.totalSpeaks}</p>
+                  <p className="text-[9px] text-gray-500">Speaks</p>
+                </div>
+                <div className="bg-indigo-50 rounded-lg p-2 text-center">
+                  <p className="text-xs font-bold text-indigo-700 truncate">{autoPilotStats.currentProduct || '-'}</p>
+                  <p className="text-[9px] text-gray-500">Product</p>
+                </div>
+                <div className="bg-purple-50 rounded-lg p-2 text-center">
+                  <p className="text-xs font-bold text-purple-700 capitalize">{autoPilotStats.currentScript || '-'}</p>
+                  <p className="text-[9px] text-gray-500">Script</p>
+                </div>
+              </div>
+            )}
+
+            {/* How It Works */}
+            <div className="bg-blue-50 rounded-lg p-3">
+              <h4 className="text-xs font-medium text-blue-800 mb-2 flex items-center gap-1.5">
+                <Brain className="w-3.5 h-3.5" />
+                How AutoPilot Works
+              </h4>
+              <div className="space-y-1">
+                {[
+                  'Portrait video loops continuously (visual only)',
+                  'AI Brain generates sales scripts per product',
+                  'ElevenLabs TTS creates speech audio in real-time',
+                  'Audio plays over the looping video with subtitles',
+                  'Cycles: Introduction → Highlight → Promotion → Closing → Next Product',
+                  'Viewer comments get priority AI responses',
+                ].map((step, i) => (
+                  <p key={i} className="text-[10px] text-blue-700 flex items-start gap-1.5">
+                    <span className="text-blue-400 font-bold mt-px">{i + 1}.</span>
+                    {step}
+                  </p>
+                ))}
+              </div>
+            </div>
+
+            {/* Activity Log */}
+            <div>
+              <h4 className="text-xs font-medium text-gray-700 mb-2 flex items-center gap-1.5">
+                <ListOrdered className="w-3.5 h-3.5" />
+                Activity Log
+              </h4>
+              {autoPilotLog.length === 0 ? (
+                <div className="text-center py-6 text-gray-400">
+                  <Zap className="w-8 h-8 mx-auto mb-2 opacity-30" />
+                  <p className="text-xs">No activity yet</p>
+                  <p className="text-[10px] text-gray-300 mt-1">
+                    Start AutoPilot to see the AI brain in action
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-1.5 max-h-60 overflow-y-auto">
+                  {autoPilotLog.map((entry, idx) => (
+                    <div
+                      key={idx}
+                      className={`flex items-start gap-2 p-2 rounded-lg text-[10px] ${
+                        entry.action === 'started'
+                          ? 'bg-green-50 text-green-700'
+                          : entry.action === 'stopped'
+                          ? 'bg-red-50 text-red-700'
+                          : entry.action === 'reply_comment'
+                          ? 'bg-yellow-50 text-yellow-700'
+                          : entry.action === 'switch_product'
+                          ? 'bg-purple-50 text-purple-700'
+                          : 'bg-gray-50 text-gray-700'
+                      }`}
+                    >
+                      <span className="text-gray-400 flex-shrink-0 font-mono">{entry.time}</span>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-medium capitalize">{entry.action?.replace('_', ' ')}</span>
+                          {entry.product && (
+                            <span className="text-[9px] bg-white/50 px-1.5 py-0.5 rounded-full">{entry.product}</span>
+                          )}
+                          {entry.scriptType && (
+                            <span className="text-[9px] bg-white/50 px-1.5 py-0.5 rounded-full capitalize">{entry.scriptType}</span>
+                          )}
+                        </div>
+                        {entry.text && (
+                          <p className="text-[9px] text-gray-500 mt-0.5 line-clamp-2">{entry.text}</p>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>
