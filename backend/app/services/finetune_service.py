@@ -59,7 +59,7 @@ async def build_training_dataset(
     tag_sql = text("""
         SELECT pvt.video_id, v.original_filename, v.status
         FROM persona_video_tags pvt
-        JOIN videos v ON pvt.video_id = v.id::text
+        JOIN videos v ON pvt.video_id = v.id
         WHERE pvt.persona_id = :pid
           AND v.status = 'DONE'
         ORDER BY v.created_at ASC
@@ -75,7 +75,7 @@ async def build_training_dataset(
             "duration_hours": 0.0,
         }
 
-    video_ids = [str(v.video_id) for v in tagged_videos]
+    video_ids = [v.video_id for v in tagged_videos]  # Keep as UUID, don't convert to str
     logger.info(f"Building dataset for persona {persona_id}: {len(video_ids)} videos")
 
     # 2. Get persona info for system prompt
