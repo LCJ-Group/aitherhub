@@ -112,6 +112,10 @@ export default function AiLiveCreatorPage() {
   // ── Collapse panels ──
   const [showSetupPanel, setShowSetupPanel] = useState(true);
 
+  // ── Auto-generate next video ref ──
+  const liveStreamPanelRef = useRef(null);
+  const autoGenerateIndexRef = useRef(0);
+
   // ── Refs ──
   const portraitInputRef = useRef(null);
   const audioInputRef = useRef(null);
@@ -544,8 +548,14 @@ export default function AiLiveCreatorPage() {
                 videoQueue={previewVideoQueue}
                 commentHistory={previewCommentHistory}
                 products={previewProducts}
-                currentProduct={previewProducts[0]}
+                currentProduct={previewProducts[autoGenerateIndexRef.current % Math.max(previewProducts.length, 1)]}
                 isLive={!!liveSessionId}
+                onRequestNextVideo={() => {
+                  // Auto-generate next video for infinite loop
+                  if (liveStreamPanelRef.current?.generateNextVideo) {
+                    liveStreamPanelRef.current.generateNextVideo();
+                  }
+                }}
               />
             </div>
 
@@ -765,6 +775,7 @@ export default function AiLiveCreatorPage() {
             {/* ── Right: Livestream Brain Panel ── */}
             <div className="flex-1 min-w-0 overflow-y-auto max-h-[calc(100vh-100px)]" style={{ scrollbarWidth: "thin" }}>
               <LiveStreamPanel
+                ref={liveStreamPanelRef}
                 sessionId={liveSessionId}
                 setSessionId={setLiveSessionId}
                 portraitUrl={portraitUrl}

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, forwardRef, useImperativeHandle } from "react";
 import {
   Brain,
   MessageSquare,
@@ -46,7 +46,7 @@ import aiLiveCreatorService from "../base/services/aiLiveCreatorService";
  *   - Video Queue: Track generated video segments
  *   - Generate & Queue: Script → TTS → Digital Human → Queue
  */
-export default function LiveStreamPanel({
+const LiveStreamPanel = forwardRef(function LiveStreamPanel({
   sessionId,
   setSessionId,
   portraitUrl,
@@ -57,7 +57,7 @@ export default function LiveStreamPanel({
   onQueueUpdate,
   onCommentHistoryUpdate,
   onProductsUpdate,
-}) {
+}, ref) {
   // ── Tab State ──
   const [activeTab, setActiveTab] = useState("products"); // products | comments | queue
 
@@ -345,6 +345,75 @@ export default function LiveStreamPanel({
       setIsGeneratingVideo(false);
     }
   };
+
+  // ══════════════════════════════════════════════
+  // Auto-Generate Next Video (for infinite loop)
+  // ══════════════════════════════════════════════
+
+  const autoGenIndexRef = useRef(0);
+
+  const generateNextVideo = useCallback(async () => {
+    if (!sessionId || products.length === 0) {
+      console.log('[LiveStreamPanel] generateNextVideo: no session or products');
+      return;
+    }
+    if (isGeneratingVideo) {
+      console.log('[LiveStreamPanel] generateNextVideo: already generating');
+      return;
+    }
+
+    // Cycle through products and script types
+    const scriptTypes = ['introduction', 'highlight', 'promotion', 'closing'];
+    const productIndex = autoGenIndexRef.current % products.length;
+    const typeIndex = Math.floor(autoGenIndexRef.current / products.length) % scriptTypes.length;
+    autoGenIndexRef.current++;
+
+    const product = products[productIndex];
+    const sType = scriptTypes[typeIndex];
+
+    console.log(`[LiveStreamPanel] Auto-generating next video: product=${product.name}, type=${sType}`);
+
+    // First generate a script, then generate video from it
+    try {
+      const scriptRes = await aiLiveCreatorService.generateProductScript({
+        product_name: product.name,
+        product_description: product.description || '',
+        product_price: product.price || '',
+        product_features: product.features || [],
+        tone: 'professional_friendly',
+        language: language || 'ja',
+        script_type: sType,
+      });
+
+      if (scriptRes.success && scriptRes.script_text) {
+        // Update scripts state
+        setScripts(prev => ({
+          ...prev,
+          [product.name]: {
+            ...(prev[product.name] || {}),
+            [sType]: scriptRes.script_text,
+          },
+        }));
+
+        // Generate video from the new script
+        await handleGenerateVideo(scriptRes.script_text, product.name, 'product_intro');
+      } else {
+        console.error('[LiveStreamPanel] Auto script generation failed:', scriptRes.error);
+        // Fallback: use existing script if available
+        const existingScript = scripts[product.name]?.[sType] || scripts[product.name]?.introduction;
+        if (existingScript) {
+          await handleGenerateVideo(existingScript, product.name, 'product_intro');
+        }
+      }
+    } catch (err) {
+      console.error('[LiveStreamPanel] Auto-generate next video error:', err);
+    }
+  }, [sessionId, products, scripts, language, isGeneratingVideo, handleGenerateVideo]);
+
+  // Expose generateNextVideo to parent via ref
+  useImperativeHandle(ref, () => ({
+    generateNextVideo,
+  }), [generateNextVideo]);
 
   // ══════════════════════════════════════════════
   // Comment Response
@@ -1038,4 +1107,6 @@ export default function LiveStreamPanel({
       </div>
     </div>
   );
-}
+});
+
+export default LiveStreamPanel;

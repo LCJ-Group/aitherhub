@@ -433,7 +433,48 @@ async def import_tiktok_product(
             product_image = og_info.get("image", "")
             logger.info(f"TikTok og_info parsed: title='{product_title[:60]}', image={'yes' if product_image else 'no'}")
 
-        # Fallback: try to extract from encode_params or other fields
+        # Fallback 1: Scrape HTML page for title and meta tags
+        if not product_title:
+            try:
+                import httpx
+                async with httpx.AsyncClient(
+                    follow_redirects=True,
+                    timeout=15.0,
+                    headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"},
+                ) as client:
+                    resp = await client.get(redirect_url)
+                    html_text = resp.text
+
+                    # Try og:title
+                    og_title_match = re.search(r'<meta[^>]*property=["\']og:title["\'][^>]*content=["\']([^"\']+)', html_text)
+                    if og_title_match:
+                        product_title = og_title_match.group(1).strip()
+                        logger.info(f"TikTok og:title from HTML: '{product_title[:80]}'")
+
+                    # Try <title> tag
+                    if not product_title:
+                        title_match = re.search(r'<title[^>]*>([^<]+)</title>', html_text)
+                        if title_match:
+                            raw_title = title_match.group(1).strip()
+                            # Remove common suffixes like " | TikTok"
+                            product_title = re.sub(r'\s*[|\-]\s*TikTok.*$', '', raw_title).strip()
+                            logger.info(f"TikTok <title> from HTML: '{product_title[:80]}'")
+
+                    # Try og:image
+                    if not product_image:
+                        og_img_match = re.search(r'<meta[^>]*property=["\']og:image["\'][^>]*content=["\']([^"\']+)', html_text)
+                        if og_img_match:
+                            product_image = og_img_match.group(1).strip()
+
+                    # Try to find price in HTML
+                    price_html_match = re.search(r'["\']price["\']\s*:\s*["\']?([\d,.]+)', html_text)
+                    if not price_html_match:
+                        price_html_match = re.search(r'[¥￥$]\s*([\d,.]+)', html_text)
+
+            except Exception as html_err:
+                logger.warning(f"TikTok HTML scrape fallback failed: {html_err}")
+
+        # Fallback 2: Use product ID as name
         if not product_title:
             shop_name = params.get("unique_id", [""])[0]
             if product_id:
@@ -447,23 +488,73 @@ async def import_tiktok_product(
                 "error": "商品情報を取得できませんでした。URLを確認してください。",
             }
 
-        # ── Step 3: Build product data from og_info (no GPT needed) ──
-        # GPT analysis is done later via sales-brain/generate-script
+        # ── Step 3: Use GPT to analyze and enrich product data ──
+        product_description = product_title
+        product_features = []
+        product_price = ""
+
+        # Try to extract price from title
+        price_match = re.search(r'[\$¥￥]\s*[\d,.]+|[\d,.]+\s*[円元]', product_title)
+        if price_match:
+            product_price = price_match.group(0)
+
+        # Use GPT to generate a rich description from the title
+        try:
+            import openai
+            client = openai.AsyncOpenAI()
+
+            lang_map = {"ja": "日本語", "zh": "中文", "en": "English"}
+            lang_name = lang_map.get(language, "日本語")
+
+            gpt_response = await client.chat.completions.create(
+                model="gpt-4.1-nano",
+                messages=[
+                    {"role": "system", "content": f"あなたはTikTok Shopの商品分析AIです。商品タイトルから、{lang_name}で商品の説明文と特徴を推測して生成してください。JSON形式で出力してください。"},
+                    {"role": "user", "content": f"""以下のTikTok Shop商品を分析してください。
+
+商品タイトル: {product_title}
+商品URL: {original_url}
+
+JSON形式で出力:
+{{
+  "name": "商品の短い名前（ブランド名+商品カテゴリ）",
+  "description": "商品の魅力的な説明文（50-100文字）",
+  "features": ["特徴1", "特徴2", "特徴3"],
+  "price": "価格（わかる場合）"
+}}"""},
+                ],
+                max_tokens=512,
+                temperature=0.3,
+                response_format={"type": "json_object"},
+            )
+
+            gpt_text = gpt_response.choices[0].message.content.strip()
+            gpt_data = json_module.loads(gpt_text)
+
+            if gpt_data.get("name"):
+                product_title = gpt_data["name"]
+            if gpt_data.get("description"):
+                product_description = gpt_data["description"]
+            if gpt_data.get("features"):
+                product_features = gpt_data["features"]
+            if gpt_data.get("price") and not product_price:
+                product_price = gpt_data["price"]
+
+            logger.info(f"GPT enriched product: name='{product_title}', features={len(product_features)}")
+
+        except Exception as gpt_err:
+            logger.warning(f"GPT product analysis failed (using raw title): {gpt_err}")
+
         product_data = {
             "name": product_title,
-            "description": product_title,  # Use title as description initially
-            "price": "",
-            "features": [],
+            "description": product_description,
+            "price": product_price,
+            "features": product_features,
             "image_url": product_image,
             "original_url": original_url,
             "tiktok_product_id": product_id,
             "source": "tiktok_shop",
         }
-
-        # Try to extract price from title (common patterns: $XX, ¥XX, XX円)
-        price_match = re.search(r'[\$¥￥]\s*[\d,.]+|[\d,.]+\s*[円元]', product_title)
-        if price_match:
-            product_data["price"] = price_match.group(0)
 
         logger.info(f"TikTok product imported: '{product_data['name']}'")
 

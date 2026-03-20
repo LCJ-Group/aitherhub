@@ -152,17 +152,23 @@ export default function LivePreviewPlayer({
     }
   }, [completedVideos, loadedJobIds, isPlaying, isLoadingVideo, playVideo]);
 
-  // ── Handle video ended → play next ──
+  // ── Handle video ended → play next + request new content ──
   const handleVideoEnded = useCallback(() => {
     onVideoEnded?.();
+
+    // Always request next video generation for infinite loop
+    onRequestNextVideo?.();
+
     const nextIndex = currentVideoIndex + 1;
     if (nextIndex < completedVideos.length) {
+      // Play next video in queue
       playVideo(completedVideos[nextIndex], nextIndex);
     } else if (completedVideos.length > 0) {
-      // Loop back to first video
+      // Loop back to first video while waiting for new content
       playVideo(completedVideos[0], 0);
+      // Reset loaded job IDs so we can detect new videos
+      setLoadedJobIds(new Set(completedVideos.map(v => v.job_id)));
     }
-    onRequestNextVideo?.();
   }, [
     currentVideoIndex,
     completedVideos,
@@ -290,7 +296,7 @@ export default function LivePreviewPlayer({
         <video
           ref={videoRef}
           src={currentVideoUrl}
-          className="absolute inset-0 w-full h-full object-contain bg-black"
+          className="absolute inset-0 w-full h-full object-cover bg-black"
           autoPlay
           playsInline
           muted={isMuted}
