@@ -3393,9 +3393,12 @@ async def bulk_retry_product_detection(
 @router.get("/debug-excel-urls/{video_id}")
 async def debug_excel_urls(
     video_id: str,
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
     db: AsyncSession = Depends(get_db),
-    _admin=Depends(require_admin),
 ):
+    expected_key = os.getenv("ADMIN_API_KEY", "aither:hub")
+    if x_admin_key != expected_key:
+        raise HTTPException(status_code=403, detail="Forbidden")
     """Temporary debug endpoint to test Excel URL accessibility."""
     import requests as req_lib
     from app.services.storage_service import generate_read_sas_from_url
