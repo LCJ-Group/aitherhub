@@ -510,56 +510,29 @@ async def import_tiktok_product(
                 "error": "商品情報を取得できませんでした。URLを確認してください。",
             }
 
-        # ── Step 3: GPT Analysis (separate function to isolate openai client) ──
-        raw_text = await _analyze_product_with_gpt(
-            product_title=product_title,
-            product_id=product_id,
-            product_image=product_image,
-            language=language,
-        )
+        # ── Step 3: Build product data from og_info (no GPT needed) ──
+        # GPT analysis is done later via sales-brain/generate-script
+        product_data = {
+            "name": product_title,
+            "description": product_title,  # Use title as description initially
+            "price": "",
+            "features": [],
+            "image_url": product_image,
+            "original_url": original_url,
+            "tiktok_product_id": product_id,
+            "source": "tiktok_shop",
+        }
 
-        # Parse JSON from response (handle markdown code blocks)
-        json_text = raw_text
-        if "```" in json_text:
-            json_match = re.search(r"```(?:json)?\s*([\s\S]*?)```", json_text)
-            if json_match:
-                json_text = json_match.group(1).strip()
+        # Try to extract price from title (common patterns: $XX, ¥XX, XX円)
+        price_match = re.search(r'[\$¥￥]\s*[\d,.]+|[\d,.]+\s*[円元]', product_title)
+        if price_match:
+            product_data["price"] = price_match.group(0)
 
-        product_data = json_module.loads(json_text)
-
-        # Ensure required fields
-        product_data.setdefault("name", product_title)
-        product_data.setdefault("description", "")
-        product_data.setdefault("price", "")
-        product_data.setdefault("features", [])
-
-        # Add metadata
-        product_data["image_url"] = product_image
-        product_data["original_url"] = original_url
-        product_data["tiktok_product_id"] = product_id
-        product_data["source"] = "tiktok_shop"
-
-        logger.info(f"TikTok product imported: '{product_data['name']}' with {len(product_data.get('features', []))} features")
+        logger.info(f"TikTok product imported: '{product_data['name']}'")
 
         return {
             "success": True,
             "product": product_data,
-        }
-
-    except json_module.JSONDecodeError as e:
-        logger.error(f"TikTok product GPT response parse error: {e}")
-        return {
-            "success": True,
-            "product": {
-                "name": product_title or "Unknown Product",
-                "description": product_title,
-                "price": "",
-                "features": [],
-                "image_url": product_image,
-                "original_url": original_url,
-                "tiktok_product_id": product_id,
-                "source": "tiktok_shop",
-            },
         }
 
     except Exception as e:
