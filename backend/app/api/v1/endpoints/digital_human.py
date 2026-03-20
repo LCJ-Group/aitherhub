@@ -2715,7 +2715,6 @@ async def debug_gpt_test(_auth: bool = Depends(verify_admin_key)):
                 model=azure_model,
                 input=[{"role": "user", "content": "Say hello in Japanese in one sentence"}],
                 max_output_tokens=50,
-                temperature=0.5,
             )
             text = response.output_text if hasattr(response, 'output_text') else str(response)
             results["azure_responses_api_test"] = "SUCCESS"

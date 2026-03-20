@@ -75,7 +75,6 @@ async def _call_gpt(
                 model=azure_model,
                 input=input_payload,
                 max_output_tokens=max_tokens,
-                temperature=temperature,
             )
             # Extract text from Responses API response
             result = ""
