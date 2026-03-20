@@ -106,22 +106,37 @@ def _ensure_sas_token(blob_url: str, force_regenerate: bool = False) -> str:
 def download_excel(blob_url: str, dest_path: str) -> bool:
     """Download an Excel file from Azure Blob URL (with auto SAS token)."""
     if not blob_url:
+        logger.warning("[EXCEL] download_excel called with empty blob_url")
         return False
     try:
         # Ensure URL has SAS token for authentication
+        logger.info("[EXCEL] download_excel: input URL prefix=%s has_sas=%s",
+                     blob_url[:80], "sig=" in blob_url)
         url = _ensure_sas_token(blob_url)
+        logger.info("[EXCEL] download_excel: after SAS ensure, URL prefix=%s has_sas=%s",
+                     url[:80], "sig=" in url)
 
         os.makedirs(os.path.dirname(dest_path), exist_ok=True)
         with requests.get(url, stream=True, timeout=60) as r:
+            logger.info("[EXCEL] download_excel: HTTP status=%d content_length=%s",
+                        r.status_code, r.headers.get('content-length', 'unknown'))
             r.raise_for_status()
+            total_bytes = 0
             with open(dest_path, "wb") as f:
                 for chunk in r.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
-        logger.info(f"[EXCEL] Downloaded: {dest_path}")
+                        total_bytes += len(chunk)
+        logger.info("[EXCEL] Downloaded: %s (%d bytes)", dest_path, total_bytes)
         return True
+    except requests.exceptions.HTTPError as e:
+        logger.warning("[EXCEL] Download HTTP error: status=%s reason=%s url_prefix=%s",
+                       getattr(e.response, 'status_code', '?'),
+                       getattr(e.response, 'reason', '?'),
+                       url[:80] if 'url' in dir() else blob_url[:80])
+        return False
     except Exception as e:
-        logger.warning(f"[EXCEL] Download failed: {e}")
+        logger.warning("[EXCEL] Download failed: %s (type=%s)", e, type(e).__name__)
         return False
 
 
