@@ -25,6 +25,8 @@ import {
   Monitor,
   PanelLeftClose,
   PanelLeftOpen,
+  Video,
+  Film,
 } from "lucide-react";
 import aiLiveCreatorService from "../base/services/aiLiveCreatorService";
 import LiveStreamPanel from "./LiveStreamPanel";
@@ -54,7 +56,8 @@ export default function AiLiveCreatorPage() {
   // ── Input Mode ──
   const [inputMode, setInputMode] = useState("text"); // "text" | "audio"
 
-  // ── Portrait ──
+  // ── Portrait / Driving Video ──
+  const [portraitType, setPortraitType] = useState("image"); // "image" | "video"
   const [portraitFile, setPortraitFile] = useState(null);
   const [portraitPreview, setPortraitPreview] = useState(null);
   const [portraitUrl, setPortraitUrl] = useState("");
@@ -118,6 +121,7 @@ export default function AiLiveCreatorPage() {
 
   // ── Refs ──
   const portraitInputRef = useRef(null);
+  const videoInputRef = useRef(null);
   const audioInputRef = useRef(null);
   const pollRef = useRef(null);
 
@@ -196,7 +200,7 @@ export default function AiLiveCreatorPage() {
     });
   };
 
-  // ── Portrait Upload ──
+  // ── Portrait (Image) Upload ──
   const handlePortraitSelect = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -209,6 +213,7 @@ export default function AiLiveCreatorPage() {
       return;
     }
 
+    setPortraitType("image");
     setPortraitFile(file);
     setPortraitPreview(URL.createObjectURL(file));
     setError(null);
@@ -220,6 +225,38 @@ export default function AiLiveCreatorPage() {
       setPortraitUrl(url);
     } catch (err) {
       setError(`Portrait upload failed: ${err.message}`);
+      setPortraitFile(null);
+      setPortraitPreview(null);
+    } finally {
+      setIsUploadingPortrait(false);
+    }
+  };
+
+  // ── Driving Video Upload ──
+  const handleVideoSelect = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("video/")) {
+      setError("動画ファイルを選択してください (MP4, MOV)");
+      return;
+    }
+    if (file.size > 200 * 1024 * 1024) {
+      setError("動画は200MB以下にしてください");
+      return;
+    }
+
+    setPortraitType("video");
+    setPortraitFile(file);
+    setPortraitPreview(URL.createObjectURL(file));
+    setError(null);
+
+    setIsUploadingPortrait(true);
+    setPortraitUploadProgress(0);
+    try {
+      const url = await aiLiveCreatorService.uploadFile(file, "driving_video", setPortraitUploadProgress);
+      setPortraitUrl(url);
+    } catch (err) {
+      setError(`Video upload failed: ${err.message}`);
       setPortraitFile(null);
       setPortraitPreview(null);
     } finally {
@@ -274,6 +311,7 @@ export default function AiLiveCreatorPage() {
       if (engine === "imtalker") {
         result = await aiLiveCreatorService.generatePremiumFromText({
           portrait_url: portraitUrl,
+          portrait_type: portraitType,
           text: scriptText.trim(),
           voice_id: selectedVoiceId || undefined,
           language_code: languageCode,
@@ -285,6 +323,7 @@ export default function AiLiveCreatorPage() {
       } else {
         result = await aiLiveCreatorService.generateFromText({
           portrait_url: portraitUrl,
+          portrait_type: portraitType,
           text: scriptText.trim(),
           voice_id: selectedVoiceId || undefined,
           language_code: languageCode,
@@ -344,6 +383,7 @@ export default function AiLiveCreatorPage() {
       if (engine === "imtalker") {
         result = await aiLiveCreatorService.generatePremium({
           portrait_url: portraitUrl,
+          portrait_type: portraitType,
           audio_url: audioUrl,
           a_cfg_scale: aCfgScale,
           nfe: nfe,
@@ -353,6 +393,7 @@ export default function AiLiveCreatorPage() {
       } else {
         result = await aiLiveCreatorService.generate({
           portrait_url: portraitUrl,
+          portrait_type: portraitType,
           audio_url: audioUrl,
           bbox_shift: bboxShift,
           extra_margin: extraMargin,
@@ -415,6 +456,7 @@ export default function AiLiveCreatorPage() {
 
   // ── Reset ──
   const handleReset = () => {
+    setPortraitType("image");
     setPortraitFile(null);
     setPortraitPreview(null);
     setPortraitUrl("");
@@ -608,18 +650,57 @@ export default function AiLiveCreatorPage() {
                   </div>
                 </div>
 
-                {/* Portrait (compact) */}
+                {/* Portrait / Driving Video (compact) */}
                 <div className="bg-gray-800/50 rounded-xl border border-gray-700/30 p-3">
                   <h4 className="text-[11px] font-medium text-gray-400 mb-2 flex items-center gap-1.5">
-                    <ImageIcon className="w-3.5 h-3.5 text-purple-400" />
+                    {portraitType === "video" ? <Film className="w-3.5 h-3.5 text-purple-400" /> : <ImageIcon className="w-3.5 h-3.5 text-purple-400" />}
                     Portrait
                   </h4>
+                  {/* Photo / Video toggle */}
+                  {!portraitPreview && (
+                    <div className="flex items-center bg-gray-900/50 rounded-lg p-0.5 mb-2 border border-gray-700/30">
+                      <button
+                        onClick={() => setPortraitType("image")}
+                        className={`flex-1 px-2 py-1 rounded-md text-[10px] font-medium transition-all flex items-center justify-center gap-1 ${
+                          portraitType === "image"
+                            ? "bg-purple-600 text-white shadow-sm"
+                            : "text-gray-500 hover:text-gray-300"
+                        }`}
+                      >
+                        <ImageIcon className="w-3 h-3" /> Photo
+                      </button>
+                      <button
+                        onClick={() => setPortraitType("video")}
+                        className={`flex-1 px-2 py-1 rounded-md text-[10px] font-medium transition-all flex items-center justify-center gap-1 ${
+                          portraitType === "video"
+                            ? "bg-purple-600 text-white shadow-sm"
+                            : "text-gray-500 hover:text-gray-300"
+                        }`}
+                      >
+                        <Video className="w-3 h-3" /> Video
+                      </button>
+                    </div>
+                  )}
                   {portraitPreview ? (
                     <div className="relative">
-                      <img src={portraitPreview} alt="Portrait" className="w-full h-32 object-contain rounded-lg bg-gray-900/50" />
+                      {portraitType === "video" ? (
+                        <video
+                          src={portraitPreview}
+                          className="w-full h-32 object-cover rounded-lg bg-gray-900/50"
+                          muted
+                          loop
+                          autoPlay
+                          playsInline
+                        />
+                      ) : (
+                        <img src={portraitPreview} alt="Portrait" className="w-full h-32 object-contain rounded-lg bg-gray-900/50" />
+                      )}
                       {isUploadingPortrait && (
                         <div className="absolute inset-0 bg-black/50 rounded-lg flex items-center justify-center">
-                          <Loader2 className="w-6 h-6 text-white animate-spin" />
+                          <div className="text-center">
+                            <Loader2 className="w-5 h-5 text-white animate-spin mx-auto mb-1" />
+                            <p className="text-[9px] text-white/80">{portraitUploadProgress}%</p>
+                          </div>
                         </div>
                       )}
                       {!isUploadingPortrait && portraitUrl && (
@@ -627,8 +708,13 @@ export default function AiLiveCreatorPage() {
                           <CheckCircle className="w-2.5 h-2.5" /> OK
                         </div>
                       )}
+                      {portraitType === "video" && !isUploadingPortrait && portraitUrl && (
+                        <div className="absolute bottom-1.5 left-1.5 bg-purple-600/90 text-white px-1.5 py-0.5 rounded text-[9px] flex items-center gap-0.5">
+                          <Film className="w-2.5 h-2.5" /> Driving Video
+                        </div>
+                      )}
                       <button
-                        onClick={() => { setPortraitFile(null); setPortraitPreview(null); setPortraitUrl(""); }}
+                        onClick={() => { setPortraitType("image"); setPortraitFile(null); setPortraitPreview(null); setPortraitUrl(""); }}
                         className="absolute top-1.5 left-1.5 bg-black/60 hover:bg-black/80 p-1 rounded-full transition-colors"
                       >
                         <X className="w-3 h-3 text-white" />
@@ -636,14 +722,26 @@ export default function AiLiveCreatorPage() {
                     </div>
                   ) : (
                     <div
-                      onClick={() => portraitInputRef.current?.click()}
+                      onClick={() => portraitType === "video" ? videoInputRef.current?.click() : portraitInputRef.current?.click()}
                       className="border border-dashed border-gray-600 rounded-lg p-4 text-center cursor-pointer hover:border-purple-500/50 hover:bg-purple-500/5 transition-all"
                     >
-                      <ImageIcon className="w-6 h-6 text-gray-600 mx-auto mb-1" />
-                      <p className="text-[10px] text-gray-500">Upload Portrait</p>
+                      {portraitType === "video" ? (
+                        <>
+                          <Video className="w-6 h-6 text-gray-600 mx-auto mb-1" />
+                          <p className="text-[10px] text-gray-500">Upload 9:16 Video</p>
+                          <p className="text-[8px] text-gray-600 mt-0.5">MP4, MOV (max 200MB)</p>
+                        </>
+                      ) : (
+                        <>
+                          <ImageIcon className="w-6 h-6 text-gray-600 mx-auto mb-1" />
+                          <p className="text-[10px] text-gray-500">Upload Portrait</p>
+                          <p className="text-[8px] text-gray-600 mt-0.5">JPEG, PNG (max 20MB)</p>
+                        </>
+                      )}
                     </div>
                   )}
                   <input ref={portraitInputRef} type="file" accept="image/jpeg,image/png,image/jpg" onChange={handlePortraitSelect} className="hidden" />
+                  <input ref={videoInputRef} type="file" accept="video/mp4,video/quicktime,video/mov" onChange={handleVideoSelect} className="hidden" />
                 </div>
 
                 {/* Text Input (compact) */}
@@ -779,6 +877,7 @@ export default function AiLiveCreatorPage() {
                 sessionId={liveSessionId}
                 setSessionId={setLiveSessionId}
                 portraitUrl={portraitUrl}
+                portraitType={portraitType}
                 engine={engine}
                 voiceId={selectedVoiceId}
                 language={languageCode}
@@ -852,18 +951,57 @@ export default function AiLiveCreatorPage() {
                 </div>
               </div>
 
-              {/* Portrait Upload */}
+              {/* Portrait / Driving Video Upload */}
               <div className="bg-white rounded-xl border border-gray-200 p-5">
                 <h2 className="text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2">
-                  <ImageIcon className="w-4 h-4 text-purple-600" />
-                  Portrait Image
+                  {portraitType === "video" ? <Film className="w-4 h-4 text-purple-600" /> : <ImageIcon className="w-4 h-4 text-purple-600" />}
+                  {portraitType === "video" ? "Driving Video" : "Portrait Image"}
                 </h2>
                 <p className="text-xs text-gray-500 mb-3">
-                  正面を向いた写真をアップロードしてください。AIがこの顔を音声に合わせてアニメーションします。
+                  {portraitType === "video"
+                    ? "9:16の参考動画をアップロード。AIが動きを再現し、音声を差し替えます。"
+                    : "正面を向いた写真をアップロード。AIがこの顔を音声に合わせてアニメーションします。"
+                  }
                 </p>
+                {/* Photo / Video toggle */}
+                {!portraitPreview && (
+                  <div className="flex items-center bg-gray-100 rounded-lg p-1 mb-3">
+                    <button
+                      onClick={() => setPortraitType("image")}
+                      className={`flex-1 px-3 py-2 rounded-md text-xs font-medium transition-all flex items-center justify-center gap-1.5 ${
+                        portraitType === "image"
+                          ? "bg-white text-purple-700 shadow-sm"
+                          : "text-gray-500 hover:text-gray-700"
+                      }`}
+                    >
+                      <ImageIcon className="w-3.5 h-3.5" /> Photo
+                    </button>
+                    <button
+                      onClick={() => setPortraitType("video")}
+                      className={`flex-1 px-3 py-2 rounded-md text-xs font-medium transition-all flex items-center justify-center gap-1.5 ${
+                        portraitType === "video"
+                          ? "bg-white text-purple-700 shadow-sm"
+                          : "text-gray-500 hover:text-gray-700"
+                      }`}
+                    >
+                      <Video className="w-3.5 h-3.5" /> 9:16 Video
+                    </button>
+                  </div>
+                )}
                 {portraitPreview ? (
                   <div className="relative">
-                    <img src={portraitPreview} alt="Portrait" className="w-full max-h-64 object-contain rounded-lg bg-gray-50" />
+                    {portraitType === "video" ? (
+                      <video
+                        src={portraitPreview}
+                        className="w-full max-h-64 object-contain rounded-lg bg-gray-50"
+                        muted
+                        loop
+                        autoPlay
+                        playsInline
+                      />
+                    ) : (
+                      <img src={portraitPreview} alt="Portrait" className="w-full max-h-64 object-contain rounded-lg bg-gray-50" />
+                    )}
                     {isUploadingPortrait && (
                       <div className="absolute inset-0 bg-black/30 rounded-lg flex items-center justify-center">
                         <div className="text-center">
@@ -877,8 +1015,13 @@ export default function AiLiveCreatorPage() {
                         <CheckCircle className="w-3 h-3" /> Uploaded
                       </div>
                     )}
+                    {portraitType === "video" && !isUploadingPortrait && portraitUrl && (
+                      <div className="absolute bottom-2 left-2 bg-purple-600/90 text-white px-2 py-1 rounded text-xs flex items-center gap-1">
+                        <Film className="w-3 h-3" /> Driving Video
+                      </div>
+                    )}
                     <button
-                      onClick={() => { setPortraitFile(null); setPortraitPreview(null); setPortraitUrl(""); }}
+                      onClick={() => { setPortraitType("image"); setPortraitFile(null); setPortraitPreview(null); setPortraitUrl(""); }}
                       className="absolute top-2 left-2 bg-white/80 hover:bg-white p-1.5 rounded-full transition-colors"
                     >
                       <X className="w-4 h-4 text-gray-600" />
@@ -886,15 +1029,26 @@ export default function AiLiveCreatorPage() {
                   </div>
                 ) : (
                   <div
-                    onClick={() => portraitInputRef.current?.click()}
+                    onClick={() => portraitType === "video" ? videoInputRef.current?.click() : portraitInputRef.current?.click()}
                     className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center cursor-pointer hover:border-purple-400 hover:bg-purple-50/30 transition-all"
                   >
-                    <ImageIcon className="w-10 h-10 text-gray-300 mx-auto mb-2" />
-                    <p className="text-sm text-gray-500">クリックして肖像画をアップロード</p>
-                    <p className="text-xs text-gray-400 mt-1">JPEG, PNG (max 20MB)</p>
+                    {portraitType === "video" ? (
+                      <>
+                        <Video className="w-10 h-10 text-gray-300 mx-auto mb-2" />
+                        <p className="text-sm text-gray-500">クリックして9:16動画をアップロード</p>
+                        <p className="text-xs text-gray-400 mt-1">MP4, MOV (max 200MB) • 10-30秒推奨</p>
+                      </>
+                    ) : (
+                      <>
+                        <ImageIcon className="w-10 h-10 text-gray-300 mx-auto mb-2" />
+                        <p className="text-sm text-gray-500">クリックして胖像画をアップロード</p>
+                        <p className="text-xs text-gray-400 mt-1">JPEG, PNG (max 20MB)</p>
+                      </>
+                    )}
                   </div>
                 )}
                 <input ref={portraitInputRef} type="file" accept="image/jpeg,image/png,image/jpg" onChange={handlePortraitSelect} className="hidden" />
+                <input ref={videoInputRef} type="file" accept="video/mp4,video/quicktime,video/mov" onChange={handleVideoSelect} className="hidden" />
               </div>
 
               {/* Input Mode Tabs */}
@@ -1211,6 +1365,7 @@ export default function AiLiveCreatorPage() {
                 sessionId={liveSessionId}
                 setSessionId={setLiveSessionId}
                 portraitUrl={portraitUrl}
+                portraitType={portraitType}
                 engine={engine}
                 voiceId={selectedVoiceId}
                 language={languageCode}

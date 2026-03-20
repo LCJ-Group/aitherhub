@@ -50,6 +50,7 @@ const LiveStreamPanel = forwardRef(function LiveStreamPanel({
   sessionId,
   setSessionId,
   portraitUrl,
+  portraitType = "image",
   engine,
   voiceId,
   language,
@@ -140,6 +141,7 @@ const LiveStreamPanel = forwardRef(function LiveStreamPanel({
       console.log('[LiveStreamPanel] Creating session...', { portraitUrl, engine, voiceId, language, products: products.length });
       const res = await aiLiveCreatorService.createLiveSession({
         portrait_url: portraitUrl,
+        portrait_type: portraitType || "image",
         engine: engine || "imtalker",
         voice_id: voiceId,
         language: language || "ja",

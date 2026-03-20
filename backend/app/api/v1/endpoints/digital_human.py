@@ -1825,6 +1825,7 @@ async def create_live_session(
 
         session = create_session(
             portrait_url=portrait_url,
+            portrait_type=getattr(req, 'portrait_type', 'image'),
             engine=req.engine,
             voice_id=req.voice_id,
             language=req.language,
@@ -2007,6 +2008,12 @@ async def comment_response_generate(
         if req.auto_generate_video and req.portrait_url:
             try:
                 portrait_url = _ensure_sas_url(req.portrait_url)
+                # Get portrait_type from session or default to image
+                portrait_type = "image"
+                if req.session_id:
+                    sess = get_session(req.session_id)
+                    if sess:
+                        portrait_type = sess.get("portrait_type", "image")
                 el_service = get_elevenlabs_service()
 
                 # Generate TTS
@@ -2027,10 +2034,11 @@ async def comment_response_generate(
                     payload = {
                         "job_id": job_id,
                         "portrait_url": portrait_url,
+                        "portrait_type": portrait_type,
                         "audio_url": audio_url,
                         "a_cfg_scale": 2.0,
                         "nfe": 10,
-                        "crop": True,
+                        "crop": True if portrait_type == "image" else False,
                         "output_fps": 25,
                     }
                     resp = await service._request(
@@ -2039,6 +2047,7 @@ async def comment_response_generate(
                 else:
                     result = await service.generate(
                         portrait_url=portrait_url,
+                        portrait_type=portrait_type,
                         audio_url=audio_url,
                         job_id=job_id,
                     )
@@ -2115,6 +2124,7 @@ async def generate_and_queue_video(
 
     try:
         portrait_url = _ensure_sas_url(session["portrait_url"])
+        portrait_type = session.get("portrait_type", "image")
         el_service = get_elevenlabs_service()
 
         # Step 1: TTS
@@ -2136,10 +2146,11 @@ async def generate_and_queue_video(
             payload = {
                 "job_id": job_id,
                 "portrait_url": portrait_url,
+                "portrait_type": portrait_type,
                 "audio_url": audio_url,
                 "a_cfg_scale": 2.0,
                 "nfe": 10,
-                "crop": True,
+                "crop": True if portrait_type == "image" else False,
                 "output_fps": 25,
             }
             resp = await service._request(
@@ -2148,6 +2159,7 @@ async def generate_and_queue_video(
         else:
             await service.generate(
                 portrait_url=portrait_url,
+                portrait_type=portrait_type,
                 audio_url=audio_url,
                 job_id=job_id,
             )

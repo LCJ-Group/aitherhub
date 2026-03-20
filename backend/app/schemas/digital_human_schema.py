@@ -454,8 +454,12 @@ class MuseTalkGenerateRequest(BaseModel):
     """Request to generate a lip-synced video using MuseTalk."""
     portrait_url: str = Field(
         ...,
-        description="Publicly accessible URL of the portrait image (front-facing photo). "
-        "Supported formats: JPEG, PNG. Recommended: 512x512 or larger, clear face."
+        description="Publicly accessible URL of the portrait image or driving video. "
+        "Supported formats: JPEG, PNG for images; MP4, MOV for videos."
+    )
+    portrait_type: str = Field(
+        "image",
+        description="Type of portrait: 'image' (static photo) or 'video' (9:16 driving video)"
     )
     audio_url: str = Field(
         ...,
@@ -540,8 +544,12 @@ class MuseTalkTextGenerateRequest(BaseModel):
     """Request to generate a lip-synced video from text using ElevenLabs TTS + MuseTalk."""
     portrait_url: str = Field(
         ...,
-        description="Publicly accessible URL of the portrait image (front-facing photo). "
-        "Supported formats: JPEG, PNG. Recommended: 512x512 or larger, clear face."
+        description="Publicly accessible URL of the portrait image or driving video. "
+        "Supported formats: JPEG, PNG for images; MP4, MOV for videos."
+    )
+    portrait_type: str = Field(
+        "image",
+        description="Type of portrait: 'image' (static photo) or 'video' (9:16 driving video)"
     )
     text: str = Field(
         ...,
@@ -617,8 +625,12 @@ class IMTalkerGenerateRequest(BaseModel):
     """Request to generate a premium digital human video using IMTalker."""
     portrait_url: str = Field(
         ...,
-        description="URL of the portrait image (front-facing photo). "
+        description="URL of the portrait image or driving video. "
         "Must be publicly accessible or have a SAS token."
+    )
+    portrait_type: str = Field(
+        "image",
+        description="Type of portrait: 'image' (static photo) or 'video' (9:16 driving video)"
     )
     audio_url: str = Field(
         ...,
@@ -665,7 +677,11 @@ class IMTalkerTextGenerateRequest(BaseModel):
     Pipeline: Text → ElevenLabs TTS → IMTalker → Full-animation video."""
     portrait_url: str = Field(
         ...,
-        description="URL of the portrait image (front-facing photo)."
+        description="URL of the portrait image or driving video."
+    )
+    portrait_type: str = Field(
+        "image",
+        description="Type of portrait: 'image' (static photo) or 'video' (9:16 driving video)"
     )
     text: str = Field(
         ..., min_length=1, max_length=5000,
@@ -741,7 +757,11 @@ class CreateLiveSessionRequest(BaseModel):
     """Request to create a new AI Live Creator session."""
     portrait_url: str = Field(
         ...,
-        description="URL of the portrait image for the digital human."
+        description="URL of the portrait image or driving video for the digital human."
+    )
+    portrait_type: str = Field(
+        "image",
+        description="Type of portrait: 'image' (static photo) or 'video' (9:16 driving video)"
     )
     engine: str = Field(
         "imtalker",

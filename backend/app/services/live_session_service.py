@@ -49,6 +49,7 @@ def _new_session_id() -> str:
 
 def create_session(
     portrait_url: str,
+    portrait_type: str = "image",
     engine: str = "imtalker",
     voice_id: Optional[str] = None,
     language: str = "ja",
@@ -61,6 +62,7 @@ def create_session(
         "status": "active",
         "engine": engine,
         "portrait_url": portrait_url,
+        "portrait_type": portrait_type,
         "voice_id": voice_id,
         "language": language,
         "products": products or [],

@@ -202,6 +202,7 @@ class MuseTalkService:
         portrait_url: str,
         audio_url: str,
         job_id: Optional[str] = None,
+        portrait_type: str = "image",
         bbox_shift: int = 0,
         extra_margin: int = 10,
         batch_size: int = 16,
@@ -211,9 +212,10 @@ class MuseTalkService:
         Start a MuseTalk lip-sync video generation job.
 
         Args:
-            portrait_url: URL of the portrait image (front-facing photo)
+            portrait_url: URL of the portrait image or driving video
             audio_url: URL of the audio file (WAV or MP3)
             job_id: Optional custom job ID (auto-generated if not provided)
+            portrait_type: 'image' for static photo, 'video' for 9:16 driving video
             bbox_shift: Vertical shift for face bounding box
             extra_margin: Extra margin below face for v1.5
             batch_size: Inference batch size
@@ -229,6 +231,7 @@ class MuseTalkService:
         payload = {
             "job_id": job_id,
             "portrait_url": portrait_url,
+            "portrait_type": portrait_type,
             "audio_url": audio_url,
             "bbox_shift": bbox_shift,
             "extra_margin": extra_margin,
