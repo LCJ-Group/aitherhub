@@ -236,6 +236,19 @@ class AiLiveCreatorService {
     );
     return res.data;
   }
+
+  // ══════════════════════════════════════════════════════════
+  // TikTok Shop Product Import
+  // ══════════════════════════════════════════════════════════
+
+  async importTikTokProduct(params) {
+    const res = await axios.post(
+      `${this.baseURL}/api/v1/digital-human/tiktok-product/import`,
+      params,
+      { headers: this._headers() }
+    );
+    return res.data;
+  }
 }
 
 const aiLiveCreatorService = new AiLiveCreatorService();

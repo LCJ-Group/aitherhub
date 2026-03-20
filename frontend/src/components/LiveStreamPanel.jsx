@@ -29,6 +29,10 @@ import {
   Copy,
   Zap,
   Crown,
+  Link,
+  ExternalLink,
+  Image,
+  Globe,
 } from "lucide-react";
 import aiLiveCreatorService from "../base/services/aiLiveCreatorService";
 
@@ -58,6 +62,10 @@ export default function LiveStreamPanel({
   const [products, setProducts] = useState([]);
   const [newProduct, setNewProduct] = useState({ name: "", description: "", price: "", features: "" });
   const [showAddProduct, setShowAddProduct] = useState(false);
+  const [tiktokUrl, setTiktokUrl] = useState("");
+  const [isImportingTiktok, setIsImportingTiktok] = useState(false);
+  const [importError, setImportError] = useState("");
+  const [showTiktokImport, setShowTiktokImport] = useState(true); // Show TikTok import by default
 
   // ── Scripts ──
   const [scripts, setScripts] = useState({}); // productName → {type → script}
@@ -142,6 +150,51 @@ export default function LiveStreamPanel({
 
   const handleRemoveProduct = (id) => {
     setProducts((prev) => prev.filter((p) => p.id !== id));
+  };
+
+  // ══════════════════════════════════════════════
+  // TikTok Shop Product Import
+  // ══════════════════════════════════════════════
+
+  const handleTiktokImport = async () => {
+    if (!tiktokUrl.trim()) return;
+    setIsImportingTiktok(true);
+    setImportError("");
+    try {
+      const res = await aiLiveCreatorService.importTikTokProduct({
+        product_url: tiktokUrl.trim(),
+        language: language || "ja",
+        session_id: sessionId || null,
+      });
+      if (res.success && res.product) {
+        const p = res.product;
+        setProducts((prev) => [
+          ...prev,
+          {
+            id: Date.now(),
+            name: p.name || "Unknown Product",
+            description: p.description || "",
+            price: p.price || "",
+            features: (p.features || []).join(", "),
+            image_url: p.image_url || "",
+            original_url: p.original_url || tiktokUrl,
+            tiktok_product_id: p.tiktok_product_id || "",
+            source: "tiktok_shop",
+            category: p.category || "",
+            target_audience: p.target_audience || "",
+            selling_points: p.selling_points || [],
+          },
+        ]);
+        setTiktokUrl("");
+      } else {
+        setImportError(res.error || "Import failed");
+      }
+    } catch (err) {
+      console.error("TikTok import error:", err);
+      setImportError(err?.response?.data?.error || "Failed to import product");
+    } finally {
+      setIsImportingTiktok(false);
+    }
   };
 
   // ══════════════════════════════════════════════
@@ -393,25 +446,70 @@ export default function LiveStreamPanel({
             {products.map((product) => (
               <div
                 key={product.id}
-                className="border border-gray-200 rounded-lg p-3 hover:border-indigo-200 transition-colors"
+                className={`border rounded-lg p-3 hover:border-indigo-200 transition-colors ${
+                  product.source === "tiktok_shop"
+                    ? "border-pink-200 bg-gradient-to-r from-pink-50/30 to-white"
+                    : "border-gray-200"
+                }`}
               >
                 <div className="flex items-start justify-between mb-2">
-                  <div className="flex items-center gap-2">
-                    <Package className="w-4 h-4 text-indigo-500" />
-                    <span className="text-sm font-medium text-gray-800">{product.name}</span>
-                    {product.price && (
-                      <span className="text-xs text-green-600 font-medium">{product.price}</span>
+                  <div className="flex items-center gap-2 flex-1 min-w-0">
+                    {product.image_url ? (
+                      <img
+                        src={product.image_url}
+                        alt={product.name}
+                        className="w-10 h-10 rounded-lg object-cover border border-gray-200 flex-shrink-0"
+                        onError={(e) => { e.target.style.display = 'none'; }}
+                      />
+                    ) : (
+                      <Package className="w-4 h-4 text-indigo-500 flex-shrink-0" />
                     )}
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-sm font-medium text-gray-800 truncate">{product.name}</span>
+                        {product.source === "tiktok_shop" && (
+                          <span className="text-[8px] bg-gradient-to-r from-pink-500 to-red-500 text-white px-1.5 py-0.5 rounded-full flex-shrink-0 flex items-center gap-0.5">
+                            <Globe className="w-2 h-2" />
+                            TikTok
+                          </span>
+                        )}
+                      </div>
+                      {product.price && (
+                        <span className="text-xs text-green-600 font-medium">{product.price}</span>
+                      )}
+                    </div>
                   </div>
-                  <button
-                    onClick={() => handleRemoveProduct(product.id)}
-                    className="p-1 hover:bg-red-50 rounded transition-colors"
-                  >
-                    <Trash2 className="w-3.5 h-3.5 text-gray-400 hover:text-red-500" />
-                  </button>
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    {product.original_url && (
+                      <a
+                        href={product.original_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="p-1 hover:bg-blue-50 rounded transition-colors"
+                        title="Open in TikTok"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5 text-gray-400 hover:text-blue-500" />
+                      </a>
+                    )}
+                    <button
+                      onClick={() => handleRemoveProduct(product.id)}
+                      className="p-1 hover:bg-red-50 rounded transition-colors"
+                    >
+                      <Trash2 className="w-3.5 h-3.5 text-gray-400 hover:text-red-500" />
+                    </button>
+                  </div>
                 </div>
                 {product.description && (
                   <p className="text-xs text-gray-500 mb-2 line-clamp-2">{product.description}</p>
+                )}
+                {product.selling_points && product.selling_points.length > 0 && (
+                  <div className="flex flex-wrap gap-1 mb-2">
+                    {product.selling_points.map((sp, i) => (
+                      <span key={i} className="text-[9px] bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded-full">
+                        {sp}
+                      </span>
+                    ))}
+                  </div>
                 )}
 
                 {/* Script Generation */}
@@ -545,13 +643,56 @@ export default function LiveStreamPanel({
                 </div>
               </div>
             ) : (
-              <button
-                onClick={() => setShowAddProduct(true)}
-                className="w-full py-2.5 border-2 border-dashed border-gray-300 hover:border-indigo-400 rounded-lg text-xs text-gray-500 hover:text-indigo-600 flex items-center justify-center gap-1.5 transition-colors"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                Add Product
-              </button>
+              <div className="space-y-2">
+                {/* TikTok Shop Import */}
+                <div className="border-2 border-dashed border-pink-300 hover:border-pink-400 rounded-lg p-3 bg-gradient-to-r from-pink-50/50 to-red-50/30 transition-colors">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Globe className="w-4 h-4 text-pink-500" />
+                    <span className="text-xs font-medium text-gray-700">TikTok Shop Import</span>
+                    <span className="text-[8px] bg-pink-100 text-pink-600 px-1.5 py-0.5 rounded-full">AI Auto-Analyze</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      placeholder="Paste TikTok product URL (vt.tiktok.com/...)"
+                      value={tiktokUrl}
+                      onChange={(e) => { setTiktokUrl(e.target.value); setImportError(""); }}
+                      onKeyDown={(e) => { if (e.key === "Enter") handleTiktokImport(); }}
+                      className="flex-1 text-xs border border-pink-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-pink-400 bg-white placeholder-gray-400"
+                    />
+                    <button
+                      onClick={handleTiktokImport}
+                      disabled={!tiktokUrl.trim() || isImportingTiktok}
+                      className="flex items-center gap-1.5 px-3 py-2 bg-gradient-to-r from-pink-500 to-red-500 hover:from-pink-600 hover:to-red-600 text-white text-xs font-medium rounded-lg transition-all disabled:opacity-50 flex-shrink-0"
+                    >
+                      {isImportingTiktok ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Sparkles className="w-3.5 h-3.5" />
+                      )}
+                      {isImportingTiktok ? "Analyzing..." : "Import"}
+                    </button>
+                  </div>
+                  {importError && (
+                    <p className="text-[10px] text-red-500 mt-1.5 flex items-center gap-1">
+                      <AlertCircle className="w-3 h-3" />
+                      {importError}
+                    </p>
+                  )}
+                  <p className="text-[9px] text-gray-400 mt-1.5">
+                    Supports: vt.tiktok.com/... or tiktok.com/view/product/...
+                  </p>
+                </div>
+
+                {/* Manual Add Product */}
+                <button
+                  onClick={() => setShowAddProduct(true)}
+                  className="w-full py-2 border border-gray-200 hover:border-indigo-300 rounded-lg text-xs text-gray-500 hover:text-indigo-600 flex items-center justify-center gap-1.5 transition-colors"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  Add Manually
+                </button>
+              </div>
             )}
 
             {/* Generate All Scripts Button */}

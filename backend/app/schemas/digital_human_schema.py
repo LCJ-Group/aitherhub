@@ -854,3 +854,32 @@ class GenerateAndQueueResponse(BaseModel):
     queue_position: Optional[int] = None
     status: Optional[str] = None
     error: Optional[str] = None
+
+
+
+# ══════════════════════════════════════════════
+# TikTok Shop Product Import
+# ══════════════════════════════════════════════
+
+class TikTokProductImportRequest(BaseModel):
+    """Import a product from TikTok Shop by URL — AI auto-analyzes the page."""
+    product_url: str = Field(
+        ...,
+        description="TikTok Shop product URL (e.g., https://www.tiktok.com/@shop/product/...)"
+    )
+    language: str = Field("ja", description="Language for parsed output: ja / zh / en")
+    session_id: Optional[str] = Field(
+        None, description="If provided, auto-add the product to this live session"
+    )
+
+
+class TikTokProductImportResponse(BaseModel):
+    success: bool
+    product: Optional[dict] = Field(
+        None,
+        description="Parsed product data: name, description, price, features, image_url, original_url"
+    )
+    added_to_session: Optional[bool] = Field(
+        None, description="Whether the product was added to the live session"
+    )
+    error: Optional[str] = None

@@ -2220,3 +2220,66 @@ async def get_session_queue(
         "completed": sum(1 for i in session["video_queue"] if i.get("status") == "completed"),
         "processing": sum(1 for i in session["video_queue"] if i.get("status") == "processing"),
     }
+
+
+
+# ──────────────────────────────────────────────
+# 36. TikTok Shop Product Import
+# ──────────────────────────────────────────────
+
+from app.schemas.digital_human_schema import (
+    TikTokProductImportRequest,
+    TikTokProductImportResponse,
+)
+from app.services.live_session_service import (
+    import_tiktok_product,
+    add_product_to_session,
+)
+
+
+@router.post(
+    "/tiktok-product/import",
+    response_model=TikTokProductImportResponse,
+    summary="Import a product from TikTok Shop URL",
+    description=(
+        "Paste a TikTok Shop product URL (short or full). "
+        "The system resolves the URL, extracts product info from og_info, "
+        "and uses GPT to analyze and structure the product data. "
+        "Optionally adds the product to a live session."
+    ),
+)
+async def tiktok_product_import(
+    req: TikTokProductImportRequest,
+    _auth: bool = Depends(verify_admin_key),
+):
+    try:
+        result = await import_tiktok_product(
+            product_url=req.product_url,
+            language=req.language,
+        )
+
+        if not result.get("success"):
+            return TikTokProductImportResponse(
+                success=False,
+                error=result.get("error", "Import failed"),
+            )
+
+        product = result["product"]
+        added_to_session = None
+
+        # Auto-add to session if session_id provided
+        if req.session_id:
+            added_to_session = add_product_to_session(req.session_id, product)
+
+        return TikTokProductImportResponse(
+            success=True,
+            product=product,
+            added_to_session=added_to_session,
+        )
+
+    except Exception as e:
+        logger.exception(f"TikTok product import endpoint error: {e}")
+        return TikTokProductImportResponse(
+            success=False,
+            error=f"Internal error: {str(e)}",
+        )

@@ -356,3 +356,192 @@ async def generate_session_scripts(
     session["scripts_generated"] = results
     session["updated_at"] = time.time()
     return results
+
+
+# ══════════════════════════════════════════════
+# TikTok Shop Product Import — URL → AI Analysis
+# ══════════════════════════════════════════════
+
+TIKTOK_PRODUCT_ANALYSIS_PROMPT = """あなたはECサイトの商品データ解析AIです。
+TikTok Shopの商品タイトルと画像URLから、ライブコマース配信に必要な商品情報を構造化してください。
+
+出力はJSON形式で、以下のフィールドを含めてください:
+{
+  "name": "商品名（簡潔に）",
+  "description": "商品の説明文（50〜150文字）",
+  "price": "価格（わかる場合のみ）",
+  "features": ["特徴1", "特徴2", "特徴3"],
+  "category": "カテゴリ（例: 美容, ファッション, 食品, 電子機器, etc.）",
+  "target_audience": "ターゲット層（例: 20〜30代女性）",
+  "selling_points": ["セールスポイント1", "セールスポイント2"]
+}
+
+ルール:
+1. 商品タイトルから情報を最大限抽出する
+2. 不明な項目は推測で埋めるが、価格が不明な場合は空文字にする
+3. JSONのみ出力（説明文やマークダウンは不要）"""
+
+
+async def import_tiktok_product(
+    product_url: str,
+    language: str = "ja",
+) -> Dict[str, Any]:
+    """
+    Import a product from TikTok Shop URL.
+
+    Supports:
+      - Short URLs: https://vt.tiktok.com/...
+      - Full URLs: https://www.tiktok.com/view/product/...
+
+    Flow:
+      1. Follow redirect to get full URL with og_info
+      2. Parse og_info for product title + image
+      3. Use GPT to analyze and structure the product data
+    """
+    import httpx
+    import json as json_module
+    import urllib.parse
+    import re
+
+    product_title = ""
+    product_image = ""
+    product_id = ""
+    original_url = product_url
+
+    try:
+        # ── Step 1: Resolve short URL → full URL ──
+        async with httpx.AsyncClient(follow_redirects=False, timeout=15) as client:
+            redirect_url = product_url
+
+            # Follow up to 5 redirects manually to capture the final URL
+            for _ in range(5):
+                resp = await client.head(redirect_url, follow_redirects=False)
+                if resp.status_code in (301, 302, 303, 307, 308):
+                    redirect_url = str(resp.headers.get("location", ""))
+                    if not redirect_url.startswith("http"):
+                        # Relative redirect
+                        break
+                else:
+                    break
+
+        logger.info(f"TikTok URL resolved: {redirect_url[:200]}")
+
+        # ── Step 2: Parse og_info from URL parameters ──
+        parsed = urllib.parse.urlparse(redirect_url)
+        params = urllib.parse.parse_qs(parsed.query)
+
+        # Extract product ID from path
+        path_match = re.search(r"/product/(\d+)", parsed.path)
+        if path_match:
+            product_id = path_match.group(1)
+
+        # Extract og_info (contains title + image)
+        if "og_info" in params:
+            og_info = json_module.loads(params["og_info"][0])
+            product_title = og_info.get("title", "")
+            product_image = og_info.get("image", "")
+            logger.info(f"TikTok og_info parsed: title='{product_title[:60]}', image={'yes' if product_image else 'no'}")
+
+        # Fallback: try to extract from encode_params or other fields
+        if not product_title:
+            # Try unique_id (shop name)
+            shop_name = params.get("unique_id", [""])[0]
+            if product_id:
+                product_title = f"TikTok Product #{product_id}"
+                if shop_name:
+                    product_title += f" by @{shop_name}"
+
+        if not product_title:
+            return {
+                "success": False,
+                "error": "商品情報を取得できませんでした。URLを確認してください。",
+            }
+
+        # ── Step 3: GPT Analysis — Enrich product data ──
+        lang_map = {"ja": "日本語", "zh": "中文", "en": "English"}
+        lang_name = lang_map.get(language, "日本語")
+
+        prompt = f"""以下のTikTok Shop商品のタイトルから、商品情報を{lang_name}で構造化してください。
+
+商品タイトル: {product_title}
+商品ID: {product_id}
+商品画像URL: {product_image or '(なし)'}
+
+JSONのみ出力してください。"""
+
+        import openai
+        client = openai.AsyncOpenAI()
+        response = await client.chat.completions.create(
+            model="gpt-4.1-nano",
+            messages=[
+                {"role": "system", "content": TIKTOK_PRODUCT_ANALYSIS_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=512,
+            temperature=0.3,
+        )
+
+        raw_text = response.choices[0].message.content.strip()
+
+        # Parse JSON from response (handle markdown code blocks)
+        json_text = raw_text
+        if "```" in json_text:
+            json_match = re.search(r"```(?:json)?\s*([\s\S]*?)```", json_text)
+            if json_match:
+                json_text = json_match.group(1).strip()
+
+        product_data = json_module.loads(json_text)
+
+        # Ensure required fields
+        product_data.setdefault("name", product_title)
+        product_data.setdefault("description", "")
+        product_data.setdefault("price", "")
+        product_data.setdefault("features", [])
+
+        # Add metadata
+        product_data["image_url"] = product_image
+        product_data["original_url"] = original_url
+        product_data["tiktok_product_id"] = product_id
+        product_data["source"] = "tiktok_shop"
+
+        logger.info(f"TikTok product imported: '{product_data['name']}' with {len(product_data.get('features', []))} features")
+
+        return {
+            "success": True,
+            "product": product_data,
+        }
+
+    except json_module.JSONDecodeError as e:
+        logger.error(f"TikTok product GPT response parse error: {e}")
+        # Return basic data even if GPT parsing fails
+        return {
+            "success": True,
+            "product": {
+                "name": product_title or "Unknown Product",
+                "description": product_title,
+                "price": "",
+                "features": [],
+                "image_url": product_image,
+                "original_url": original_url,
+                "tiktok_product_id": product_id,
+                "source": "tiktok_shop",
+            },
+        }
+
+    except Exception as e:
+        logger.exception(f"TikTok product import error: {e}")
+        return {
+            "success": False,
+            "error": f"商品情報の取得に失敗しました: {str(e)}",
+        }
+
+
+def add_product_to_session(session_id: str, product: Dict[str, Any]) -> bool:
+    """Add an imported product to a live session."""
+    session = _sessions.get(session_id)
+    if session:
+        session["products"].append(product)
+        session["updated_at"] = time.time()
+        logger.info(f"Product added to session {session_id}: {product.get('name', 'unknown')}")
+        return True
+    return False
