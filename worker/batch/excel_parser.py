@@ -25,20 +25,44 @@ def _parse_conn_str(conn_str: str) -> dict:
     return out
 
 
-def _ensure_sas_token(blob_url: str) -> str:
+def _ensure_sas_token(blob_url: str, force_regenerate: bool = False) -> str:
     """
-    Ensure the blob URL has a SAS token for authentication.
-    If no SAS token is present, generate one using the connection string.
+    Ensure the blob URL has a valid SAS token for authentication.
+    Always strips any existing (potentially expired) SAS token and generates
+    a fresh one using the connection string.
+
+    Args:
+        blob_url: Azure Blob Storage URL (with or without SAS token)
+        force_regenerate: If True, always regenerate SAS even if one exists
     """
     if not blob_url:
         return blob_url
 
-    # Already has SAS token
-    if "?" in blob_url and ("sig=" in blob_url or "se=" in blob_url):
+    # Strip existing SAS token (it may be expired)
+    base_url = blob_url.split("?")[0] if "?" in blob_url else blob_url
+
+    # If no connection string available, fall back to original URL
+    if not AZURE_STORAGE_CONNECTION_STRING:
+        if "?" in blob_url and ("sig=" in blob_url or "se=" in blob_url):
+            # Has existing SAS, check if still valid
+            try:
+                from urllib.parse import parse_qs
+                from datetime import datetime
+                qs = parse_qs(blob_url.split("?", 1)[1])
+                se_val = qs.get("se", [""])[0]
+                if se_val:
+                    expiry = datetime.fromisoformat(se_val.replace("Z", "+00:00"))
+                    if expiry > datetime.now(expiry.tzinfo):
+                        return blob_url  # Still valid
+            except Exception:
+                pass
+            logger.warning("[EXCEL] SAS token may be expired but no credentials to regenerate")
+            return blob_url
+        logger.warning("[EXCEL] No Azure credentials available for SAS generation")
         return blob_url
 
-    # No SAS token → generate one
-    logger.info("[EXCEL] No SAS token in URL, generating one...")
+    # Generate fresh SAS token
+    logger.info("[EXCEL] Generating fresh SAS token...")
     try:
         from azure.storage.blob import generate_blob_sas, BlobSasPermissions
         from datetime import datetime, timedelta
@@ -52,10 +76,10 @@ def _ensure_sas_token(blob_url: str) -> str:
             return blob_url
 
         # Parse blob URL to extract container and blob path
-        parsed = urlparse(blob_url)
+        parsed = urlparse(base_url)
         path_parts = parsed.path.lstrip("/").split("/", 1)
         if len(path_parts) < 2:
-            logger.warning("[EXCEL] Cannot parse blob path from URL: %s", blob_url)
+            logger.warning("[EXCEL] Cannot parse blob path from URL: %s", base_url)
             return blob_url
 
         container_name = path_parts[0]
@@ -70,8 +94,8 @@ def _ensure_sas_token(blob_url: str) -> str:
             permission=BlobSasPermissions(read=True),
             expiry=expiry,
         )
-        url_with_sas = f"{blob_url}?{sas}"
-        logger.info("[EXCEL] SAS token generated successfully")
+        url_with_sas = f"{base_url}?{sas}"
+        logger.info("[EXCEL] Fresh SAS token generated successfully")
         return url_with_sas
 
     except Exception as e:
