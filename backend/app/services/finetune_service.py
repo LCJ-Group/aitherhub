@@ -59,7 +59,7 @@ async def build_training_dataset(
     tag_sql = text("""
         SELECT pvt.video_id, v.original_filename, v.status
         FROM persona_video_tags pvt
-        JOIN videos v ON v.id = pvt.video_id
+        JOIN videos v ON pvt.video_id = v.id::text
         WHERE pvt.persona_id = :pid
           AND v.status = 'DONE'
         ORDER BY v.created_at ASC
@@ -103,7 +103,6 @@ async def build_training_dataset(
         LEFT JOIN phase_insights pi
             ON pi.video_id = vp.video_id
             AND pi.phase_index = vp.phase_index
-            AND pi.deleted_at IS NULL
         WHERE vp.video_id = ANY(:vids)
           AND (vp.phase_description IS NOT NULL OR pi.insight IS NOT NULL)
         ORDER BY vp.video_id, vp.phase_index ASC

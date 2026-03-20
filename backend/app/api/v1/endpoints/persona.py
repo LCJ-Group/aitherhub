@@ -163,7 +163,7 @@ async def get_persona(
                 SELECT pvt.video_id, v.original_filename, v.status, v.created_at,
                        pvt.included_in_training
                 FROM persona_video_tags pvt
-        JOIN videos v ON v.id = pvt.video_id
+        JOIN videos v ON pvt.video_id = v.id::text
         WHERE pvt.persona_id = :pid
         ORDER BY v.created_at DESC
             """)
