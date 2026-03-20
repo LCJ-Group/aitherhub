@@ -59,7 +59,7 @@ async def build_training_dataset(
     tag_sql = text("""
         SELECT pvt.video_id, v.original_filename, v.status
         FROM persona_video_tags pvt
-        JOIN videos v ON CAST(v.id AS text) = pvt.video_id
+        JOIN videos v ON v.id = pvt.video_id
         WHERE pvt.persona_id = :pid
           AND v.status = 'DONE'
         ORDER BY v.created_at ASC
@@ -92,7 +92,7 @@ async def build_training_dataset(
     # phase_insights.insight contains GPT analysis per phase
     phases_sql = text("""
         SELECT
-            CAST(vp.video_id AS text) AS video_id,
+            vp.video_id,
             vp.phase_index,
             vp.phase_description,
             vp.time_start,
@@ -101,10 +101,10 @@ async def build_training_dataset(
             pi.insight
         FROM video_phases vp
         LEFT JOIN phase_insights pi
-            ON CAST(pi.video_id AS text) = CAST(vp.video_id AS text)
+            ON pi.video_id = vp.video_id
             AND pi.phase_index = vp.phase_index
             AND pi.deleted_at IS NULL
-        WHERE CAST(vp.video_id AS text) = ANY(:vids)
+        WHERE vp.video_id = ANY(:vids)
           AND (vp.phase_description IS NOT NULL OR pi.insight IS NOT NULL)
         ORDER BY vp.video_id, vp.phase_index ASC
     """)
@@ -151,7 +151,7 @@ async def _build_from_speech_segments(
             ac.chunk_index
         FROM speech_segments ss
         JOIN audio_chunks ac ON ss.audio_chunk_id = ac.id
-        WHERE CAST(ac.video_id AS text) = ANY(:vids)
+        WHERE ac.video_id = ANY(:vids)
           AND ss.confidence >= 0.5
         ORDER BY ac.video_id, ss.start_ms ASC
     """)
