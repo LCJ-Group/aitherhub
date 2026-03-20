@@ -1,4 +1,4 @@
-# app/services/finetune_service.py
+# app/services/finetune_service.py  # v4 - no CAST, no deleted_at
 """
 Service for building fine-tuning datasets from persona-tagged videos
 and managing OpenAI fine-tuning jobs.
