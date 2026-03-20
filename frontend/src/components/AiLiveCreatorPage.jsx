@@ -597,6 +597,8 @@ export default function AiLiveCreatorPage() {
                 currentProduct={previewProducts[autoGenerateIndexRef.current % Math.max(previewProducts.length, 1)]}
                 isLive={!!liveSessionId}
                 autoPilotActive={autoPilotActive}
+                voiceId={selectedVoiceId}
+                language={languageCode}
                 onRequestNextVideo={() => {
                   if (liveStreamPanelRef.current?.generateNextVideo) {
                     liveStreamPanelRef.current.generateNextVideo();

@@ -2512,13 +2512,14 @@ async def autopilot_next(
                 current_product = products[req.current_product_index]
 
             from app.services.live_session_service import generate_comment_response
-            reply_result = await generate_comment_response(
+            reply_text = await generate_comment_response(
                 comment_text=comment_text,
                 commenter_name=commenter,
                 current_product=current_product,
                 language=req.language,
             )
-            reply_text = reply_result.get("reply_text", f"谢谢{commenter}的留言！")
+            if not reply_text:
+                reply_text = f"谢谢{commenter}的留言！"
 
             # Generate TTS
             el_service = get_elevenlabs_service()
@@ -2590,7 +2591,7 @@ async def autopilot_next(
 
         # Generate script using Sales Brain
         from app.services.live_session_service import generate_product_script
-        script_result = await generate_product_script(
+        script_text = await generate_product_script(
             product_name=product_name,
             product_description=product_desc,
             product_price=product_price,
@@ -2599,7 +2600,8 @@ async def autopilot_next(
             language=req.language,
             script_type=next_script_type,
         )
-        script_text = script_result.get("script_text", f"这款{product_name}真的很不错！")
+        if not script_text:
+            script_text = f"この{product_name}は本当に素晴らしい商品です！"
 
         # Generate TTS
         el_service = get_elevenlabs_service()

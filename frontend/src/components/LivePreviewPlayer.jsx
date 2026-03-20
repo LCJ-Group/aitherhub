@@ -49,6 +49,8 @@ export default function LivePreviewPlayer({
   currentProduct,
   isLive = false,
   autoPilotActive = false,
+  voiceId,
+  language = "ja",
   onVideoEnded,
   onRequestNextVideo,
   onAutoPilotStateChange,
@@ -213,7 +215,8 @@ export default function LivePreviewPlayer({
         current_product_index: autoPilotProductIndex,
         current_script_type: autoPilotScriptType,
         pending_comments: pendingComments.length > 0 ? pendingComments : null,
-        language: "zh",
+        language: language || "ja",
+        voice_id: voiceId || null,
       });
 
       if (!result.success) {
@@ -306,7 +309,7 @@ export default function LivePreviewPlayer({
           text,
           speak_type: scriptType,
           product_name: productName,
-          language: "zh",
+          language: language || "ja",
         });
 
         if (result.success && result.audio_url) {
