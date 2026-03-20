@@ -362,92 +362,29 @@ async def generate_session_scripts(
 # TikTok Shop Product Import — URL → AI Analysis
 # ══════════════════════════════════════════════
 
-TIKTOK_PRODUCT_ANALYSIS_PROMPT = """あなたはECサイトの商品データ解析AIです。
-TikTok Shopの商品タイトルと画像URLから、ライブコマース配信に必要な商品情報を構造化してください。
-
-出力はJSON形式で、以下のフィールドを含めてください:
-{
-  "name": "商品名（簡潔に）",
-  "description": "商品の説明文（50〜150文字）",
-  "price": "価格（わかる場合のみ）",
-  "features": ["特徴1", "特徴2", "特徴3"],
-  "category": "カテゴリ（例: 美容, ファッション, 食品, 電子機器, etc.）",
-  "target_audience": "ターゲット層（例: 20〜30代女性）",
-  "selling_points": ["セールスポイント1", "セールスポイント2"]
-}
-
-ルール:
-1. 商品タイトルから情報を最大限抽出する
-2. 不明な項目は推測で埋めるが、価格が不明な場合は空文字にする
-3. JSONのみ出力（説明文やマークダウンは不要）"""
-
-
 async def _resolve_tiktok_url(product_url: str) -> str:
-    """Resolve TikTok short URL to full URL by following redirects (using requests in thread)."""
-    import asyncio
-    import requests as sync_requests
+    """Resolve TikTok short URL to full URL by following redirects (using httpx)."""
+    import httpx
 
-    def _follow_redirects(url: str) -> str:
+    try:
+        async with httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=15.0,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; AitherHub/1.0)"},
+        ) as client:
+            resp = await client.head(product_url)
+            return str(resp.url)
+    except Exception:
         try:
-            resp = sync_requests.head(
-                url,
-                allow_redirects=True,
-                timeout=15,
-                headers={"User-Agent": "Mozilla/5.0 (compatible; AitherHub/1.0)"}
-            )
-            return resp.url
+            async with httpx.AsyncClient(
+                follow_redirects=True,
+                timeout=15.0,
+                headers={"User-Agent": "Mozilla/5.0 (compatible; AitherHub/1.0)"},
+            ) as client:
+                resp = await client.get(product_url)
+                return str(resp.url)
         except Exception:
-            # Fallback: try GET
-            try:
-                resp = sync_requests.get(
-                    url,
-                    allow_redirects=True,
-                    timeout=15,
-                    headers={"User-Agent": "Mozilla/5.0 (compatible; AitherHub/1.0)"},
-                    stream=True,
-                )
-                final_url = resp.url
-                resp.close()
-                return final_url
-            except Exception:
-                return url
-
-    loop = asyncio.get_event_loop()
-    resolved = await loop.run_in_executor(None, _follow_redirects, product_url)
-    return str(resolved)
-
-
-async def _analyze_product_with_gpt(
-    product_title: str,
-    product_id: str,
-    product_image: str,
-    language: str,
-) -> str:
-    """Use GPT to analyze product title and return structured JSON."""
-    import openai
-
-    lang_map = {"ja": "日本語", "zh": "中文", "en": "English"}
-    lang_name = lang_map.get(language, "日本語")
-
-    prompt = f"""以下のTikTok Shop商品のタイトルから、商品情報を{lang_name}で構造化してください。
-
-商品タイトル: {product_title}
-商品ID: {product_id}
-商品画像URL: {product_image or '(なし)'}
-
-JSONのみ出力してください。"""
-
-    client = openai.AsyncOpenAI()
-    response = await client.chat.completions.create(
-        model="gpt-4.1-nano",
-        messages=[
-            {"role": "system", "content": TIKTOK_PRODUCT_ANALYSIS_PROMPT},
-            {"role": "user", "content": prompt},
-        ],
-        max_tokens=512,
-        temperature=0.3,
-    )
-    return response.choices[0].message.content.strip()
+            return product_url
 
 
 async def import_tiktok_product(
