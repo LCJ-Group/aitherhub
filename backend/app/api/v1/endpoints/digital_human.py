@@ -2699,48 +2699,42 @@ async def debug_gpt_test(_auth: bool = Depends(verify_admin_key)):
         "gpt5_api_version": os.getenv("GPT5_API_VERSION", "not set"),
     }
 
-    # Test Azure OpenAI
+    # Test Azure OpenAI with Responses API (matching chat.py / live_ai.py)
     azure_key = os.getenv("AZURE_OPENAI_KEY", "")
     azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
     azure_model = os.getenv("GPT5_MODEL") or os.getenv("GPT5_DEPLOYMENT") or "gpt-4.1-mini"
     if azure_key and azure_endpoint:
         try:
             import openai
-            client = openai.AsyncAzureOpenAI(
+            client = openai.AzureOpenAI(
                 api_key=azure_key,
                 azure_endpoint=azure_endpoint,
-                api_version=os.getenv("GPT5_API_VERSION", "2024-12-01-preview"),
+                api_version=os.getenv("GPT5_API_VERSION", "2025-04-01-preview"),
             )
-            response = await client.chat.completions.create(
+            response = client.responses.create(
                 model=azure_model,
-                messages=[{"role": "user", "content": "Say hello in Japanese"}],
-                max_tokens=50,
+                input=[{"role": "user", "content": "Say hello in Japanese in one sentence"}],
+                max_output_tokens=50,
                 temperature=0.5,
             )
-            results["azure_openai_test"] = "SUCCESS"
-            results["azure_openai_response"] = response.choices[0].message.content.strip()[:100]
+            text = response.output_text if hasattr(response, 'output_text') else str(response)
+            results["azure_responses_api_test"] = "SUCCESS"
+            results["azure_responses_api_response"] = text.strip()[:100]
         except Exception as e:
-            results["azure_openai_test"] = f"FAILED: {str(e)[:200]}"
+            results["azure_responses_api_test"] = f"FAILED: {str(e)[:200]}"
     else:
-        results["azure_openai_test"] = "SKIPPED (no credentials)"
+        results["azure_responses_api_test"] = "SKIPPED (no credentials)"
 
-    # Test OpenAI-compatible API
-    openai_key = os.getenv("OPENAI_API_KEY", "")
-    if openai_key:
-        try:
-            import openai
-            client = openai.AsyncOpenAI()
-            response = await client.chat.completions.create(
-                model="gpt-4.1-mini",
-                messages=[{"role": "user", "content": "Say hello in Japanese"}],
-                max_tokens=50,
-                temperature=0.5,
-            )
-            results["openai_test"] = "SUCCESS"
-            results["openai_response"] = response.choices[0].message.content.strip()[:100]
-        except Exception as e:
-            results["openai_test"] = f"FAILED: {str(e)[:200]}"
-    else:
-        results["openai_test"] = "SKIPPED (no OPENAI_API_KEY)"
+    # Test _call_gpt (the actual function used by Sales Brain)
+    try:
+        from app.services.live_session_service import _call_gpt
+        gpt_result = await _call_gpt(
+            messages=[{"role": "user", "content": "Say hello in Japanese in one sentence"}],
+            max_tokens=50,
+        )
+        results["_call_gpt_test"] = "SUCCESS"
+        results["_call_gpt_response"] = gpt_result[:100]
+    except Exception as e:
+        results["_call_gpt_test"] = f"FAILED: {str(e)[:300]}"
 
     return results

@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 
 # ══════════════════════════════════════════════
-# GPT Client — Azure OpenAI primary, OpenAI fallback
+# GPT Client — Azure OpenAI Responses API (production)
 # ══════════════════════════════════════════════
 
 async def _call_gpt(
@@ -43,40 +43,67 @@ async def _call_gpt(
 ) -> str:
     """
     Call GPT using the best available provider.
-    Priority: Azure OpenAI → OpenAI-compatible API → raise error.
+    Priority: Azure OpenAI (Responses API) → OpenAI Chat Completions → raise error.
+
+    Azure OpenAI with gpt-5.2-chat uses the Responses API:
+      client.responses.create(model=..., input=...) instead of
+      client.chat.completions.create(model=..., messages=...)
+    This matches the pattern used in chat.py and live_ai.py.
     """
+    import openai
     errors = []
 
-    # --- Strategy 1: Azure OpenAI (used in production) ---
+    # --- Strategy 1: Azure OpenAI Responses API (production) ---
     azure_key = os.getenv("AZURE_OPENAI_KEY", "")
     azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
     azure_model = os.getenv("GPT5_MODEL") or os.getenv("GPT5_DEPLOYMENT") or "gpt-4.1-mini"
     if azure_key and azure_endpoint:
         try:
-            import openai
-            client = openai.AsyncAzureOpenAI(
+            client = openai.AzureOpenAI(
                 api_key=azure_key,
                 azure_endpoint=azure_endpoint,
-                api_version=os.getenv("GPT5_API_VERSION", "2024-12-01-preview"),
+                api_version=os.getenv("GPT5_API_VERSION", "2025-04-01-preview"),
             )
-            response = await client.chat.completions.create(
+            # Convert messages list to Responses API input format
+            input_payload = []
+            for m in messages:
+                role = m.get("role", "user")
+                content = m.get("content", "")
+                input_payload.append({"role": role, "content": content})
+
+            response = client.responses.create(
                 model=azure_model,
-                messages=messages,
-                max_tokens=max_tokens,
+                input=input_payload,
+                max_output_tokens=max_tokens,
                 temperature=temperature,
             )
-            result = response.choices[0].message.content.strip()
-            logger.info(f"_call_gpt: Azure OpenAI success ({len(result)} chars, model={azure_model})")
-            return result
+            # Extract text from Responses API response
+            result = ""
+            if hasattr(response, "output_text") and response.output_text:
+                result = response.output_text.strip()
+            elif hasattr(response, "output") and response.output:
+                # Fallback: iterate output items
+                for item in response.output:
+                    if hasattr(item, "content"):
+                        for part in item.content:
+                            if hasattr(part, "text"):
+                                result += part.text
+                result = result.strip()
+
+            if result:
+                logger.info(f"_call_gpt: Azure OpenAI Responses API success ({len(result)} chars, model={azure_model})")
+                return result
+            else:
+                errors.append("Azure OpenAI: empty response")
+                logger.warning("_call_gpt Azure OpenAI returned empty response")
         except Exception as e:
-            errors.append(f"Azure OpenAI: {e}")
+            errors.append(f"Azure OpenAI: {str(e)[:200]}")
             logger.warning(f"_call_gpt Azure OpenAI failed: {e}")
 
-    # --- Strategy 2: OpenAI-compatible API (OPENAI_API_KEY + OPENAI_BASE_URL) ---
+    # --- Strategy 2: OpenAI Chat Completions (sandbox / fallback) ---
     openai_key = os.getenv("OPENAI_API_KEY", "")
     if openai_key:
         try:
-            import openai
             client = openai.AsyncOpenAI()
             response = await client.chat.completions.create(
                 model=model,
@@ -88,7 +115,7 @@ async def _call_gpt(
             logger.info(f"_call_gpt: OpenAI success ({len(result)} chars, model={model})")
             return result
         except Exception as e:
-            errors.append(f"OpenAI: {e}")
+            errors.append(f"OpenAI: {str(e)[:200]}")
             logger.warning(f"_call_gpt OpenAI failed: {e}")
 
     raise RuntimeError(f"All GPT providers failed: {'; '.join(errors)}")
