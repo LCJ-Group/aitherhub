@@ -2590,6 +2590,8 @@ async def autopilot_start(
             "cycle_duration_sec": req.cycle_duration_sec,
             "started_at": time.time(),
             "total_speaks": 0,
+            "previous_script": "",
+            "persona": req.persona or {},
         }
 
         return AutoPilotStartResponse(
@@ -2632,58 +2634,13 @@ async def autopilot_next(
     autopilot = session.get("autopilot", {})
 
     try:
-        # Priority 1: Respond to pending comments
-        if req.pending_comments and len(req.pending_comments) > 0:
-            comment = req.pending_comments[0]
-            comment_text = comment.get("text", comment.get("comment", ""))
-            commenter = comment.get("name", comment.get("commenter_name", "观众"))
+        # Retrieve autopilot context
+        previous_script = autopilot.get("previous_script", "")
+        persona = autopilot.get("persona", {})
+        has_comments = bool(req.pending_comments and len(req.pending_comments) > 0)
 
-            # Get current product for context
-            current_product = None
-            if products and req.current_product_index < len(products):
-                current_product = products[req.current_product_index]
-
-            from app.services.live_session_service import generate_comment_response
-            reply_text = await generate_comment_response(
-                comment_text=comment_text,
-                commenter_name=commenter,
-                current_product=current_product,
-                language=req.language,
-            )
-            if not reply_text:
-                reply_text = f"谢谢{commenter}的留言！"
-
-            # Generate TTS
-            el_service = get_elevenlabs_service()
-            voice_id = req.voice_id or session.get("voice_id")
-            mp3_audio = await el_service.text_to_speech(
-                text=reply_text,
-                voice_id=voice_id,
-                output_format="mp3_44100_128",
-                language_code=req.language,
-            )
-            duration_ms = len(mp3_audio) / 16.0
-            audio_id = f"reply-{int(time.time())}"
-            blob_url = await _upload_mp3_to_blob(mp3_audio, audio_id)
-            audio_url = _ensure_sas_url(blob_url)
-
-            autopilot["total_speaks"] = autopilot.get("total_speaks", 0) + 1
-
-            return AutoPilotNextResponse(
-                success=True,
-                action="reply_comment",
-                audio_url=audio_url,
-                audio_duration_ms=round(duration_ms, 1),
-                text=reply_text,
-                script_type="comment_reply",
-                product_name=current_product.get("name") if current_product else None,
-                product_index=req.current_product_index,
-                next_state=req.current_state,
-            )
-
-        # Priority 2: Product scripts cycle
+        # No products — generate a generic greeting/filler
         if not products:
-            # No products — generate a generic greeting/filler
             filler_text = _generate_filler_script(req.language)
             el_service = get_elevenlabs_service()
             voice_id = req.voice_id or session.get("voice_id")
@@ -2697,6 +2654,7 @@ async def autopilot_next(
             audio_id = f"filler-{int(time.time())}"
             blob_url = await _upload_mp3_to_blob(mp3_audio, audio_id)
             audio_url = _ensure_sas_url(blob_url)
+            autopilot["previous_script"] = filler_text
 
             return AutoPilotNextResponse(
                 success=True,
@@ -2708,11 +2666,12 @@ async def autopilot_next(
                 next_state="idle",
             )
 
-        # Determine next script based on state
+        # Determine next script based on state (comments influence the cycle)
         product_index = req.current_product_index
         script_type = req.current_script_type
         next_script_type, next_product_index, next_state = _advance_script_state(
-            script_type, product_index, len(products)
+            script_type, product_index, len(products),
+            has_comments=has_comments,
         )
 
         product = products[next_product_index]
@@ -2721,7 +2680,7 @@ async def autopilot_next(
         product_price = product.get("price", product.get("product_price", ""))
         product_features = product.get("features", product.get("product_features", []))
 
-        # Generate script using Sales Brain
+        # Generate script using Sales Brain (with context, comments, persona)
         from app.services.live_session_service import generate_product_script
         script_text = await generate_product_script(
             product_name=product_name,
@@ -2731,6 +2690,9 @@ async def autopilot_next(
             tone="energetic",
             language=req.language,
             script_type=next_script_type,
+            previous_script=previous_script,
+            pending_comments=req.pending_comments if has_comments else None,
+            persona=persona if persona else None,
         )
         if not script_text:
             script_text = f"この{product_name}は本当に素晴らしい商品です！"
@@ -2789,8 +2751,12 @@ async def autopilot_next(
         autopilot["product_index"] = next_product_index
         autopilot["script_type"] = next_script_type
         autopilot["total_speaks"] = autopilot.get("total_speaks", 0) + 1
+        autopilot["previous_script"] = script_text  # Keep context for next call
 
         action = "switch_product" if next_product_index != product_index else "speak_script"
+        # If comments were woven in, mark as interaction
+        if has_comments and next_script_type == "interaction":
+            action = "speak_script"  # Not a separate reply_comment action
 
         return AutoPilotNextResponse(
             success=True,
@@ -2817,18 +2783,35 @@ async def autopilot_next(
 
 
 def _advance_script_state(
-    current_type: str, current_index: int, total_products: int
+    current_type: str, current_index: int, total_products: int,
+    has_comments: bool = False,
 ) -> tuple:
     """
-    State machine for script cycling:
-    introduction → highlight → promotion → closing → (next product) introduction → ...
+    State machine for script cycling (enhanced for continuous livestream flow):
+
+    Base cycle per product:
+      introduction → highlight → interaction/filler → promotion → closing → (next product)
+
+    - After highlight, if there are pending comments, insert "interaction" state
+      (comments woven into product talk). Otherwise insert "filler" (engagement talk).
+    - This ensures the AI keeps talking continuously, not just responding to comments.
+
     Returns: (next_script_type, next_product_index, next_state)
     """
-    script_cycle = ["introduction", "highlight", "promotion", "closing"]
-    try:
-        current_pos = script_cycle.index(current_type)
-    except ValueError:
-        current_pos = -1
+    # Extended cycle: introduction → highlight → interaction/filler → promotion → closing
+    script_cycle = ["introduction", "highlight", "_interact_or_filler", "promotion", "closing"]
+    
+    # Map current_type to position
+    type_to_pos = {
+        "introduction": 0,
+        "highlight": 1,
+        "interaction": 2,
+        "filler": 2,
+        "_interact_or_filler": 2,
+        "promotion": 3,
+        "closing": 4,
+    }
+    current_pos = type_to_pos.get(current_type, -1)
 
     next_pos = current_pos + 1
     if next_pos >= len(script_cycle):
@@ -2836,7 +2819,10 @@ def _advance_script_state(
         next_index = (current_index + 1) % total_products
         return "introduction", next_index, "product_intro"
     else:
-        return script_cycle[next_pos], current_index, "product_intro"
+        next_type = script_cycle[next_pos]
+        if next_type == "_interact_or_filler":
+            next_type = "interaction" if has_comments else "filler"
+        return next_type, current_index, "product_intro"
 
 
 def _generate_filler_script(language: str) -> str:

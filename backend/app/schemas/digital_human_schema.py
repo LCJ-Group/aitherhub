@@ -952,6 +952,10 @@ class AutoPilotStartRequest(BaseModel):
         30,
         description="Approximate duration per script segment in seconds"
     )
+    persona: Optional[dict] = Field(
+        None,
+        description="Livestreamer persona settings: {speaking_style, catchphrases, personality, expertise}"
+    )
 
 
 class AutoPilotStartResponse(BaseModel):
@@ -969,7 +973,7 @@ class AutoPilotNextRequest(BaseModel):
     current_product_index: int = Field(0, description="Index of current product")
     current_script_type: str = Field(
         "introduction",
-        description="Last script type: introduction / highlight / promotion / closing"
+        description="Last script type: introduction / highlight / interaction / filler / promotion / closing"
     )
     pending_comments: Optional[List[dict]] = Field(
         None, description="Unresponded viewer comments"
