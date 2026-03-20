@@ -10,6 +10,12 @@ const ADMIN_KEY = `${ADMIN_ID}:${ADMIN_PASS}`;
  * Communicates with the backend MuseTalk + IMTalker API endpoints.
  * Standard (MuseTalk): Portrait + Audio → Lip-sync only
  * Premium (IMTalker):  Portrait + Audio → Full facial animation
+ *
+ * Also includes:
+ *   - Live Session management
+ *   - Sales Brain (帯貨大脳) script generation
+ *   - Comment Response generation
+ *   - Video Queue management
  */
 class AiLiveCreatorService {
   constructor() {
@@ -135,6 +141,100 @@ class AiLiveCreatorService {
     });
 
     return blob_url;
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // Live Session Management
+  // ══════════════════════════════════════════════════════════
+
+  async createLiveSession(params) {
+    const res = await axios.post(
+      `${this.baseURL}/api/v1/digital-human/live-session/create`,
+      params,
+      { headers: this._headers() }
+    );
+    return res.data;
+  }
+
+  async getLiveSession(sessionId) {
+    const res = await axios.get(
+      `${this.baseURL}/api/v1/digital-human/live-session/${sessionId}`,
+      { headers: this._headers() }
+    );
+    return res.data;
+  }
+
+  async listLiveSessions() {
+    const res = await axios.get(
+      `${this.baseURL}/api/v1/digital-human/live-sessions`,
+      { headers: this._headers() }
+    );
+    return res.data;
+  }
+
+  async closeLiveSession(sessionId) {
+    const res = await axios.post(
+      `${this.baseURL}/api/v1/digital-human/live-session/${sessionId}/close`,
+      {},
+      { headers: this._headers() }
+    );
+    return res.data;
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // Sales Brain (帯貨大脳) — Product Script Generation
+  // ══════════════════════════════════════════════════════════
+
+  async generateProductScript(params) {
+    const res = await axios.post(
+      `${this.baseURL}/api/v1/digital-human/sales-brain/generate-script`,
+      params,
+      { headers: this._headers() }
+    );
+    return res.data;
+  }
+
+  async generateAllSessionScripts(sessionId) {
+    const res = await axios.post(
+      `${this.baseURL}/api/v1/digital-human/live-session/${sessionId}/generate-all-scripts`,
+      {},
+      { headers: this._headers() }
+    );
+    return res.data;
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // Comment Response
+  // ══════════════════════════════════════════════════════════
+
+  async generateCommentResponse(params) {
+    const res = await axios.post(
+      `${this.baseURL}/api/v1/digital-human/comment-response/generate`,
+      params,
+      { headers: this._headers() }
+    );
+    return res.data;
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // Video Queue
+  // ══════════════════════════════════════════════════════════
+
+  async generateAndQueueVideo(sessionId, params) {
+    const res = await axios.post(
+      `${this.baseURL}/api/v1/digital-human/live-session/${sessionId}/generate-video`,
+      { session_id: sessionId, ...params },
+      { headers: this._headers() }
+    );
+    return res.data;
+  }
+
+  async getSessionQueue(sessionId) {
+    const res = await axios.get(
+      `${this.baseURL}/api/v1/digital-human/live-session/${sessionId}/queue`,
+      { headers: this._headers() }
+    );
+    return res.data;
   }
 }
 

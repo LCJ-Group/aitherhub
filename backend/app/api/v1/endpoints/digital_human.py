@@ -33,6 +33,7 @@ Architecture:
 from __future__ import annotations
 
 import logging
+import time
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Header
@@ -1758,3 +1759,464 @@ async def imtalker_download(
     except Exception as e:
         logger.exception(f"Error downloading IMTalker video: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+
+# ══════════════════════════════════════════════
+# Mode E: AI Live Creator — Livestream Brain
+# ══════════════════════════════════════════════
+#
+# Live Session management with:
+#   - Sales Brain (帯貨大脳): Product → GPT script → TTS → Digital Human video
+#   - Comment Response: Comment → GPT reply → TTS → Digital Human video
+#   - Video Queue: Pre-generated segments for livestream playback
+#
+# Architecture:
+#   Product Info ─┐
+#                 ├──▶ GPT Script ──▶ ElevenLabs TTS ──▶ IMTalker/MuseTalk ──▶ Video Queue
+#   Comment ──────┘
+# ══════════════════════════════════════════════
+
+from app.schemas.digital_human_schema import (
+    CreateLiveSessionRequest,
+    CreateLiveSessionResponse,
+    LiveSessionStatusResponse,
+    ListLiveSessionsResponse,
+    GenerateProductScriptRequest,
+    GenerateProductScriptResponse,
+    CommentResponseRequest,
+    CommentResponseResponse,
+    GenerateAndQueueRequest,
+    GenerateAndQueueResponse,
+)
+from app.services.live_session_service import (
+    create_session,
+    get_session,
+    list_sessions,
+    close_session,
+    add_to_queue,
+    update_queue_item,
+    generate_product_script,
+    generate_comment_response,
+    generate_session_scripts,
+)
+
+
+# ──────────────────────────────────────────────
+# 27. Create Live Session
+# ──────────────────────────────────────────────
+
+@router.post(
+    "/live-session/create",
+    response_model=CreateLiveSessionResponse,
+    summary="Create a new AI Live Creator session",
+    description=(
+        "Create a livestream session with portrait, engine, voice, and product list. "
+        "The session manages video generation queue and Sales Brain scripts."
+    ),
+)
+async def create_live_session(
+    req: CreateLiveSessionRequest,
+    _auth: bool = Depends(verify_admin_key),
+):
+    try:
+        products = [p.model_dump() for p in req.products] if req.products else []
+        portrait_url = _ensure_sas_url(req.portrait_url)
+
+        session = create_session(
+            portrait_url=portrait_url,
+            engine=req.engine,
+            voice_id=req.voice_id,
+            language=req.language,
+            products=products,
+        )
+
+        return CreateLiveSessionResponse(
+            success=True,
+            session_id=session["session_id"],
+            status=session["status"],
+            engine=session["engine"],
+            products_count=len(products),
+        )
+
+    except Exception as e:
+        logger.exception(f"Error creating live session: {e}")
+        return CreateLiveSessionResponse(
+            success=False, error=f"Internal error: {str(e)}"
+        )
+
+
+# ──────────────────────────────────────────────
+# 28. Get Live Session Status
+# ──────────────────────────────────────────────
+
+@router.get(
+    "/live-session/{session_id}",
+    response_model=LiveSessionStatusResponse,
+    summary="Get live session status and queue",
+)
+async def get_live_session(
+    session_id: str,
+    _auth: bool = Depends(verify_admin_key),
+):
+    session = get_session(session_id)
+    if not session:
+        return LiveSessionStatusResponse(
+            success=False, error=f"Session {session_id} not found"
+        )
+    return LiveSessionStatusResponse(success=True, session=session)
+
+
+# ──────────────────────────────────────────────
+# 29. List Live Sessions
+# ──────────────────────────────────────────────
+
+@router.get(
+    "/live-sessions",
+    response_model=ListLiveSessionsResponse,
+    summary="List all active live sessions",
+)
+async def list_live_sessions(
+    _auth: bool = Depends(verify_admin_key),
+):
+    sessions = list_sessions()
+    return ListLiveSessionsResponse(success=True, sessions=sessions)
+
+
+# ──────────────────────────────────────────────
+# 30. Close Live Session
+# ──────────────────────────────────────────────
+
+@router.post(
+    "/live-session/{session_id}/close",
+    summary="Close a live session",
+)
+async def close_live_session_endpoint(
+    session_id: str,
+    _auth: bool = Depends(verify_admin_key),
+):
+    success = close_session(session_id)
+    if not success:
+        return {"success": False, "error": f"Session {session_id} not found"}
+    return {"success": True, "session_id": session_id, "status": "closed"}
+
+
+# ──────────────────────────────────────────────
+# 31. Sales Brain — Generate Product Script (帯貨大脳)
+# ──────────────────────────────────────────────
+
+@router.post(
+    "/sales-brain/generate-script",
+    response_model=GenerateProductScriptResponse,
+    summary="Generate a livestream script for a product (Sales Brain / 帯貨大脳)",
+    description=(
+        "The Sales Brain analyzes product information and generates an optimized "
+        "livestream script for the digital human to read. Supports multiple tones "
+        "and script types (introduction, highlight, promotion, closing)."
+    ),
+)
+async def sales_brain_generate_script(
+    req: GenerateProductScriptRequest,
+    _auth: bool = Depends(verify_admin_key),
+):
+    try:
+        script = await generate_product_script(
+            product_name=req.product_name,
+            product_description=req.product_description,
+            product_price=req.product_price,
+            product_features=req.product_features,
+            tone=req.tone,
+            language=req.language,
+            script_type=req.script_type,
+        )
+
+        return GenerateProductScriptResponse(
+            success=True,
+            product_name=req.product_name,
+            script_type=req.script_type,
+            script_text=script,
+            script_length=len(script),
+        )
+
+    except Exception as e:
+        logger.exception(f"Sales Brain script generation error: {e}")
+        return GenerateProductScriptResponse(
+            success=False, error=f"Script generation failed: {str(e)}"
+        )
+
+
+# ──────────────────────────────────────────────
+# 32. Sales Brain — Generate All Session Scripts
+# ──────────────────────────────────────────────
+
+@router.post(
+    "/live-session/{session_id}/generate-all-scripts",
+    summary="Generate scripts for all products in a session",
+)
+async def generate_all_session_scripts(
+    session_id: str,
+    _auth: bool = Depends(verify_admin_key),
+):
+    try:
+        results = await generate_session_scripts(session_id)
+        return {
+            "success": True,
+            "session_id": session_id,
+            "scripts": results,
+            "total": len(results),
+        }
+    except ValueError as e:
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        logger.exception(f"Error generating session scripts: {e}")
+        return {"success": False, "error": f"Internal error: {str(e)}"}
+
+
+# ──────────────────────────────────────────────
+# 33. Comment Response — Generate Reply
+# ──────────────────────────────────────────────
+
+@router.post(
+    "/comment-response/generate",
+    response_model=CommentResponseResponse,
+    summary="Generate a response to a viewer comment",
+    description=(
+        "The AI generates a natural response to a viewer's comment. "
+        "Optionally auto-generates a digital human video with the response."
+    ),
+)
+async def comment_response_generate(
+    req: CommentResponseRequest,
+    _auth: bool = Depends(verify_admin_key),
+):
+    try:
+        current_product = None
+        if req.current_product:
+            current_product = req.current_product.model_dump()
+
+        reply = await generate_comment_response(
+            comment_text=req.comment_text,
+            commenter_name=req.commenter_name,
+            current_product=current_product,
+            language=req.language,
+        )
+
+        video_job_id = None
+
+        # Auto-generate video if requested
+        if req.auto_generate_video and req.portrait_url:
+            try:
+                portrait_url = _ensure_sas_url(req.portrait_url)
+                el_service = get_elevenlabs_service()
+
+                # Generate TTS
+                pcm_audio = await el_service.text_to_speech(
+                    text=reply,
+                    voice_id=req.voice_id,
+                    output_format="pcm_16000",
+                    language_code=req.language,
+                )
+                wav_data = _pcm_to_wav(pcm_audio, sample_rate=16000)
+                job_id = f"cr-{int(time.time())}"
+                audio_url = await _upload_audio_to_blob(wav_data, job_id)
+                audio_url = _ensure_sas_url(audio_url)
+
+                service = get_musetalk_service()
+
+                if req.engine == "imtalker":
+                    payload = {
+                        "job_id": job_id,
+                        "portrait_url": portrait_url,
+                        "audio_url": audio_url,
+                        "a_cfg_scale": 2.0,
+                        "nfe": 10,
+                        "crop": True,
+                        "output_fps": 25,
+                    }
+                    resp = await service._request(
+                        "POST", "/api/digital-human/imtalker/generate", json=payload
+                    )
+                else:
+                    result = await service.generate(
+                        portrait_url=portrait_url,
+                        audio_url=audio_url,
+                        job_id=job_id,
+                    )
+
+                video_job_id = job_id
+                logger.info(f"Comment response video queued: {job_id}")
+
+                # Add to session queue if session_id provided
+                if req.session_id:
+                    add_to_queue(req.session_id, {
+                        "job_id": job_id,
+                        "type": "comment_reply",
+                        "status": "processing",
+                        "text_preview": reply[:100],
+                        "comment": req.comment_text,
+                        "commenter": req.commenter_name,
+                        "timestamp": time.time(),
+                    })
+
+            except Exception as ve:
+                logger.error(f"Comment response video generation failed: {ve}")
+                # Still return the text reply even if video fails
+
+        # Record in session history
+        if req.session_id:
+            session = get_session(req.session_id)
+            if session:
+                session["comment_history"].append({
+                    "comment": req.comment_text,
+                    "commenter": req.commenter_name,
+                    "reply": reply,
+                    "job_id": video_job_id,
+                    "timestamp": time.time(),
+                })
+
+        return CommentResponseResponse(
+            success=True,
+            comment_text=req.comment_text,
+            reply_text=reply,
+            reply_length=len(reply),
+            video_job_id=video_job_id,
+        )
+
+    except Exception as e:
+        logger.exception(f"Comment response error: {e}")
+        return CommentResponseResponse(
+            success=False, error=f"Failed: {str(e)}"
+        )
+
+
+# ──────────────────────────────────────────────
+# 34. Generate Video and Add to Queue
+# ──────────────────────────────────────────────
+
+@router.post(
+    "/live-session/{session_id}/generate-video",
+    response_model=GenerateAndQueueResponse,
+    summary="Generate a digital human video and add to session queue",
+    description=(
+        "Generate a video from text using the session's portrait and engine, "
+        "then add it to the video queue for livestream playback."
+    ),
+)
+async def generate_and_queue_video(
+    session_id: str,
+    req: GenerateAndQueueRequest,
+    _auth: bool = Depends(verify_admin_key),
+):
+    session = get_session(session_id)
+    if not session:
+        return GenerateAndQueueResponse(
+            success=False, error=f"Session {session_id} not found"
+        )
+
+    try:
+        portrait_url = _ensure_sas_url(session["portrait_url"])
+        el_service = get_elevenlabs_service()
+
+        # Step 1: TTS
+        pcm_audio = await el_service.text_to_speech(
+            text=req.text,
+            voice_id=session.get("voice_id"),
+            output_format="pcm_16000",
+            language_code=session.get("language", "ja"),
+        )
+        wav_data = _pcm_to_wav(pcm_audio, sample_rate=16000)
+        job_id = f"lq-{int(time.time())}"
+        audio_url = await _upload_audio_to_blob(wav_data, job_id)
+        audio_url = _ensure_sas_url(audio_url)
+
+        # Step 2: Start video generation
+        service = get_musetalk_service()
+
+        if session["engine"] == "imtalker":
+            payload = {
+                "job_id": job_id,
+                "portrait_url": portrait_url,
+                "audio_url": audio_url,
+                "a_cfg_scale": 2.0,
+                "nfe": 10,
+                "crop": True,
+                "output_fps": 25,
+            }
+            resp = await service._request(
+                "POST", "/api/digital-human/imtalker/generate", json=payload
+            )
+        else:
+            await service.generate(
+                portrait_url=portrait_url,
+                audio_url=audio_url,
+                job_id=job_id,
+            )
+
+        # Step 3: Add to queue
+        queue_item = {
+            "job_id": job_id,
+            "type": req.queue_type,
+            "status": "processing",
+            "text_preview": req.text[:100],
+            "product_name": req.product_name,
+            "timestamp": time.time(),
+        }
+        add_to_queue(session_id, queue_item)
+
+        return GenerateAndQueueResponse(
+            success=True,
+            job_id=job_id,
+            queue_position=len(session["video_queue"]),
+            status="processing",
+        )
+
+    except ElevenLabsError as e:
+        return GenerateAndQueueResponse(
+            success=False, error=f"TTS error: {str(e)}"
+        )
+    except (MuseTalkConnectionError, MuseTalkAPIError) as e:
+        return GenerateAndQueueResponse(
+            success=False, error=f"GPU Worker error: {str(e)}"
+        )
+    except Exception as e:
+        logger.exception(f"Error in generate-and-queue: {e}")
+        return GenerateAndQueueResponse(
+            success=False, error=f"Internal error: {str(e)}"
+        )
+
+
+# ──────────────────────────────────────────────
+# 35. Get Session Video Queue Status
+# ──────────────────────────────────────────────
+
+@router.get(
+    "/live-session/{session_id}/queue",
+    summary="Get the video queue for a live session",
+)
+async def get_session_queue(
+    session_id: str,
+    _auth: bool = Depends(verify_admin_key),
+):
+    session = get_session(session_id)
+    if not session:
+        return {"success": False, "error": f"Session {session_id} not found"}
+
+    # Update queue item statuses from GPU Worker
+    service = get_musetalk_service()
+    for item in session["video_queue"]:
+        if item.get("status") == "processing":
+            try:
+                status_result = await service.get_status(item["job_id"])
+                item["status"] = status_result.get("status", item["status"])
+                item["progress"] = status_result.get("progress", 0)
+            except Exception:
+                pass  # Keep current status
+
+    return {
+        "success": True,
+        "session_id": session_id,
+        "queue": session["video_queue"],
+        "total": len(session["video_queue"]),
+        "completed": sum(1 for i in session["video_queue"] if i.get("status") == "completed"),
+        "processing": sum(1 for i in session["video_queue"] if i.get("status") == "processing"),
+    }

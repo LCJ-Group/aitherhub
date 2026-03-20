@@ -720,3 +720,137 @@ class IMTalkerTextGenerateResponse(BaseModel):
     )
     engine: str = Field("imtalker", description="Engine used for generation.")
     error: Optional[str] = None
+
+
+# ══════════════════════════════════════════════
+# Live Session (AI Live Creator Livestream Brain)
+# ══════════════════════════════════════════════
+
+
+class ProductInfo(BaseModel):
+    """Product information for the Sales Brain."""
+    name: str = Field(..., description="Product name")
+    description: str = Field("", description="Product description")
+    price: str = Field("", description="Price (e.g., '¥3,980')")
+    features: Optional[List[str]] = Field(None, description="Key features list")
+    image_url: Optional[str] = Field(None, description="Product image URL")
+    tone: str = Field("professional_friendly", description="Script tone for this product")
+
+
+class CreateLiveSessionRequest(BaseModel):
+    """Request to create a new AI Live Creator session."""
+    portrait_url: str = Field(
+        ...,
+        description="URL of the portrait image for the digital human."
+    )
+    engine: str = Field(
+        "imtalker",
+        description="Engine: 'musetalk' (Standard) or 'imtalker' (Premium)"
+    )
+    voice_id: Optional[str] = Field(
+        None,
+        description="ElevenLabs voice ID. If not set, uses default."
+    )
+    language: str = Field("ja", description="Language: ja / zh / en")
+    products: Optional[List[ProductInfo]] = Field(
+        None,
+        description="List of products for the Sales Brain to generate scripts for."
+    )
+
+
+class CreateLiveSessionResponse(BaseModel):
+    success: bool
+    session_id: Optional[str] = None
+    status: Optional[str] = None
+    engine: Optional[str] = None
+    products_count: int = 0
+    error: Optional[str] = None
+
+
+class LiveSessionStatusResponse(BaseModel):
+    success: bool
+    session: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+
+
+class ListLiveSessionsResponse(BaseModel):
+    success: bool
+    sessions: Optional[List[Dict[str, Any]]] = None
+    error: Optional[str] = None
+
+
+class GenerateProductScriptRequest(BaseModel):
+    """Request to generate a script for a specific product (Sales Brain)."""
+    session_id: Optional[str] = Field(None, description="Live session ID (optional)")
+    product_name: str = Field(..., description="Product name")
+    product_description: str = Field("", description="Product description")
+    product_price: str = Field("", description="Price")
+    product_features: Optional[List[str]] = Field(None, description="Key features")
+    tone: str = Field("professional_friendly", description="Script tone")
+    language: str = Field("ja", description="Output language")
+    script_type: str = Field(
+        "introduction",
+        description="Script type: introduction / highlight / promotion / closing"
+    )
+
+
+class GenerateProductScriptResponse(BaseModel):
+    success: bool
+    product_name: Optional[str] = None
+    script_type: Optional[str] = None
+    script_text: Optional[str] = None
+    script_length: Optional[int] = None
+    error: Optional[str] = None
+
+
+class CommentResponseRequest(BaseModel):
+    """Request to generate a response to a viewer comment."""
+    session_id: Optional[str] = Field(None, description="Live session ID (optional)")
+    comment_text: str = Field(..., min_length=1, max_length=500, description="Viewer's comment")
+    commenter_name: str = Field("", description="Viewer's display name")
+    current_product: Optional[ProductInfo] = Field(
+        None, description="Currently featured product (for context)"
+    )
+    language: str = Field("ja", description="Response language")
+    # Auto-generate video
+    auto_generate_video: bool = Field(
+        False,
+        description="If true, automatically generate a digital human video "
+        "with the response (TTS + engine)."
+    )
+    portrait_url: Optional[str] = Field(
+        None,
+        description="Portrait URL for video generation (required if auto_generate_video=true)"
+    )
+    engine: str = Field("musetalk", description="Engine for video: musetalk / imtalker")
+    voice_id: Optional[str] = Field(None, description="ElevenLabs voice ID")
+
+
+class CommentResponseResponse(BaseModel):
+    success: bool
+    comment_text: Optional[str] = None
+    reply_text: Optional[str] = None
+    reply_length: Optional[int] = None
+    video_job_id: Optional[str] = Field(
+        None, description="Job ID if auto_generate_video was true"
+    )
+    error: Optional[str] = None
+
+
+class GenerateAndQueueRequest(BaseModel):
+    """Generate a digital human video from text and add to session queue."""
+    session_id: str = Field(..., description="Live session ID")
+    text: str = Field(..., min_length=1, max_length=5000, description="Text to speak")
+    queue_type: str = Field(
+        "product_intro",
+        description="Type: product_intro / comment_reply / custom"
+    )
+    product_name: Optional[str] = Field(None, description="Associated product name")
+
+
+class GenerateAndQueueResponse(BaseModel):
+    success: bool
+    job_id: Optional[str] = None
+    queue_position: Optional[int] = None
+    status: Optional[str] = None
+    error: Optional[str] = None

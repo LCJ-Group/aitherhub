@@ -23,6 +23,7 @@ import {
   Crown,
 } from "lucide-react";
 import aiLiveCreatorService from "../base/services/aiLiveCreatorService";
+import LiveStreamPanel from "./LiveStreamPanel";
 
 /**
  * AI Live Creator Page
@@ -90,6 +91,9 @@ export default function AiLiveCreatorPage() {
 
   // ── Job History ──
   const [jobHistory, setJobHistory] = useState([]);
+
+  // ── Live Session ──
+  const [liveSessionId, setLiveSessionId] = useState(null);
 
   // ── Refs ──
   const portraitInputRef = useRef(null);
@@ -921,6 +925,20 @@ export default function AiLiveCreatorPage() {
                 </div>
               </div>
             )}
+
+            {/* ── Livestream Brain Panel ── */}
+            <LiveStreamPanel
+              sessionId={liveSessionId}
+              setSessionId={setLiveSessionId}
+              portraitUrl={portraitUrl}
+              engine={engine}
+              voiceId={selectedVoiceId}
+              language={languageCode}
+              onVideoGenerated={(jobId) => {
+                setCurrentJobId(jobId);
+                setCurrentEngine(engine);
+              }}
+            />
 
             {/* GPU Info */}
             {health?.status === "ok" && (
