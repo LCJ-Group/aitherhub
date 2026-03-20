@@ -728,10 +728,11 @@ async def retry_video(
         raise HTTPException(status_code=403, detail="Forbidden")
 
     try:
-        # Get video info (including upload_type)
+        # Get video info (including upload_type and excel URLs)
         sql = text("""
             SELECT v.id, v.original_filename, v.status, v.user_id,
-                   v.upload_type, u.email as user_email
+                   v.upload_type, u.email as user_email,
+                   v.excel_product_blob_url, v.excel_trend_blob_url
             FROM videos v
             LEFT JOIN users u ON v.user_id = u.id
             WHERE v.id = :vid
@@ -753,14 +754,35 @@ async def retry_video(
             )
 
         # ── Standard videos: use standard pipeline ──
-        # Generate fresh SAS URL
-        from app.services.storage_service import generate_download_sas
+        # Generate fresh SAS URL for video blob
+        from app.services.storage_service import generate_download_sas, generate_read_sas_from_url
         download_url, expiry = await generate_download_sas(
             email=row.user_email,
             video_id=str(row.id),
             filename=row.original_filename,
             expires_in_minutes=1440,  # 24 hours
         )
+
+        # ★ Refresh SAS tokens for Excel blob URLs (they expire after upload)
+        _excel_updates = {}
+        if row.excel_product_blob_url:
+            fresh_product_url = generate_read_sas_from_url(row.excel_product_blob_url, expires_hours=24)
+            if fresh_product_url:
+                _excel_updates["excel_product_blob_url"] = fresh_product_url
+                logger.info("[retry-video] Refreshed SAS for excel_product_blob_url")
+        if row.excel_trend_blob_url:
+            fresh_trend_url = generate_read_sas_from_url(row.excel_trend_blob_url, expires_hours=24)
+            if fresh_trend_url:
+                _excel_updates["excel_trend_blob_url"] = fresh_trend_url
+                logger.info("[retry-video] Refreshed SAS for excel_trend_blob_url")
+        if _excel_updates:
+            set_clauses = ", ".join(f"{k} = :{k}" for k in _excel_updates)
+            _excel_updates["vid"] = video_id
+            await db.execute(
+                text(f"UPDATE videos SET {set_clauses} WHERE id = :vid"),
+                _excel_updates,
+            )
+            logger.info("[retry-video] Updated %d Excel blob URLs with fresh SAS", len(_excel_updates) - 1)
 
         # Reset status — use from_step if provided, otherwise STEP_0
         resume_status = 'STEP_0_EXTRACT_FRAMES'
