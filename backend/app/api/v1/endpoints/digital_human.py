@@ -2340,9 +2340,141 @@ async def _upload_mp3_to_blob(mp3_data: bytes, audio_id: str) -> str:
     return blob_url
 
 
+async def _upload_video_to_blob(video_bytes: bytes, job_id: str) -> str:
+    """Upload MP4 video bytes to Azure Blob Storage and return the public URL."""
+    from app.services.storage_service import generate_upload_sas
+    import httpx as _httpx
+
+    vid, upload_url, blob_url, expiry = await generate_upload_sas(
+        email="ai-live-creator@aitherhub.com",
+        video_id=f"lipsync-video-{job_id}",
+        filename=f"lipsync_{job_id}.mp4",
+    )
+
+    async with _httpx.AsyncClient(timeout=120.0) as client:
+        resp = await client.put(
+            upload_url,
+            content=video_bytes,
+            headers={
+                "x-ms-blob-type": "BlockBlob",
+                "Content-Type": "video/mp4",
+            },
+        )
+        if resp.status_code not in (200, 201):
+            raise RuntimeError(
+                f"Failed to upload lip-sync video to blob: HTTP {resp.status_code}"
+            )
+
+    logger.info(f"Lip-sync video uploaded to blob: {blob_url} ({len(video_bytes)} bytes)")
+    return blob_url
+
+
+async def _generate_lipsync_video(
+    portrait_url: str,
+    audio_url: str,
+    engine: str = "musetalk",
+    max_wait_sec: int = 120,
+) -> Optional[str]:
+    """
+    Generate a lip-synced video using MuseTalk or IMTalker GPU Worker.
+    Submits the job, polls for completion, downloads the video,
+    uploads to Azure Blob, and returns the SAS URL.
+
+    Returns None if GPU Worker is unavailable or generation fails.
+    """
+    import uuid
+    job_id = f"ap-{uuid.uuid4().hex[:10]}"
+
+    try:
+        service = get_musetalk_service()
+
+        # Ensure SAS tokens for GPU Worker access
+        portrait_sas = _ensure_sas_url(portrait_url)
+        audio_sas = _ensure_sas_url(audio_url)
+
+        if engine == "imtalker":
+            # IMTalker: full facial animation + lip-sync
+            payload = {
+                "job_id": job_id,
+                "portrait_url": portrait_sas,
+                "audio_url": audio_sas,
+                "a_cfg_scale": 2.0,
+                "nfe": 32,
+                "crop": True,
+                "output_fps": 25,
+            }
+            resp = await service._request(
+                "POST", "/api/digital-human/imtalker/generate", json=payload
+            )
+        else:
+            # MuseTalk: standard lip-sync (faster)
+            payload = {
+                "job_id": job_id,
+                "portrait_url": portrait_sas,
+                "portrait_type": "video",
+                "audio_url": audio_sas,
+                "bbox_shift": 0,
+                "extra_margin": 10,
+                "batch_size": 16,
+                "output_fps": 25,
+            }
+            resp = await service._request(
+                "POST", "/api/digital-human/generate", json=payload
+            )
+
+        result = resp.json()
+        actual_job_id = result.get("job_id", job_id)
+        logger.info(f"[AutoPilot LipSync] Job submitted: {actual_job_id} (engine={engine})")
+
+        # Poll for completion
+        import asyncio
+        poll_interval = 3  # seconds
+        elapsed = 0
+        while elapsed < max_wait_sec:
+            await asyncio.sleep(poll_interval)
+            elapsed += poll_interval
+
+            status_resp = await service.get_status(actual_job_id)
+            status = status_resp.get("status", "unknown")
+            progress = status_resp.get("progress", 0)
+
+            logger.info(
+                f"[AutoPilot LipSync] Job {actual_job_id}: status={status}, "
+                f"progress={progress}%, elapsed={elapsed}s"
+            )
+
+            if status == "completed":
+                # Download the video
+                video_bytes = await service.download(actual_job_id)
+                if not video_bytes:
+                    logger.error(f"[AutoPilot LipSync] Empty video download for {actual_job_id}")
+                    return None
+
+                # Upload to Azure Blob
+                blob_url = await _upload_video_to_blob(video_bytes, actual_job_id)
+                video_url = _ensure_sas_url(blob_url)
+                logger.info(
+                    f"[AutoPilot LipSync] Video ready: {video_url[:80]}... "
+                    f"({len(video_bytes)} bytes, {elapsed}s)"
+                )
+                return video_url
+
+            elif status in ("error", "failed"):
+                error_msg = status_resp.get("error", "Unknown error")
+                logger.error(f"[AutoPilot LipSync] Job {actual_job_id} failed: {error_msg}")
+                return None
+
+        logger.warning(f"[AutoPilot LipSync] Job {actual_job_id} timed out after {max_wait_sec}s")
+        return None
+
+    except Exception as e:
+        logger.error(f"[AutoPilot LipSync] Error generating lip-sync video: {e}")
+        return None
+
+
 # ──────────────────────────────────────────────
 # 37. TTS Speak — Generate audio for real-time playback
-# ──────────────────────────────────────────────
+# ───────────────────────────────────────────────
 @router.post(
     "/live-session/{session_id}/speak",
     response_model=TTSSpeakResponse,
@@ -2603,19 +2735,54 @@ async def autopilot_next(
         if not script_text:
             script_text = f"この{product_name}は本当に素晴らしい商品です！"
 
-        # Generate TTS
+        # Generate TTS (WAV for GPU Worker lip-sync)
         el_service = get_elevenlabs_service()
         voice_id = req.voice_id or session.get("voice_id")
+        pcm_audio = await el_service.text_to_speech(
+            text=script_text,
+            voice_id=voice_id,
+            output_format="pcm_16000",
+            language_code=req.language,
+        )
+        wav_audio = _pcm_to_wav(pcm_audio, sample_rate=16000)
+        tts_duration_ms = len(pcm_audio) / (16000 * 2) * 1000
+
+        # Upload WAV audio to blob (needed for GPU Worker)
+        audio_id = f"script-{int(time.time())}"
+        wav_blob_url = await _upload_audio_to_blob(wav_audio, audio_id)
+        wav_audio_url = _ensure_sas_url(wav_blob_url)
+
+        # Also generate MP3 for fallback audio playback
         mp3_audio = await el_service.text_to_speech(
             text=script_text,
             voice_id=voice_id,
             output_format="mp3_44100_128",
             language_code=req.language,
         )
-        duration_ms = len(mp3_audio) / 16.0
-        audio_id = f"script-{int(time.time())}"
-        blob_url = await _upload_mp3_to_blob(mp3_audio, audio_id)
-        audio_url = _ensure_sas_url(blob_url)
+        mp3_blob_url = await _upload_mp3_to_blob(mp3_audio, audio_id)
+        mp3_audio_url = _ensure_sas_url(mp3_blob_url)
+
+        # Generate lip-synced video via GPU Worker
+        portrait_url = session.get("portrait_url", "")
+        lipsync_engine = session.get("engine", "musetalk")
+        video_url = None
+        video_job_id = None
+
+        if portrait_url:
+            logger.info(
+                f"[AutoPilot] Generating lip-sync video: "
+                f"engine={lipsync_engine}, portrait={portrait_url[:60]}..."
+            )
+            video_url = await _generate_lipsync_video(
+                portrait_url=portrait_url,
+                audio_url=wav_audio_url,
+                engine=lipsync_engine,
+                max_wait_sec=180,
+            )
+            if video_url:
+                logger.info(f"[AutoPilot] Lip-sync video ready: {video_url[:80]}...")
+            else:
+                logger.warning("[AutoPilot] Lip-sync video generation failed, falling back to audio-only")
 
         # Update autopilot state
         autopilot["state"] = next_state
@@ -2628,13 +2795,14 @@ async def autopilot_next(
         return AutoPilotNextResponse(
             success=True,
             action=action,
-            audio_url=audio_url,
-            audio_duration_ms=round(duration_ms, 1),
+            audio_url=mp3_audio_url,
+            audio_duration_ms=round(tts_duration_ms, 1),
             text=script_text,
             script_type=next_script_type,
             product_name=product_name,
             product_index=next_product_index,
             next_state=next_state,
+            video_url=video_url,
         )
 
     except ElevenLabsError as e:

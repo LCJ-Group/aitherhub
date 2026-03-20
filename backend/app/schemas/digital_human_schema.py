@@ -991,5 +991,7 @@ class AutoPilotNextResponse(BaseModel):
     product_name: Optional[str] = None
     product_index: Optional[int] = None
     next_state: Optional[str] = None
+    video_url: Optional[str] = Field(None, description="Lip-synced video URL (if generated)")
+    video_job_id: Optional[str] = Field(None, description="GPU Worker job ID for lip-sync video")
     error: Optional[str] = None
 

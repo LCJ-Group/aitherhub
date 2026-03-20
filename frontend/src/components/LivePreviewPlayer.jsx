@@ -20,20 +20,21 @@ import {
   MicOff,
 } from "lucide-react";
 import aiLiveCreatorService from "../base/services/aiLiveCreatorService";
-
 /**
  * LivePreviewPlayer — TikTok Live-style 9:16 Preview Player
  *
- * NEW Architecture (Real-time TTS):
- *   - Portrait VIDEO loops continuously (muted) — just for visual appearance
- *   - TTS AUDIO plays on top via separate <audio> element
- *   - No GPU video generation needed per script
- *   - Supports AutoPilot mode: brain auto-generates scripts + TTS
+ * Architecture (Lip-Sync Video):
+ *   - Portrait VIDEO loops continuously (muted) — idle/fallback visual
+ *   - When AutoPilot generates a lip-synced video segment, it plays THAT video
+ *     (with audio) instead of the loop + separate TTS audio
+ *   - Falls back to loop + TTS audio if lip-sync video is not available
+ *   - Supports AutoPilot mode: brain auto-generates scripts + TTS + lip-sync video
  *
  * Features:
  *   - 9:16 vertical video loop playback
- *   - Real-time TTS audio overlay
- *   - AutoPilot: automatic script cycling with TTS
+ *   - Lip-synced video segment playback (replaces loop during speech)
+ *   - Fallback: TTS audio overlay when lip-sync unavailable
+ *   - AutoPilot: automatic script cycling with lip-sync
  *   - TikTok-style comment overlay
  *   - Product info overlay
  *   - Live status indicators
@@ -69,6 +70,9 @@ export default function LivePreviewPlayer({
   const [audioLoading, setAudioLoading] = useState(false);
   const [speechQueue, setSpeechQueue] = useState([]);
 
+  // ── Lip-Sync Video State ──
+  const [lipSyncPlaying, setLipSyncPlaying] = useState(false);
+
   // ── AutoPilot State ──
   const [autoPilotState, setAutoPilotState] = useState("idle");
   const [autoPilotProductIndex, setAutoPilotProductIndex] = useState(0);
@@ -89,13 +93,17 @@ export default function LivePreviewPlayer({
   const [showSubtitle, setShowSubtitle] = useState(false);
 
   // ── Refs ──
-  const videoRef = useRef(null);
-  const audioRef = useRef(null);
+  const loopVideoRef = useRef(null);     // Background loop video (muted)
+  const lipSyncVideoRef = useRef(null);  // Lip-sync segment video (with audio)
+  const audioRef = useRef(null);          // Fallback TTS audio
   const containerRef = useRef(null);
   const heartIdRef = useRef(0);
   const autoPilotTimerRef = useRef(null);
   const isSpeakingRef = useRef(false);
   const autoPilotActiveRef = useRef(false);
+
+  // Backward-compat alias
+  const videoRef = loopVideoRef;
 
   // Keep refs in sync
   useEffect(() => {
@@ -106,42 +114,130 @@ export default function LivePreviewPlayer({
   }, [autoPilotActive]);
 
   // ══════════════════════════════════════════════
-  // Video Loop — Portrait video plays continuously
+  // Video Loop — Portrait video plays continuously (background)
   // ══════════════════════════════════════════════
 
   // Start video loop when portrait URL is available
   useEffect(() => {
-    if (portraitVideoUrl && videoRef.current) {
-      videoRef.current.src = portraitVideoUrl;
-      videoRef.current.load();
+    if (portraitVideoUrl && loopVideoRef.current) {
+      loopVideoRef.current.src = portraitVideoUrl;
+      loopVideoRef.current.load();
     }
   }, [portraitVideoUrl]);
 
   const handleVideoCanPlay = () => {
     setVideoReady(true);
-    if (videoRef.current && (isLive || autoPilotActive)) {
-      videoRef.current.play().catch(() => {});
+    if (loopVideoRef.current && (isLive || autoPilotActive)) {
+      loopVideoRef.current.play().catch(() => {});
       setIsPlaying(true);
     }
   };
 
   const handleVideoLoop = () => {
     // Video ended — loop it
-    if (videoRef.current) {
-      videoRef.current.currentTime = 0;
-      videoRef.current.play().catch(() => {});
+    if (loopVideoRef.current) {
+      loopVideoRef.current.currentTime = 0;
+      loopVideoRef.current.play().catch(() => {});
     }
   };
 
   // ══════════════════════════════════════════════
-  // TTS Audio Playback
+  // Lip-Sync Video Playback
+  // ══════════════════════════════════════════════
+
+  /**
+   * Play a lip-synced video segment. Hides the loop video and shows the
+   * lip-sync video with audio. When it ends, switches back to loop.
+   */
+  const playLipSyncVideo = useCallback((videoUrl, text, scriptType) => {
+    if (!lipSyncVideoRef.current) return;
+
+    console.log("[LipSync] Playing lip-sync video:", videoUrl?.substring(0, 80));
+
+    setAudioLoading(true);
+    setCurrentSpeechText(text || "");
+    setCurrentScriptType(scriptType || "");
+
+    lipSyncVideoRef.current.src = videoUrl;
+    lipSyncVideoRef.current.load();
+
+    lipSyncVideoRef.current.oncanplaythrough = () => {
+      setAudioLoading(false);
+      setIsSpeaking(true);
+      isSpeakingRef.current = true;
+      setLipSyncPlaying(true);
+      setShowSubtitle(true);
+      setSubtitleText(text || "");
+      onSpeakingChange?.(true);
+
+      // Pause loop video while lip-sync plays
+      if (loopVideoRef.current) {
+        loopVideoRef.current.pause();
+      }
+
+      lipSyncVideoRef.current.play().catch((err) => {
+        console.error("[LipSync] Video play error:", err);
+        setIsSpeaking(false);
+        isSpeakingRef.current = false;
+        setLipSyncPlaying(false);
+        onSpeakingChange?.(false);
+        // Resume loop
+        if (loopVideoRef.current) {
+          loopVideoRef.current.play().catch(() => {});
+        }
+      });
+    };
+
+    lipSyncVideoRef.current.onerror = (e) => {
+      console.error("[LipSync] Video load error:", e);
+      setAudioLoading(false);
+      setIsSpeaking(false);
+      isSpeakingRef.current = false;
+      setLipSyncPlaying(false);
+      onSpeakingChange?.(false);
+      // Resume loop
+      if (loopVideoRef.current) {
+        loopVideoRef.current.play().catch(() => {});
+      }
+      // If autopilot, request next after error
+      if (autoPilotActiveRef.current) {
+        setTimeout(() => requestAutoPilotNext(), 2000);
+      }
+    };
+  }, [onSpeakingChange]);
+
+  const handleLipSyncEnded = useCallback(() => {
+    console.log("[LipSync] Segment ended, returning to loop");
+    setIsSpeaking(false);
+    isSpeakingRef.current = false;
+    setLipSyncPlaying(false);
+    setShowSubtitle(false);
+    setSubtitleText("");
+    onSpeakingChange?.(false);
+
+    // Resume loop video
+    if (loopVideoRef.current && portraitVideoUrl) {
+      loopVideoRef.current.play().catch(() => {});
+    }
+
+    // If autopilot is active, request next segment after a brief pause
+    if (autoPilotActiveRef.current) {
+      setTimeout(() => requestAutoPilotNext(), 1500);
+    }
+  }, [onSpeakingChange, portraitVideoUrl]);
+
+  // ══════════════════════════════════════════════
+  // TTS Audio Playback (Fallback when no lip-sync video)
   // ══════════════════════════════════════════════
 
   /**
    * Play TTS audio from a URL. Shows subtitle text while speaking.
+   * Used as fallback when lip-sync video is not available.
    */
   const playTTSAudio = useCallback((audioUrl, text, scriptType) => {
     if (!audioRef.current) return;
+
+    console.log("[TTS Fallback] Playing audio:", audioUrl?.substring(0, 80));
 
     setAudioLoading(true);
     setCurrentSpeechText(text || "");
@@ -192,7 +288,7 @@ export default function LivePreviewPlayer({
   }, [onSpeakingChange]);
 
   // ══════════════════════════════════════════════
-  // AutoPilot — Brain auto-generates scripts + TTS
+  // AutoPilot — Brain auto-generates scripts + TTS + Lip-Sync
   // ══════════════════════════════════════════════
 
   const requestAutoPilotNext = useCallback(async () => {
@@ -244,14 +340,19 @@ export default function LivePreviewPlayer({
         action: result.action,
         text: result.text,
         productName: result.product_name,
+        videoUrl: result.video_url,
       });
 
-      // Play the TTS audio
-      if (result.audio_url) {
+      // Priority: Play lip-sync video if available, otherwise fallback to TTS audio
+      if (result.video_url) {
+        console.log("[AutoPilot] Lip-sync video available, playing video segment");
+        playLipSyncVideo(result.video_url, result.text, result.script_type);
+      } else if (result.audio_url) {
+        console.log("[AutoPilot] No lip-sync video, falling back to TTS audio");
         playTTSAudio(result.audio_url, result.text, result.script_type);
       } else {
         setAudioLoading(false);
-        // No audio — try again
+        // No audio or video — try again
         if (autoPilotActiveRef.current) {
           setTimeout(() => requestAutoPilotNext(), 3000);
         }
@@ -269,6 +370,7 @@ export default function LivePreviewPlayer({
     autoPilotProductIndex,
     autoPilotScriptType,
     commentHistory,
+    playLipSyncVideo,
     playTTSAudio,
     onAutoPilotStateChange,
   ]);
@@ -277,8 +379,8 @@ export default function LivePreviewPlayer({
   useEffect(() => {
     if (autoPilotActive && sessionId && !isSpeaking && !audioLoading) {
       // Start video loop
-      if (videoRef.current && portraitVideoUrl) {
-        videoRef.current.play().catch(() => {});
+      if (loopVideoRef.current && portraitVideoUrl) {
+        loopVideoRef.current.play().catch(() => {});
         setIsPlaying(true);
       }
       // Request first segment
@@ -291,6 +393,12 @@ export default function LivePreviewPlayer({
         clearTimeout(autoPilotTimerRef.current);
         autoPilotTimerRef.current = null;
       }
+      // Stop lip-sync video if playing
+      if (lipSyncVideoRef.current) {
+        lipSyncVideoRef.current.pause();
+        lipSyncVideoRef.current.src = "";
+      }
+      setLipSyncPlaying(false);
     }
   }, [autoPilotActive, sessionId]);
 
@@ -328,88 +436,79 @@ export default function LivePreviewPlayer({
 
   // Attach speakText to window for external access
   useEffect(() => {
-    window.__livePlayerSpeak = speakText;
+    if (sessionId) {
+      window.__aitherhub_speak = speakText;
+    }
     return () => {
-      delete window.__livePlayerSpeak;
+      delete window.__aitherhub_speak;
     };
-  }, [speakText]);
+  }, [sessionId, speakText]);
 
   // ══════════════════════════════════════════════
-  // Controls
+  // Simulated Live Stats
+  // ══════════════════════════════════════════════
+
+  useEffect(() => {
+    if (!autoPilotActive && !isLive) return;
+    // Simulate viewer count changes
+    setViewerCount(Math.floor(100 + Math.random() * 150));
+    const interval = setInterval(() => {
+      setViewerCount((prev) => {
+        const delta = Math.floor(Math.random() * 20) - 8;
+        return Math.max(50, prev + delta);
+      });
+    }, 8000);
+    return () => clearInterval(interval);
+  }, [autoPilotActive, isLive]);
+
+  // Update visible comments
+  useEffect(() => {
+    setVisibleComments(commentHistory.slice(0, 5));
+  }, [commentHistory]);
+
+  // Active product
+  const activeProduct =
+    currentProduct || products[autoPilotProductIndex] || products[0] || null;
+
+  // ══════════════════════════════════════════════
+  // UI Controls
   // ══════════════════════════════════════════════
 
   const togglePlayPause = () => {
-    if (!videoRef.current) return;
-    if (videoRef.current.paused) {
-      videoRef.current.play();
+    if (!loopVideoRef.current) return;
+    if (loopVideoRef.current.paused) {
+      loopVideoRef.current.play();
       setIsPlaying(true);
     } else {
-      videoRef.current.pause();
+      loopVideoRef.current.pause();
       setIsPlaying(false);
     }
   };
 
   const toggleMute = () => {
-    if (audioRef.current) {
-      audioRef.current.muted = !audioRef.current.muted;
-    }
     setIsMuted((prev) => !prev);
   };
 
   const toggleFullscreen = () => {
     if (!containerRef.current) return;
-    if (!document.fullscreenElement) {
-      containerRef.current.requestFullscreen?.();
-      setIsFullscreen(true);
-    } else {
+    if (isFullscreen) {
       document.exitFullscreen?.();
-      setIsFullscreen(false);
+    } else {
+      containerRef.current.requestFullscreen?.();
     }
+    setIsFullscreen((prev) => !prev);
   };
 
-  // ── Simulated viewer/like counts ──
-  useEffect(() => {
-    if (!isLive && !isPlaying && !autoPilotActive) return;
-    const base = 128;
-    setViewerCount(base + Math.floor(Math.random() * 50));
-    const interval = setInterval(() => {
-      setViewerCount((v) => Math.max(1, v + Math.floor(Math.random() * 5) - 2));
-      setLikeCount((l) => l + Math.floor(Math.random() * 3));
-    }, 3000);
-    return () => clearInterval(interval);
-  }, [isLive, isPlaying, autoPilotActive]);
-
-  // ── Comment overlay animation ──
-  useEffect(() => {
-    if (commentHistory.length === 0) return;
-    const recent = commentHistory.slice(0, 8).map((c, i) => ({
-      ...c,
-      id: `comment-${Date.now()}-${i}`,
-      fadeIn: i < 3,
-    }));
-    setVisibleComments(recent);
-  }, [commentHistory]);
-
-  // ── Floating hearts ──
   const addFloatingHeart = () => {
-    const id = ++heartIdRef.current;
-    const heart = {
-      id,
-      x: 85 + Math.random() * 10,
-      delay: Math.random() * 0.5,
-    };
-    setFloatingHearts((prev) => [...prev, heart]);
+    setLikeCount((prev) => prev + 1);
+    const id = heartIdRef.current++;
+    const x = 5 + Math.random() * 15;
+    const delay = Math.random() * 0.3;
+    setFloatingHearts((prev) => [...prev, { id, x, delay }]);
     setTimeout(() => {
       setFloatingHearts((prev) => prev.filter((h) => h.id !== id));
     }, 2500);
-    setLikeCount((l) => l + 1);
   };
-
-  // ── Current product ──
-  const activeProduct =
-    currentProduct ||
-    (autoPilotActive && products[autoPilotProductIndex]) ||
-    products[0];
 
   // ══════════════════════════════════════════════
   // Render
@@ -418,16 +517,14 @@ export default function LivePreviewPlayer({
   return (
     <div
       ref={containerRef}
-      className={`relative bg-black rounded-2xl overflow-hidden shadow-2xl ${
-        isFullscreen ? "fixed inset-0 z-50 rounded-none" : ""
-      }`}
+      className="relative bg-black rounded-2xl overflow-hidden shadow-2xl"
       style={{
-        aspectRatio: isFullscreen ? undefined : "9/16",
+        aspectRatio: "9/16",
         maxHeight: isFullscreen ? "100vh" : "720px",
         width: isFullscreen ? "100%" : undefined,
       }}
     >
-      {/* ── Hidden Audio Element for TTS ── */}
+      {/* ── Hidden Audio Element for TTS Fallback ── */}
       <audio
         ref={audioRef}
         onEnded={handleAudioEnded}
@@ -435,11 +532,15 @@ export default function LivePreviewPlayer({
         style={{ display: "none" }}
       />
 
-      {/* ── Video Layer (Looping Portrait) ── */}
+      {/* ── Background Video Layer (Looping Portrait — always present) ── */}
       {portraitVideoUrl ? (
         <video
-          ref={videoRef}
+          ref={loopVideoRef}
           className="absolute inset-0 w-full h-full object-cover bg-black"
+          style={{
+            opacity: lipSyncPlaying ? 0 : 1,
+            transition: "opacity 0.3s ease",
+          }}
           autoPlay
           playsInline
           muted
@@ -447,7 +548,9 @@ export default function LivePreviewPlayer({
           onCanPlay={handleVideoCanPlay}
           onEnded={handleVideoLoop}
           onPlay={() => setIsPlaying(true)}
-          onPause={() => setIsPlaying(false)}
+          onPause={() => {
+            if (!lipSyncPlaying) setIsPlaying(false);
+          }}
           onError={(e) => {
             console.error("Video loop error:", e);
           }}
@@ -474,6 +577,25 @@ export default function LivePreviewPlayer({
         </div>
       )}
 
+      {/* ── Lip-Sync Video Layer (overlays loop during speech) ── */}
+      <video
+        ref={lipSyncVideoRef}
+        className="absolute inset-0 w-full h-full object-cover bg-black"
+        style={{
+          opacity: lipSyncPlaying ? 1 : 0,
+          transition: "opacity 0.3s ease",
+          pointerEvents: lipSyncPlaying ? "auto" : "none",
+          zIndex: lipSyncPlaying ? 5 : -1,
+        }}
+        playsInline
+        muted={isMuted}
+        onEnded={handleLipSyncEnded}
+        onError={(e) => {
+          console.error("[LipSync] Video error:", e);
+          handleLipSyncEnded();
+        }}
+      />
+
       {/* ── Speaking Indicator ── */}
       {(isSpeaking || audioLoading) && (
         <div className="absolute top-14 left-1/2 -translate-x-1/2 z-30">
@@ -481,7 +603,9 @@ export default function LivePreviewPlayer({
             {audioLoading ? (
               <>
                 <Loader2 className="w-3.5 h-3.5 text-cyan-400 animate-spin" />
-                <span className="text-[10px] text-cyan-300">Generating speech...</span>
+                <span className="text-[10px] text-cyan-300">
+                  {lipSyncPlaying ? "Loading video..." : "Generating speech..."}
+                </span>
               </>
             ) : (
               <>
@@ -501,6 +625,15 @@ export default function LivePreviewPlayer({
               </>
             )}
           </div>
+        </div>
+      )}
+
+      {/* ── Lip-Sync / Video Mode Badge ── */}
+      {lipSyncPlaying && (
+        <div className="absolute top-8 right-3 z-30">
+          <span className="text-[8px] bg-green-500/40 text-green-200 px-2 py-0.5 rounded-full backdrop-blur-sm flex items-center gap-1">
+            <Crown className="w-2.5 h-2.5" /> Video
+          </span>
         </div>
       )}
 
@@ -577,6 +710,11 @@ export default function LivePreviewPlayer({
           {isSpeaking && (
             <span className="text-[9px] bg-cyan-500/30 text-cyan-200 px-2 py-0.5 rounded-full flex items-center gap-1 backdrop-blur-sm">
               <Mic className="w-2.5 h-2.5" /> {currentScriptType || "Speaking"}
+            </span>
+          )}
+          {lipSyncPlaying && (
+            <span className="text-[9px] bg-purple-500/30 text-purple-200 px-2 py-0.5 rounded-full flex items-center gap-1 backdrop-blur-sm">
+              <Crown className="w-2.5 h-2.5" /> Lip-Sync
             </span>
           )}
           {totalSpeaks > 0 && (
@@ -768,7 +906,13 @@ export default function LivePreviewPlayer({
                   Product {autoPilotProductIndex + 1}/{products.length}
                 </span>
               )}
-              {isSpeaking && (
+              {lipSyncPlaying && (
+                <span className="text-[9px] text-purple-300 bg-purple-500/20 px-2 py-0.5 rounded-full flex items-center gap-1">
+                  <Crown className="w-2.5 h-2.5" />
+                  Lip-Sync
+                </span>
+              )}
+              {isSpeaking && !lipSyncPlaying && (
                 <span className="text-[9px] text-cyan-300 bg-cyan-500/20 px-2 py-0.5 rounded-full flex items-center gap-1">
                   <Mic className="w-2.5 h-2.5" />
                   Speaking
