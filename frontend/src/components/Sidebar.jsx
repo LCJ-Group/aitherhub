@@ -424,15 +424,15 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
                 <span className={`text-sm transition-colors duration-200 ease-out ${location.pathname === '/ai-live-creator' ? 'text-purple-700 font-medium' : 'text-muted-foreground'}`}>AI Live Creator</span>
               </div>
               <div
-                onClick={() => { navigate('/persona'); onClose?.(); }}
+                onClick={() => { navigate('/personas'); onClose?.(); }}
                 className={`flex items-center gap-2 p-2 px-4 rounded-md cursor-pointer transition-all duration-200 ease-out ${
-                  location.pathname === '/persona'
+                  location.pathname === '/personas'
                     ? 'border border-pink-300 bg-pink-50 text-pink-700'
                     : 'hover:bg-gray-100'
                 }`}
               >
-                <Users className={`w-4 h-4 transition-colors duration-200 ease-out ${location.pathname === '/persona' ? 'text-pink-600' : 'text-gray-500'}`} />
-                <span className={`text-sm transition-colors duration-200 ease-out ${location.pathname === '/persona' ? 'text-pink-700 font-medium' : 'text-muted-foreground'}`}>Liver Clone</span>
+                <Users className={`w-4 h-4 transition-colors duration-200 ease-out ${location.pathname === '/personas' ? 'text-pink-600' : 'text-gray-500'}`} />
+                <span className={`text-sm transition-colors duration-200 ease-out ${location.pathname === '/personas' ? 'text-pink-700 font-medium' : 'text-muted-foreground'}`}>Liver Clone</span>
               </div>
             </div>
           </div>

@@ -69,6 +69,9 @@ export default function PersonaPage() {
   const [taggedVideoIds, setTaggedVideoIds] = useState(new Set());
   const [loadingVideos, setLoadingVideos] = useState(false);
   const [videoSearchQuery, setVideoSearchQuery] = useState("");
+  const [videoPage, setVideoPage] = useState(0);
+  const [videoTotal, setVideoTotal] = useState(0);
+  const VIDEO_PAGE_SIZE = 50;
 
   // ── Load Personas ──
   const loadPersonas = useCallback(async () => {
@@ -87,21 +90,31 @@ export default function PersonaPage() {
     loadPersonas();
   }, [loadPersonas]);
 
-  // ── Load Videos for Tagging ──
-  const loadVideos = useCallback(async () => {
+  // ── Load Videos for Tagging (using available-videos endpoint) ──
+  const loadVideos = useCallback(async (page = 0, search = "") => {
+    if (!selectedPersona) return;
     setLoadingVideos(true);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/admin/videos?limit=500`, {
-        headers: { "X-Admin-Key": ADMIN_KEY },
+      const params = new URLSearchParams({
+        limit: VIDEO_PAGE_SIZE,
+        offset: page * VIDEO_PAGE_SIZE,
       });
+      if (search.trim()) params.append("search", search.trim());
+
+      const res = await fetch(
+        `${API_BASE}/api/v1/personas/${selectedPersona.id}/available-videos?${params}`,
+        { headers: { "X-Admin-Key": ADMIN_KEY } }
+      );
       const data = await res.json();
       setAllVideos(data.videos || []);
+      setVideoTotal(data.total || 0);
+      setVideoPage(page);
     } catch (err) {
       console.error("Failed to load videos:", err);
     } finally {
       setLoadingVideos(false);
     }
-  }, []);
+  }, [selectedPersona]);
 
   // ── Load Dataset Preview ──
   const loadDatasetPreview = async (personaId) => {
@@ -111,6 +124,7 @@ export default function PersonaPage() {
       setDatasetPreview(data);
     } catch (err) {
       console.error("Failed to load dataset preview:", err);
+      setDatasetPreview(null);
     } finally {
       setLoadingDataset(false);
     }
@@ -126,16 +140,27 @@ export default function PersonaPage() {
     }
   };
 
-  // ── Select Persona ──
+  // ── Select Persona (loads detail from API) ──
   const handleSelectPersona = async (persona) => {
     setSelectedPersona(persona);
     setShowVideoTagger(false);
     setDatasetPreview(null);
     setTrainingStatus(null);
+    setAllVideos([]);
 
-    // Load tagged video IDs
-    const taggedIds = new Set((persona.tagged_video_ids || []).map(String));
-    setTaggedVideoIds(taggedIds);
+    // Load persona detail to get tagged_videos
+    try {
+      const detail = await personaService.getPersona(persona.id);
+      const taggedVids = detail.tagged_videos || [];
+      const taggedIds = new Set(taggedVids.map((v) => String(v.video_id)));
+      setTaggedVideoIds(taggedIds);
+
+      // Update selectedPersona with full detail
+      setSelectedPersona({ ...persona, ...detail.persona, _tagged_videos: taggedVids });
+    } catch (err) {
+      console.error("Failed to load persona detail:", err);
+      setTaggedVideoIds(new Set());
+    }
 
     // Load dataset preview and training status
     await Promise.all([
@@ -212,16 +237,23 @@ export default function PersonaPage() {
     if (!selectedPersona) return;
     const id = String(videoId);
 
-    if (taggedVideoIds.has(id)) {
-      await personaService.untagVideos(selectedPersona.id, [id]);
-      setTaggedVideoIds((prev) => {
-        const next = new Set(prev);
-        next.delete(id);
-        return next;
-      });
-    } else {
-      await personaService.tagVideos(selectedPersona.id, [id]);
-      setTaggedVideoIds((prev) => new Set([...prev, id]));
+    try {
+      if (taggedVideoIds.has(id)) {
+        await personaService.untagVideos(selectedPersona.id, [id]);
+        setTaggedVideoIds((prev) => {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
+      } else {
+        await personaService.tagVideos(selectedPersona.id, [id]);
+        setTaggedVideoIds((prev) => new Set([...prev, id]));
+      }
+      // Refresh dataset preview after tag change
+      loadDatasetPreview(selectedPersona.id);
+    } catch (err) {
+      console.error("Failed to toggle video tag:", err);
+      alert(`Error: ${err.message}`);
     }
   };
 
@@ -243,20 +275,20 @@ export default function PersonaPage() {
     }
   };
 
-  // ── Filtered Videos ──
-  const filteredVideos = allVideos.filter((v) => {
-    if (!videoSearchQuery.trim()) return true;
-    const q = videoSearchQuery.toLowerCase();
-    return (
-      (v.title || "").toLowerCase().includes(q) ||
-      (v.user_email || "").toLowerCase().includes(q)
-    );
-  });
+  // ── Video Search with debounce ──
+  useEffect(() => {
+    if (!showVideoTagger || !selectedPersona) return;
+    const timer = setTimeout(() => {
+      loadVideos(0, videoSearchQuery);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [videoSearchQuery, showVideoTagger, selectedPersona]);
 
   // ── Status Badge ──
   const StatusBadge = ({ status }) => {
     const colors = {
       ready: "bg-gray-100 text-gray-600",
+      none: "bg-gray-100 text-gray-600",
       preparing: "bg-yellow-100 text-yellow-700",
       training: "bg-blue-100 text-blue-700",
       completed: "bg-green-100 text-green-700",
@@ -276,7 +308,7 @@ export default function PersonaPage() {
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-4">
             <button
-              onClick={() => navigate("/ai-live-creator")}
+              onClick={() => navigate("/")}
               className="p-2 hover:bg-white/10 rounded-lg transition-colors"
             >
               <ArrowLeft className="w-5 h-5" />
@@ -413,7 +445,7 @@ export default function PersonaPage() {
                   <div className="grid grid-cols-2 gap-4 mt-4">
                     <div>
                       <p className="text-[10px] text-gray-500 mb-1">Speaking Style</p>
-                      <p className="text-xs text-gray-300">{selectedPersona.speaking_style || "Not set"}</p>
+                      <p className="text-xs text-gray-300">{selectedPersona.speaking_style || selectedPersona.style_prompt || "Not set"}</p>
                     </div>
                     <div>
                       <p className="text-[10px] text-gray-500 mb-1">Language</p>
@@ -454,8 +486,9 @@ export default function PersonaPage() {
                 <div className="bg-white/5 rounded-xl border border-white/10 overflow-hidden">
                   <button
                     onClick={() => {
-                      setShowVideoTagger(!showVideoTagger);
-                      if (!showVideoTagger && allVideos.length === 0) loadVideos();
+                      const newState = !showVideoTagger;
+                      setShowVideoTagger(newState);
+                      if (newState && allVideos.length === 0) loadVideos(0, "");
                     }}
                     className="w-full p-4 flex items-center justify-between hover:bg-white/5 transition-colors"
                   >
@@ -479,7 +512,7 @@ export default function PersonaPage() {
                         type="text"
                         value={videoSearchQuery}
                         onChange={(e) => setVideoSearchQuery(e.target.value)}
-                        placeholder="Search videos by title or email..."
+                        placeholder="Search videos by filename..."
                         className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm text-gray-200 placeholder-gray-500 mb-3"
                       />
 
@@ -488,44 +521,68 @@ export default function PersonaPage() {
                           <Loader2 className="w-5 h-5 animate-spin text-purple-400" />
                         </div>
                       ) : (
-                        <div className="max-h-80 overflow-y-auto space-y-1">
-                          {filteredVideos.map((v) => {
-                            const isTagged = taggedVideoIds.has(String(v.id));
-                            return (
-                              <div
-                                key={v.id}
-                                onClick={() => handleToggleVideoTag(v.id)}
-                                className={`flex items-center gap-3 p-2.5 rounded-lg cursor-pointer transition-colors ${
-                                  isTagged
-                                    ? "bg-purple-500/10 border border-purple-500/30"
-                                    : "hover:bg-white/5 border border-transparent"
-                                }`}
-                              >
-                                <div className={`w-5 h-5 rounded flex items-center justify-center flex-shrink-0 ${
-                                  isTagged ? "bg-purple-500" : "bg-white/10"
-                                }`}>
-                                  {isTagged && <CheckCircle className="w-3.5 h-3.5 text-white" />}
-                                </div>
-                                <div className="min-w-0 flex-1">
-                                  <p className="text-xs text-gray-200 truncate">{v.title || `Video ${v.id}`}</p>
-                                  <div className="flex items-center gap-2 mt-0.5">
-                                    <span className="text-[10px] text-gray-500">{v.user_email || "unknown"}</span>
-                                    {v.duration_seconds && (
+                        <>
+                          <div className="max-h-80 overflow-y-auto space-y-1">
+                            {allVideos.map((v) => {
+                              const isTagged = v.is_tagged || taggedVideoIds.has(String(v.id));
+                              return (
+                                <div
+                                  key={v.id}
+                                  onClick={() => handleToggleVideoTag(v.id)}
+                                  className={`flex items-center gap-3 p-2.5 rounded-lg cursor-pointer transition-colors ${
+                                    isTagged
+                                      ? "bg-purple-500/10 border border-purple-500/30"
+                                      : "hover:bg-white/5 border border-transparent"
+                                  }`}
+                                >
+                                  <div className={`w-5 h-5 rounded flex items-center justify-center flex-shrink-0 ${
+                                    isTagged ? "bg-purple-500" : "bg-white/10"
+                                  }`}>
+                                    {isTagged && <CheckCircle className="w-3.5 h-3.5 text-white" />}
+                                  </div>
+                                  <div className="min-w-0 flex-1">
+                                    <p className="text-xs text-gray-200 truncate">{v.filename || v.original_filename || `Video ${v.id?.substring(0, 8)}`}</p>
+                                    <div className="flex items-center gap-2 mt-0.5">
                                       <span className="text-[10px] text-gray-500">
-                                        {Math.floor(v.duration_seconds / 3600)}h {Math.floor((v.duration_seconds % 3600) / 60)}m
+                                        {v.segment_count || 0} segments
                                       </span>
-                                    )}
-                                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
-                                      v.status === "DONE" ? "bg-green-500/20 text-green-400" : "bg-yellow-500/20 text-yellow-400"
-                                    }`}>
-                                      {v.status}
-                                    </span>
+                                      {v.created_at && (
+                                        <span className="text-[10px] text-gray-500">
+                                          {new Date(v.created_at).toLocaleDateString()}
+                                        </span>
+                                      )}
+                                    </div>
                                   </div>
                                 </div>
+                              );
+                            })}
+                          </div>
+
+                          {/* Pagination */}
+                          {videoTotal > VIDEO_PAGE_SIZE && (
+                            <div className="flex items-center justify-between mt-3 pt-3 border-t border-white/10">
+                              <span className="text-[10px] text-gray-500">
+                                {videoPage * VIDEO_PAGE_SIZE + 1}-{Math.min((videoPage + 1) * VIDEO_PAGE_SIZE, videoTotal)} of {videoTotal}
+                              </span>
+                              <div className="flex gap-2">
+                                <button
+                                  onClick={() => loadVideos(videoPage - 1, videoSearchQuery)}
+                                  disabled={videoPage === 0}
+                                  className="px-3 py-1 text-xs bg-white/5 rounded-lg hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed"
+                                >
+                                  Prev
+                                </button>
+                                <button
+                                  onClick={() => loadVideos(videoPage + 1, videoSearchQuery)}
+                                  disabled={(videoPage + 1) * VIDEO_PAGE_SIZE >= videoTotal}
+                                  className="px-3 py-1 text-xs bg-white/5 rounded-lg hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed"
+                                >
+                                  Next
+                                </button>
                               </div>
-                            );
-                          })}
-                        </div>
+                            </div>
+                          )}
+                        </>
                       )}
                     </div>
                   )}
@@ -555,37 +612,37 @@ export default function PersonaPage() {
                     <div className="space-y-3">
                       <div className="grid grid-cols-4 gap-3">
                         <div className="bg-white/5 rounded-lg p-3 text-center">
-                          <p className="text-lg font-bold text-cyan-400">{datasetPreview.total_examples}</p>
+                          <p className="text-lg font-bold text-cyan-400">{datasetPreview.total_examples || 0}</p>
                           <p className="text-[10px] text-gray-500">Examples</p>
                         </div>
                         <div className="bg-white/5 rounded-lg p-3 text-center">
-                          <p className="text-lg font-bold text-green-400">{datasetPreview.total_videos}</p>
+                          <p className="text-lg font-bold text-green-400">{datasetPreview.video_count || 0}</p>
                           <p className="text-[10px] text-gray-500">Videos</p>
                         </div>
                         <div className="bg-white/5 rounded-lg p-3 text-center">
-                          <p className="text-lg font-bold text-purple-400">{datasetPreview.total_tokens?.toLocaleString()}</p>
-                          <p className="text-[10px] text-gray-500">Tokens</p>
+                          <p className="text-lg font-bold text-purple-400">{datasetPreview.segment_count || 0}</p>
+                          <p className="text-[10px] text-gray-500">Segments</p>
                         </div>
                         <div className="bg-white/5 rounded-lg p-3 text-center">
-                          <p className="text-lg font-bold text-yellow-400">{datasetPreview.duration_hours}h</p>
+                          <p className="text-lg font-bold text-yellow-400">{datasetPreview.duration_hours || 0}h</p>
                           <p className="text-[10px] text-gray-500">Duration</p>
                         </div>
                       </div>
 
                       {/* Sample Examples */}
-                      {datasetPreview.sample_examples?.length > 0 && (
+                      {datasetPreview.preview_examples?.length > 0 && (
                         <div>
                           <p className="text-[10px] text-gray-500 mb-2">Sample Training Data:</p>
-                          <div className="space-y-2 max-h-40 overflow-y-auto">
-                            {datasetPreview.sample_examples.map((ex, i) => (
+                          <div className="space-y-2 max-h-60 overflow-y-auto">
+                            {datasetPreview.preview_examples.map((ex, i) => (
                               <div key={i} className="bg-white/5 rounded-lg p-2.5">
                                 {ex.messages?.map((msg, j) => (
-                                  <p key={j} className={`text-[10px] ${
+                                  <p key={j} className={`text-[10px] mb-1 ${
                                     msg.role === "system" ? "text-gray-500" :
                                     msg.role === "user" ? "text-blue-300" : "text-green-300"
                                   }`}>
                                     <span className="font-bold capitalize">{msg.role}: </span>
-                                    {msg.content?.substring(0, 150)}{msg.content?.length > 150 ? "..." : ""}
+                                    {msg.content?.substring(0, 200)}{msg.content?.length > 200 ? "..." : ""}
                                   </p>
                                 ))}
                               </div>
@@ -708,7 +765,7 @@ export default function PersonaPage() {
                 <textarea
                   value={formData.speaking_style}
                   onChange={(e) => setFormData({ ...formData, speaking_style: e.target.value })}
-                  placeholder="e.g., Energetic and friendly, uses casual Japanese, often says 'ne' at the end of sentences"
+                  placeholder="e.g., Energetic and friendly, uses casual Japanese"
                   rows={3}
                   className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm text-gray-200 placeholder-gray-500 resize-none"
                 />
@@ -720,7 +777,7 @@ export default function PersonaPage() {
                   type="text"
                   value={formData.catchphrases}
                   onChange={(e) => setFormData({ ...formData, catchphrases: e.target.value })}
-                  placeholder="e.g., すごいでしょ, これマジでいいよ, ぜひ試してみて"
+                  placeholder="e.g., すごいでしょ, これマジでいいよ"
                   className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm text-gray-200 placeholder-gray-500"
                 />
               </div>
@@ -731,7 +788,7 @@ export default function PersonaPage() {
                   type="text"
                   value={formData.personality_traits}
                   onChange={(e) => setFormData({ ...formData, personality_traits: e.target.value })}
-                  placeholder="e.g., enthusiastic, knowledgeable, humorous"
+                  placeholder="e.g., energetic, knowledgeable, friendly"
                   className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm text-gray-200 placeholder-gray-500"
                 />
               </div>

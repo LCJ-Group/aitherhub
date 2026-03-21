@@ -1322,7 +1322,7 @@ const LiveStreamPanel = forwardRef(function LiveStreamPanel({
                   </select>
                   {personas.length === 0 && !loadingPersonas && (
                     <p className="text-[10px] text-gray-500 mt-1">
-                      No personas yet. <a href="/persona" className="text-purple-600 underline">Create one</a>
+                      No personas yet. <a href="/personas" className="text-purple-600 underline">Create one</a>
                     </p>
                   )}
                   {selectedPersonaId && (() => {
