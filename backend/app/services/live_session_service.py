@@ -53,11 +53,16 @@ async def _call_gpt(
     import openai
     errors = []
 
+    # If model is a fine-tuned model (ft:...), use OpenAI API directly
+    # Fine-tuned models are hosted on OpenAI, not Azure OpenAI
+    is_finetune_model = model.startswith("ft:")
+
     # --- Strategy 1: Azure OpenAI Responses API (production) ---
+    # Skip Azure for fine-tuned models — they only work via OpenAI API
     azure_key = os.getenv("AZURE_OPENAI_KEY", "")
     azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
     azure_model = os.getenv("GPT5_MODEL") or os.getenv("GPT5_DEPLOYMENT") or "gpt-4.1-mini"
-    if azure_key and azure_endpoint:
+    if azure_key and azure_endpoint and not is_finetune_model:
         try:
             client = openai.AzureOpenAI(
                 api_key=azure_key,
@@ -357,11 +362,38 @@ async def generate_product_script(
 
     try:
         gpt_model = model_override or "gpt-4.1-mini"
-        script = await _call_gpt(
-            messages=[
+        # For fine-tuned persona models, use the persona's system prompt
+        # (matching the training data format) instead of generic Sales Brain prompt
+        if gpt_model.startswith("ft:"):
+            system_content = SALES_BRAIN_SYSTEM_PROMPT
+            if persona:
+                # Build persona-aware system prompt matching fine-tuning format
+                persona_name = persona.get("name", "ライバー")
+                persona_desc = persona.get("description", "")
+                persona_style = persona.get("speaking_style", "")
+                system_content = f"""あなたは「{persona_name}」というライブコマース配信者です。
+視聴者とリアルタイムで会話しながら商品を紹介するライブ配信を行っています。
+{f'プロフィール: {persona_desc}' if persona_desc else ''}
+{f'話し方の特徴: {persona_style}' if persona_style else ''}
+以下のルールに従ってください：
+- 自然な日本語で話す（書き言葉ではなく話し言葉）
+- 視聴者に親しみやすい口調で話す
+- 商品の魅力を具体的に伝える
+- 視聴者のコメントに自然に反応する
+- ライブ配信のテンポ感を大切にする
+- あなた自身の言葉で話す（第三者視点の描写はしない）""".strip()
+            messages_for_gpt = [
+                {"role": "system", "content": system_content},
+                {"role": "user", "content": prompt},
+            ]
+            logger.info(f"Using fine-tuned persona model: {gpt_model}")
+        else:
+            messages_for_gpt = [
                 {"role": "system", "content": SALES_BRAIN_SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
-            ],
+            ]
+        script = await _call_gpt(
+            messages=messages_for_gpt,
             model=gpt_model,
             max_tokens=1024,
             temperature=0.7,

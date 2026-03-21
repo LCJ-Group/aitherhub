@@ -473,6 +473,8 @@ const LiveStreamPanel = forwardRef(function LiveStreamPanel({
         const selectedPersona = personas.find(p => p.id === selectedPersonaId);
         if (selectedPersona) {
           startParams.persona = {
+            name: selectedPersona.name || '',
+            description: selectedPersona.description || '',
             speaking_style: selectedPersona.speaking_style || '',
             catchphrases: selectedPersona.catchphrases || '',
             personality: selectedPersona.personality || '',
