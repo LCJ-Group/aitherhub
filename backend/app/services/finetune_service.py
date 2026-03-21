@@ -274,7 +274,7 @@ def get_finetune_status(job_id: str) -> dict:
     return {
         "job_id": job.id,
         "status": job.status,
-        "model": job.fine_tuned_model,
+        "model_id": job.fine_tuned_model,
         "created_at": str(job.created_at) if job.created_at else None,
         "finished_at": str(job.finished_at) if job.finished_at else None,
         "trained_tokens": job.trained_tokens,
