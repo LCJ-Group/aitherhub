@@ -805,7 +805,7 @@ async def retry_video(
             else:
                 raise HTTPException(status_code=400, detail=f"Invalid from_step: {from_step}. Valid: {valid_steps}")
         await db.execute(
-            text("UPDATE videos SET status = :status, step_progress = 0 WHERE id = :vid"),
+            text("UPDATE videos SET status = :status, step_progress = 0, worker_claimed_at = NULL, dequeue_count = 0 WHERE id = :vid"),
             {"vid": video_id, "status": resume_status},
         )
         await db.commit()
@@ -3385,61 +3385,3 @@ async def bulk_retry_product_detection(
         logger.exception(f"Failed to bulk retry product detection: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
-
-# ──────────────────────────────────────────────
-# TEMPORARY DEBUG: Test Excel URL download
-# ──────────────────────────────────────────────
-@router.get("/debug-excel-urls/{video_id}")
-async def debug_excel_urls(
-    video_id: str,
-    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
-    db: AsyncSession = Depends(get_db),
-):
-    """Temporary debug endpoint to test Excel URL accessibility."""
-    expected_key = os.getenv("ADMIN_API_KEY", "aither:hub")
-    if x_admin_key != expected_key:
-        raise HTTPException(status_code=403, detail="Forbidden")
-    try:
-        from app.services.storage_service import generate_read_sas_from_url
-
-        row = (await db.execute(
-            text("SELECT excel_product_blob_url, excel_trend_blob_url, status FROM videos WHERE id = :vid"),
-            {"vid": video_id},
-        )).fetchone()
-
-        if not row:
-            raise HTTPException(status_code=404, detail="Video not found")
-
-        product_url = row[0]
-        trend_url = row[1]
-        status = row[2]
-
-        results = {
-            "video_id": video_id,
-            "status": status,
-            "product_url_exists": product_url is not None,
-            "trend_url_exists": trend_url is not None,
-        }
-
-        if product_url:
-            results["product_url_prefix"] = product_url[:150]
-            results["product_has_sas"] = "sig=" in product_url
-            try:
-                fresh = generate_read_sas_from_url(product_url, expires_hours=1)
-                results["product_fresh_sas"] = fresh is not None
-                if fresh:
-                    results["product_fresh_prefix"] = fresh[:150]
-            except Exception as e:
-                results["product_sas_error"] = str(e)[:200]
-
-        if trend_url:
-            results["trend_url_prefix"] = trend_url[:150]
-            results["trend_has_sas"] = "sig=" in trend_url
-
-        return results
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("debug-excel-urls failed: %s", e)
-        return {"error": str(e), "type": type(e).__name__}
