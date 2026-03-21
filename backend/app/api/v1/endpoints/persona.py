@@ -375,6 +375,8 @@ async def dataset_preview(
         "segment_count": dataset["segment_count"],
         "duration_hours": dataset["duration_hours"],
         "total_examples": len(dataset["examples"]),
+        "audio_text_examples": dataset.get("audio_text_examples", 0),
+        "fallback_examples": dataset.get("fallback_examples", 0),
         "preview_examples": dataset["examples"][:limit],
     }
 
@@ -890,3 +892,54 @@ async def generate_script(
     except Exception as e:
         logger.exception(f"Script generation error for persona {persona_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Script generation error: {str(e)}")
+
+
+# ── Debug: check audio_text data ──
+@router.get("/{persona_id}/debug-audio-text")
+async def debug_audio_text(
+    persona_id: str,
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Debug: check if audio_text exists in video_phases for tagged videos."""
+    _check_admin(x_admin_key)
+
+    tag_sql = text("""
+        SELECT pvt.video_id FROM persona_video_tags pvt
+        JOIN videos v ON pvt.video_id = v.id
+        WHERE pvt.persona_id = :pid AND v.status = 'DONE'
+    """)
+    tag_result = await db.execute(tag_sql, {"pid": persona_id})
+    video_ids = [r.video_id for r in tag_result.fetchall()]
+
+    if not video_ids:
+        return {"error": "no tagged videos"}
+
+    # Check audio_text
+    check_sql = text("""
+        SELECT
+            vp.video_id,
+            vp.phase_index,
+            LENGTH(vp.audio_text) as audio_text_len,
+            LEFT(vp.audio_text, 100) as audio_text_preview,
+            LENGTH(vp.phase_description) as desc_len
+        FROM video_phases vp
+        WHERE vp.video_id = ANY(:vids)
+        ORDER BY vp.video_id, vp.phase_index
+        LIMIT 20
+    """)
+    try:
+        result = await db.execute(check_sql, {"vids": video_ids})
+        rows = result.fetchall()
+        data = []
+        for r in rows:
+            data.append({
+                "video_id": str(r.video_id),
+                "phase_index": r.phase_index,
+                "audio_text_len": r.audio_text_len,
+                "audio_text_preview": r.audio_text_preview,
+                "desc_len": r.desc_len,
+            })
+        return {"video_count": len(video_ids), "phases": data}
+    except Exception as e:
+        return {"error": str(e)}
