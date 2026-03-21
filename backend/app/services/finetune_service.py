@@ -28,8 +28,10 @@ _openai_client: Optional[OpenAI] = None
 def _get_openai() -> OpenAI:
     global _openai_client
     if _openai_client is None:
+        # Prefer OPENAI_FINETUNE_API_KEY (real OpenAI key) over OPENAI_API_KEY (may be proxy)
+        api_key = os.getenv("OPENAI_FINETUNE_API_KEY") or os.getenv("OPENAI_API_KEY")
         _openai_client = OpenAI(
-            api_key=os.getenv("OPENAI_API_KEY"),
+            api_key=api_key,
             base_url="https://api.openai.com/v1",  # Use original OpenAI for fine-tuning
         )
     return _openai_client
