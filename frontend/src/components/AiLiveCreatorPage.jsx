@@ -213,7 +213,7 @@ export default function AiLiveCreatorPage() {
   const loadPersonas = async () => {
     try {
       const data = await personaService.listPersonas();
-      const completed = (data.personas || []).filter(p => p.status === 'completed' && p.finetune_model_id);
+      const completed = (data.personas || []).filter(p => p.finetune_status === 'completed' && p.finetune_model_id);
       setPersonas(completed);
       if (completed.length > 0) setSelectedPersonaId(completed[0].id);
     } catch (err) {
