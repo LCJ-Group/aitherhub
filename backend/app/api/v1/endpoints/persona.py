@@ -710,3 +710,183 @@ async def _get_available_videos_impl(persona_id, search, limit, offset, db):
             for r in rows
         ],
     }
+
+
+# ── Chat with Fine-tuned Persona ──
+
+class ChatRequest(BaseModel):
+    message: str = Field(..., description="User message to the persona")
+    context: Optional[str] = Field(None, description="Optional context (e.g. current scene, products)")
+    history: Optional[List[dict]] = Field(default_factory=list, description="Previous conversation messages")
+
+
+@router.post("/{persona_id}/chat")
+async def chat_with_persona(
+    persona_id: str,
+    body: ChatRequest,
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Chat with a fine-tuned persona model."""
+    _check_admin(x_admin_key)
+
+    # Get persona
+    result = await db.execute(
+        text("SELECT * FROM personas WHERE id = :pid"),
+        {"pid": persona_id},
+    )
+    persona = result.fetchone()
+    if not persona:
+        raise HTTPException(status_code=404, detail="Persona not found")
+
+    model_id = persona.finetune_model_id
+    if not model_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Persona has no fine-tuned model. Please train first.",
+        )
+
+    # Build system prompt
+    system_prompt = finetune_service._build_system_prompt(persona)
+
+    # Add context if provided
+    if body.context:
+        system_prompt += f"\n\n現在の状況:\n{body.context}"
+
+    # Build messages
+    messages = [{"role": "system", "content": system_prompt}]
+
+    # Add conversation history
+    if body.history:
+        for msg in body.history[-10:]:  # Keep last 10 messages
+            if msg.get("role") in ("user", "assistant"):
+                messages.append({
+                    "role": msg["role"],
+                    "content": msg["content"],
+                })
+
+    # Add current user message
+    messages.append({"role": "user", "content": body.message})
+
+    try:
+        client = finetune_service._get_openai()
+        response = client.chat.completions.create(
+            model=model_id,
+            messages=messages,
+            temperature=0.8,
+            max_tokens=1024,
+        )
+
+        assistant_message = response.choices[0].message.content
+
+        return {
+            "response": assistant_message,
+            "model": model_id,
+            "persona_name": persona.name,
+            "usage": {
+                "prompt_tokens": response.usage.prompt_tokens,
+                "completion_tokens": response.usage.completion_tokens,
+                "total_tokens": response.usage.total_tokens,
+            },
+        }
+    except Exception as e:
+        logger.exception(f"Chat error for persona {persona_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Chat error: {str(e)}")
+
+
+# ── Generate Script with Fine-tuned Persona ──
+
+class ScriptRequest(BaseModel):
+    products: Optional[List[str]] = Field(default_factory=list, description="Products to introduce")
+    duration_minutes: int = Field(5, description="Target script duration in minutes")
+    style: Optional[str] = Field(None, description="Script style (e.g. energetic, calm)")
+    notes: Optional[str] = Field(None, description="Additional notes for script generation")
+
+
+@router.post("/{persona_id}/generate-script")
+async def generate_script(
+    persona_id: str,
+    body: ScriptRequest,
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate a live commerce script using the fine-tuned persona model."""
+    _check_admin(x_admin_key)
+
+    # Get persona
+    result = await db.execute(
+        text("SELECT * FROM personas WHERE id = :pid"),
+        {"pid": persona_id},
+    )
+    persona = result.fetchone()
+    if not persona:
+        raise HTTPException(status_code=404, detail="Persona not found")
+
+    model_id = persona.finetune_model_id
+    if not model_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Persona has no fine-tuned model. Please train first.",
+        )
+
+    # Build system prompt
+    system_prompt = finetune_service._build_system_prompt(persona)
+
+    # Build script generation prompt
+    products_text = ""
+    if body.products:
+        products_text = "紹介する商品:\n" + "\n".join(f"- {p}" for p in body.products)
+
+    # Calculate target character count (Japanese: ~250 chars/min)
+    target_chars = body.duration_minutes * 250
+    min_chars = int(target_chars * 0.85)
+    max_chars = int(target_chars * 1.15)
+
+    user_prompt = f"""以下の条件でライブ配信の台本を作成してください。
+
+配信時間: 約{body.duration_minutes}分（{min_chars}〜{max_chars}文字）
+{products_text}
+{f'スタイル: {body.style}' if body.style else ''}
+{f'備考: {body.notes}' if body.notes else ''}
+
+台本には以下を含めてください：
+1. オープニング（挨拶・今日の配信テーマ）
+2. 商品紹介（各商品の特徴・使い方・おすすめポイント）
+3. 視聴者とのインタラクション（コメント読み・質問対応のタイミング）
+4. クロージング（まとめ・購入案内）
+
+あなたの普段の話し方で、自然な台本を作ってください。"""
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    try:
+        client = finetune_service._get_openai()
+        response = client.chat.completions.create(
+            model=model_id,
+            messages=messages,
+            temperature=0.7,
+            max_tokens=4096,
+        )
+
+        script = response.choices[0].message.content
+        char_count = len(script)
+        estimated_duration_min = round(char_count / 250, 1)
+
+        return {
+            "script": script,
+            "char_count": char_count,
+            "estimated_duration_minutes": estimated_duration_min,
+            "model": model_id,
+            "persona_name": persona.name,
+            "usage": {
+                "prompt_tokens": response.usage.prompt_tokens,
+                "completion_tokens": response.usage.completion_tokens,
+                "total_tokens": response.usage.total_tokens,
+            },
+        }
+    except Exception as e:
+        logger.exception(f"Script generation error for persona {persona_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Script generation error: {str(e)}")

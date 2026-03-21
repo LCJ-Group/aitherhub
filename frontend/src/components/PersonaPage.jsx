@@ -22,6 +22,10 @@ import {
   Sparkles,
   Database,
   Settings,
+  MessageSquare,
+  Send,
+  FileText,
+  Copy,
 } from "lucide-react";
 import personaService from "../base/services/personaService";
 
@@ -72,6 +76,22 @@ export default function PersonaPage() {
   const [videoPage, setVideoPage] = useState(0);
   const [videoTotal, setVideoTotal] = useState(0);
   const VIDEO_PAGE_SIZE = 50;
+
+  // ── Chat State ──
+  const [showChat, setShowChat] = useState(false);
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatInput, setChatInput] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
+  const [chatContext, setChatContext] = useState("");
+
+  // ── Script Generation State ──
+  const [showScriptGen, setShowScriptGen] = useState(false);
+  const [scriptProducts, setScriptProducts] = useState("");
+  const [scriptDuration, setScriptDuration] = useState(5);
+  const [scriptStyle, setScriptStyle] = useState("");
+  const [scriptNotes, setScriptNotes] = useState("");
+  const [generatedScript, setGeneratedScript] = useState(null);
+  const [scriptLoading, setScriptLoading] = useState(false);
 
   // ── Load Personas ──
   const loadPersonas = useCallback(async () => {
@@ -272,6 +292,67 @@ export default function PersonaPage() {
     } catch (err) {
       console.error("Failed to start training:", err);
       alert(`Error: ${err.message}`);
+    }
+  };
+
+  // ── Chat Functions ──
+  const handleSendChat = async () => {
+    if (!chatInput.trim() || !selectedPersona || chatLoading) return;
+    const userMsg = chatInput.trim();
+    setChatInput("");
+    setChatMessages((prev) => [...prev, { role: "user", content: userMsg }]);
+    setChatLoading(true);
+    try {
+      const history = chatMessages.map((m) => ({ role: m.role, content: m.content }));
+      const data = await personaService.chat(
+        selectedPersona.id,
+        userMsg,
+        chatContext || null,
+        history
+      );
+      setChatMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: data.response, usage: data.usage },
+      ]);
+    } catch (err) {
+      console.error("Chat error:", err);
+      setChatMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: `Error: ${err.message}`, error: true },
+      ]);
+    } finally {
+      setChatLoading(false);
+    }
+  };
+
+  // ── Script Generation ──
+  const handleGenerateScript = async () => {
+    if (!selectedPersona || scriptLoading) return;
+    setScriptLoading(true);
+    setGeneratedScript(null);
+    try {
+      const products = scriptProducts
+        .split("\n")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const data = await personaService.generateScript(selectedPersona.id, {
+        products,
+        duration_minutes: scriptDuration,
+        style: scriptStyle || undefined,
+        notes: scriptNotes || undefined,
+      });
+      setGeneratedScript(data);
+    } catch (err) {
+      console.error("Script generation error:", err);
+      alert(`Error: ${err.message}`);
+    } finally {
+      setScriptLoading(false);
+    }
+  };
+
+  const handleCopyScript = () => {
+    if (generatedScript?.script) {
+      navigator.clipboard.writeText(generatedScript.script);
     }
   };
 
@@ -715,6 +796,218 @@ export default function PersonaPage() {
                     </p>
                   )}
                 </div>
+
+                {/* ── Chat with Persona ── */}
+                {selectedPersona.finetune_model_id && (
+                  <div className="bg-white/5 rounded-xl border border-white/10">
+                    <button
+                      onClick={() => { setShowChat(!showChat); setShowScriptGen(false); }}
+                      className="w-full flex items-center justify-between p-5 hover:bg-white/5 rounded-xl transition-colors"
+                    >
+                      <h3 className="text-sm font-bold text-gray-200 flex items-center gap-2">
+                        <MessageSquare className="w-4 h-4 text-blue-400" />
+                        Chat with {selectedPersona.name}
+                      </h3>
+                      {showChat ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
+                    </button>
+
+                    {showChat && (
+                      <div className="border-t border-white/10 p-4 space-y-3">
+                        {/* Context input */}
+                        <div>
+                          <label className="text-[10px] text-gray-500 mb-1 block">Context (optional)</label>
+                          <input
+                            type="text"
+                            value={chatContext}
+                            onChange={(e) => setChatContext(e.target.value)}
+                            placeholder="e.g., 商品紹介中、シャンプーの説明をしている"
+                            className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-xs text-gray-200 placeholder-gray-500"
+                          />
+                        </div>
+
+                        {/* Chat messages */}
+                        <div className="max-h-96 overflow-y-auto space-y-2 min-h-[120px]">
+                          {chatMessages.length === 0 && (
+                            <p className="text-xs text-gray-500 text-center py-8">
+                              {selectedPersona.name}と会話を始めましょう
+                            </p>
+                          )}
+                          {chatMessages.map((msg, i) => (
+                            <div
+                              key={i}
+                              className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+                            >
+                              <div
+                                className={`max-w-[80%] rounded-xl px-3.5 py-2.5 text-xs leading-relaxed ${
+                                  msg.role === "user"
+                                    ? "bg-purple-600/80 text-white"
+                                    : msg.error
+                                    ? "bg-red-500/20 text-red-300 border border-red-500/30"
+                                    : "bg-white/10 text-gray-200"
+                                }`}
+                              >
+                                <p className="whitespace-pre-wrap">{msg.content}</p>
+                                {msg.usage && (
+                                  <p className="text-[9px] text-gray-500 mt-1">
+                                    {msg.usage.total_tokens} tokens
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                          {chatLoading && (
+                            <div className="flex justify-start">
+                              <div className="bg-white/10 rounded-xl px-4 py-3">
+                                <Loader2 className="w-4 h-4 animate-spin text-purple-400" />
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Chat input */}
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            value={chatInput}
+                            onChange={(e) => setChatInput(e.target.value)}
+                            onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSendChat()}
+                            placeholder="メッセージを入力..."
+                            className="flex-1 px-3 py-2.5 bg-white/5 border border-white/10 rounded-lg text-sm text-gray-200 placeholder-gray-500"
+                            disabled={chatLoading}
+                          />
+                          <button
+                            onClick={handleSendChat}
+                            disabled={!chatInput.trim() || chatLoading}
+                            className="px-4 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            <Send className="w-4 h-4" />
+                          </button>
+                        </div>
+
+                        {chatMessages.length > 0 && (
+                          <button
+                            onClick={() => setChatMessages([])}
+                            className="text-[10px] text-gray-500 hover:text-gray-300 transition-colors"
+                          >
+                            Clear conversation
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* ── Script Generation ── */}
+                {selectedPersona.finetune_model_id && (
+                  <div className="bg-white/5 rounded-xl border border-white/10">
+                    <button
+                      onClick={() => { setShowScriptGen(!showScriptGen); setShowChat(false); }}
+                      className="w-full flex items-center justify-between p-5 hover:bg-white/5 rounded-xl transition-colors"
+                    >
+                      <h3 className="text-sm font-bold text-gray-200 flex items-center gap-2">
+                        <FileText className="w-4 h-4 text-orange-400" />
+                        Script Generator
+                      </h3>
+                      {showScriptGen ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
+                    </button>
+
+                    {showScriptGen && (
+                      <div className="border-t border-white/10 p-4 space-y-3">
+                        <div>
+                          <label className="text-[10px] text-gray-500 mb-1 block">紹介する商品（改行区切り）</label>
+                          <textarea
+                            value={scriptProducts}
+                            onChange={(e) => setScriptProducts(e.target.value)}
+                            placeholder="KYOGOKU シャンプー\nKYOGOKU トリートメント"
+                            rows={3}
+                            className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-xs text-gray-200 placeholder-gray-500 resize-none"
+                          />
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="text-[10px] text-gray-500 mb-1 block">配信時間（分）</label>
+                            <input
+                              type="number"
+                              value={scriptDuration}
+                              onChange={(e) => setScriptDuration(Number(e.target.value))}
+                              min={1}
+                              max={60}
+                              className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-xs text-gray-200"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[10px] text-gray-500 mb-1 block">スタイル</label>
+                            <input
+                              type="text"
+                              value={scriptStyle}
+                              onChange={(e) => setScriptStyle(e.target.value)}
+                              placeholder="e.g., ハイテンション"
+                              className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-xs text-gray-200 placeholder-gray-500"
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="text-[10px] text-gray-500 mb-1 block">備考</label>
+                          <input
+                            type="text"
+                            value={scriptNotes}
+                            onChange={(e) => setScriptNotes(e.target.value)}
+                            placeholder="e.g., セール中、視聴者参加型"
+                            className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-xs text-gray-200 placeholder-gray-500"
+                          />
+                        </div>
+
+                        <button
+                          onClick={handleGenerateScript}
+                          disabled={scriptLoading}
+                          className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 text-white text-sm font-bold rounded-lg transition-all disabled:opacity-50"
+                        >
+                          {scriptLoading ? (
+                            <><Loader2 className="w-4 h-4 animate-spin" /> 台本生成中...</>
+                          ) : (
+                            <><FileText className="w-4 h-4" /> 台本を生成</>
+                          )}
+                        </button>
+
+                        {generatedScript && (
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-3">
+                                <span className="text-[10px] text-gray-500">
+                                  {generatedScript.char_count}文字 / 約{generatedScript.estimated_duration_minutes}分
+                                </span>
+                                <span className="text-[10px] text-gray-500">
+                                  {generatedScript.usage?.total_tokens} tokens
+                                </span>
+                              </div>
+                              <button
+                                onClick={handleCopyScript}
+                                className="flex items-center gap-1 text-[10px] text-purple-400 hover:text-purple-300"
+                              >
+                                <Copy className="w-3 h-3" /> Copy
+                              </button>
+                            </div>
+                            <div className="bg-white/5 rounded-lg p-4 max-h-96 overflow-y-auto">
+                              <pre className="text-xs text-gray-200 whitespace-pre-wrap leading-relaxed font-sans">
+                                {generatedScript.script}
+                              </pre>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Model Info */}
+                {selectedPersona.finetune_model_id && (
+                  <div className="bg-white/5 rounded-xl border border-white/10 p-4">
+                    <p className="text-[10px] text-gray-500 mb-1">Fine-tuned Model</p>
+                    <p className="text-xs text-gray-300 font-mono break-all">{selectedPersona.finetune_model_id}</p>
+                  </div>
+                )}
               </div>
             )}
           </div>

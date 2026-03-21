@@ -68,6 +68,28 @@ class PersonaService {
   async getTrainingStatus(personaId) {
     return this._request("GET", `/${personaId}/training-status`);
   }
+
+  // ── Chat & Script Generation ──
+
+  async chat(personaId, message, context = null, history = []) {
+    return this._request("POST", `/${personaId}/chat`, {
+      message,
+      context,
+      history,
+    });
+  }
+
+  async generateScript(personaId, options = {}) {
+    return this._request("POST", `/${personaId}/generate-script`, options);
+  }
+
+  // ── Available Videos ──
+
+  async getAvailableVideos(personaId, { search = "", limit = 50, offset = 0 } = {}) {
+    const params = new URLSearchParams({ limit, offset });
+    if (search) params.set("search", search);
+    return this._request("GET", `/${personaId}/available-videos?${params}`);
+  }
 }
 
 const personaService = new PersonaService();
