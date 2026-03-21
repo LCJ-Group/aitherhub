@@ -257,6 +257,14 @@ async def generate_product_script(
     pending_comments: Optional[List[Dict[str, str]]] = None,
     persona: Optional[Dict[str, str]] = None,
     model_override: Optional[str] = None,
+    # ── Enhanced TikTok product data ──
+    selling_points: Optional[List[str]] = None,
+    achievements: Optional[List[str]] = None,
+    reviews_summary: str = "",
+    sold_info: str = "",
+    target_audience: str = "",
+    talk_hooks: Optional[List[str]] = None,
+    variants: Optional[List[str]] = None,
 ) -> str:
     """
     Generate a livestream script for a product using GPT (Sales Brain).
@@ -302,6 +310,34 @@ async def generate_product_script(
     if product_features:
         features_text = "\n".join(f"- {f}" for f in product_features)
 
+    # Build enhanced TikTok product context
+    enhanced_context = ""
+    enhanced_parts = []
+    if selling_points:
+        enhanced_parts.append("\n## セールスポイント（必ず台本に織り込んでください）")
+        for sp in selling_points:
+            enhanced_parts.append(f"- {sp}")
+    if achievements:
+        enhanced_parts.append("\n## 実績・受賞歴（信頼性の証拠として使ってください）")
+        for a in achievements:
+            enhanced_parts.append(f"- {a}")
+    if reviews_summary:
+        enhanced_parts.append(f"\n## レビュー・評価\n{reviews_summary}")
+    if sold_info:
+        enhanced_parts.append(f"\n## 販売実績\n{sold_info}")
+    if target_audience:
+        enhanced_parts.append(f"\n## ターゲット層\n{target_audience}")
+    if variants:
+        enhanced_parts.append("\n## バリエーション")
+        for v in variants:
+            enhanced_parts.append(f"- {v}")
+    if talk_hooks:
+        enhanced_parts.append("\n## トークフック（視聴者の興味を引くフレーズ）")
+        for h in talk_hooks:
+            enhanced_parts.append(f"- 「{h}」")
+    if enhanced_parts:
+        enhanced_context = "\n".join(enhanced_parts)
+
     # Build persona section
     persona_text = ""
     if persona:
@@ -342,6 +378,7 @@ async def generate_product_script(
 - 価格: {product_price or '(未設定)'}
 - 特徴:
 {features_text or '(なし)'}
+{enhanced_context}
 {persona_text}
 {prev_context}
 {comments_text}
@@ -358,6 +395,8 @@ async def generate_product_script(
 - 視聴者への呼びかけを含める
 - 前回の台本から自然に繋がるようにする
 - コメントがある場合は商品紹介の中に自然に織り込む
+- セールスポイント・実績・レビュー情報がある場合は必ず具体的な数字を含めて台本に織り込む
+- 「累計○万本」「ランキング1位」などの実績は視聴者の信頼を得るために積極的に使う
 - テキストのみ出力"""
 
     try:
@@ -515,6 +554,14 @@ async def generate_session_scripts(
                 tone=product.get("tone", "professional_friendly"),
                 language=session["language"],
                 script_type=stype,
+                # Enhanced TikTok product data
+                selling_points=product.get("selling_points"),
+                achievements=product.get("achievements"),
+                reviews_summary=product.get("reviews_summary", ""),
+                sold_info=product.get("sold_info", ""),
+                target_audience=product.get("target_audience", ""),
+                talk_hooks=product.get("talk_hooks"),
+                variants=product.get("variants"),
             )
             results.append({
                 "product_name": product.get("name", ""),
@@ -556,21 +603,101 @@ async def _resolve_tiktok_url(product_url: str) -> str:
             return product_url
 
 
+async def _analyze_product_image_vision(image_url: str, product_title: str, language: str = "ja") -> Dict[str, Any]:
+    """
+    Analyze a TikTok product image using GPT-4.1-mini Vision.
+    Extracts: achievements, features, variants, catchphrase, target audience,
+    reviews/ratings info, sales numbers — anything visible in the image.
+    """
+    import openai
+
+    try:
+        client = openai.AsyncOpenAI()
+
+        lang_map = {"ja": "日本語", "zh": "中文", "en": "English"}
+        lang_name = lang_map.get(language, "日本語")
+
+        # Try higher resolution image
+        import re as _re
+        high_res_url = _re.sub(r'resize-webp:\d+:\d+', 'resize-webp:800:800', image_url)
+        if high_res_url == image_url:
+            high_res_url = _re.sub(r'resize-jpeg:\d+:\d+', 'resize-jpeg:800:800', image_url)
+
+        response = await client.chat.completions.create(
+            model="gpt-4.1-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": f"""あなたはTikTok Shop商品画像の分析AIです。
+商品画像に写っている情報を{lang_name}で徹底的に抽出してください。
+テキスト、数字、ランキング、実績、キャッチコピー、カラーバリエーション、
+モデルの特徴、パッケージデザインなど、見えるもの全てを報告してください。
+必ずJSON形式で出力してください。""",
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": f"""この商品画像を分析してください。
+商品タイトル: {product_title}
+
+以下のJSON形式で出力:
+{{
+  "product_name": "画像から読み取れる正式な商品名",
+  "brand": "ブランド名",
+  "catchphrase": "キャッチコピー・メインメッセージ",
+  "achievements": ["ランキング1位", "累計50万本突破" など画像内の実績テキスト],
+  "variants": ["カラーや種類のバリエーション"],
+  "visible_features": ["画像から読み取れる商品特徴"],
+  "target_audience": "ターゲット層の推測",
+  "price_info": "価格情報（見える場合）",
+  "reviews_visible": "レビュー・評価情報（見える場合）",
+  "sales_info": "販売数・売上情報（見える場合）",
+  "package_description": "パッケージの見た目・デザインの説明",
+  "overall_impression": "商品の全体的な印象（高級感、ナチュラル、ポップなど）",
+  "selling_points": ["ライブ配信で使える強力なセールスポイント3-5個"]
+}}""",
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": high_res_url, "detail": "high"},
+                        },
+                    ],
+                },
+            ],
+            max_tokens=1500,
+            temperature=0.2,
+            response_format={"type": "json_object"},
+        )
+
+        import json as _json
+        result = _json.loads(response.choices[0].message.content.strip())
+        logger.info(f"Vision analysis complete: {len(result.get('selling_points', []))} selling points found")
+        return result
+
+    except Exception as e:
+        logger.warning(f"GPT Vision product image analysis failed: {e}")
+        return {}
+
+
 async def import_tiktok_product(
     product_url: str,
     language: str = "ja",
 ) -> Dict[str, Any]:
     """
-    Import a product from TikTok Shop URL.
+    Import a product from TikTok Shop URL with rich analysis.
 
     Supports:
       - Short URLs: https://vt.tiktok.com/...
       - Full URLs: https://www.tiktok.com/view/product/...
 
     Flow:
-      1. Follow redirect to get full URL with og_info (using requests, not httpx)
+      1. Follow redirect to get full URL with og_info
       2. Parse og_info for product title + image
-      3. Use GPT to analyze and structure the product data (separate function)
+      3. Analyze product image with GPT Vision (extract achievements, reviews, features)
+      4. Enrich with GPT text analysis
+      5. Return comprehensive product profile for livestream scripts
     """
     import json as json_module
     import urllib.parse
@@ -579,14 +706,15 @@ async def import_tiktok_product(
     product_title = ""
     product_image = ""
     product_id = ""
+    seller_username = ""
     original_url = product_url
 
     try:
-        # ── Step 1: Resolve short URL → full URL (using requests, not httpx) ──
+        # ── Step 1: Resolve short URL → full URL ──
         redirect_url = await _resolve_tiktok_url(product_url)
         logger.info(f"TikTok URL resolved: {redirect_url[:200]}")
 
-        # ── Step 2: Parse og_info from URL parameters ──
+        # ── Step 2: Parse ALL info from URL parameters ──
         parsed = urllib.parse.urlparse(redirect_url)
         params = urllib.parse.parse_qs(parsed.query)
 
@@ -595,6 +723,9 @@ async def import_tiktok_product(
         if path_match:
             product_id = path_match.group(1)
 
+        # Extract seller username
+        seller_username = params.get("unique_id", [""])[0]
+
         # Extract og_info (contains title + image)
         if "og_info" in params:
             og_info = json_module.loads(params["og_info"][0])
@@ -602,54 +733,37 @@ async def import_tiktok_product(
             product_image = og_info.get("image", "")
             logger.info(f"TikTok og_info parsed: title='{product_title[:60]}', image={'yes' if product_image else 'no'}")
 
-        # Fallback 1: Scrape HTML page for title and meta tags
+        # Fallback: Scrape HTML page for title and meta tags
         if not product_title:
             try:
                 import httpx
                 async with httpx.AsyncClient(
                     follow_redirects=True,
                     timeout=15.0,
-                    headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"},
+                    headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"},
                 ) as client:
                     resp = await client.get(redirect_url)
                     html_text = resp.text
-
-                    # Try og:title
-                    og_title_match = re.search(r'<meta[^>]*property=["\']og:title["\'][^>]*content=["\']([^"\']+)', html_text)
+                    og_title_match = re.search(r'<meta[^>]*property=["\x27]og:title["\x27][^>]*content=["\x27]([^"\x27]+)', html_text)
                     if og_title_match:
                         product_title = og_title_match.group(1).strip()
-                        logger.info(f"TikTok og:title from HTML: '{product_title[:80]}'")
-
-                    # Try <title> tag
                     if not product_title:
                         title_match = re.search(r'<title[^>]*>([^<]+)</title>', html_text)
                         if title_match:
-                            raw_title = title_match.group(1).strip()
-                            # Remove common suffixes like " | TikTok"
-                            product_title = re.sub(r'\s*[|\-]\s*TikTok.*$', '', raw_title).strip()
-                            logger.info(f"TikTok <title> from HTML: '{product_title[:80]}'")
-
-                    # Try og:image
+                            product_title = re.sub(r'\s*[|\-]\s*TikTok.*$', '', title_match.group(1).strip()).strip()
                     if not product_image:
-                        og_img_match = re.search(r'<meta[^>]*property=["\']og:image["\'][^>]*content=["\']([^"\']+)', html_text)
+                        og_img_match = re.search(r'<meta[^>]*property=["\x27]og:image["\x27][^>]*content=["\x27]([^"\x27]+)', html_text)
                         if og_img_match:
                             product_image = og_img_match.group(1).strip()
-
-                    # Try to find price in HTML
-                    price_html_match = re.search(r'["\']price["\']\s*:\s*["\']?([\d,.]+)', html_text)
-                    if not price_html_match:
-                        price_html_match = re.search(r'[¥￥$]\s*([\d,.]+)', html_text)
-
             except Exception as html_err:
                 logger.warning(f"TikTok HTML scrape fallback failed: {html_err}")
 
-        # Fallback 2: Use product ID as name
+        # Fallback: Use product ID as name
         if not product_title:
-            shop_name = params.get("unique_id", [""])[0]
             if product_id:
                 product_title = f"TikTok Product #{product_id}"
-                if shop_name:
-                    product_title += f" by @{shop_name}"
+                if seller_username:
+                    product_title += f" by @{seller_username}"
 
         if not product_title:
             return {
@@ -657,17 +771,51 @@ async def import_tiktok_product(
                 "error": "商品情報を取得できませんでした。URLを確認してください。",
             }
 
-        # ── Step 3: Use GPT to analyze and enrich product data ──
+        # ── Step 3: Analyze product image with GPT Vision ──
+        vision_data = {}
+        if product_image:
+            vision_data = await _analyze_product_image_vision(
+                product_image, product_title, language
+            )
+            logger.info(f"Vision analysis: {list(vision_data.keys())}")
+
+        # ── Step 4: Enrich with GPT text analysis (combine title + vision data) ──
         product_description = product_title
         product_features = []
         product_price = ""
+        selling_points = []
+        target_audience = ""
+        achievements = []
+        reviews_summary = ""
+        sold_info = ""
+        category = ""
 
-        # Try to extract price from title
-        price_match = re.search(r'[\$¥￥]\s*[\d,.]+|[\d,.]+\s*[円元]', product_title)
-        if price_match:
-            product_price = price_match.group(0)
+        # Extract from vision data
+        if vision_data:
+            if vision_data.get("catchphrase"):
+                product_description = vision_data["catchphrase"]
+            if vision_data.get("visible_features"):
+                product_features = vision_data["visible_features"]
+            if vision_data.get("selling_points"):
+                selling_points = vision_data["selling_points"]
+            if vision_data.get("target_audience"):
+                target_audience = vision_data["target_audience"]
+            if vision_data.get("achievements"):
+                achievements = vision_data["achievements"]
+            if vision_data.get("reviews_visible"):
+                reviews_summary = vision_data["reviews_visible"]
+            if vision_data.get("sales_info"):
+                sold_info = vision_data["sales_info"]
+            if vision_data.get("price_info"):
+                product_price = vision_data["price_info"]
 
-        # Use GPT to generate a rich description from the title
+        # Try to extract price from title if not from vision
+        if not product_price:
+            price_match = re.search(r'[\$¥￥]\s*[\d,.]+|[\d,.]+\s*[円元]', product_title)
+            if price_match:
+                product_price = price_match.group(0)
+
+        # GPT text enrichment — combine og_info title + vision analysis for comprehensive profile
         try:
             import openai
             client = openai.AsyncOpenAI()
@@ -675,24 +823,72 @@ async def import_tiktok_product(
             lang_map = {"ja": "日本語", "zh": "中文", "en": "English"}
             lang_name = lang_map.get(language, "日本語")
 
+            # Build context from vision analysis
+            vision_context = ""
+            if vision_data:
+                vision_parts = []
+                if vision_data.get("brand"):
+                    vision_parts.append(f"ブランド: {vision_data['brand']}")
+                if vision_data.get("catchphrase"):
+                    vision_parts.append(f"キャッチコピー: {vision_data['catchphrase']}")
+                if vision_data.get("achievements"):
+                    vision_parts.append(f"実績: {', '.join(vision_data['achievements'])}")
+                if vision_data.get("variants"):
+                    vision_parts.append(f"バリエーション: {', '.join(vision_data['variants'])}")
+                if vision_data.get("visible_features"):
+                    vision_parts.append(f"特徴: {', '.join(vision_data['visible_features'])}")
+                if vision_data.get("package_description"):
+                    vision_parts.append(f"パッケージ: {vision_data['package_description']}")
+                if vision_data.get("overall_impression"):
+                    vision_parts.append(f"印象: {vision_data['overall_impression']}")
+                if vision_data.get("reviews_visible"):
+                    vision_parts.append(f"レビュー情報: {vision_data['reviews_visible']}")
+                if vision_data.get("sales_info"):
+                    vision_parts.append(f"販売情報: {vision_data['sales_info']}")
+                vision_context = "\n".join(vision_parts)
+
+            # Build vision section text (avoid backslash in f-string)
+            vision_section = "画像分析結果:\n" + vision_context if vision_context else "（画像分析なし）"
+
+            system_msg = (
+                f"あなたはTikTok Shopの商品分析AIです。"
+                f"商品タイトルと画像分析結果を組み合わせて、{lang_name}でライブ配信用の"
+                f"包括的な商品プロファイルを作成してください。"
+                f"ライブ配信者が自然に話せるような情報を整理してください。"
+                f"必ずJSON形式で出力してください。"
+            )
+
+            user_msg = (
+                f"以下のTikTok Shop商品の包括的プロファイルを作成してください。\n\n"
+                f"商品タイトル: {product_title}\n"
+                f"販売者: @{seller_username}\n"
+                f"商品URL: {original_url}\n\n"
+                f"{vision_section}\n\n"
+                f"以下のJSON形式で出力:\n"
+                f"{{\n"
+                f'  "name": "商品の正式名（ブランド名+商品名）",\n'
+                f'  "short_name": "会話で使う短い呼び名",\n'
+                f'  "description": "商品の魅力的な説明文（100-200文字、ライブで話せる内容）",\n'
+                f'  "category": "商品カテゴリ",\n'
+                f'  "features": ["特徴1", "特徴2", "特徴3", "特徴4", "特徴5"],\n'
+                f'  "selling_points": ["ライブで使える強力なセールスポイント（実績・数字入り）"],\n'
+                f'  "target_audience": "ターゲット層の説明",\n'
+                f'  "achievements": ["ランキング実績", "累計販売数" など],\n'
+                f'  "reviews_summary": "レビュー・評価の要約（わかる場合）",\n'
+                f'  "sold_info": "販売実績（わかる場合）",\n'
+                f'  "price": "価格（わかる場合）",\n'
+                f'  "variants": ["バリエーション一覧"],\n'
+                f'  "talk_hooks": ["ライブ配信で視聴者の興味を引くフレーズ3つ"]\n'
+                f"}}\n"
+            )
+
             gpt_response = await client.chat.completions.create(
-                model="gpt-4.1-nano",
+                model="gpt-4.1-mini",
                 messages=[
-                    {"role": "system", "content": f"あなたはTikTok Shopの商品分析AIです。商品タイトルから、{lang_name}で商品の説明文と特徴を推測して生成してください。JSON形式で出力してください。"},
-                    {"role": "user", "content": f"""以下のTikTok Shop商品を分析してください。
-
-商品タイトル: {product_title}
-商品URL: {original_url}
-
-JSON形式で出力:
-{{
-  "name": "商品の短い名前（ブランド名+商品カテゴリ）",
-  "description": "商品の魅力的な説明文（50-100文字）",
-  "features": ["特徴1", "特徴2", "特徴3"],
-  "price": "価格（わかる場合）"
-}}"""},
+                    {"role": "system", "content": system_msg},
+                    {"role": "user", "content": user_msg},
                 ],
-                max_tokens=512,
+                max_tokens=1500,
                 temperature=0.3,
                 response_format={"type": "json_object"},
             )
@@ -700,32 +896,57 @@ JSON形式で出力:
             gpt_text = gpt_response.choices[0].message.content.strip()
             gpt_data = json_module.loads(gpt_text)
 
+            # Merge GPT enrichment with vision data
             if gpt_data.get("name"):
                 product_title = gpt_data["name"]
             if gpt_data.get("description"):
                 product_description = gpt_data["description"]
             if gpt_data.get("features"):
                 product_features = gpt_data["features"]
+            if gpt_data.get("selling_points"):
+                selling_points = gpt_data["selling_points"]
+            if gpt_data.get("target_audience"):
+                target_audience = gpt_data["target_audience"]
+            if gpt_data.get("achievements"):
+                achievements = gpt_data["achievements"]
+            if gpt_data.get("reviews_summary"):
+                reviews_summary = gpt_data["reviews_summary"]
+            if gpt_data.get("sold_info"):
+                sold_info = gpt_data["sold_info"]
             if gpt_data.get("price") and not product_price:
                 product_price = gpt_data["price"]
+            if gpt_data.get("category"):
+                category = gpt_data["category"]
 
-            logger.info(f"GPT enriched product: name='{product_title}', features={len(product_features)}")
+            logger.info(f"GPT enriched product: name='{product_title}', features={len(product_features)}, selling_points={len(selling_points)}")
 
         except Exception as gpt_err:
-            logger.warning(f"GPT product analysis failed (using raw title): {gpt_err}")
+            logger.warning(f"GPT product analysis failed (using vision/raw data): {gpt_err}")
 
+        # ── Step 5: Build comprehensive product data ──
         product_data = {
             "name": product_title,
+            "short_name": gpt_data.get("short_name", product_title) if 'gpt_data' in locals() else product_title,
             "description": product_description,
             "price": product_price,
             "features": product_features,
+            "selling_points": selling_points,
+            "achievements": achievements,
+            "reviews_summary": reviews_summary,
+            "sold_info": sold_info,
+            "target_audience": target_audience,
+            "category": category,
+            "variants": gpt_data.get("variants", vision_data.get("variants", [])) if 'gpt_data' in locals() else vision_data.get("variants", []),
+            "talk_hooks": gpt_data.get("talk_hooks", []) if 'gpt_data' in locals() else [],
             "image_url": product_image,
+            "image_analysis": vision_data,
             "original_url": original_url,
             "tiktok_product_id": product_id,
+            "seller_username": seller_username,
             "source": "tiktok_shop",
         }
 
-        logger.info(f"TikTok product imported: '{product_data['name']}'")
+        logger.info(f"TikTok product imported (enriched): '{product_data['name']}' with {len(selling_points)} selling points, {len(achievements)} achievements")
 
         return {
             "success": True,

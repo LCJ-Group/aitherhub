@@ -225,10 +225,23 @@ export default function AiLiveCreatorPage() {
     if (!selectedPersonaId) return;
     setIsGeneratingAiScript(true);
     try {
-      // Collect product names from LiveStreamPanel products
-      const productNames = previewProducts.map(p => p.name).filter(Boolean);
+      // Collect full product info from LiveStreamPanel products
+      const productInfos = previewProducts.map(p => ({
+        name: p.name || "",
+        description: p.description || "",
+        price: p.price || "",
+        features: p.features || "",
+        category: p.category || "",
+        selling_points: p.selling_points || [],
+        achievements: p.achievements || [],
+        reviews_summary: p.reviews_summary || "",
+        sold_info: p.sold_info || "",
+        target_audience: p.target_audience || "",
+        talk_hooks: p.talk_hooks || [],
+        variants: p.variants || [],
+      })).filter(p => p.name);
       const res = await personaService.generateScript(selectedPersonaId, {
-        products: productNames.length > 0 ? productNames : ["商品紹介"],
+        products: productInfos.length > 0 ? productInfos : [{ name: "商品紹介" }],
         duration_minutes: 3,
         style: "energetic",
       });

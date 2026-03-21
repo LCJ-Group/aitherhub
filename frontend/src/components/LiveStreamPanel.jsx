@@ -244,6 +244,13 @@ const LiveStreamPanel = forwardRef(function LiveStreamPanel({
             category: p.category || "",
             target_audience: p.target_audience || "",
             selling_points: p.selling_points || [],
+            // Enhanced TikTok data
+            achievements: p.achievements || [],
+            reviews_summary: p.reviews_summary || "",
+            sold_info: p.sold_info || "",
+            talk_hooks: p.talk_hooks || [],
+            variants: p.variants || [],
+            seller_username: p.seller_username || "",
           },
         ]);
         setTiktokUrl("");
@@ -787,6 +794,29 @@ const LiveStreamPanel = forwardRef(function LiveStreamPanel({
                 </div>
                 {product.description && (
                   <p className="text-xs text-gray-500 mb-2 line-clamp-2">{product.description}</p>
+                )}
+                {product.achievements && product.achievements.length > 0 && (
+                  <div className="flex flex-wrap gap-1 mb-1">
+                    {product.achievements.map((a, i) => (
+                      <span key={i} className="text-[9px] bg-yellow-50 text-yellow-700 px-1.5 py-0.5 rounded-full flex items-center gap-0.5">
+                        <span className="text-yellow-500">★</span> {a}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {(product.reviews_summary || product.sold_info) && (
+                  <div className="flex flex-wrap gap-1.5 mb-1">
+                    {product.reviews_summary && (
+                      <span className="text-[9px] bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded-full">
+                        💬 {product.reviews_summary}
+                      </span>
+                    )}
+                    {product.sold_info && (
+                      <span className="text-[9px] bg-green-50 text-green-600 px-1.5 py-0.5 rounded-full">
+                        📊 {product.sold_info}
+                      </span>
+                    )}
+                  </div>
                 )}
                 {product.selling_points && product.selling_points.length > 0 && (
                   <div className="flex flex-wrap gap-1 mb-2">

@@ -2714,6 +2714,14 @@ async def autopilot_next(
             pending_comments=req.pending_comments if has_comments else None,
             persona=persona if persona else None,
             model_override=finetune_model_id,
+            # Enhanced TikTok product data
+            selling_points=product.get("selling_points"),
+            achievements=product.get("achievements"),
+            reviews_summary=product.get("reviews_summary", ""),
+            sold_info=product.get("sold_info", ""),
+            target_audience=product.get("target_audience", ""),
+            talk_hooks=product.get("talk_hooks"),
+            variants=product.get("variants"),
         )
         if not script_text:
             script_text = f"この{product_name}は本当に素晴らしい商品です！"

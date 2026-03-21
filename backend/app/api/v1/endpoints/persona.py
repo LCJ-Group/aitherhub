@@ -798,8 +798,25 @@ async def chat_with_persona(
 
 # ── Generate Script with Fine-tuned Persona ──
 
+class ProductInfo(BaseModel):
+    name: str = Field(..., description="Product name")
+    description: Optional[str] = Field(None, description="Product description")
+    price: Optional[str] = Field(None, description="Product price")
+    features: Optional[str] = Field(None, description="Product features (comma-separated)")
+    category: Optional[str] = Field(None, description="Product category")
+    # Enhanced TikTok product data
+    selling_points: Optional[List[str]] = Field(default_factory=list, description="Key selling points with evidence")
+    achievements: Optional[List[str]] = Field(default_factory=list, description="Rankings, awards, sales milestones")
+    reviews_summary: Optional[str] = Field(None, description="Review/rating summary")
+    sold_info: Optional[str] = Field(None, description="Sales performance info")
+    target_audience: Optional[str] = Field(None, description="Target audience description")
+    talk_hooks: Optional[List[str]] = Field(default_factory=list, description="Phrases to hook viewer interest")
+    variants: Optional[List[str]] = Field(default_factory=list, description="Product variants/colors/sizes")
+
+
 class ScriptRequest(BaseModel):
-    products: Optional[List[str]] = Field(default_factory=list, description="Products to introduce")
+    products: Optional[List[ProductInfo]] = Field(default_factory=list, description="Products to introduce with details")
+    product_names: Optional[List[str]] = Field(default_factory=list, description="Simple product names (fallback)")
     duration_minutes: int = Field(5, description="Target script duration in minutes")
     style: Optional[str] = Field(None, description="Script style (e.g. energetic, calm)")
     notes: Optional[str] = Field(None, description="Additional notes for script generation")
@@ -835,9 +852,46 @@ async def generate_script(
     system_prompt = finetune_service._build_system_prompt(persona)
 
     # Build script generation prompt
+    # Build rich product descriptions
     products_text = ""
     if body.products:
-        products_text = "紹介する商品:\n" + "\n".join(f"- {p}" for p in body.products)
+        product_lines = []
+        for p in body.products:
+            if hasattr(p, 'name'):
+                # ProductInfo object
+                parts = [f"商品名: {p.name}"]
+                if p.description:
+                    parts.append(f"  説明: {p.description}")
+                if p.price:
+                    parts.append(f"  価格: {p.price}")
+                if p.features:
+                    parts.append(f"  特徴: {p.features}")
+                if p.category:
+                    parts.append(f"  カテゴリ: {p.category}")
+                # Enhanced TikTok data
+                if p.selling_points:
+                    parts.append(f"  セールスポイント: {', '.join(p.selling_points)}")
+                if p.achievements:
+                    parts.append(f"  実績: {', '.join(p.achievements)}")
+                if p.reviews_summary:
+                    parts.append(f"  レビュー: {p.reviews_summary}")
+                if p.sold_info:
+                    parts.append(f"  販売実績: {p.sold_info}")
+                if p.target_audience:
+                    parts.append(f"  ターゲット層: {p.target_audience}")
+                if p.variants:
+                    parts.append(f"  バリエーション: {', '.join(p.variants)}")
+                if p.talk_hooks:
+                    parts.append(f"  トークフック: {', '.join(p.talk_hooks)}")
+                product_lines.append("\n".join(parts))
+            else:
+                product_lines.append(f"商品名: {p}")
+        products_text = "紹介する商品:\n" + "\n\n".join(product_lines)
+
+    # Build enhanced product data from request notes (passed from frontend)
+    enhanced_notes = ""
+    if body.notes and "selling_points" in body.notes:
+        enhanced_notes = body.notes
 
     # Calculate target character count (Japanese: ~250 chars/min)
     target_chars = body.duration_minutes * 250
@@ -856,6 +910,12 @@ async def generate_script(
 2. 商品紹介（各商品の特徴・使い方・おすすめポイント）
 3. 視聴者とのインタラクション（コメント読み・質問対応のタイミング）
 4. クロージング（まとめ・購入案内）
+
+重要なルール:
+- 商品の実績（累計販売数、ランキング1位など）があれば必ず台本に入れる
+- レビュー・評価情報があれば「お客様の声」として自然に織り込む
+- セールスポイントがあれば具体的な数字を使って説得力のある台本にする
+- バリエーションがあればそれぞれの魅力を紹介する
 
 あなたの普段の話し方で、自然な台本を作ってください。"""
 
