@@ -1025,11 +1025,235 @@ async def batch_transcribe(
     except Exception as e:
         import traceback
         logger.exception(f"[batch-transcribe] Error: {e}")
+        return {"error": str(e), "traceback": traceback.format_exc()[-500    }
+
+
+# ── Single Video Transcription (synchronous, reliable) ──
+
+@router.post("/{persona_id}/transcribe-video/{video_id}")
+async def transcribe_single_video(
+    persona_id: str,
+    video_id: str,
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Transcribe a single video synchronously using Azure OpenAI Whisper API.
+    More reliable than batch-transcribe as it processes one video at a time.
+    """
+    import asyncio
+    import tempfile
+    import os as _os
+    import openai
+    import httpx
+
+    _check_admin(x_admin_key)
+
+    try:
+        # Get video info
+        video_sql = text("""
+            SELECT v.id, v.original_filename, u.email as user_email
+            FROM videos v
+            LEFT JOIN users u ON v.user_id = u.id
+            WHERE v.id = CAST(:vid AS UUID) AND v.status = 'DONE'
+        """)
+        video_result = await db.execute(video_sql, {"vid": video_id})
+        video = video_result.fetchone()
+        if not video:
+            return {"error": f"Video {video_id} not found or not DONE"}
+
+        user_email = video.user_email
+        filename = video.original_filename
+
+        # Generate download URL
+        from app.services.storage_service import generate_download_sas
+        download_url, _ = await generate_download_sas(
+            email=user_email,
+            video_id=video_id,
+            filename=filename,
+            expires_in_minutes=60,
+        )
+
+        tmp_dir = tempfile.mkdtemp(prefix=f"transcribe_{video_id[:8]}_")
+
+        # Download video
+        video_path = _os.path.join(tmp_dir, "video.mp4")
+        logger.info(f"[transcribe-video] Downloading {video_id}...")
+        async with httpx.AsyncClient(timeout=httpx.Timeout(connect=30, read=600, write=30, pool=600)) as client:
+            async with client.stream("GET", download_url) as resp:
+                if resp.status_code != 200:
+                    return {"error": f"Download failed: HTTP {resp.status_code}"}
+                with open(video_path, "wb") as f:
+                    async for chunk in resp.aiter_bytes(chunk_size=1024 * 1024):
+                        f.write(chunk)
+
+        file_size = _os.path.getsize(video_path)
+        logger.info(f"[transcribe-video] Downloaded: {file_size / 1024 / 1024:.1f} MB")
+
+        # Extract audio
+        audio_path = _os.path.join(tmp_dir, "audio.mp3")
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-y", "-i", video_path,
+            "-vn", "-acodec", "libmp3lame",
+            "-ar", "16000", "-ac", "1", "-b:a", "64k",
+            audio_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await proc.communicate()
+        if proc.returncode != 0 or not _os.path.exists(audio_path):
+            return {"error": f"ffmpeg failed: {stderr.decode()[:300]}"}
+
+        audio_size = _os.path.getsize(audio_path)
+        logger.info(f"[transcribe-video] Audio: {audio_size / 1024 / 1024:.1f} MB")
+
+        # Delete video to free disk space
+        _os.unlink(video_path)
+
+        # Setup Whisper client
+        azure_endpoint = _os.getenv("AZURE_OPENAI_ENDPOINT", "https://aoai-kyogoku-service.openai.azure.com/")
+        azure_key = _os.getenv("AZURE_OPENAI_KEY", "")
+        from urllib.parse import urlparse as _urlparse
+        _parsed = _urlparse(azure_endpoint)
+        clean_endpoint = f"{_parsed.scheme}://{_parsed.netloc}/"
+
+        openai_client = openai.AsyncAzureOpenAI(
+            api_key=azure_key,
+            api_version="2024-06-01",
+            azure_endpoint=clean_endpoint,
+        )
+
+        # Split audio if > 25MB
+        max_whisper_size = 24 * 1024 * 1024
+        audio_files = []
+
+        if audio_size > max_whisper_size:
+            probe_proc = await asyncio.create_subprocess_exec(
+                "ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1", audio_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            probe_out, _ = await probe_proc.communicate()
+            total_duration = float(probe_out.decode().strip())
+
+            chunk_duration = int(total_duration * (20 * 1024 * 1024) / audio_size)
+            chunk_duration = max(60, min(chunk_duration, 1800))
+
+            chunk_idx = 0
+            offset = 0.0
+            while offset < total_duration:
+                chunk_path = _os.path.join(tmp_dir, f"chunk_{chunk_idx:03d}.mp3")
+                split_proc = await asyncio.create_subprocess_exec(
+                    "ffmpeg", "-y", "-i", audio_path,
+                    "-ss", str(offset), "-t", str(chunk_duration),
+                    "-acodec", "copy", chunk_path,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await split_proc.communicate()
+                if _os.path.exists(chunk_path) and _os.path.getsize(chunk_path) > 100:
+                    audio_files.append((chunk_path, offset))
+                offset += chunk_duration
+                chunk_idx += 1
+            logger.info(f"[transcribe-video] Split into {len(audio_files)} chunks")
+        else:
+            audio_files = [(audio_path, 0.0)]
+
+        # Transcribe
+        all_segments = []
+        for audio_file, time_offset in audio_files:
+            try:
+                with open(audio_file, "rb") as f:
+                    response = await openai_client.audio.transcriptions.create(
+                        model="whisper",
+                        file=f,
+                        response_format="verbose_json",
+                        language="ja",
+                        timestamp_granularities=["segment"],
+                    )
+                if hasattr(response, "segments") and response.segments:
+                    for seg in response.segments:
+                        s = float(getattr(seg, "start", 0) if hasattr(seg, "start") else seg.get("start", 0))
+                        e = float(getattr(seg, "end", 0) if hasattr(seg, "end") else seg.get("end", 0))
+                        t = (getattr(seg, "text", "") if hasattr(seg, "text") else seg.get("text", "")).strip()
+                        if t:
+                            all_segments.append({"start": s + time_offset, "end": e + time_offset, "text": t})
+                elif hasattr(response, "text") and response.text:
+                    all_segments.append({"start": time_offset, "end": time_offset + 60.0, "text": response.text.strip()})
+            except Exception as whisper_err:
+                logger.error(f"[transcribe-video] Whisper error: {whisper_err}")
+                continue
+
+        logger.info(f"[transcribe-video] Got {len(all_segments)} segments")
+
+        if not all_segments:
+            # Cleanup
+            import shutil
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            return {"error": "No segments from Whisper", "video_id": video_id}
+
+        # Map segments to phases
+        phases_sql = text("""
+            SELECT id, phase_index, time_start, time_end
+            FROM video_phases
+            WHERE video_id = :vid
+            ORDER BY phase_index ASC
+        """)
+        phases_result = await db.execute(phases_sql, {"vid": video_id})
+        phases = phases_result.fetchall()
+
+        phases_updated = 0
+        for phase in phases:
+            p_start = float(phase.time_start or 0)
+            p_end = float(phase.time_end or 0)
+            if p_end <= p_start:
+                continue
+
+            phase_texts = []
+            for seg in all_segments:
+                if seg["end"] > p_start and seg["start"] < p_end:
+                    phase_texts.append(seg["text"])
+
+            audio_text = " ".join(phase_texts).strip()
+            if not audio_text or len(audio_text) < 5:
+                continue
+
+            update_sql = text("""
+                UPDATE video_phases
+                SET audio_text = :audio_text, updated_at = now()
+                WHERE video_id = :vid AND phase_index = :pidx
+            """)
+            await db.execute(update_sql, {
+                "audio_text": audio_text,
+                "vid": video_id,
+                "pidx": phase.phase_index,
+            })
+            phases_updated += 1
+
+        await db.commit()
+
+        # Cleanup
+        import shutil
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+        return {
+            "status": "ok",
+            "video_id": video_id,
+            "segments": len(all_segments),
+            "phases_total": len(phases),
+            "phases_updated": phases_updated,
+            "sample_text": all_segments[0]["text"][:100] if all_segments else None,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        logger.exception(f"[transcribe-video] Error: {e}")
         return {"error": str(e), "traceback": traceback.format_exc()[-500:]}
 
 
-async def _run_batch_transcribe(persona_id: str, videos: list):
-    """Background task: transcribe videos and save audio_text to DB."""
+async def _run_batch_transcribe(persona_id: str, videos: list):   """Background task: transcribe videos and save audio_text to DB."""
     import asyncio
     import tempfile
     import os
