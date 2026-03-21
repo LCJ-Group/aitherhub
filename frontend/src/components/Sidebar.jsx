@@ -10,8 +10,9 @@ import "../assets/css/sidebar.css";
 import ForgotPasswordModal from "./modals/ForgotPasswordModal";
 import AuthService from "../base/services/userService";
 import VideoService from "../base/services/videoService";
+import personaService from "../base/services/personaService";
 
-import { ChevronDown, LogOut, Settings, User, Users, X, MoreHorizontal, Pencil, Trash2, Scissors, MessageSquareText, Radio, Video, Eye, Calendar, Sparkles, UserCircle, Clapperboard, Wand2 } from "lucide-react";
+import { ChevronDown, LogOut, Settings, User, Users, X, MoreHorizontal, Pencil, Trash2, Scissors, MessageSquareText, Radio, Video, Eye, Calendar, Sparkles, UserCircle, Clapperboard, Wand2, Brain, Check } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -33,6 +34,10 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
   const [renameValue, setRenameValue] = useState("");
   const [deleteConfirmVideoId, setDeleteConfirmVideoId] = useState(null);
   const menuRef = useRef(null);
+  const [personas, setPersonas] = useState([]);
+  const [videoPersonaTags, setVideoPersonaTags] = useState({}); // { videoId: [personaId, ...] }
+  const [personaMenuVideoId, setPersonaMenuVideoId] = useState(null);
+  const [taggingInProgress, setTaggingInProgress] = useState(false);
 
   // Close menu when clicking outside
   useEffect(() => {
@@ -88,6 +93,69 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
       setSelectedVideoId(selectedVideo.id);
     }
   }, [selectedVideo?.id]);
+
+  // ===== Fetch personas and their video tags =====
+  useEffect(() => {
+    const fetchPersonas = async () => {
+      try {
+        const data = await personaService.listPersonas();
+        const list = data.personas || data || [];
+        setPersonas(list);
+        // Build videoId -> [personaId] map from list API (tagged_video_ids included)
+        const tagMap = {};
+        for (const p of list) {
+          if (p.tagged_video_ids && p.tagged_video_ids.length > 0) {
+            for (const vid of p.tagged_video_ids) {
+              if (!tagMap[vid]) tagMap[vid] = [];
+              if (!tagMap[vid].includes(p.id)) tagMap[vid].push(p.id);
+            }
+          }
+        }
+        setVideoPersonaTags(tagMap);
+      } catch (e) {
+        console.warn('[Sidebar] Failed to fetch personas:', e);
+      }
+    };
+    fetchPersonas();
+  }, []);
+
+  const handleTogglePersonaTag = async (videoId, personaId) => {
+    if (taggingInProgress) return;
+    setTaggingInProgress(true);
+    try {
+      const currentTags = videoPersonaTags[videoId] || [];
+      if (currentTags.includes(personaId)) {
+        // Untag
+        await personaService.untagVideos(personaId, [videoId]);
+        setVideoPersonaTags(prev => {
+          const updated = { ...prev };
+          updated[videoId] = (updated[videoId] || []).filter(id => id !== personaId);
+          if (updated[videoId].length === 0) delete updated[videoId];
+          return updated;
+        });
+      } else {
+        // Tag
+        await personaService.tagVideos(personaId, [videoId]);
+        setVideoPersonaTags(prev => {
+          const updated = { ...prev };
+          if (!updated[videoId]) updated[videoId] = [];
+          updated[videoId] = [...updated[videoId], personaId];
+          return updated;
+        });
+      }
+    } catch (e) {
+      console.error('[Sidebar] Failed to toggle persona tag:', e);
+    } finally {
+      setTaggingInProgress(false);
+      setPersonaMenuVideoId(null);
+      setMenuOpenVideoId(null);
+    }
+  };
+
+  const getPersonaName = (personaId) => {
+    const p = personas.find(p => p.id === personaId);
+    return p ? p.name : '';
+  };
 
   // ===== sidebar search (PC + SP) =====
   const [searchValue, setSearchValue] = useState("");
@@ -754,15 +822,43 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
                                         {video.memo_count}
                                       </span>
                                     )}
+                                    {/* Persona tag badges */}
+                                    {videoPersonaTags[video.id] && videoPersonaTags[video.id].map(pid => (
+                                      <span key={pid} className="inline-flex items-center gap-1 text-[10px] text-fuchsia-600 bg-fuchsia-50 px-1.5 py-0.5 rounded-full font-medium leading-normal">
+                                        <Brain className="w-2.5 h-2.5 flex-shrink-0" />
+                                        {getPersonaName(pid)}
+                                      </span>
+                                    ))}
                                   </div>
                                 </div>
                                 <div className="relative" ref={menuOpenVideoId === video.id ? menuRef : null}>
-                                  <button onClick={(e) => { e.stopPropagation(); setMenuOpenVideoId(menuOpenVideoId === video.id ? null : video.id); }}
+                                  <button onClick={(e) => { e.stopPropagation(); setMenuOpenVideoId(menuOpenVideoId === video.id ? null : video.id); setPersonaMenuVideoId(null); }}
                                     className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-gray-200">
                                     <MoreHorizontal className="w-4 h-4 text-gray-500" />
                                   </button>
                                   {menuOpenVideoId === video.id && (
-                                    <div className="absolute right-0 top-8 z-50 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[140px]">
+                                    <div className="absolute right-0 top-8 z-50 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[180px]">
+                                      {/* Persona tagging */}
+                                      {personas.length > 0 && (
+                                        <>
+                                          <div className="px-3 py-1.5 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">ライバー割り当て</div>
+                                          {personas.map(p => {
+                                            const isTagged = (videoPersonaTags[video.id] || []).includes(p.id);
+                                            return (
+                                              <button key={p.id} onClick={(e) => { e.stopPropagation(); handleTogglePersonaTag(video.id, p.id); }}
+                                                className={`w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors ${
+                                                  isTagged ? 'text-fuchsia-600 bg-fuchsia-50 hover:bg-fuchsia-100' : 'text-gray-700 hover:bg-gray-100'
+                                                }`}
+                                                disabled={taggingInProgress}>
+                                                {isTagged ? <Check className="w-3.5 h-3.5" /> : <Brain className="w-3.5 h-3.5 text-gray-400" />}
+                                                {p.name}
+                                                {taggingInProgress && <span className="ml-auto text-[10px] text-gray-400">...</span>}
+                                              </button>
+                                            );
+                                          })}
+                                          <div className="border-t border-gray-100 my-1"></div>
+                                        </>
+                                      )}
                                       <button onClick={(e) => { e.stopPropagation(); setRenamingVideoId(video.id); setRenameValue(video.original_filename || ""); setMenuOpenVideoId(null); }}
                                         className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100">
                                         <Pencil className="w-3.5 h-3.5" /> 名前を変更

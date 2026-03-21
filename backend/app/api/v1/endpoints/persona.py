@@ -77,7 +77,9 @@ async def list_personas(
 
     sql = text("""
         SELECT p.*,
-            (SELECT COUNT(*) FROM persona_video_tags pvt WHERE pvt.persona_id = p.id) AS tagged_video_count
+            (SELECT COUNT(*) FROM persona_video_tags pvt WHERE pvt.persona_id = p.id) AS tagged_video_count,
+            (SELECT COALESCE(array_agg(pvt.video_id::text), ARRAY[]::text[])
+             FROM persona_video_tags pvt WHERE pvt.persona_id = p.id) AS tagged_video_ids
         FROM personas p
         WHERE p.deleted_at IS NULL
         ORDER BY p.created_at DESC
@@ -101,6 +103,7 @@ async def list_personas(
             "training_segment_count": r.training_segment_count,
             "training_duration_hours": r.training_duration_hours,
             "tagged_video_count": r.tagged_video_count,
+            "tagged_video_ids": list(r.tagged_video_ids) if r.tagged_video_ids else [],
             "created_at": str(r.created_at) if r.created_at else None,
             "updated_at": str(r.updated_at) if r.updated_at else None,
         })
