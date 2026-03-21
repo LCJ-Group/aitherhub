@@ -605,80 +605,126 @@ async def _resolve_tiktok_url(product_url: str) -> str:
 
 async def _analyze_product_image_vision(image_url: str, product_title: str, language: str = "ja") -> Dict[str, Any]:
     """
-    Analyze a TikTok product image using GPT-4.1-mini Vision.
+    Analyze a TikTok product image using GPT Vision.
+    Tries: Azure OpenAI Responses API (with image_url) → OpenAI Chat Completions (with image_url) → fallback empty.
     Extracts: achievements, features, variants, catchphrase, target audience,
     reviews/ratings info, sales numbers — anything visible in the image.
     """
     import openai
+    import json as _json
+    import re as _re
 
-    try:
-        client = openai.AsyncOpenAI()
+    lang_map = {"ja": "日本語", "zh": "中文", "en": "English"}
+    lang_name = lang_map.get(language, "日本語")
 
-        lang_map = {"ja": "日本語", "zh": "中文", "en": "English"}
-        lang_name = lang_map.get(language, "日本語")
+    # Try higher resolution image
+    high_res_url = _re.sub(r'resize-webp:\d+:\d+', 'resize-webp:800:800', image_url)
+    if high_res_url == image_url:
+        high_res_url = _re.sub(r'resize-jpeg:\d+:\d+', 'resize-jpeg:800:800', image_url)
 
-        # Try higher resolution image
-        import re as _re
-        high_res_url = _re.sub(r'resize-webp:\d+:\d+', 'resize-webp:800:800', image_url)
-        if high_res_url == image_url:
-            high_res_url = _re.sub(r'resize-jpeg:\d+:\d+', 'resize-jpeg:800:800', image_url)
+    system_prompt = (
+        f"あなたはTikTok Shop商品画像の分析AIです。"
+        f"商品画像に写っている情報を{lang_name}で徹底的に抽出してください。"
+        f"テキスト、数字、ランキング、実績、キャッチコピー、カラーバリエーション、"
+        f"モデルの特徴、パッケージデザインなど、見えるもの全てを報告してください。"
+        f"必ずJSON形式で出力してください。"
+    )
 
-        response = await client.chat.completions.create(
-            model="gpt-4.1-mini",
-            messages=[
-                {
-                    "role": "system",
-                    "content": f"""あなたはTikTok Shop商品画像の分析AIです。
-商品画像に写っている情報を{lang_name}で徹底的に抽出してください。
-テキスト、数字、ランキング、実績、キャッチコピー、カラーバリエーション、
-モデルの特徴、パッケージデザインなど、見えるもの全てを報告してください。
-必ずJSON形式で出力してください。""",
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": f"""この商品画像を分析してください。
-商品タイトル: {product_title}
+    user_text = (
+        f"この商品画像を分析してください。\n"
+        f"商品タイトル: {product_title}\n\n"
+        f"以下のJSON形式で出力:\n"
+        f'{{\n'
+        f'  "product_name": "画像から読み取れる正式な商品名",\n'
+        f'  "brand": "ブランド名",\n'
+        f'  "catchphrase": "キャッチコピー・メインメッセージ",\n'
+        f'  "achievements": ["ランキング1位", "累計50万本突破" など画像内の実績テキスト],\n'
+        f'  "variants": ["カラーや種類のバリエーション"],\n'
+        f'  "visible_features": ["画像から読み取れる商品特徴"],\n'
+        f'  "target_audience": "ターゲット層の推測",\n'
+        f'  "price_info": "価格情報（見える場合）",\n'
+        f'  "reviews_visible": "レビュー・評価情報（見える場合）",\n'
+        f'  "sales_info": "販売数・売上情報（見える場合）",\n'
+        f'  "package_description": "パッケージの見た目・デザインの説明",\n'
+        f'  "overall_impression": "商品の全体的な印象（高級感、ナチュラル、ポップなど）",\n'
+        f'  "selling_points": ["ライブ配信で使える強力なセールスポイント3-5個"]\n'
+        f'}}'
+    )
 
-以下のJSON形式で出力:
-{{
-  "product_name": "画像から読み取れる正式な商品名",
-  "brand": "ブランド名",
-  "catchphrase": "キャッチコピー・メインメッセージ",
-  "achievements": ["ランキング1位", "累計50万本突破" など画像内の実績テキスト],
-  "variants": ["カラーや種類のバリエーション"],
-  "visible_features": ["画像から読み取れる商品特徴"],
-  "target_audience": "ターゲット層の推測",
-  "price_info": "価格情報（見える場合）",
-  "reviews_visible": "レビュー・評価情報（見える場合）",
-  "sales_info": "販売数・売上情報（見える場合）",
-  "package_description": "パッケージの見た目・デザインの説明",
-  "overall_impression": "商品の全体的な印象（高級感、ナチュラル、ポップなど）",
-  "selling_points": ["ライブ配信で使える強力なセールスポイント3-5個"]
-}}""",
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": high_res_url, "detail": "high"},
-                        },
-                    ],
-                },
-            ],
-            max_tokens=1500,
-            temperature=0.2,
-            response_format={"type": "json_object"},
-        )
+    errors = []
 
-        import json as _json
-        result = _json.loads(response.choices[0].message.content.strip())
-        logger.info(f"Vision analysis complete: {len(result.get('selling_points', []))} selling points found")
-        return result
+    # --- Strategy 1: Azure OpenAI Responses API with image ---
+    azure_key = os.getenv("AZURE_OPENAI_KEY", "")
+    azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
+    azure_model = os.getenv("GPT5_MODEL") or os.getenv("GPT5_DEPLOYMENT") or "gpt-4.1-mini"
+    if azure_key and azure_endpoint:
+        try:
+            client = openai.AzureOpenAI(
+                api_key=azure_key,
+                azure_endpoint=azure_endpoint,
+                api_version=os.getenv("GPT5_API_VERSION", "2025-04-01-preview"),
+            )
+            response = client.responses.create(
+                model=azure_model,
+                input=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": [
+                        {"type": "input_text", "text": user_text},
+                        {"type": "input_image", "image_url": high_res_url},
+                    ]},
+                ],
+                max_output_tokens=1500,
+            )
+            result_text = ""
+            if hasattr(response, "output_text") and response.output_text:
+                result_text = response.output_text.strip()
+            elif hasattr(response, "output") and response.output:
+                for item in response.output:
+                    if hasattr(item, "content"):
+                        for part in item.content:
+                            if hasattr(part, "text"):
+                                result_text += part.text
+                result_text = result_text.strip()
 
-    except Exception as e:
-        logger.warning(f"GPT Vision product image analysis failed: {e}")
-        return {}
+            if result_text:
+                # Extract JSON from response (may have markdown code block)
+                json_match = _re.search(r'\{[\s\S]*\}', result_text)
+                if json_match:
+                    result = _json.loads(json_match.group())
+                    logger.info(f"Vision analysis (Azure) complete: {len(result.get('selling_points', []))} selling points")
+                    return result
+            errors.append("Azure Vision: empty response")
+        except Exception as e:
+            errors.append(f"Azure Vision: {str(e)[:200]}")
+            logger.warning(f"Azure OpenAI Vision failed: {e}")
+
+    # --- Strategy 2: OpenAI Chat Completions with image_url ---
+    openai_key = os.getenv("OPENAI_API_KEY", "")
+    if openai_key:
+        try:
+            client = openai.AsyncOpenAI()
+            response = await client.chat.completions.create(
+                model="gpt-4.1-mini",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": [
+                        {"type": "text", "text": user_text},
+                        {"type": "image_url", "image_url": {"url": high_res_url, "detail": "high"}},
+                    ]},
+                ],
+                max_tokens=1500,
+                temperature=0.2,
+                response_format={"type": "json_object"},
+            )
+            result = _json.loads(response.choices[0].message.content.strip())
+            logger.info(f"Vision analysis (OpenAI) complete: {len(result.get('selling_points', []))} selling points")
+            return result
+        except Exception as e:
+            errors.append(f"OpenAI Vision: {str(e)[:200]}")
+            logger.warning(f"OpenAI Vision failed: {e}")
+
+    logger.warning(f"All Vision providers failed: {'; '.join(errors)}")
+    return {}
 
 
 async def import_tiktok_product(
@@ -817,9 +863,6 @@ async def import_tiktok_product(
 
         # GPT text enrichment — combine og_info title + vision analysis for comprehensive profile
         try:
-            import openai
-            client = openai.AsyncOpenAI()
-
             lang_map = {"ja": "日本語", "zh": "中文", "en": "English"}
             lang_name = lang_map.get(language, "日本語")
 
@@ -847,7 +890,7 @@ async def import_tiktok_product(
                     vision_parts.append(f"販売情報: {vision_data['sales_info']}")
                 vision_context = "\n".join(vision_parts)
 
-            # Build vision section text (avoid backslash in f-string)
+            # Build vision section text
             vision_section = "画像分析結果:\n" + vision_context if vision_context else "（画像分析なし）"
 
             system_msg = (
@@ -882,19 +925,23 @@ async def import_tiktok_product(
                 f"}}\n"
             )
 
-            gpt_response = await client.chat.completions.create(
-                model="gpt-4.1-mini",
+            # Use _call_gpt which handles Azure OpenAI / OpenAI fallback
+            gpt_text = await _call_gpt(
                 messages=[
                     {"role": "system", "content": system_msg},
                     {"role": "user", "content": user_msg},
                 ],
+                model="gpt-4.1-mini",
                 max_tokens=1500,
                 temperature=0.3,
-                response_format={"type": "json_object"},
             )
 
-            gpt_text = gpt_response.choices[0].message.content.strip()
-            gpt_data = json_module.loads(gpt_text)
+            # Parse JSON from response (may have markdown code block)
+            json_match = re.search(r'\{[\s\S]*\}', gpt_text)
+            if json_match:
+                gpt_data = json_module.loads(json_match.group())
+            else:
+                gpt_data = json_module.loads(gpt_text)
 
             # Merge GPT enrichment with vision data
             if gpt_data.get("name"):
