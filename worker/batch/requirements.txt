@@ -33,3 +33,7 @@ asyncpg>=0.29.0
 ultralytics
 paddlepaddle 
 paddleocr
+
+# ---- Excel / CSV parsing ----
+openpyxl>=3.1.0
+pandas>=2.0.0
