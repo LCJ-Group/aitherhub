@@ -62,7 +62,7 @@ class PersonaService {
   }
 
   async startTraining(personaId, options = {}) {
-    return this._request("POST", `/${personaId}/start-training`, options);
+    return this._request("POST", `/${personaId}/train`, options);
   }
 
   async getTrainingStatus(personaId) {

@@ -530,7 +530,35 @@ async def get_training_status(
     persona = p_result.fetchone()
 
     if not persona or not persona.finetune_job_id:
-        return {"status": persona.finetune_status if persona else "none", "message": "No active training job"}
+        # Still return logs even if no active job
+        logs = []
+        if persona:
+            try:
+                logs_sql = text("""
+                    SELECT id, status, openai_job_id, model_id,
+                           error_message, created_at
+                    FROM persona_training_logs
+                    WHERE persona_id = :pid
+                    ORDER BY created_at DESC LIMIT 10
+                """)
+                logs_result = await db.execute(logs_sql, {"pid": persona_id})
+                logs = [
+                    {
+                        "id": str(r.id), "status": r.status,
+                        "base_model": None,
+                        "openai_job_id": r.openai_job_id,
+                        "error_message": r.error_message,
+                        "created_at": str(r.created_at) if r.created_at else None,
+                    }
+                    for r in logs_result.fetchall()
+                ]
+            except Exception:
+                pass
+        return {
+            "status": persona.finetune_status if persona else "none",
+            "message": "No active training job",
+            "logs": logs,
+        }
 
     # Poll OpenAI
     try:
@@ -579,11 +607,36 @@ async def get_training_status(
 
         await db.commit()
 
+    # Fetch training logs
+    logs_sql = text("""
+        SELECT id, status, openai_job_id, model_id,
+               video_count, segment_count, training_examples,
+               error_message, started_at, completed_at, created_at
+        FROM persona_training_logs
+        WHERE persona_id = :pid
+        ORDER BY created_at DESC
+        LIMIT 10
+    """)
+    logs_result = await db.execute(logs_sql, {"pid": persona_id})
+    logs = [
+        {
+            "id": str(r.id),
+            "status": r.status,
+            "base_model": None,
+            "openai_job_id": r.openai_job_id,
+            "model_id": r.model_id if hasattr(r, 'model_id') else None,
+            "error_message": r.error_message,
+            "created_at": str(r.created_at) if r.created_at else None,
+        }
+        for r in logs_result.fetchall()
+    ]
+
     return {
         "status": status["status"],
         "model_id": status.get("model_id"),
         "trained_tokens": status.get("trained_tokens"),
         "error": status.get("error"),
+        "logs": logs,
     }
 
 
