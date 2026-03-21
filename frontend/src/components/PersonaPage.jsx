@@ -29,7 +29,7 @@ import {
 } from "lucide-react";
 import personaService from "../base/services/personaService";
 
-const API_BASE = import.meta.env.VITE_API_URL || "";
+const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
 const ADMIN_KEY = "aither:hub";
 
 /**
