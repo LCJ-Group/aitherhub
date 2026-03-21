@@ -962,63 +962,70 @@ async def batch_transcribe(
     """
     _check_admin(x_admin_key)
 
-    # Get tagged videos
-    tag_sql = text("""
-        SELECT pvt.video_id, v.original_filename, u.email as user_email
-        FROM persona_video_tags pvt
-        JOIN videos v ON CAST(pvt.video_id AS UUID) = v.id
-        LEFT JOIN users u ON v.user_id = u.id
-        WHERE pvt.persona_id = :pid AND v.status = 'DONE'
-        ORDER BY v.created_at ASC
-    """)
-    tag_result = await db.execute(tag_sql, {"pid": persona_id})
-    tagged_videos = tag_result.fetchall()
+    try:
+        # Get tagged videos
+        tag_sql = text("""
+            SELECT pvt.video_id, v.original_filename, u.email as user_email
+            FROM persona_video_tags pvt
+            JOIN videos v ON CAST(pvt.video_id AS UUID) = v.id
+            LEFT JOIN users u ON v.user_id = u.id
+            WHERE pvt.persona_id = :pid AND v.status = 'DONE'
+            ORDER BY v.created_at ASC
+        """)
+        tag_result = await db.execute(tag_sql, {"pid": persona_id})
+        tagged_videos = tag_result.fetchall()
 
-    if not tagged_videos:
-        raise HTTPException(status_code=400, detail="No tagged DONE videos found")
+        if not tagged_videos:
+            raise HTTPException(status_code=400, detail="No tagged DONE videos found")
 
-    # Check which videos need transcription
-    videos_to_process = []
-    for v in tagged_videos:
-        if not force:
-            # Check if any phases already have audio_text
-            check_sql = text("""
-                SELECT COUNT(*) as total,
-                       SUM(CASE WHEN audio_text IS NOT NULL AND LENGTH(audio_text) > 10 THEN 1 ELSE 0 END) as has_audio
-                FROM video_phases
-                WHERE video_id = :vid
-            """)
-            check_result = await db.execute(check_sql, {"vid": v.video_id})
-            check_row = check_result.fetchone()
-            if check_row and check_row.has_audio and check_row.has_audio > 0:
-                logger.info(f"[batch-transcribe] Skipping {v.video_id} - already has {check_row.has_audio} audio_text phases")
-                continue
-        videos_to_process.append({
-            "video_id": str(v.video_id),
-            "filename": v.original_filename,
-            "user_email": v.user_email,
-        })
+        # Check which videos need transcription
+        videos_to_process = []
+        for v in tagged_videos:
+            if not force:
+                # Check if any phases already have audio_text
+                check_sql = text("""
+                    SELECT COUNT(*) as total,
+                           SUM(CASE WHEN audio_text IS NOT NULL AND LENGTH(audio_text) > 10 THEN 1 ELSE 0 END) as has_audio
+                    FROM video_phases
+                    WHERE video_id = :vid
+                """)
+                check_result = await db.execute(check_sql, {"vid": v.video_id})
+                check_row = check_result.fetchone()
+                if check_row and check_row.has_audio and check_row.has_audio > 0:
+                    logger.info(f"[batch-transcribe] Skipping {v.video_id} - already has {check_row.has_audio} audio_text phases")
+                    continue
+            videos_to_process.append({
+                "video_id": str(v.video_id),
+                "filename": v.original_filename,
+                "user_email": v.user_email,
+            })
 
-    if not videos_to_process:
+        if not videos_to_process:
+            return {
+                "status": "skipped",
+                "message": "All videos already have audio_text. Use force=true to re-transcribe.",
+                "total_tagged": len(tagged_videos),
+            }
+
+        # Start background task
+        background_tasks.add_task(
+            _run_batch_transcribe,
+            persona_id,
+            videos_to_process,
+        )
+
         return {
-            "status": "skipped",
-            "message": "All videos already have audio_text. Use force=true to re-transcribe.",
+            "status": "started",
+            "videos_to_process": len(videos_to_process),
             "total_tagged": len(tagged_videos),
+            "videos": [v["video_id"] for v in videos_to_process],
         }
-
-    # Start background task
-    background_tasks.add_task(
-        _run_batch_transcribe,
-        persona_id,
-        videos_to_process,
-    )
-
-    return {
-        "status": "started",
-        "videos_to_process": len(videos_to_process),
-        "total_tagged": len(tagged_videos),
-        "videos": [v["video_id"] for v in videos_to_process],
-    }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        logger.exception(f"[batch-transcribe] Error: {e}")
+        return {"error": str(e), "traceback": traceback.format_exc()[-500:]}
 
 
 async def _run_batch_transcribe(persona_id: str, videos: list):
