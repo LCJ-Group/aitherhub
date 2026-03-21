@@ -1025,7 +1025,7 @@ async def batch_transcribe(
     except Exception as e:
         import traceback
         logger.exception(f"[batch-transcribe] Error: {e}")
-        return {"error": str(e), "traceback": traceback.format_exc()[-500    }
+        return {"error": str(e), "traceback": traceback.format_exc()[-500:]}
 
 
 # ── Single Video Transcription (synchronous, reliable) ──
@@ -1253,7 +1253,8 @@ async def transcribe_single_video(
         return {"error": str(e), "traceback": traceback.format_exc()[-500:]}
 
 
-async def _run_batch_transcribe(persona_id: str, videos: list):   """Background task: transcribe videos and save audio_text to DB."""
+async def _run_batch_transcribe(persona_id: str, videos: list):
+    """Background task: transcribe videos and save audio_text to DB."""
     import asyncio
     import tempfile
     import os
