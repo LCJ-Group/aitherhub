@@ -943,3 +943,338 @@ async def debug_audio_text(
         return {"video_count": len(video_ids), "phases": data}
     except Exception as e:
         return {"error": str(e)}
+
+
+# ── Batch Transcription: populate audio_text for tagged videos ──
+
+@router.post("/{persona_id}/batch-transcribe")
+async def batch_transcribe(
+    persona_id: str,
+    background_tasks: BackgroundTasks,
+    force: bool = Query(False, description="Re-transcribe even if audio_text exists"),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Batch transcribe all tagged videos using Azure OpenAI Whisper API.
+    Downloads each video from Azure Blob, extracts audio, transcribes,
+    and saves to video_phases.audio_text.
+    """
+    _check_admin(x_admin_key)
+
+    # Get tagged videos
+    tag_sql = text("""
+        SELECT pvt.video_id, v.original_filename, v.user_email
+        FROM persona_video_tags pvt
+        JOIN videos v ON pvt.video_id = v.id
+        WHERE pvt.persona_id = :pid AND v.status = 'DONE'
+        ORDER BY v.created_at ASC
+    """)
+    tag_result = await db.execute(tag_sql, {"pid": persona_id})
+    tagged_videos = tag_result.fetchall()
+
+    if not tagged_videos:
+        raise HTTPException(status_code=400, detail="No tagged DONE videos found")
+
+    # Check which videos need transcription
+    videos_to_process = []
+    for v in tagged_videos:
+        if not force:
+            # Check if any phases already have audio_text
+            check_sql = text("""
+                SELECT COUNT(*) as total,
+                       SUM(CASE WHEN audio_text IS NOT NULL AND LENGTH(audio_text) > 10 THEN 1 ELSE 0 END) as has_audio
+                FROM video_phases
+                WHERE video_id = :vid
+            """)
+            check_result = await db.execute(check_sql, {"vid": v.video_id})
+            check_row = check_result.fetchone()
+            if check_row and check_row.has_audio and check_row.has_audio > 0:
+                logger.info(f"[batch-transcribe] Skipping {v.video_id} - already has {check_row.has_audio} audio_text phases")
+                continue
+        videos_to_process.append({
+            "video_id": str(v.video_id),
+            "filename": v.original_filename,
+            "user_email": v.user_email,
+        })
+
+    if not videos_to_process:
+        return {
+            "status": "skipped",
+            "message": "All videos already have audio_text. Use force=true to re-transcribe.",
+            "total_tagged": len(tagged_videos),
+        }
+
+    # Start background task
+    background_tasks.add_task(
+        _run_batch_transcribe,
+        persona_id,
+        videos_to_process,
+    )
+
+    return {
+        "status": "started",
+        "videos_to_process": len(videos_to_process),
+        "total_tagged": len(tagged_videos),
+        "videos": [v["video_id"] for v in videos_to_process],
+    }
+
+
+async def _run_batch_transcribe(persona_id: str, videos: list):
+    """Background task: transcribe videos and save audio_text to DB."""
+    import asyncio
+    import tempfile
+    import os
+    import openai
+    import httpx
+
+    from app.core.db import AsyncSessionLocal
+    from app.services.storage_service import generate_download_sas
+
+    azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "https://aoai-kyogoku-service.openai.azure.com/")
+    azure_key = os.getenv("AZURE_OPENAI_KEY", "")
+
+    from urllib.parse import urlparse as _urlparse
+    _parsed = _urlparse(azure_endpoint)
+    clean_endpoint = f"{_parsed.scheme}://{_parsed.netloc}/"
+
+    openai_client = openai.AsyncAzureOpenAI(
+        api_key=azure_key,
+        api_version="2024-06-01",
+        azure_endpoint=clean_endpoint,
+    )
+
+    total_phases_updated = 0
+    total_videos_done = 0
+
+    for video_info in videos:
+        video_id = video_info["video_id"]
+        filename = video_info["filename"]
+        user_email = video_info["user_email"]
+
+        logger.info(f"[batch-transcribe] Processing video {video_id}: {filename}")
+
+        tmp_dir = tempfile.mkdtemp(prefix=f"transcribe_{video_id[:8]}_")
+        try:
+            # 1. Generate download URL
+            download_url, _ = await generate_download_sas(
+                email=user_email,
+                video_id=video_id,
+                filename=filename,
+                expires_in_minutes=60,
+            )
+
+            # 2. Download video
+            video_path = os.path.join(tmp_dir, "video.mp4")
+            logger.info(f"[batch-transcribe] Downloading video {video_id}...")
+            async with httpx.AsyncClient(timeout=httpx.Timeout(connect=30, read=300, write=30, pool=300)) as client:
+                async with client.stream("GET", download_url) as resp:
+                    if resp.status_code != 200:
+                        logger.error(f"[batch-transcribe] Download failed for {video_id}: HTTP {resp.status_code}")
+                        continue
+                    with open(video_path, "wb") as f:
+                        async for chunk in resp.aiter_bytes(chunk_size=1024 * 1024):
+                            f.write(chunk)
+
+            file_size = os.path.getsize(video_path)
+            logger.info(f"[batch-transcribe] Downloaded {video_id}: {file_size / 1024 / 1024:.1f} MB")
+
+            # 3. Extract audio as mp3 (smaller for Whisper API)
+            audio_path = os.path.join(tmp_dir, "audio.mp3")
+            proc = await asyncio.create_subprocess_exec(
+                "ffmpeg", "-y", "-i", video_path,
+                "-vn", "-acodec", "libmp3lame",
+                "-ar", "16000", "-ac", "1", "-b:a", "64k",
+                audio_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await proc.communicate()
+            if proc.returncode != 0 or not os.path.exists(audio_path):
+                logger.error(f"[batch-transcribe] ffmpeg failed for {video_id}: {stderr.decode()[:300]}")
+                continue
+
+            audio_size = os.path.getsize(audio_path)
+            logger.info(f"[batch-transcribe] Extracted audio: {audio_size / 1024 / 1024:.1f} MB")
+
+            # 4. Split audio into chunks if > 25MB (Whisper API limit)
+            max_whisper_size = 24 * 1024 * 1024  # 24MB to be safe
+            audio_files = []
+
+            if audio_size > max_whisper_size:
+                # Split into ~20MB chunks by duration
+                # Get audio duration first
+                probe_proc = await asyncio.create_subprocess_exec(
+                    "ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+                    "-of", "default=noprint_wrappers=1:nokey=1", audio_path,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                probe_out, _ = await probe_proc.communicate()
+                total_duration = float(probe_out.decode().strip())
+
+                # Calculate chunk duration to keep each chunk under 20MB
+                chunk_duration = int(total_duration * (20 * 1024 * 1024) / audio_size)
+                chunk_duration = max(60, min(chunk_duration, 1800))  # 1-30 min chunks
+
+                chunk_idx = 0
+                offset = 0
+                while offset < total_duration:
+                    chunk_path = os.path.join(tmp_dir, f"chunk_{chunk_idx:03d}.mp3")
+                    split_proc = await asyncio.create_subprocess_exec(
+                        "ffmpeg", "-y", "-i", audio_path,
+                        "-ss", str(offset), "-t", str(chunk_duration),
+                        "-acodec", "copy", chunk_path,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    await split_proc.communicate()
+                    if os.path.exists(chunk_path) and os.path.getsize(chunk_path) > 100:
+                        audio_files.append((chunk_path, offset))
+                    offset += chunk_duration
+                    chunk_idx += 1
+                logger.info(f"[batch-transcribe] Split into {len(audio_files)} chunks")
+            else:
+                audio_files = [(audio_path, 0.0)]
+
+            # 5. Transcribe each chunk with Whisper
+            all_segments = []
+            for audio_file, time_offset in audio_files:
+                try:
+                    with open(audio_file, "rb") as f:
+                        response = await openai_client.audio.transcriptions.create(
+                            model="whisper",
+                            file=f,
+                            response_format="verbose_json",
+                            language="ja",
+                            timestamp_granularities=["segment"],
+                        )
+
+                    if hasattr(response, "segments") and response.segments:
+                        for seg in response.segments:
+                            s = float(getattr(seg, "start", 0) if hasattr(seg, "start") else seg.get("start", 0))
+                            e = float(getattr(seg, "end", 0) if hasattr(seg, "end") else seg.get("end", 0))
+                            t = (getattr(seg, "text", "") if hasattr(seg, "text") else seg.get("text", "")).strip()
+                            if t:
+                                all_segments.append({
+                                    "start": s + time_offset,
+                                    "end": e + time_offset,
+                                    "text": t,
+                                })
+                    elif hasattr(response, "text") and response.text:
+                        # Single segment fallback
+                        all_segments.append({
+                            "start": time_offset,
+                            "end": time_offset + 60.0,  # approximate
+                            "text": response.text.strip(),
+                        })
+                except Exception as whisper_err:
+                    logger.error(f"[batch-transcribe] Whisper failed for {audio_file}: {whisper_err}")
+                    continue
+
+            logger.info(f"[batch-transcribe] Got {len(all_segments)} segments for {video_id}")
+
+            if not all_segments:
+                logger.warning(f"[batch-transcribe] No segments for {video_id}, skipping DB update")
+                continue
+
+            # 6. Map segments to phases and update DB
+            async with AsyncSessionLocal() as db_session:
+                # Get phases for this video
+                phases_sql = text("""
+                    SELECT id, phase_index, time_start, time_end
+                    FROM video_phases
+                    WHERE video_id = :vid
+                    ORDER BY phase_index ASC
+                """)
+                phases_result = await db_session.execute(phases_sql, {"vid": video_id})
+                phases = phases_result.fetchall()
+
+                phases_updated = 0
+                for phase in phases:
+                    p_start = float(phase.time_start or 0)
+                    p_end = float(phase.time_end or 0)
+                    if p_end <= p_start:
+                        continue
+
+                    # Collect speech segments overlapping with this phase
+                    phase_texts = []
+                    for seg in all_segments:
+                        # Segment overlaps with phase if seg.end > p_start and seg.start < p_end
+                        if seg["end"] > p_start and seg["start"] < p_end:
+                            phase_texts.append(seg["text"])
+
+                    audio_text = " ".join(phase_texts).strip()
+                    if not audio_text or len(audio_text) < 5:
+                        continue
+
+                    # Update DB
+                    update_sql = text("""
+                        UPDATE video_phases
+                        SET audio_text = :audio_text, updated_at = now()
+                        WHERE video_id = :vid AND phase_index = :pidx
+                    """)
+                    await db_session.execute(update_sql, {
+                        "audio_text": audio_text,
+                        "vid": video_id,
+                        "pidx": phase.phase_index,
+                    })
+                    phases_updated += 1
+
+                await db_session.commit()
+                total_phases_updated += phases_updated
+                total_videos_done += 1
+                logger.info(f"[batch-transcribe] Updated {phases_updated}/{len(phases)} phases for {video_id}")
+
+        except Exception as e:
+            logger.exception(f"[batch-transcribe] Error processing {video_id}: {e}")
+        finally:
+            # Cleanup temp files
+            import shutil
+            try:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+            except Exception:
+                pass
+
+    logger.info(
+        f"[batch-transcribe] DONE: {total_videos_done}/{len(videos)} videos, "
+        f"{total_phases_updated} phases updated"
+    )
+
+
+# ── Batch Transcription Status ──
+
+@router.get("/{persona_id}/transcription-status")
+async def transcription_status(
+    persona_id: str,
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Check how many phases have audio_text for tagged videos."""
+    _check_admin(x_admin_key)
+
+    sql = text("""
+        SELECT
+            COUNT(*) as total_phases,
+            SUM(CASE WHEN vp.audio_text IS NOT NULL AND LENGTH(vp.audio_text) > 10 THEN 1 ELSE 0 END) as with_audio,
+            SUM(CASE WHEN vp.audio_text IS NULL OR LENGTH(vp.audio_text) <= 10 THEN 1 ELSE 0 END) as without_audio,
+            COUNT(DISTINCT vp.video_id) as total_videos,
+            COUNT(DISTINCT CASE WHEN vp.audio_text IS NOT NULL AND LENGTH(vp.audio_text) > 10 THEN vp.video_id END) as videos_with_audio
+        FROM video_phases vp
+        JOIN persona_video_tags pvt ON pvt.video_id = vp.video_id
+        JOIN videos v ON v.id = vp.video_id
+        WHERE pvt.persona_id = :pid AND v.status = 'DONE'
+    """)
+    result = await db.execute(sql, {"pid": persona_id})
+    row = result.fetchone()
+
+    return {
+        "total_phases": row.total_phases if row else 0,
+        "phases_with_audio": row.with_audio if row else 0,
+        "phases_without_audio": row.without_audio if row else 0,
+        "total_videos": row.total_videos if row else 0,
+        "videos_with_audio": row.videos_with_audio if row else 0,
+        "completion_pct": round(
+            (row.with_audio / row.total_phases * 100) if row and row.total_phases > 0 else 0, 1
+        ),
+    }
