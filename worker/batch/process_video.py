@@ -1688,6 +1688,46 @@ def main():
                             transcription_segments = raw_segments
                             logger.info("[PRODUCT] Loaded %d transcription segments from audio_text", len(transcription_segments))
 
+                    # ★v4.3: Fallback - load from DB when audio_text files don't exist
+                    # (e.g., after deploy/VM restart that deletes local files)
+                    if not transcription_segments:
+                        try:
+                            from db_ops import get_event_loop, AsyncSessionLocal
+                            async def _load_transcription_from_db():
+                                async with AsyncSessionLocal() as sess:
+                                    r = await sess.execute(
+                                        text(
+                                            "SELECT phase_index, time_start, time_end, audio_text "
+                                            "FROM video_phases "
+                                            "WHERE video_id = :vid AND audio_text IS NOT NULL AND audio_text != '' "
+                                            "ORDER BY phase_index"
+                                        ),
+                                        {"vid": str(video_id)}
+                                    )
+                                    rows = r.fetchall()
+                                    if not rows:
+                                        return []
+                                    segments = []
+                                    for row in rows:
+                                        t_start = float(row[1]) if row[1] else 0
+                                        t_end = float(row[2]) if row[2] else 0
+                                        txt = str(row[3]).strip()
+                                        if txt and t_end > t_start:
+                                            segments.append({
+                                                "start": t_start,
+                                                "end": t_end,
+                                                "text": txt
+                                            })
+                                    return segments
+                            db_segments = get_event_loop().run_until_complete(_load_transcription_from_db())
+                            if db_segments:
+                                transcription_segments = db_segments
+                                logger.info("[PRODUCT] Loaded %d transcription segments from DB (fallback)", len(transcription_segments))
+                            else:
+                                logger.warning("[PRODUCT] No transcription segments found in DB either")
+                        except Exception as _db_err:
+                            logger.warning("[PRODUCT] Failed to load transcription from DB: %s", _db_err)
+
                     # Run product detection (v4.1: audio-first + sales + minimal image)
                     # ★v4.2: duration_secを複数ソースから取得（フレーム数 > _vid_duration > DB > 0）
                     _product_duration = 0
@@ -1697,19 +1737,29 @@ def main():
                         _product_duration = float(locals()['_vid_duration'])
                     else:
                         # DBからduration_secを取得（resume時にtotal_framesがない場合）
+                        # 優先順位: videos.duration_sec > video_phases.MAX(time_end)
                         try:
                             from db_ops import get_event_loop, AsyncSessionLocal
                             async def _get_duration_from_db():
                                 async with AsyncSessionLocal() as sess:
-                                    r = await sess.execute(
+                                    # まずvideos.duration_secを確認（最も信頼性が高い）
+                                    r1 = await sess.execute(
+                                        text("SELECT duration_sec FROM videos WHERE id = :vid"),
+                                        {"vid": str(video_id)}
+                                    )
+                                    row1 = r1.fetchone()
+                                    if row1 and row1[0] and float(row1[0]) > 0:
+                                        return float(row1[0])
+                                    # フォールバック: video_phasesのMAX(time_end)
+                                    r2 = await sess.execute(
                                         text("SELECT COALESCE(MAX(time_end), 0) as max_t FROM video_phases WHERE video_id = :vid"),
                                         {"vid": str(video_id)}
                                     )
-                                    row = r.fetchone()
-                                    return float(row[0]) if row and row[0] else 0
+                                    row2 = r2.fetchone()
+                                    return float(row2[0]) if row2 and row2[0] else 0
                             _product_duration = get_event_loop().run_until_complete(_get_duration_from_db())
                             if _product_duration > 0:
-                                logger.info("[PRODUCT] Duration from DB phases: %.1f sec", _product_duration)
+                                logger.info("[PRODUCT] Duration from DB: %.1f sec", _product_duration)
                         except Exception as _dur_err:
                             logger.warning("[PRODUCT] Failed to get duration from DB: %s", _dur_err)
                     exposures = detect_product_timeline(

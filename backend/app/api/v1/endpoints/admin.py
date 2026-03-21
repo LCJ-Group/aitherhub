@@ -3385,3 +3385,476 @@ async def bulk_retry_product_detection(
         logger.exception(f"Failed to bulk retry product detection: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+
+# =========================================================
+# Regenerate Product Exposures (backend-only, no worker needed)
+# =========================================================
+
+@router.post("/regenerate-product-exposures/{video_id}")
+async def regenerate_product_exposures(
+    video_id: str,
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Regenerate product exposure timeline for a video without requiring
+    the full worker pipeline. Downloads Excel data from blob storage,
+    parses product list and trend data, and generates product exposures
+    based on sales data timestamps.
+
+    This is a lightweight alternative to re-running the entire video
+    processing pipeline when only product exposures need to be regenerated.
+    """
+    import os
+    import tempfile
+    import httpx
+    import re
+    from datetime import datetime, timezone, timedelta
+
+    expected_key = f"{ADMIN_ID}:{ADMIN_PASS}"
+    if x_admin_key != expected_key:
+        raise HTTPException(status_code=403, detail="Invalid admin credentials")
+
+    try:
+        # ── A. Get video info ──
+        result = await db.execute(
+            text("""
+                SELECT v.id, v.user_id, v.excel_product_blob_url, v.excel_trend_blob_url,
+                       v.time_offset_seconds, v.duration_sec, v.top_products, v.status
+                FROM videos v WHERE v.id = :vid
+            """),
+            {"vid": video_id},
+        )
+        video = result.fetchone()
+        if not video:
+            raise HTTPException(status_code=404, detail="Video not found")
+
+        user_id = video.user_id
+        time_offset = float(video.time_offset_seconds or 0)
+        duration_sec = float(video.duration_sec or 0)
+
+        if not video.excel_product_blob_url:
+            raise HTTPException(status_code=400, detail="No Excel product data URL")
+
+        # ── B. Generate fresh SAS URLs for Excel files ──
+        from app.services.storage_service import generate_read_sas_from_url
+        product_url = generate_read_sas_from_url(video.excel_product_blob_url)
+        trend_url = None
+        if video.excel_trend_blob_url:
+            trend_url = generate_read_sas_from_url(video.excel_trend_blob_url)
+
+        if not product_url:
+            raise HTTPException(status_code=500, detail="Failed to generate SAS for product Excel")
+
+        # ── C. Download and parse Excel files ──
+        import openpyxl
+
+        def _parse_excel_from_url(url: str) -> list[dict]:
+            """Download Excel from URL and parse rows into dicts."""
+            resp = httpx.get(url, timeout=30, follow_redirects=True)
+            resp.raise_for_status()
+            with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+                tmp.write(resp.content)
+                tmp_path = tmp.name
+            try:
+                wb = openpyxl.load_workbook(tmp_path, read_only=True, data_only=True)
+                ws = wb.active
+                if ws is None:
+                    return []
+                rows = list(ws.iter_rows(values_only=True))
+                if len(rows) < 2:
+                    return []
+                headers = [str(h).strip() if h else f"col_{i}" for i, h in enumerate(rows[0])]
+                data = []
+                for row in rows[1:]:
+                    if all(v is None for v in row):
+                        continue
+                    entry = {}
+                    for i, val in enumerate(row):
+                        if i < len(headers):
+                            entry[headers[i]] = val
+                    data.append(entry)
+                wb.close()
+                return data
+            finally:
+                os.unlink(tmp_path)
+
+        products = _parse_excel_from_url(product_url)
+        trends = _parse_excel_from_url(trend_url) if trend_url else []
+
+        if not products:
+            raise HTTPException(status_code=400, detail="No products found in Excel")
+
+        # ── D. Build product list with name matching ──
+        # Find the product name column
+        PRODUCT_NAME_ALIASES = ["商品名", "product_name", "name", "商品", "品名", "アイテム名"]
+        BRAND_ALIASES = ["ブランド", "brand", "brand_name", "メーカー"]
+        IMAGE_ALIASES = ["画像", "image", "image_url", "商品画像"]
+
+        def _find_key(sample: dict, aliases: list) -> str | None:
+            for a in aliases:
+                for k in sample.keys():
+                    if a.lower() in k.lower():
+                        return k
+            return None
+
+        sample_product = products[0] if products else {}
+        pname_key = _find_key(sample_product, PRODUCT_NAME_ALIASES)
+        brand_key = _find_key(sample_product, BRAND_ALIASES)
+        image_key = _find_key(sample_product, IMAGE_ALIASES)
+
+        product_list = []
+        for p in products:
+            name = str(p.get(pname_key, "")).strip() if pname_key else ""
+            if not name:
+                continue
+            product_list.append({
+                "product_name": name,
+                "brand_name": str(p.get(brand_key, "")).strip() if brand_key else "",
+                "image_url": str(p.get(image_key, "")).strip() if image_key else "",
+            })
+
+        if not product_list:
+            raise HTTPException(status_code=400, detail="No valid products found in Excel")
+
+        # ── E. Parse trend data for sales-based detection ──
+        TIME_ALIASES = ["時間", "time", "timestamp", "配信時間", "日時"]
+        ORDER_ALIASES = ["注文数", "orders", "order_count", "注文", "成約数"]
+        GMV_ALIASES = ["売上", "gmv", "revenue", "売上金額", "成約金額"]
+        TREND_PRODUCT_ALIASES = ["商品名", "product_name", "商品", "品名"]
+
+        exposures = []
+        audio_exposures = []
+        slot_interval = 60  # default
+
+        # ── E-1. Load audio transcription from DB (video_phases.audio_text) ──
+        phase_rows = await db.execute(
+            text(
+                "SELECT phase_index, time_start, time_end, audio_text "
+                "FROM video_phases "
+                "WHERE video_id = :vid AND audio_text IS NOT NULL AND audio_text != '' "
+                "ORDER BY phase_index"
+            ),
+            {"vid": video_id},
+        )
+        phases_with_audio = phase_rows.fetchall()
+        logger.info("[REGEN] Loaded %d phases with audio_text from DB", len(phases_with_audio))
+
+        # Build product keyword map for matching
+        product_keywords = {}  # product_name -> [keywords]
+        for pl in product_list:
+            name = pl["product_name"]
+            keywords = set()
+            # Add full name (lowercase)
+            keywords.add(name.lower())
+            # Add individual words (3+ chars)
+            for w in name.split():
+                w_clean = w.strip().lower()
+                skip_words = {'kyogoku', 'the', 'and', 'for', 'pro', '\u7528', '\u5f0f', '\u578b'}
+                if len(w_clean) >= 3 and w_clean not in skip_words:
+                    keywords.add(w_clean)
+            # Add katakana/hiragana words
+            import unicodedata
+            kana_word = ""
+            for ch in name:
+                cat = unicodedata.category(ch)
+                if cat.startswith('Lo'):  # Letter, other (CJK, kana)
+                    kana_word += ch
+                else:
+                    if len(kana_word) >= 2:
+                        keywords.add(kana_word.lower())
+                    kana_word = ""
+            if len(kana_word) >= 2:
+                keywords.add(kana_word.lower())
+            product_keywords[name] = list(keywords)
+
+        # ── E-2. Audio-based product detection ──
+        if phases_with_audio:
+            for row in phases_with_audio:
+                t_start = float(row[1]) if row[1] else 0
+                t_end = float(row[2]) if row[2] else 0
+                audio_text = str(row[3]).strip().lower()
+                if not audio_text or t_end <= t_start:
+                    continue
+
+                # Search for product keywords in audio text
+                for pname, keywords in product_keywords.items():
+                    matched = False
+                    for kw in keywords:
+                        if len(kw) >= 3 and kw in audio_text:
+                            matched = True
+                            break
+                    if matched:
+                        audio_exposures.append({
+                            "product_name": pname,
+                            "brand_name": next((pl.get("brand_name", "") for pl in product_list if pl["product_name"] == pname), ""),
+                            "product_image_url": next((pl.get("image_url", "") for pl in product_list if pl["product_name"] == pname), ""),
+                            "time_start": t_start,
+                            "time_end": t_end,
+                            "confidence": 0.80,
+                            "source": "audio",
+                        })
+            logger.info("[REGEN] Audio detection: %d exposures", len(audio_exposures))
+
+        # ── E-3. Sales-based product detection from trend data ──
+        def _parse_time_to_seconds(val) -> float | None:
+            """Parse various time formats to seconds."""
+            if val is None:
+                return None
+            s = str(val).strip()
+            if not s:
+                return None
+            m = re.match(r'^(\d{1,2}):(\d{2}):(\d{2})$', s)
+            if m:
+                return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3))
+            m = re.match(r'^(\d{1,2}):(\d{2})$', s)
+            if m:
+                return int(m.group(1)) * 3600 + int(m.group(2)) * 60
+            try:
+                return float(s)
+            except ValueError:
+                return None
+
+        sales_exposures = []
+        if trends:
+            sample_trend = trends[0]
+            time_key = _find_key(sample_trend, TIME_ALIASES)
+            order_key = _find_key(sample_trend, ORDER_ALIASES)
+            gmv_key = _find_key(sample_trend, GMV_ALIASES)
+            trend_product_key = _find_key(sample_trend, TREND_PRODUCT_ALIASES)
+
+            if time_key:
+                slot_times = []
+                for entry in trends:
+                    t = _parse_time_to_seconds(entry.get(time_key))
+                    if t is not None:
+                        slot_times.append(t)
+                slot_times.sort()
+
+                if len(slot_times) >= 2:
+                    intervals = [slot_times[i+1] - slot_times[i] for i in range(len(slot_times)-1)]
+                    intervals = [iv for iv in intervals if iv > 0]
+                    if intervals:
+                        from collections import Counter
+                        interval_counts = Counter(int(iv) for iv in intervals)
+                        slot_interval = interval_counts.most_common(1)[0][0]
+                        if slot_interval < 10:
+                            slot_interval = 60
+
+                for entry in trends:
+                    t_sec = _parse_time_to_seconds(entry.get(time_key))
+                    if t_sec is None:
+                        continue
+
+                    video_time = t_sec - time_offset
+                    if video_time < 0:
+                        continue
+
+                    orders = 0
+                    if order_key:
+                        try:
+                            orders = int(float(entry.get(order_key, 0) or 0))
+                        except (ValueError, TypeError):
+                            orders = 0
+
+                    gmv = 0
+                    if gmv_key:
+                        try:
+                            gmv = float(entry.get(gmv_key, 0) or 0)
+                        except (ValueError, TypeError):
+                            gmv = 0
+
+                    if orders <= 0 and gmv <= 0:
+                        continue
+
+                    trend_product = ""
+                    if trend_product_key:
+                        trend_product = str(entry.get(trend_product_key, "")).strip()
+
+                    matched = None
+                    if trend_product:
+                        tp_lower = trend_product.lower()
+                        for pl in product_list:
+                            pl_lower = pl["product_name"].lower()
+                            if tp_lower in pl_lower or pl_lower in tp_lower:
+                                matched = pl
+                                break
+                        if not matched:
+                            for pl in product_list:
+                                words = [w for w in pl["product_name"].split() if len(w) >= 3]
+                                for w in words:
+                                    if w.lower() in tp_lower:
+                                        matched = pl
+                                        break
+                                if matched:
+                                    break
+
+                    if not matched and len(product_list) == 1:
+                        matched = product_list[0]
+
+                    if not matched:
+                        continue
+
+                    lookback = min(slot_interval * 2, 300)
+                    sales_exposures.append({
+                        "product_name": matched["product_name"],
+                        "brand_name": matched.get("brand_name", ""),
+                        "product_image_url": matched.get("image_url", ""),
+                        "time_start": max(0, video_time - lookback),
+                        "time_end": video_time + slot_interval,
+                        "confidence": min(0.85, 0.60 + min(orders, 5) * 0.05),
+                        "source": "sales",
+                    })
+            logger.info("[REGEN] Sales detection: %d exposures", len(sales_exposures))
+
+        # Combine audio + sales exposures
+        exposures = audio_exposures + sales_exposures
+
+        # ── F. Merge overlapping exposures for same product ──
+        if exposures:
+            by_product = {}
+            for exp in exposures:
+                name = exp["product_name"]
+                if name not in by_product:
+                    by_product[name] = []
+                by_product[name].append(exp)
+
+            merged = []
+            for name, exps in by_product.items():
+                exps.sort(key=lambda x: x["time_start"])
+                current = exps[0].copy()
+                for i in range(1, len(exps)):
+                    if exps[i]["time_start"] <= current["time_end"] + slot_interval:
+                        current["time_end"] = max(current["time_end"], exps[i]["time_end"])
+                        current["confidence"] = max(current["confidence"], exps[i]["confidence"])
+                    else:
+                        merged.append(current)
+                        current = exps[i].copy()
+                merged.append(current)
+            exposures = merged
+
+        # ── G. If no exposures at all, create from top_products or first N products ──
+        if not exposures and product_list:
+            # Use top_products if available, otherwise first 10 products
+            import json as _json
+            top_product_names = []
+            if video.top_products:
+                try:
+                    tp = _json.loads(video.top_products) if isinstance(video.top_products, str) else video.top_products
+                    if isinstance(tp, list):
+                        top_product_names = tp
+                except Exception:
+                    pass
+
+            # Match top_products to product_list
+            target_products = []
+            if top_product_names:
+                for tp_name in top_product_names:
+                    tp_lower = tp_name.lower()
+                    for pl in product_list:
+                        if pl["product_name"].lower() in tp_lower or tp_lower in pl["product_name"].lower():
+                            target_products.append(pl)
+                            break
+            if not target_products:
+                # Sort by GMV if available, otherwise take first 10
+                target_products = product_list[:min(10, len(product_list))]
+
+            if duration_sec > 0 and target_products:
+                segment_duration = duration_sec / max(len(target_products), 1)
+                for i, pl in enumerate(target_products):
+                    exposures.append({
+                        "product_name": pl["product_name"],
+                        "brand_name": pl.get("brand_name", ""),
+                        "product_image_url": pl.get("image_url", ""),
+                        "time_start": i * segment_duration,
+                        "time_end": (i + 1) * segment_duration,
+                        "confidence": 0.5,
+                    })
+
+        # ── H. Ensure table exists ──
+        try:
+            await db.execute(text("""
+                CREATE TABLE IF NOT EXISTS video_product_exposures (
+                    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+                    video_id UUID NOT NULL,
+                    user_id INTEGER,
+                    product_name TEXT NOT NULL,
+                    brand_name TEXT,
+                    product_image_url TEXT,
+                    time_start FLOAT NOT NULL,
+                    time_end FLOAT NOT NULL,
+                    confidence FLOAT DEFAULT 0.8,
+                    source VARCHAR(20) DEFAULT 'ai',
+                    created_at TIMESTAMPTZ DEFAULT now(),
+                    updated_at TIMESTAMPTZ DEFAULT now()
+                )
+            """))
+            await db.commit()
+        except Exception:
+            await db.rollback()
+
+        # ── I. Delete existing AI-generated exposures and insert new ones ──
+        await db.execute(
+            text("DELETE FROM video_product_exposures WHERE video_id = :vid AND source = 'ai'"),
+            {"vid": video_id},
+        )
+
+        inserted = 0
+        for exp in exposures:
+            await db.execute(
+                text("""
+                    INSERT INTO video_product_exposures
+                        (video_id, user_id, product_name, brand_name,
+                         product_image_url, time_start, time_end, confidence, source)
+                    VALUES
+                        (:video_id, :user_id, :product_name, :brand_name,
+                         :product_image_url, :time_start, :time_end, :confidence, 'ai')
+                """),
+                {
+                    "video_id": video_id,
+                    "user_id": user_id,
+                    "product_name": exp.get("product_name", ""),
+                    "brand_name": exp.get("brand_name", ""),
+                    "product_image_url": exp.get("product_image_url", ""),
+                    "time_start": exp.get("time_start", 0),
+                    "time_end": exp.get("time_end", 0),
+                    "confidence": exp.get("confidence", 0.8),
+                },
+            )
+            inserted += 1
+
+        await db.commit()
+
+        # ── J. Update video status to DONE if it was ERROR ──
+        if video.status == "ERROR":
+            await db.execute(
+                text("UPDATE videos SET status = 'DONE' WHERE id = :vid"),
+                {"vid": video_id},
+            )
+            await db.commit()
+
+        return {
+            "status": "ok",
+            "video_id": video_id,
+            "products_found": len(product_list),
+            "trend_entries": len(trends),
+            "audio_exposures": len(audio_exposures),
+            "sales_exposures": len(sales_exposures) if 'sales_exposures' in dir() else 0,
+            "exposures_generated": inserted,
+            "exposures": [
+                {
+                    "product_name": e["product_name"],
+                    "time_start": e["time_start"],
+                    "time_end": e["time_end"],
+                    "confidence": e["confidence"],
+                }
+                for e in exposures
+            ],
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Failed to regenerate product exposures: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
