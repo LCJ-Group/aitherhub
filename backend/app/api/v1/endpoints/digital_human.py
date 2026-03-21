@@ -2949,7 +2949,36 @@ async def debug_test_vision(_auth: bool = Depends(verify_admin_key)):
     except Exception as e:
         results["vision_direct"] = f"FAILED: {str(e)[:500]}"
 
-    # Test 2: Full _analyze_product_image_vision function
+    # Test 2: Azure OpenAI Responses API with image
+    azure_key = os.getenv("AZURE_OPENAI_KEY", "")
+    azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
+    azure_model = os.getenv("GPT5_MODEL") or "gpt-4.1-mini"
+    if azure_key and azure_endpoint:
+        try:
+            client = openai.AzureOpenAI(
+                api_key=azure_key,
+                azure_endpoint=azure_endpoint,
+                api_version=os.getenv("GPT5_API_VERSION", "2025-04-01-preview"),
+            )
+            response = client.responses.create(
+                model=azure_model,
+                input=[
+                    {"role": "user", "content": [
+                        {"type": "input_text", "text": 'What product is shown in this image? Reply in JSON: {"product": "..."}'},
+                        {"type": "input_image", "image_url": image_url},
+                    ]},
+                ],
+                max_output_tokens=200,
+            )
+            result_text = response.output_text if hasattr(response, 'output_text') else str(response)
+            results["azure_vision"] = "SUCCESS"
+            results["azure_vision_response"] = result_text[:500]
+        except Exception as e:
+            results["azure_vision"] = f"FAILED: {str(e)[:500]}"
+    else:
+        results["azure_vision"] = "SKIPPED (no credentials)"
+
+    # Test 3: Full _analyze_product_image_vision function
     try:
         from app.services.live_session_service import _analyze_product_image_vision
         vision_data = await _analyze_product_image_vision(
