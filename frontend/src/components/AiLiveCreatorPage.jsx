@@ -29,6 +29,7 @@ import {
   Film,
 } from "lucide-react";
 import aiLiveCreatorService from "../base/services/aiLiveCreatorService";
+import personaService from "../base/services/personaService";
 import LiveStreamPanel from "./LiveStreamPanel";
 import LivePreviewPlayer from "./LivePreviewPlayer";
 
@@ -107,6 +108,11 @@ export default function AiLiveCreatorPage() {
   // ── Live Session ──
   const [liveSessionId, setLiveSessionId] = useState(null);
 
+  // ── Persona (AI Script Generation) ──
+  const [personas, setPersonas] = useState([]);
+  const [selectedPersonaId, setSelectedPersonaId] = useState("");
+  const [isGeneratingAiScript, setIsGeneratingAiScript] = useState(false);
+
   // ── AutoPilot State ──
   const [autoPilotActive, setAutoPilotActive] = useState(false);
 
@@ -132,6 +138,7 @@ export default function AiLiveCreatorPage() {
   useEffect(() => {
     checkHealth();
     loadVoices();
+    loadPersonas();
     try {
       const saved = localStorage.getItem("aiLiveCreator_jobs");
       if (saved) setJobHistory(JSON.parse(saved));
@@ -201,6 +208,39 @@ export default function AiLiveCreatorPage() {
       localStorage.setItem("aiLiveCreator_jobs", JSON.stringify(updated));
       return updated;
     });
+  };
+
+  const loadPersonas = async () => {
+    try {
+      const data = await personaService.listPersonas();
+      const completed = (data.personas || []).filter(p => p.status === 'completed' && p.finetune_model_id);
+      setPersonas(completed);
+      if (completed.length > 0) setSelectedPersonaId(completed[0].id);
+    } catch (err) {
+      console.error('Failed to load personas:', err);
+    }
+  };
+
+  const handleGenerateAiScript = async () => {
+    if (!selectedPersonaId) return;
+    setIsGeneratingAiScript(true);
+    try {
+      // Collect product names from LiveStreamPanel products
+      const productNames = previewProducts.map(p => p.name).filter(Boolean);
+      const res = await personaService.generateScript(selectedPersonaId, {
+        products: productNames.length > 0 ? productNames : ["商品紹介"],
+        duration_minutes: 3,
+        style: "energetic",
+      });
+      if (res.script) {
+        setScriptText(res.script);
+      }
+    } catch (err) {
+      console.error('AI script generation error:', err);
+      setError(`AI台本生成エラー: ${err.message}`);
+    } finally {
+      setIsGeneratingAiScript(false);
+    }
   };
 
   // ── Portrait (Image) Upload ──
@@ -764,10 +804,41 @@ export default function AiLiveCreatorPage() {
                     <Type className="w-3.5 h-3.5 text-purple-400" />
                     Script Text
                   </h4>
+                  {/* AI Script Generation with Persona */}
+                  {personas.length > 0 && (
+                    <div className="mb-2 p-2 bg-purple-900/20 border border-purple-500/30 rounded-lg">
+                      <div className="flex items-center gap-2 mb-1.5">
+                        <Sparkles className="w-3 h-3 text-purple-400" />
+                        <span className="text-[10px] font-medium text-purple-300">AI台本生成</span>
+                      </div>
+                      <div className="flex gap-1.5">
+                        <select
+                          value={selectedPersonaId}
+                          onChange={(e) => setSelectedPersonaId(e.target.value)}
+                          className="flex-1 px-2 py-1 bg-gray-900/50 border border-purple-500/30 rounded text-[10px] text-gray-300 outline-none"
+                        >
+                          {personas.map((p) => (
+                            <option key={p.id} value={p.id}>{p.name}</option>
+                          ))}
+                        </select>
+                        <button
+                          onClick={handleGenerateAiScript}
+                          disabled={isGeneratingAiScript || !selectedPersonaId}
+                          className="px-3 py-1 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-700 disabled:text-gray-500 text-white text-[10px] font-medium rounded flex items-center gap-1 transition-colors"
+                        >
+                          {isGeneratingAiScript ? (
+                            <><Loader2 className="w-3 h-3 animate-spin" />生成中...</>
+                          ) : (
+                            <><Sparkles className="w-3 h-3" />ペルソナで生成</>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  )}
                   <textarea
                     value={scriptText}
                     onChange={(e) => setScriptText(e.target.value)}
-                    placeholder="テキストを入力..."
+                    placeholder="テキストを入力、または上のAI台本生成で自動作成..."
                     rows={4}
                     maxLength={5000}
                     className="w-full px-2.5 py-2 bg-gray-900/50 border border-gray-700/30 rounded-lg text-xs text-gray-200 placeholder-gray-600 focus:ring-1 focus:ring-purple-500/50 focus:border-purple-500/50 outline-none resize-none"
