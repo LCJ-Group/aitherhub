@@ -964,9 +964,10 @@ async def batch_transcribe(
 
     # Get tagged videos
     tag_sql = text("""
-        SELECT pvt.video_id, v.original_filename, v.user_email
+        SELECT pvt.video_id, v.original_filename, u.email as user_email
         FROM persona_video_tags pvt
-        JOIN videos v ON pvt.video_id = v.id
+        JOIN videos v ON CAST(pvt.video_id AS UUID) = v.id
+        LEFT JOIN users u ON v.user_id = u.id
         WHERE pvt.persona_id = :pid AND v.status = 'DONE'
         ORDER BY v.created_at ASC
     """)
