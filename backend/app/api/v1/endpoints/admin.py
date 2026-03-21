@@ -3421,7 +3421,7 @@ async def regenerate_product_exposures(
         result = await db.execute(
             text("""
                 SELECT v.id, v.user_id, v.excel_product_blob_url, v.excel_trend_blob_url,
-                       v.time_offset_seconds, v.duration_sec, v.top_products, v.status
+                       v.time_offset_seconds, v.duration, v.top_products, v.status
                 FROM videos v WHERE v.id = :vid
             """),
             {"vid": video_id},
@@ -3432,7 +3432,16 @@ async def regenerate_product_exposures(
 
         user_id = video.user_id
         time_offset = float(video.time_offset_seconds or 0)
-        duration_sec = float(video.duration_sec or 0)
+        duration_sec = float(video.duration or 0)
+        # Fallback: get duration from video_phases if not set
+        if duration_sec <= 0:
+            dur_result = await db.execute(
+                text("SELECT COALESCE(MAX(time_end), 0) FROM video_phases WHERE video_id = :vid"),
+                {"vid": video_id},
+            )
+            dur_row = dur_result.fetchone()
+            if dur_row and dur_row[0]:
+                duration_sec = float(dur_row[0])
 
         if not video.excel_product_blob_url:
             raise HTTPException(status_code=400, detail="No Excel product data URL")
