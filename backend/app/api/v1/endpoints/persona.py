@@ -1028,6 +1028,15 @@ async def generate_script(
             )
             script = response.choices[0].message.content
 
+        # Post-process: remove markdown/tags that shouldn't be in spoken script
+        import re as _re
+        script = _re.sub(r'\*\*', '', script)  # Remove **bold**
+        script = _re.sub(r'\*', '', script)    # Remove *italic*
+        script = _re.sub(r'\u3010[^\u3011]*\u3011', '', script)  # Remove 【tags】
+        script = _re.sub(r'#{1,6}\s*', '', script)  # Remove # headings
+        script = _re.sub(r'\n{3,}', '\n\n', script)  # Collapse excess newlines
+        script = script.strip()
+
         char_count = len(script)
         estimated_duration_min = round(char_count / 250, 1)
 
