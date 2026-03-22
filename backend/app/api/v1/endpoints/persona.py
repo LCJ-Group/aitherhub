@@ -903,22 +903,24 @@ async def generate_script(
     for p in (body.products or []):
         if hasattr(p, 'achievements') and p.achievements:
             for a in p.achievements:
-                mandatory_facts.append(f"【実績】{a}")
+                mandatory_facts.append(f"- 実績: {a}")
         if hasattr(p, 'selling_points') and p.selling_points:
             for sp in p.selling_points:
-                mandatory_facts.append(f"【セールスポイント】{sp}")
+                mandatory_facts.append(f"- セールスポイント: {sp}")
         if hasattr(p, 'sold_info') and p.sold_info:
-            mandatory_facts.append(f"【販売実績】{p.sold_info}")
+            mandatory_facts.append(f"- 販売実績: {p.sold_info}")
         if hasattr(p, 'reviews_summary') and p.reviews_summary:
-            mandatory_facts.append(f"【レビュー】{p.reviews_summary}")
+            mandatory_facts.append(f"- レビュー: {p.reviews_summary}")
         if hasattr(p, 'talk_hooks') and p.talk_hooks:
             for hook in p.talk_hooks:
-                mandatory_facts.append(f"【フック】{hook}")
+                mandatory_facts.append(f"- トークフック例: {hook}")
+        if hasattr(p, 'variants') and p.variants:
+            mandatory_facts.append(f"- バリエーション: {', '.join(p.variants)}")
 
     mandatory_section = ""
     if mandatory_facts:
         facts_text = "\n".join(mandatory_facts)
-        mandatory_section = f"""\n\n★★★ 以下の情報は必ず台本に含めてください（省略禁止）★★★\n{facts_text}\n★★★ 上記の実績・数字は台本の中で自然に言及すること ★★★"""
+        mandatory_section = f"""\n\n=== 必須情報（台本に自然に組み込むこと）===\n{facts_text}\n=== 上記の数字・実績は台本内で必ず言及すること ==="""
 
     style_text = f"スタイル: {body.style}" if body.style else ""
     notes_text = f"備考: {body.notes}" if body.notes else ""
@@ -947,6 +949,9 @@ async def generate_script(
 - 商品名は正確に（漢字・カタカナを正しく）使う
 - 指定された文字数（{min_chars}〜{max_chars}文字）を守る
 - 同じフレーズを繰り返さない
+- バリエーション（色・種類）がある場合は、それぞれの特徴を紹介する
+- 台本はそのまま読み上げるテキストのみ出力する（【タグ】や**太字**等の記号は使わない）
+- 台本以外の説明文やメモは出力しない
 
 あなたの普段の話し方で、自然だけど説得力のある台本を作ってください。"""
 
