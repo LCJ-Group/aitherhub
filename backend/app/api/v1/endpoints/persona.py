@@ -957,14 +957,69 @@ async def generate_script(
 
     try:
         client = finetune_service._get_openai()
-        response = client.chat.completions.create(
-            model=model_id,
-            messages=messages,
-            temperature=0.7,
-            max_tokens=4096,
+
+        # ── 2-stage generation: persona voice + product data integration ──
+        has_rich_product_data = any(
+            (hasattr(p, 'selling_points') and p.selling_points) or
+            (hasattr(p, 'achievements') and p.achievements) or
+            (hasattr(p, 'talk_hooks') and p.talk_hooks)
+            for p in (body.products or [])
         )
 
-        script = response.choices[0].message.content
+        if has_rich_product_data:
+            # Stage 1: Get persona voice/style from fine-tuned model (short sample)
+            voice_prompt = f"""以下の商品を紹介するライブ配信のオープニングを50文字程度で書いてください。
+商品名: {body.products[0].name if body.products else '商品'}
+あなたの普段の話し方で、自然に。"""
+            voice_response = client.chat.completions.create(
+                model=model_id,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": voice_prompt},
+                ],
+                temperature=0.8,
+                max_tokens=200,
+            )
+            voice_sample = voice_response.choices[0].message.content.strip()
+
+            # Stage 2: Use GPT-4.1-mini to generate full script with product data
+            from app.services.live_session_service import _call_gpt
+            integration_prompt = f"""あなたはライブコマース台本ライターです。
+以下の「配信者の口調サンプル」を参考に、同じ話し方・テンション・口癖で台本を書いてください。
+
+【配信者の口調サンプル】
+{voice_sample}
+
+【配信者プロフィール】
+{system_prompt}
+
+{user_prompt}"""
+            stage2_result = await _call_gpt(
+                integration_prompt,
+                max_tokens=2000,
+                temperature=0.7,
+            )
+            script = stage2_result.strip() if stage2_result else ""
+
+            if not script or len(script) < 100:
+                # Fallback: direct fine-tuned model
+                response = client.chat.completions.create(
+                    model=model_id,
+                    messages=messages,
+                    temperature=0.7,
+                    max_tokens=4096,
+                )
+                script = response.choices[0].message.content
+        else:
+            # No rich data - use fine-tuned model directly
+            response = client.chat.completions.create(
+                model=model_id,
+                messages=messages,
+                temperature=0.7,
+                max_tokens=4096,
+            )
+            script = response.choices[0].message.content
+
         char_count = len(script)
         estimated_duration_min = round(char_count / 250, 1)
 
@@ -972,12 +1027,12 @@ async def generate_script(
             "script": script,
             "char_count": char_count,
             "estimated_duration_minutes": estimated_duration_min,
-            "model": model_id,
+            "model": model_id if not has_rich_product_data else f"{model_id}+gpt-4.1-mini",
             "persona_name": persona.name,
             "usage": {
-                "prompt_tokens": response.usage.prompt_tokens,
-                "completion_tokens": response.usage.completion_tokens,
-                "total_tokens": response.usage.total_tokens,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
             },
         }
     except Exception as e:
