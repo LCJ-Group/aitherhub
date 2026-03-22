@@ -898,26 +898,57 @@ async def generate_script(
     min_chars = int(target_chars * 0.85)
     max_chars = int(target_chars * 1.15)
 
+    # Build mandatory facts section - these MUST appear in the script
+    mandatory_facts = []
+    for p in (body.products or []):
+        if hasattr(p, 'achievements') and p.achievements:
+            for a in p.achievements:
+                mandatory_facts.append(f"【実績】{a}")
+        if hasattr(p, 'selling_points') and p.selling_points:
+            for sp in p.selling_points:
+                mandatory_facts.append(f"【セールスポイント】{sp}")
+        if hasattr(p, 'sold_info') and p.sold_info:
+            mandatory_facts.append(f"【販売実績】{p.sold_info}")
+        if hasattr(p, 'reviews_summary') and p.reviews_summary:
+            mandatory_facts.append(f"【レビュー】{p.reviews_summary}")
+        if hasattr(p, 'talk_hooks') and p.talk_hooks:
+            for hook in p.talk_hooks:
+                mandatory_facts.append(f"【フック】{hook}")
+
+    mandatory_section = ""
+    if mandatory_facts:
+        facts_text = "\n".join(mandatory_facts)
+        mandatory_section = f"""\n\n★★★ 以下の情報は必ず台本に含めてください（省略禁止）★★★\n{facts_text}\n★★★ 上記の実績・数字は台本の中で自然に言及すること ★★★"""
+
+    style_text = f"スタイル: {body.style}" if body.style else ""
+    notes_text = f"備考: {body.notes}" if body.notes else ""
+
     user_prompt = f"""以下の条件でライブ配信の台本を作成してください。
 
 配信時間: 約{body.duration_minutes}分（{min_chars}〜{max_chars}文字）
 {products_text}
-{f'スタイル: {body.style}' if body.style else ''}
-{f'備考: {body.notes}' if body.notes else ''}
+{style_text}
+{notes_text}
+{mandatory_section}
 
-台本には以下を含めてください：
+台本の構成:
 1. オープニング（挨拶・今日の配信テーマ）
 2. 商品紹介（各商品の特徴・使い方・おすすめポイント）
+   - 必ず商品名を正確に言う
+   - 実績データ（ランキング、累計販売数）を具体的な数字で伝える
+   - レビュー情報があれば「お客様からも〇〇という声が」と自然に入れる
+   - バリエーションがあればそれぞれの特徴を紹介する
 3. 視聴者とのインタラクション（コメント読み・質問対応のタイミング）
 4. クロージング（まとめ・購入案内）
 
-重要なルール:
-- 商品の実績（累計販売数、ランキング1位など）があれば必ず台本に入れる
-- レビュー・評価情報があれば「お客様の声」として自然に織り込む
-- セールスポイントがあれば具体的な数字を使って説得力のある台本にする
-- バリエーションがあればそれぞれの魅力を紹介する
+絶対ルール:
+- 商品の実績（累計販売数、ランキング1位など）は必ず台本に入れる。「50万本突破」「No.1獲得」等の数字は省略しない
+- セールスポイントの具体的な数字を使って説得力のある台本にする
+- 商品名は正確に（漢字・カタカナを正しく）使う
+- 指定された文字数（{min_chars}〜{max_chars}文字）を守る
+- 同じフレーズを繰り返さない
 
-あなたの普段の話し方で、自然な台本を作ってください。"""
+あなたの普段の話し方で、自然だけど説得力のある台本を作ってください。"""
 
     messages = [
         {"role": "system", "content": system_prompt},
