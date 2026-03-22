@@ -994,8 +994,11 @@ async def generate_script(
 {system_prompt}
 
 {user_prompt}"""
+            stage2_messages = [
+                {"role": "user", "content": integration_prompt},
+            ]
             stage2_result = await _call_gpt(
-                integration_prompt,
+                stage2_messages,
                 max_tokens=2000,
                 temperature=0.7,
             )
