@@ -66,6 +66,10 @@ export default function ClipSection({ videoData, clipStates, reports1, editorPar
   const [editorClip, setEditorClip] = useState(null);
   const editorAutoOpenedRef = useRef(false);
   const [clipRatings, setClipRatings] = useState({});
+  // Auto-generation state for when editorParams targets a clip that doesn't exist yet
+  const [autoGenerating, setAutoGenerating] = useState(false);
+  const [autoGenerateStatus, setAutoGenerateStatus] = useState('');
+  const autoGenPollingRef = useRef(null);
 
   // Fetch clip ratings for badge display
   const fetchClipRatings = useCallback(async () => {
@@ -143,70 +147,139 @@ export default function ClipSection({ videoData, clipStates, reports1, editorPar
   }, [clipStates, reports1]);
 
   // Auto-open editor when editorParams are provided (from feedback card click)
+  // If no matching clip exists, auto-generate it and open the editor when ready.
   useEffect(() => {
-    if (!editorParams || editorAutoOpenedRef.current || visibleClips.length === 0) return;
-    editorAutoOpenedRef.current = true;
+    if (!editorParams || editorAutoOpenedRef.current) return;
+    // Allow running even when visibleClips is empty (we may need to generate the clip)
+    if (!videoData?.id) return;
 
-    // Find the clip that matches the editorParams
-    let targetClip = null;
-    if (editorParams.phase_index != null) {
-      // 1) Match by clipStates key (array index used in video_clips table)
-      targetClip = visibleClips.find(
-        (c) => String(c.phaseIndex) === String(editorParams.phase_index)
-      );
-      // 2) Match by displayPhaseIndex (reports_1[].phase_index, the user-facing phase number)
-      //    This is needed because AdminDashboard feedback URLs use video_phases.phase_index
-      //    which differs from video_clips.phase_index (array index)
-      if (!targetClip) {
-        targetClip = visibleClips.find(
-          (c) => c.displayPhaseIndex != null && String(c.displayPhaseIndex) === String(editorParams.phase_index)
+    // Helper: search for a matching clip in visibleClips
+    const findMatchingClip = () => {
+      let target = null;
+      if (editorParams.phase_index != null && visibleClips.length > 0) {
+        // 1) Match by clipStates key (array index used in video_clips table)
+        target = visibleClips.find(
+          (c) => String(c.phaseIndex) === String(editorParams.phase_index)
         );
-      }
-      // 3) Convert: find the array index for the given phase_index in reports1
-      if (!targetClip && reports1?.length) {
-        const arrayIdx = reports1.findIndex(
-          (r) => r?.phase_index != null && String(r.phase_index) === String(editorParams.phase_index)
-        );
-        if (arrayIdx >= 0) {
-          targetClip = visibleClips.find(
-            (c) => String(c.phaseIndex) === String(arrayIdx)
+        // 2) Match by displayPhaseIndex (reports_1[].phase_index, the user-facing phase number)
+        if (!target) {
+          target = visibleClips.find(
+            (c) => c.displayPhaseIndex != null && String(c.displayPhaseIndex) === String(editorParams.phase_index)
           );
         }
-      }
-    }
-    // Fallback: match by time range overlap (generous 5-second tolerance)
-    if (!targetClip && editorParams.time_start != null && editorParams.time_end != null) {
-      const tolerance = 5;
-      targetClip = visibleClips.find((c) => {
-        const cStart = (c.time_start ?? 0) - tolerance;
-        const cEnd = (c.time_end ?? 0) + tolerance;
-        return cStart < editorParams.time_end && cEnd > editorParams.time_start;
-      });
-    }
-    // Fallback: open the clip closest in time to the requested range
-    if (!targetClip && visibleClips.length > 0 && editorParams.time_start != null) {
-      const reqMid = (Number(editorParams.time_start) + Number(editorParams.time_end ?? editorParams.time_start)) / 2;
-      let bestDist = Infinity;
-      for (const c of visibleClips) {
-        const cMid = ((c.time_start ?? 0) + (c.time_end ?? 0)) / 2;
-        const dist = Math.abs(cMid - reqMid);
-        if (dist < bestDist) {
-          bestDist = dist;
-          targetClip = c;
+        // 3) Convert: find the array index for the given phase_index in reports1
+        if (!target && reports1?.length) {
+          const arrayIdx = reports1.findIndex(
+            (r) => r?.phase_index != null && String(r.phase_index) === String(editorParams.phase_index)
+          );
+          if (arrayIdx >= 0) {
+            target = visibleClips.find(
+              (c) => String(c.phaseIndex) === String(arrayIdx)
+            );
+          }
         }
       }
-    }
-    // Ultimate fallback: open the first clip
-    if (!targetClip && visibleClips.length > 0) {
-      targetClip = visibleClips[0];
-    }
-    if (targetClip) {
-      handleOpenEditor(targetClip);
-    }
-  }, [editorParams, visibleClips, reports1]);
+      // Fallback: match by time range overlap (generous 5-second tolerance)
+      if (!target && editorParams.time_start != null && editorParams.time_end != null && visibleClips.length > 0) {
+        const tolerance = 5;
+        target = visibleClips.find((c) => {
+          const cStart = (c.time_start ?? 0) - tolerance;
+          const cEnd = (c.time_end ?? 0) + tolerance;
+          return cStart < editorParams.time_end && cEnd > editorParams.time_start;
+        });
+      }
+      return target;
+    };
 
-  // Don't render if no visible clips
-  if (visibleClips.length === 0) return null;
+    const targetClip = findMatchingClip();
+
+    if (targetClip) {
+      // Found a matching clip - open editor immediately
+      editorAutoOpenedRef.current = true;
+      handleOpenEditor(targetClip);
+      return;
+    }
+
+    // No matching clip found - auto-generate it
+    if (editorParams.time_start == null || editorParams.time_end == null) return;
+    if (autoGenerating) return; // already generating
+
+    const phaseIdx = editorParams.phase_index ?? `auto_${editorParams.time_start}`;
+    const timeStart = Number(editorParams.time_start);
+    const timeEnd = Number(editorParams.time_end);
+    if (isNaN(timeStart) || isNaN(timeEnd)) return;
+
+    editorAutoOpenedRef.current = true;
+    setAutoGenerating(true);
+    setAutoGenerateStatus('クリップを生成中...');
+    console.log(`[ClipSection] No matching clip for phase=${phaseIdx} t=${timeStart}-${timeEnd}, auto-generating`);
+
+    (async () => {
+      try {
+        const res = await VideoService.requestClipGeneration(videoData.id, phaseIdx, timeStart, timeEnd);
+        if (res.status === 'completed' && res.clip_url) {
+          // Already generated (cache hit)
+          setAutoGenerating(false);
+          setAutoGenerateStatus('');
+          setEditorClip({
+            clip_url: res.clip_url,
+            clip_id: res.clip_id,
+            phase_index: phaseIdx,
+            time_start: timeStart,
+            time_end: timeEnd,
+          });
+          return;
+        }
+
+        // Poll for completion
+        setAutoGenerateStatus('クリップを生成中... (0%)');
+        const pollId = setInterval(async () => {
+          try {
+            const statusRes = await VideoService.getClipStatus(videoData.id, phaseIdx);
+            if (statusRes.status === 'completed' && statusRes.clip_url) {
+              clearInterval(pollId);
+              autoGenPollingRef.current = null;
+              setAutoGenerating(false);
+              setAutoGenerateStatus('');
+              setEditorClip({
+                clip_url: statusRes.clip_url,
+                clip_id: statusRes.clip_id,
+                phase_index: phaseIdx,
+                time_start: statusRes.time_start ?? timeStart,
+                time_end: statusRes.time_end ?? timeEnd,
+              });
+            } else if (statusRes.status === 'failed' || statusRes.status === 'dead') {
+              clearInterval(pollId);
+              autoGenPollingRef.current = null;
+              setAutoGenerating(false);
+              setAutoGenerateStatus('クリップ生成に失敗しました');
+            } else {
+              const pct = statusRes.progress_pct || 0;
+              const step = statusRes.progress_step || '';
+              setAutoGenerateStatus(`クリップを生成中... (${pct}%) ${step}`);
+            }
+          } catch (e) {
+            // continue polling
+          }
+        }, 4000);
+        autoGenPollingRef.current = pollId;
+      } catch (e) {
+        console.error('[ClipSection] Auto-generate failed:', e);
+        setAutoGenerating(false);
+        setAutoGenerateStatus('クリップ生成リクエストに失敗しました');
+      }
+    })();
+
+    return () => {
+      if (autoGenPollingRef.current) {
+        clearInterval(autoGenPollingRef.current);
+        autoGenPollingRef.current = null;
+      }
+    };
+  }, [editorParams, visibleClips, reports1, videoData?.id, autoGenerating]);
+
+  // Don't render if no visible clips AND not auto-generating
+  if (visibleClips.length === 0 && !autoGenerating && !autoGenerateStatus && !editorClip) return null;
 
   const formatTime = (seconds) => {
     if (seconds == null || isNaN(seconds)) return "--:--";
@@ -391,6 +464,40 @@ export default function ClipSection({ videoData, clipStates, reports1, editorPar
           </div>
         )}
       </div>
+
+      {/* Auto-generation loading overlay */}
+      {(autoGenerating || autoGenerateStatus) && !editorClip && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl p-8 shadow-2xl max-w-sm mx-4 text-center">
+            {autoGenerating ? (
+              <>
+                <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center animate-pulse">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="6" cy="6" r="3"/><path d="M8.12 8.12 12 12"/><path d="M20 4 8.12 15.88"/><circle cx="6" cy="18" r="3"/><path d="M14.8 14.8 20 20"/>
+                  </svg>
+                </div>
+                <div className="text-gray-900 text-lg font-semibold mb-2">{autoGenerateStatus}</div>
+                <div className="text-gray-500 text-sm">該当時間帯のクリップが見つからなかったため、自動生成しています</div>
+              </>
+            ) : (
+              <>
+                <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-red-100 flex items-center justify-center">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#DC2626" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>
+                  </svg>
+                </div>
+                <div className="text-gray-900 text-lg font-semibold mb-2">{autoGenerateStatus}</div>
+                <button
+                  onClick={() => { setAutoGenerateStatus(''); }}
+                  className="mt-4 px-6 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-gray-700 text-sm transition-colors"
+                >
+                  閉じる
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ClipEditorV2 Modal */}
       {editorClip && (
