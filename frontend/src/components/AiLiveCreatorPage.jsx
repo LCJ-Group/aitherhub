@@ -87,8 +87,8 @@ export default function AiLiveCreatorPage() {
   const [extraMargin, setExtraMargin] = useState(10);
   const [batchSize, setBatchSize] = useState(16);
   // IMTalker-specific
-  const [aCfgScale, setACfgScale] = useState(2.0);
-  const [nfe, setNfe] = useState(10);
+  const [aCfgScale, setACfgScale] = useState(1.5);
+  const [nfe, setNfe] = useState(32);
   const [crop, setCrop] = useState(true);
 
   // ── Job State ──
@@ -1315,13 +1315,13 @@ export default function AiLiveCreatorPage() {
                           <label className="text-xs font-medium text-gray-600 block mb-1">Audio CFG Scale</label>
                           <input type="number" value={aCfgScale} onChange={(e) => setACfgScale(Number(e.target.value))} min={0.5} max={5.0} step={0.1}
                             className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-300 focus:border-purple-400 outline-none" />
-                          <p className="text-[10px] text-gray-400 mt-1">表現力の強さ (0.5-5.0, 推奨: 2.0)</p>
+                          <p className="text-[10px] text-gray-400 mt-1">表現力の強さ (0.5-5.0, 推奨: 1.5)</p>
                         </div>
                         <div>
                           <label className="text-xs font-medium text-gray-600 block mb-1">NFE Steps</label>
-                          <input type="number" value={nfe} onChange={(e) => setNfe(Number(e.target.value))} min={5} max={30}
+                          <input type="number" value={nfe} onChange={(e) => setNfe(Number(e.target.value))} min={5} max={64}
                             className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-300 focus:border-purple-400 outline-none" />
-                          <p className="text-[10px] text-gray-400 mt-1">品質ステップ数 (5-30, 推奨: 10)</p>
+                          <p className="text-[10px] text-gray-400 mt-1">品質ステップ数 (5-64, 推奨: 32)</p>
                         </div>
                         <div>
                           <label className="text-xs font-medium text-gray-600 block mb-1">Output FPS</label>
