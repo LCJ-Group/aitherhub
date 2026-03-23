@@ -189,8 +189,13 @@ export default function AiLiveCreatorPage() {
       const res = await aiLiveCreatorService.listVoices();
       if (res.success && res.voices) {
         setVoices(res.voices);
-        const cloned = res.voices.find((v) => v.is_cloned);
-        if (cloned) setSelectedVoiceId(cloned.voice_id);
+        // Prefer Japanese cloned voice, then any cloned voice, then first available
+        const jaClone = res.voices.find(
+          (v) => v.is_cloned && /日本語|japanese|ja/i.test(v.name || "")
+        );
+        const anyClone = res.voices.find((v) => v.is_cloned);
+        const preferred = jaClone || anyClone;
+        if (preferred) setSelectedVoiceId(preferred.voice_id);
         else if (res.voices.length > 0) setSelectedVoiceId(res.voices[0].voice_id);
       }
     } catch (err) {

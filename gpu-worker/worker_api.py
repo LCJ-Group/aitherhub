@@ -1663,8 +1663,8 @@ class IMTalkerRequest(BaseModel):
     job_id: str = Field(..., description="Unique job ID")
     portrait_url: str = Field(..., description="URL of portrait image (front-facing photo)")
     audio_url: str = Field(..., description="URL of audio file (WAV/MP3)")
-    a_cfg_scale: float = Field(default=2.0, description="Audio CFG scale (higher = more expression)")
-    nfe: int = Field(default=10, description="Number of function evaluations for ODE solver")
+    a_cfg_scale: float = Field(default=1.5, description="Audio CFG scale (1.5 = natural, 2.0+ = exaggerated)")
+    nfe: int = Field(default=32, description="Number of function evaluations for ODE solver (higher = better quality)")
     crop: bool = Field(default=True, description="Whether to crop face region")
     output_fps: int = Field(default=25, description="Output video FPS")
 
@@ -1800,32 +1800,28 @@ async def _run_imtalker_job(req: IMTalkerRequest):
         job["progress"] = 85
 
         # ── Step 5: Composite onto original portrait in 9:16 ──
-        logger.info(f"[IMT {req.job_id}] Compositing to 9:16 portrait video...")
+        # Strategy v3: Detect face in original portrait, create 9:16 background,
+        # overlay IMTalker animated face with elliptical feathered mask for
+        # seamless blending. No hard edges.
+        logger.info(f"[IMT {req.job_id}] Compositing to 9:16 portrait video (v3 feathered blend)...")
         final_output = os.path.join(job_dir, f"output_{req.job_id}.mp4")
-
-        # Strategy: Use the original portrait image as background (9:16),
-        # overlay the IMTalker animated face on top, aligned to face position.
-        # ffmpeg approach: scale portrait to 9:16, overlay animated face.
-        #
-        # Since IMTalker crops the face, we need to:
-        # 1. Detect face position in original portrait
-        # 2. Overlay the animated face at that position
-        # OR simpler: place animated face centered on a blurred/original background
 
         try:
             from PIL import Image
+            import numpy as np
             img = Image.open(portrait_path)
             orig_w, orig_h = img.size
 
             # Target: 9:16 aspect ratio
-            # Use 720x1280 as default, or scale based on original image
             target_w, target_h = 720, 1280
             if orig_w >= 1080:
                 target_w, target_h = 1080, 1920
 
-            # Calculate face region in original image for overlay positioning
-            # Use face_alignment if available, otherwise center the face
-            face_cx, face_cy = orig_w // 2, int(orig_h * 0.4)  # default: center-top
+            # ── Detect face region in original portrait ──
+            face_cx, face_cy = orig_w // 2, int(orig_h * 0.4)
+            face_w_est = int(orig_w * 0.45)
+            face_h_est = int(orig_h * 0.35)
+            face_detected = False
 
             try:
                 import face_alignment
@@ -1833,69 +1829,111 @@ async def _run_imtalker_job(req: IMTalkerRequest):
                     face_alignment.LandmarksType.TWO_D,
                     device="cuda", flip_input=False
                 )
-                import numpy as np
                 img_np = np.array(img)
                 landmarks = fa.get_landmarks(img_np)
                 if landmarks and len(landmarks) > 0:
-                    lm = landmarks[0]  # first face
+                    lm = landmarks[0]
                     face_cx = int(lm[:, 0].mean())
                     face_cy = int(lm[:, 1].mean())
-                    # Estimate face size from landmarks
-                    face_w = int((lm[:, 0].max() - lm[:, 0].min()) * 1.6)
-                    face_h = int((lm[:, 1].max() - lm[:, 1].min()) * 1.8)
-                    logger.info(f"[IMT {req.job_id}] Face detected at ({face_cx},{face_cy}), size ~{face_w}x{face_h}")
+                    face_w_est = int((lm[:, 0].max() - lm[:, 0].min()) * 1.8)
+                    face_h_est = int((lm[:, 1].max() - lm[:, 1].min()) * 2.2)
+                    face_detected = True
+                    logger.info(
+                        f"[IMT {req.job_id}] Face detected at ({face_cx},{face_cy}), "
+                        f"size ~{face_w_est}x{face_h_est}"
+                    )
                 del fa
             except Exception as e:
-                logger.warning(f"[IMT {req.job_id}] Face detection for composite failed: {e}, using center")
+                logger.warning(f"[IMT {req.job_id}] Face detection failed: {e}, using heuristic")
 
-            # Scale original to fill 9:16 canvas
+            # ── Scale portrait to fill 9:16 canvas ──
             scale = max(target_w / orig_w, target_h / orig_h)
             scaled_w = int(orig_w * scale)
             scaled_h = int(orig_h * scale)
 
-            # Scale face center coordinates
             s_face_cx = int(face_cx * scale)
             s_face_cy = int(face_cy * scale)
+            s_face_w = int(face_w_est * scale)
+            s_face_h = int(face_h_est * scale)
 
-            # Crop offset to center face in frame
+            # Crop offset to center face in 9:16 frame
             crop_x = max(0, min(s_face_cx - target_w // 2, scaled_w - target_w))
-            crop_y = max(0, min(s_face_cy - target_h // 3, scaled_h - target_h))  # face at 1/3 from top
+            crop_y = max(0, min(s_face_cy - target_h // 3, scaled_h - target_h))
 
-            # IMTalker output is 512x512 - determine overlay size
-            # Scale the overlay to match the face size in the final frame
-            overlay_size = min(int(target_w * 0.95), 680)  # ~95% of width or 680px
+            # Face position in final cropped frame
+            face_in_frame_x = s_face_cx - crop_x
+            face_in_frame_y = s_face_cy - crop_y
 
-            # Overlay position (centered horizontally, face-aligned vertically)
-            overlay_x = (target_w - overlay_size) // 2
-            overlay_y = max(0, int(target_h * 0.08))  # 8% from top
+            # ── Determine overlay size based on face detection ──
+            # IMTalker output is 512x512 (cropped face with forehead/chin/neck)
+            if face_detected:
+                overlay_w = min(int(s_face_w * 1.4), target_w)
+                overlay_h = min(int(s_face_h * 1.3), int(target_h * 0.6))
+            else:
+                overlay_w = int(target_w * 0.65)
+                overlay_h = int(overlay_w * 1.1)
 
-            # Build ffmpeg filter for compositing:
-            # 1. Scale original portrait → fill 9:16, crop to exact size
-            # 2. Scale IMTalker video → overlay size
-            # 3. Overlay animated face on portrait background
-            # 4. Add audio from IMTalker output
+            # Ensure minimum size and even dimensions
+            overlay_w = max(overlay_w, 256)
+            overlay_h = max(overlay_h, 256)
+            overlay_w = overlay_w + (overlay_w % 2)
+            overlay_h = overlay_h + (overlay_h % 2)
+
+            # Overlay position: center on detected face
+            overlay_x = max(0, min(face_in_frame_x - overlay_w // 2, target_w - overlay_w))
+            overlay_y = max(0, min(face_in_frame_y - int(overlay_h * 0.4), target_h - overlay_h))
+
+            # ── Generate elliptical alpha mask with feathering ──
+            feather_px = max(30, int(min(overlay_w, overlay_h) * 0.15))
+            mask_path = os.path.join(job_dir, "blend_mask.png")
+
+            mask_arr = np.zeros((overlay_h, overlay_w), dtype=np.float32)
+            cy, cx = overlay_h // 2, overlay_w // 2
+            ry = max((overlay_h // 2) - feather_px, overlay_h // 4)
+            rx = max((overlay_w // 2) - feather_px, overlay_w // 4)
+
+            y_coords, x_coords = np.ogrid[:overlay_h, :overlay_w]
+            dist = np.sqrt(
+                ((x_coords - cx) / max(rx, 1)) ** 2 +
+                ((y_coords - cy) / max(ry, 1)) ** 2
+            )
+            mask_arr = np.clip(
+                1.0 - (dist - 1.0) * (min(rx, ry) / max(feather_px, 1)),
+                0.0, 1.0
+            )
+            mask_arr = mask_arr ** 0.7  # gamma < 1 = wider opaque center
+            mask_img = Image.fromarray((mask_arr * 255).astype(np.uint8), mode='L')
+            mask_img.save(mask_path)
+
+            logger.info(
+                f"[IMT {req.job_id}] Overlay: {overlay_w}x{overlay_h} at ({overlay_x},{overlay_y}), "
+                f"feather={feather_px}px, face_detected={face_detected}"
+            )
+
+            # ── Build ffmpeg filter: background + masked face overlay ──
             filter_complex = (
                 f"[1:v]scale={scaled_w}:{scaled_h},"
                 f"crop={target_w}:{target_h}:{crop_x}:{crop_y}[bg];"
-                f"[0:v]scale={overlay_size}:{overlay_size}[face];"
-                f"[bg][face]overlay={overlay_x}:{overlay_y}[out]"
+                f"[0:v]scale={overlay_w}:{overlay_h}:flags=lanczos[face_scaled];"
+                f"[2:v]scale={overlay_w}:{overlay_h}:flags=bilinear[mask_scaled];"
+                f"[face_scaled][mask_scaled]alphamerge[face_masked];"
+                f"[bg][face_masked]overlay={overlay_x}:{overlay_y}:format=auto[out]"
             )
 
             composite_cmd = [
                 "ffmpeg", "-y",
                 "-i", src_video,                    # input 0: IMTalker animated face
                 "-loop", "1", "-i", portrait_path,  # input 1: original portrait image
+                "-loop", "1", "-i", mask_path,      # input 2: elliptical alpha mask
                 "-filter_complex", filter_complex,
                 "-map", "[out]",
-                "-map", "0:a?",                      # keep audio from IMTalker
-                "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+                "-map", "0:a?",
+                "-c:v", "libx264", "-preset", "fast", "-crf", "18",
                 "-c:a", "aac", "-b:a", "128k",
                 "-shortest",
                 "-pix_fmt", "yuv420p",
                 final_output,
             ]
-
-            logger.info(f"[IMT {req.job_id}] Compositing: {target_w}x{target_h}, overlay {overlay_size}x{overlay_size} at ({overlay_x},{overlay_y})")
 
             comp_proc = await asyncio.create_subprocess_exec(
                 *composite_cmd,
@@ -1905,12 +1943,47 @@ async def _run_imtalker_job(req: IMTalkerRequest):
             )
             comp_out, _ = await comp_proc.communicate()
             if comp_proc.returncode != 0:
-                logger.warning(f"[IMT {req.job_id}] Composite failed, falling back to raw output")
-                logger.warning(f"[IMT {req.job_id}] ffmpeg output: {comp_out.decode('utf-8', errors='replace')[-500:]}")
-                import shutil
-                shutil.move(src_video, final_output)
+                comp_log = comp_out.decode('utf-8', errors='replace')[-800:]
+                logger.warning(f"[IMT {req.job_id}] Feathered composite failed: {comp_log}")
+
+                # Fallback: simple overlay without mask (still better positioning)
+                filter_simple = (
+                    f"[1:v]scale={scaled_w}:{scaled_h},"
+                    f"crop={target_w}:{target_h}:{crop_x}:{crop_y}[bg];"
+                    f"[0:v]scale={overlay_w}:{overlay_h}:flags=lanczos[face];"
+                    f"[bg][face]overlay={overlay_x}:{overlay_y}[out]"
+                )
+                fallback_cmd = [
+                    "ffmpeg", "-y",
+                    "-i", src_video,
+                    "-loop", "1", "-i", portrait_path,
+                    "-filter_complex", filter_simple,
+                    "-map", "[out]",
+                    "-map", "0:a?",
+                    "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+                    "-c:a", "aac", "-b:a", "128k",
+                    "-shortest", "-pix_fmt", "yuv420p",
+                    final_output,
+                ]
+                fb_proc = await asyncio.create_subprocess_exec(
+                    *fallback_cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                    cwd=job_dir,
+                )
+                fb_out, _ = await fb_proc.communicate()
+                if fb_proc.returncode != 0:
+                    logger.warning(f"[IMT {req.job_id}] Simple overlay also failed, using raw output")
+                    import shutil
+                    shutil.move(src_video, final_output)
+                else:
+                    logger.info(f"[IMT {req.job_id}] Simple overlay fallback success: {target_w}x{target_h}")
             else:
-                logger.info(f"[IMT {req.job_id}] Composite success: {target_w}x{target_h}")
+                logger.info(f"[IMT {req.job_id}] Feathered composite success: {target_w}x{target_h}")
+
+            # Clean up mask
+            if os.path.exists(mask_path):
+                os.remove(mask_path)
 
         except Exception as e:
             logger.warning(f"[IMT {req.job_id}] Composite failed ({e}), using raw 512x512 output")

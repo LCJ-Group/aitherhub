@@ -642,14 +642,14 @@ class IMTalkerGenerateRequest(BaseModel):
         description="Custom job ID. If not provided, one will be auto-generated."
     )
     a_cfg_scale: float = Field(
-        2.0, ge=0.5, le=5.0,
+        1.5, ge=0.5, le=5.0,
         description="Audio classifier-free guidance scale. "
-        "Higher values = more expressive animation. Default 2.0."
+        "1.5 = natural, 2.0+ = exaggerated. Default 1.5."
     )
     nfe: int = Field(
-        10, ge=5, le=30,
+        32, ge=5, le=64,
         description="Number of function evaluations for ODE solver. "
-        "Higher = better quality but slower. Default 10."
+        "Higher = better quality but slower. Default 32."
     )
     crop: bool = Field(
         True,
@@ -704,11 +704,11 @@ class IMTalkerTextGenerateRequest(BaseModel):
         description="Custom job ID. If not provided, one will be auto-generated."
     )
     a_cfg_scale: float = Field(
-        2.0, ge=0.5, le=5.0,
-        description="Audio CFG scale. Higher = more expressive."
+        1.5, ge=0.5, le=5.0,
+        description="Audio CFG scale. 1.5 = natural, 2.0+ = exaggerated."
     )
     nfe: int = Field(
-        10, ge=5, le=30,
+        32, ge=5, le=64,
         description="ODE solver steps. Higher = better quality but slower."
     )
     crop: bool = Field(
