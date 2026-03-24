@@ -1209,12 +1209,64 @@ async def debug_run_facefusion(
     return result
 
 
-# ── MuseTalk Digital Human ─────────────────────────────────────────────────
+# ── MuseTalk Digital Human (v2 with MuseTalkEngine + Avatar Caching) ──────────
+
+import hashlib
 
 MUSETALK_DIR = os.getenv("MUSETALK_DIR", "/workspace/MuseTalk")
 MUSETALK_MODELS_DIR = os.path.join(MUSETALK_DIR, "models")
 
-# MuseTalk model cache (lazy loaded)
+# MuseTalkEngine singleton (from live_engine.py)
+_musetalk_engine = None
+_musetalk_engine_lock = asyncio.Lock() if hasattr(asyncio, 'Lock') else None
+
+# Avatar cache: portrait_hash -> True (avatar already prepared)
+_avatar_cache: dict = {}  # portrait_hash -> {"prepared": True, "portrait_path": str}
+
+
+def _get_portrait_hash(portrait_path: str) -> str:
+    """Compute a hash of the portrait file for caching."""
+    h = hashlib.md5()
+    with open(portrait_path, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _get_or_create_engine():
+    """Get or create the MuseTalkEngine singleton."""
+    global _musetalk_engine
+    if _musetalk_engine is not None and _musetalk_engine.models_loaded:
+        return _musetalk_engine
+
+    # Import from live_engine.py (should be in /workspace/ alongside worker_api.py)
+    engine_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "live_engine.py")
+    if not os.path.exists(engine_path):
+        engine_path = "/workspace/live_engine.py"
+
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("live_engine", engine_path)
+    live_engine_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(live_engine_mod)
+
+    config = live_engine_mod.EngineConfig(
+        version="v15",
+        bbox_shift=0,
+        extra_margin=10,
+        batch_size=20,
+        parsing_mode="jaw",
+        left_cheek_width=90,
+        right_cheek_width=90,
+        audio_padding_length_left=2,
+        audio_padding_length_right=2,
+    )
+    _musetalk_engine = live_engine_mod.MuseTalkEngine(config)
+    _musetalk_engine.load_models()
+    logger.info("MuseTalkEngine singleton created and models loaded")
+    return _musetalk_engine
+
+
+# Legacy model cache (kept for backward compatibility with load_musetalk_models)
 musetalk_models = {
     "loaded": False,
     "vae": None,
@@ -1227,74 +1279,40 @@ musetalk_models = {
     "timesteps": None,
 }
 
+
 def load_musetalk_models():
-    """Lazy-load MuseTalk v1.5 models into GPU memory."""
+    """Lazy-load MuseTalk v1.5 models via MuseTalkEngine singleton."""
     if musetalk_models["loaded"]:
         return True
-    # MuseTalk uses relative paths internally (e.g. 'models/sd-vae'),
-    # so we must chdir to MUSETALK_DIR before loading.
-    original_cwd = os.getcwd()
     try:
-        os.chdir(MUSETALK_DIR)
-        import torch
-        if MUSETALK_DIR not in sys.path:
-            sys.path.insert(0, MUSETALK_DIR)
-        from musetalk.utils.utils import load_all_model
-        from musetalk.utils.face_parsing import FaceParsing
-        from musetalk.utils.audio_processor import AudioProcessor
-        from transformers import WhisperModel
-
-        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
-        unet_model_path = os.path.join(MUSETALK_MODELS_DIR, "musetalkV15", "unet.pth")
-        unet_config = os.path.join(MUSETALK_MODELS_DIR, "musetalkV15", "musetalk.json")
-        whisper_dir = os.path.join(MUSETALK_MODELS_DIR, "whisper")
-
-        vae, unet, pe = load_all_model(
-            unet_model_path=unet_model_path,
-            vae_type="sd-vae",
-            unet_config=unet_config,
-            device=device,
-        )
-
-        # Half precision for speed
-        pe = pe.half().to(device)
-        vae.vae = vae.vae.half().to(device)
-        unet.model = unet.model.half().to(device)
-
-        audio_processor = AudioProcessor(feature_extractor_path=whisper_dir)
-        weight_dtype = unet.model.dtype
-        whisper = WhisperModel.from_pretrained(whisper_dir)
-        whisper = whisper.to(device=device, dtype=weight_dtype).eval()
-        whisper.requires_grad_(False)
-
-        fp = FaceParsing()
-
+        engine = _get_or_create_engine()
+        # Populate legacy dict for any code that still references it
         musetalk_models.update({
             "loaded": True,
-            "vae": vae,
-            "unet": unet,
-            "pe": pe,
-            "whisper": whisper,
-            "audio_processor": audio_processor,
-            "fp": fp,
-            "device": device,
-            "timesteps": torch.tensor([0], device=device),
+            "vae": engine.vae,
+            "unet": engine.unet,
+            "pe": engine.pe,
+            "whisper": engine.whisper,
+            "audio_processor": engine.audio_processor,
+            "fp": engine.fp,
+            "device": engine.device,
+            "timesteps": engine.timesteps,
         })
-        logger.info("MuseTalk v1.5 models loaded successfully")
+        logger.info("MuseTalk v1.5 models loaded successfully (via MuseTalkEngine)")
         return True
     except Exception as e:
         logger.error(f"Failed to load MuseTalk models: {e}")
+        import traceback
+        traceback.print_exc()
         return False
-    finally:
-        os.chdir(original_cwd)
 
 
 class DigitalHumanRequest(BaseModel):
     """Request to generate a digital human video."""
     job_id: str = Field(..., description="Unique job ID")
-    portrait_url: str = Field(..., description="URL of portrait image (front-facing photo)")
+    portrait_url: str = Field(..., description="URL of portrait image/video (front-facing)")
     audio_url: str = Field(..., description="URL of audio file (WAV/MP3)")
+    portrait_type: str = Field(default="image", description="'image' or 'video'")
     bbox_shift: int = Field(default=0, description="Vertical shift for face bounding box")
     extra_margin: int = Field(default=10, description="Extra margin below face for v1.5")
     batch_size: int = Field(default=16, description="Inference batch size")
@@ -1307,7 +1325,7 @@ digital_human_jobs: dict = {}  # job_id -> {status, progress, output_path, error
 
 @app.post("/api/digital-human/generate", dependencies=[Depends(verify_api_key)])
 async def digital_human_generate(req: DigitalHumanRequest):
-    """Start a digital human video generation job using MuseTalk."""
+    """Start a digital human video generation job using MuseTalk v2 engine."""
     if req.job_id in digital_human_jobs:
         return {"error": f"Job {req.job_id} already exists"}
 
@@ -1356,8 +1374,21 @@ async def digital_human_download(job_id: str):
     )
 
 
+@app.get("/api/digital-human/health", dependencies=[Depends(verify_api_key)])
+async def digital_human_health():
+    """Health check for MuseTalk engine."""
+    engine = _musetalk_engine
+    return {
+        "status": "ok",
+        "engine": "musetalk_v2",
+        "models_loaded": engine.models_loaded if engine else False,
+        "avatar_cached": bool(_avatar_cache),
+        "active_jobs": len([j for j in digital_human_jobs.values() if j["status"] in ("queued", "processing")]),
+    }
+
+
 async def _run_digital_human_job(req: DigitalHumanRequest):
-    """Background task to run MuseTalk inference."""
+    """Background task to run MuseTalk v2 inference with avatar caching."""
     import httpx
     job = digital_human_jobs[req.job_id]
     job["status"] = "processing"
@@ -1369,22 +1400,45 @@ async def _run_digital_human_job(req: DigitalHumanRequest):
     try:
         # Step 1: Download portrait and audio
         logger.info(f"[DH {req.job_id}] Downloading portrait and audio...")
-        async with httpx.AsyncClient(timeout=60) as client:
-            # Download portrait
-            r = await client.get(req.portrait_url)
-            r.raise_for_status()
-            ext = ".png" if "png" in r.headers.get("content-type", "") else ".jpg"
-            portrait_path = os.path.join(job_dir, f"portrait{ext}")
-            with open(portrait_path, "wb") as f:
-                f.write(r.content)
 
-            # Download audio
-            r = await client.get(req.audio_url)
-            r.raise_for_status()
-            audio_ext = ".wav" if "wav" in r.headers.get("content-type", "") else ".mp3"
-            audio_path = os.path.join(job_dir, f"audio{audio_ext}")
-            with open(audio_path, "wb") as f:
-                f.write(r.content)
+        # Handle file:// URLs for local testing
+        if req.portrait_url.startswith('file://'):
+            import shutil as _shutil
+            _src = req.portrait_url[7:]
+            _ext = os.path.splitext(_src)[1] or '.mp4'
+            portrait_path = os.path.join(job_dir, 'portrait' + _ext)
+            _shutil.copy2(_src, portrait_path)
+        else:
+            async with httpx.AsyncClient(timeout=60) as client:
+                r = await client.get(req.portrait_url)
+                r.raise_for_status()
+                ct = r.headers.get("content-type", "").lower()
+                url_lower = req.portrait_url.split("?")[0].lower()
+                if any(v in ct for v in ["video", "quicktime", "mp4", "mov"]) or url_lower.endswith((".mov", ".mp4", ".avi", ".mkv")):
+                    ext = ".mov" if (url_lower.endswith(".mov") or "quicktime" in ct) else ".mp4"
+                elif "png" in ct or url_lower.endswith(".png"):
+                    ext = ".png"
+                else:
+                    ext = ".jpg"
+                portrait_path = os.path.join(job_dir, f"portrait{ext}")
+                with open(portrait_path, "wb") as f:
+                    f.write(r.content)
+
+        # Download audio
+        if req.audio_url.startswith('file://'):
+            import shutil as _shutil
+            _src = req.audio_url[7:]
+            audio_ext = os.path.splitext(_src)[1] or '.wav'
+            audio_path = os.path.join(job_dir, 'audio' + audio_ext)
+            _shutil.copy2(_src, audio_path)
+        else:
+            async with httpx.AsyncClient(timeout=60) as client:
+                r = await client.get(req.audio_url)
+                r.raise_for_status()
+                audio_ext = ".wav" if "wav" in r.headers.get("content-type", "") else ".mp3"
+                audio_path = os.path.join(job_dir, f"audio{audio_ext}")
+                with open(audio_path, "wb") as f:
+                    f.write(r.content)
 
         job["progress"] = 10
 
@@ -1400,31 +1454,42 @@ async def _run_digital_human_job(req: DigitalHumanRequest):
 
         job["progress"] = 15
 
-        # Step 2: Load MuseTalk models (lazy)
-        logger.info(f"[DH {req.job_id}] Loading MuseTalk models...")
+        # Step 2: Load MuseTalk engine (lazy singleton)
+        logger.info(f"[DH {req.job_id}] Loading MuseTalk engine...")
         loop = asyncio.get_event_loop()
-        loaded = await loop.run_in_executor(None, load_musetalk_models)
-        if not loaded:
-            raise RuntimeError("Failed to load MuseTalk models")
-        job["progress"] = 25
+        engine = await loop.run_in_executor(None, _get_or_create_engine)
+        job["progress"] = 20
 
-        # Step 3: Run MuseTalk inference in a thread
-        logger.info(f"[DH {req.job_id}] Running MuseTalk inference...")
+        # Step 3: Prepare avatar (with caching)
+        portrait_hash = await loop.run_in_executor(None, _get_portrait_hash, portrait_path)
+        logger.info(f"[DH {req.job_id}] Portrait hash: {portrait_hash}")
+
+        if portrait_hash in _avatar_cache:
+            logger.info(f"[DH {req.job_id}] Avatar cache HIT - skipping preparation")
+        else:
+            logger.info(f"[DH {req.job_id}] Avatar cache MISS - preparing avatar...")
+            success = await loop.run_in_executor(None, engine.prepare_avatar, portrait_path)
+            if not success:
+                raise RuntimeError("Failed to prepare avatar from portrait")
+            _avatar_cache[portrait_hash] = {"prepared": True, "portrait_path": portrait_path}
+            logger.info(f"[DH {req.job_id}] Avatar prepared and cached")
+
+        job["progress"] = 35
+
+        # Step 4: Generate lip-sync frames
+        logger.info(f"[DH {req.job_id}] Generating lip-sync frames...")
         output_path = os.path.join(job_dir, f"output_{req.job_id}.mp4")
 
-        def run_musetalk_inference():
-            return _musetalk_inference(
-                portrait_path=portrait_path,
+        def run_lipsync():
+            return _musetalk_inference_v2(
+                engine=engine,
                 audio_path=audio_path,
                 output_path=output_path,
                 job_id=req.job_id,
-                bbox_shift=req.bbox_shift,
-                extra_margin=req.extra_margin,
-                batch_size=req.batch_size,
                 fps=req.output_fps,
             )
 
-        result_path = await loop.run_in_executor(None, run_musetalk_inference)
+        result_path = await loop.run_in_executor(None, run_lipsync)
 
         if result_path and os.path.exists(result_path):
             job["status"] = "completed"
@@ -1436,236 +1501,94 @@ async def _run_digital_human_job(req: DigitalHumanRequest):
 
     except Exception as e:
         logger.error(f"[DH {req.job_id}] Error: {e}")
+        import traceback
+        traceback.print_exc()
         job["status"] = "error"
         job["error"] = str(e)
     finally:
         # Clean up input files but keep output
-        for f in ["portrait.png", "portrait.jpg", "audio.wav", "audio.mp3"]:
+        for f in ["portrait.png", "portrait.jpg", "portrait.mov", "portrait.mp4",
+                  "audio.wav", "audio.mp3"]:
             p = os.path.join(job_dir, f)
             if os.path.exists(p):
-                os.remove(p)
+                try:
+                    os.remove(p)
+                except Exception:
+                    pass
 
 
-def _musetalk_inference(
-    portrait_path: str,
+def _musetalk_inference_v2(
+    engine,
     audio_path: str,
     output_path: str,
     job_id: str,
-    bbox_shift: int = 0,
-    extra_margin: int = 10,
-    batch_size: int = 16,
     fps: int = 25,
 ) -> str:
-    """Run MuseTalk v1.5 inference synchronously (called from thread pool)."""
-    import torch
-    import cv2
-    import copy
-    import numpy as np
-    import pickle
+    """Run MuseTalk v2 inference using MuseTalkEngine with pre-cached avatar.
+
+    This is much faster than the original _musetalk_inference because:
+    1. Avatar frames, landmarks, latents, and masks are pre-computed and cached
+    2. Uses get_image_blending (mask-based) for higher quality compositing
+    3. Only audio processing + neural inference + compositing runs per request
+    """
     import shutil
 
-    sys.path.insert(0, MUSETALK_DIR)
-    from musetalk.utils.utils import datagen, get_video_fps, get_file_type
-    from musetalk.utils.preprocessing import get_landmark_and_bbox, read_imgs, coord_placeholder
-    from musetalk.utils.blending import get_image
-
-    m = musetalk_models
-    device = m["device"]
-    vae, unet, pe = m["vae"], m["unet"], m["pe"]
-    whisper_model = m["whisper"]
-    audio_processor = m["audio_processor"]
-    fp = m["fp"]
-    timesteps = m["timesteps"]
-    weight_dtype = unet.model.dtype
-
     job = digital_human_jobs.get(job_id, {})
-    job_dir = os.path.dirname(output_path)
 
-    # Determine input type (image or video)
-    file_type = get_file_type(portrait_path)
-    logger.info(f"[DH {job_id}] Input type: {file_type}")
-
-    # Prepare frames from portrait
-    input_img_dir = os.path.join(job_dir, "input_frames")
-    os.makedirs(input_img_dir, exist_ok=True)
-
-    if file_type == "image":
-        # Single image: duplicate to create a short loop
-        img = cv2.imread(portrait_path)
-        if img is None:
-            raise RuntimeError(f"Failed to read portrait image: {portrait_path}")
-        # Save as single frame
-        cv2.imwrite(os.path.join(input_img_dir, "00000000.png"), img)
-        input_img_list = sorted([
-            os.path.join(input_img_dir, f) for f in os.listdir(input_img_dir)
-            if f.endswith(".png")
-        ])
-    elif file_type == "video":
-        # Extract frames from video
-        cap = cv2.VideoCapture(portrait_path)
-        idx = 0
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            cv2.imwrite(os.path.join(input_img_dir, f"{idx:08d}.png"), frame)
-            idx += 1
-        cap.release()
-        input_img_list = sorted([
-            os.path.join(input_img_dir, f) for f in os.listdir(input_img_dir)
-            if f.endswith(".png")
-        ])
-    else:
-        raise RuntimeError(f"Unsupported input type: {file_type}")
-
-    if not input_img_list:
-        raise RuntimeError("No input frames found")
-
-    logger.info(f"[DH {job_id}] Input frames: {len(input_img_list)}")
-    job["progress"] = 30
-
-    # Extract audio features
-    logger.info(f"[DH {job_id}] Extracting audio features...")
-    whisper_input_features, librosa_length = audio_processor.get_audio_feature(
-        audio_path,
-        weight_dtype=weight_dtype,
-    )
-    if whisper_input_features is None:
-        raise RuntimeError(f"Failed to extract audio features from {audio_path}")
-    logger.info(f"[DH {job_id}] Audio features extracted, librosa_length={librosa_length}")
-
-    whisper_chunks = audio_processor.get_whisper_chunk(
-        whisper_input_features=whisper_input_features,
-        device=device,
-        weight_dtype=weight_dtype,
-        whisper=whisper_model,
-        librosa_length=librosa_length,
-        fps=fps,
-    )
-    logger.info(f"[DH {job_id}] Audio chunks: {len(whisper_chunks)}")
+    logger.info(f"[DH {job_id}] Running MuseTalk v2 inference (cached avatar)...")
     job["progress"] = 40
 
-    # Get face landmarks and bounding boxes
-    logger.info(f"[DH {job_id}] Extracting face landmarks...")
-    coord_list, frame_list = get_landmark_and_bbox(input_img_list, bbox_shift)
-    job["progress"] = 50
+    # Generate lip-sync frames using the engine (avatar already prepared)
+    frames = engine.generate_lipsync_frames(audio_path)
 
-    # Process input latents
-    input_latent_list = []
-    for bbox, frame in zip(coord_list, frame_list):
-        if bbox == coord_placeholder:
-            continue
-        x1, y1, x2, y2 = bbox
-        y2 = min(y2 + extra_margin, frame.shape[0])
-        crop_frame = frame[y1:y2, x1:x2]
-        crop_frame = cv2.resize(crop_frame, (256, 256), interpolation=cv2.INTER_LANCZOS4)
-        latents = vae.get_latents_for_unet(crop_frame)
-        input_latent_list.append(latents)
+    if not frames:
+        raise RuntimeError("No lip-sync frames generated")
 
-    if not input_latent_list:
-        raise RuntimeError("No valid face detected in portrait")
+    logger.info(f"[DH {job_id}] Generated {len(frames)} lip-sync frames")
+    job["progress"] = 80
 
-    # Create cycled lists for looping
-    frame_list_cycle = frame_list + frame_list[::-1]
-    coord_list_cycle = coord_list + coord_list[::-1]
-    input_latent_list_cycle = input_latent_list + input_latent_list[::-1]
+    # Encode video with ffmpeg (pipe frames directly, no temp images)
+    job_dir = os.path.dirname(output_path)
+    temp_vid = os.path.join(job_dir, "temp_video.mp4")
 
-    job["progress"] = 55
+    h, w = frames[0].shape[:2]
+    logger.info(f"[DH {job_id}] Encoding video ({w}x{h}, {fps}fps, {len(frames)} frames)...")
 
-    # Batch inference
-    logger.info(f"[DH {job_id}] Running inference ({len(whisper_chunks)} chunks, batch_size={batch_size})...")
-    video_num = len(whisper_chunks)
-    gen = datagen(
-        whisper_chunks=whisper_chunks,
-        vae_encode_latents=input_latent_list_cycle,
-        batch_size=batch_size,
-        delay_frame=0,
-        device=device,
+    # Use ffmpeg pipe for faster encoding (no disk I/O for frames)
+    import subprocess
+    ffmpeg_proc = subprocess.Popen(
+        [
+            "ffmpeg", "-y", "-v", "warning",
+            "-f", "rawvideo", "-pix_fmt", "bgr24",
+            "-s", f"{w}x{h}", "-r", str(fps),
+            "-i", "pipe:0",
+            "-vcodec", "libx264", "-pix_fmt", "yuv420p",
+            "-crf", "18", "-preset", "fast",
+            temp_vid,
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
     )
 
-    res_frame_list = []
-    total_batches = int(np.ceil(float(video_num) / batch_size))
-
-    with torch.no_grad():
-        for i, (whisper_batch, latent_batch) in enumerate(gen):
-            audio_feature_batch = pe(whisper_batch)
-            latent_batch = latent_batch.to(dtype=unet.model.dtype)
-            pred_latents = unet.model(
-                latent_batch, timesteps, encoder_hidden_states=audio_feature_batch
-            ).sample
-            recon = vae.decode_latents(pred_latents)
-            for res_frame in recon:
-                res_frame_list.append(res_frame)
-
-            # Update progress (55% -> 85%)
-            progress = 55 + int(30 * (i + 1) / total_batches)
-            job["progress"] = min(progress, 85)
-
-    logger.info(f"[DH {job_id}] Generated {len(res_frame_list)} frames")
-    job["progress"] = 85
-
-    # Compose output frames
-    logger.info(f"[DH {job_id}] Composing output frames...")
-    result_img_dir = os.path.join(job_dir, "result_frames")
-    os.makedirs(result_img_dir, exist_ok=True)
-
-    compose_errors = 0
-    for i, res_frame in enumerate(res_frame_list):
-        bbox = coord_list_cycle[i % len(coord_list_cycle)]
-        ori_frame = copy.deepcopy(frame_list_cycle[i % len(frame_list_cycle)])
-        x1, y1, x2, y2 = bbox
-
-        # Skip placeholder bboxes
-        if bbox == coord_placeholder:
-            cv2.imwrite(os.path.join(result_img_dir, f"{i:08d}.png"), ori_frame)
-            continue
-
-        y2 = min(y2 + extra_margin, ori_frame.shape[0])
+    for frame in frames:
         try:
-            res_frame = cv2.resize(res_frame.astype(np.uint8), (x2 - x1, y2 - y1))
-        except Exception:
-            cv2.imwrite(os.path.join(result_img_dir, f"{i:08d}.png"), ori_frame)
-            compose_errors += 1
-            continue
+            ffmpeg_proc.stdin.write(frame.tobytes())
+        except BrokenPipeError:
+            break
 
-        try:
-            combine_frame = get_image(ori_frame, res_frame, [x1, y1, x2, y2], fp=fp)
-            if combine_frame is None:
-                raise ValueError("get_image returned None")
-            cv2.imwrite(os.path.join(result_img_dir, f"{i:08d}.png"), combine_frame)
-        except Exception as e:
-            # Fallback: paste face directly without blending mask
-            try:
-                ori_frame[y1:y2, x1:x2] = res_frame
-                cv2.imwrite(os.path.join(result_img_dir, f"{i:08d}.png"), ori_frame)
-            except Exception:
-                cv2.imwrite(os.path.join(result_img_dir, f"{i:08d}.png"), ori_frame)
-            compose_errors += 1
-
-    if compose_errors > 0:
-        logger.warning(f"[DH {job_id}] {compose_errors}/{len(res_frame_list)} frames used fallback compositing")
+    ffmpeg_proc.stdin.close()
+    ffmpeg_proc.wait()
 
     job["progress"] = 90
 
-    # Encode video with ffmpeg
-    logger.info(f"[DH {job_id}] Encoding video...")
-    temp_vid = os.path.join(job_dir, "temp_video.mp4")
-    ffmpeg_cmd = (
-        f"ffmpeg -y -v warning -r {fps} -f image2 "
-        f"-i {result_img_dir}/%08d.png "
-        f"-vcodec libx264 -vf format=yuv420p -crf 18 {temp_vid}"
-    )
-    os.system(ffmpeg_cmd)
-
     # Merge audio
-    merge_cmd = f"ffmpeg -y -v warning -i {audio_path} -i {temp_vid} -c:v copy -c:a aac {output_path}"
+    merge_cmd = f"ffmpeg -y -v warning -i {temp_vid} -i {audio_path} -c:v copy -c:a aac -shortest {output_path}"
     os.system(merge_cmd)
 
     job["progress"] = 95
 
-    # Clean up temp files
-    shutil.rmtree(input_img_dir, ignore_errors=True)
-    shutil.rmtree(result_img_dir, ignore_errors=True)
+    # Clean up
     if os.path.exists(temp_vid):
         os.remove(temp_vid)
 
