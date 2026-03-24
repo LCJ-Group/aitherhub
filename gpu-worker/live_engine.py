@@ -118,7 +118,11 @@ class MuseTalkEngine:
         """Load all MuseTalk models into GPU memory."""
         logger.info("Loading MuseTalk models...")
 
+        # MuseTalk uses relative paths for models, so we need to chdir
+        original_cwd = os.getcwd()
+        os.chdir(MUSETALK_DIR)
         sys.path.insert(0, MUSETALK_DIR)
+
         from musetalk.utils.utils import load_all_model
         from musetalk.utils.face_parsing import FaceParsing
         from musetalk.utils.audio_processor import AudioProcessor
@@ -154,6 +158,7 @@ class MuseTalkEngine:
             self.fp = FaceParsing()
 
         self.models_loaded = True
+        os.chdir(original_cwd)
         logger.info("MuseTalk models loaded successfully.")
 
     def prepare_avatar(self, video_path: str) -> bool:
