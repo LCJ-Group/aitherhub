@@ -114,6 +114,22 @@ pip install --quiet opencv-python-headless einops face_alignment \
 
 echo "  Done."
 
+# ── IMTalker Dependencies ──────────────────────────────────────────────────
+
+echo "[4b/9] Installing IMTalker dependencies..."
+cd "$WORKSPACE"
+
+if [ -d "IMTalker" ]; then
+    # Install IMTalker Python dependencies from requirement.txt
+    echo "  Installing IMTalker Python dependencies..."
+    pip install --quiet torchdiffeq==0.2.5 timm pytorch-lightning \
+        flow-vis av==12.0.0 librosa \
+        2>/dev/null || true
+    echo "  Done."
+else
+    echo "  [skip] IMTalker directory not found"
+fi
+
 # ── MuseTalk Runtime Patches ────────────────────────────────────────────────
 
 echo "[5/9] Applying MuseTalk runtime patches..."
@@ -200,6 +216,7 @@ echo ""
 echo "  Features:"
 echo "    - FaceFusion (Mode B: Real-time face swap)"
 echo "    - MuseTalk v1.5 (Mode A: Digital human lip-sync)"
+echo "    - IMTalker (Premium: Full facial animation)"
 echo ""
 echo "  Quick Test:"
 echo "    curl -H 'X-Api-Key: ${WORKER_API_KEY}' http://localhost:${WORKER_PORT}/api/health"
@@ -213,6 +230,7 @@ export FACEFUSION_DIR="$WORKSPACE/facefusion"
 export SOURCE_FACE_DIR="$WORKSPACE/source_faces"
 export TEMP_DIR="$WORKSPACE/tmp"
 export MUSETALK_DIR="$WORKSPACE/MuseTalk"
+export IMTALKER_DIR="$WORKSPACE/IMTalker"
 
 cd "$WORKSPACE"
 python3 worker_api.py
