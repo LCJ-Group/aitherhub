@@ -113,6 +113,9 @@ class SpeakRequest(BaseModel):
     audio_path: Optional[str] = Field(None, description="Local path to audio file")
     voice_id: Optional[str] = Field(None, description="TTS voice ID")
     language: str = Field("ja", description="Language for TTS")
+    openai_api_key: Optional[str] = Field(None, description="OpenAI API key (overrides env)")
+    elevenlabs_api_key: Optional[str] = Field(None, description="ElevenLabs API key (overrides env)")
+    tts_provider: Optional[str] = Field(None, description="TTS provider: openai or elevenlabs")
 
 
 class RespondRequest(BaseModel):
@@ -124,23 +127,32 @@ class RespondRequest(BaseModel):
     product_info: Optional[str] = Field(None, description="Current product information")
     voice_id: Optional[str] = Field(None, description="TTS voice ID")
     language: str = Field("ja", description="Language for response")
+    openai_api_key: Optional[str] = Field(None, description="OpenAI API key (overrides env)")
+    elevenlabs_api_key: Optional[str] = Field(None, description="ElevenLabs API key (overrides env)")
+    tts_provider: Optional[str] = Field(None, description="TTS provider: openai or elevenlabs")
 
 
 class TestVideoRequest(BaseModel):
     audio_path: Optional[str] = Field(None, description="Local path to audio file")
     audio_url: Optional[str] = Field(None, description="URL to audio file")
     text: Optional[str] = Field(None, description="Text to speak (TTS)")
+    openai_api_key: Optional[str] = Field(None, description="OpenAI API key (overrides env)")
+    elevenlabs_api_key: Optional[str] = Field(None, description="ElevenLabs API key (overrides env)")
+    tts_provider: Optional[str] = Field(None, description="TTS provider: openai or elevenlabs")
 
 
 # ─── TTS Functions ───────────────────────────────────────────────────────────
 
-async def text_to_speech_openai(text: str, output_path: str, voice: str = "alloy"):
+async def text_to_speech_openai(text: str, output_path: str, voice: str = "alloy", api_key: str = None):
     """Generate speech using OpenAI TTS API."""
+    key = api_key or OPENAI_API_KEY
+    if not key:
+        raise ValueError("OpenAI API key not configured")
     async with httpx.AsyncClient() as client:
         response = await client.post(
             f"{OPENAI_API_BASE}/audio/speech",
             headers={
-                "Authorization": f"Bearer {OPENAI_API_KEY}",
+                "Authorization": f"Bearer {key}",
                 "Content-Type": "application/json"
             },
             json={
@@ -157,14 +169,17 @@ async def text_to_speech_openai(text: str, output_path: str, voice: str = "alloy
     return output_path
 
 
-async def text_to_speech_elevenlabs(text: str, output_path: str, voice_id: str = None):
+async def text_to_speech_elevenlabs(text: str, output_path: str, voice_id: str = None, api_key: str = None):
     """Generate speech using ElevenLabs TTS API."""
     vid = voice_id or ELEVENLABS_VOICE_ID
+    key = api_key or ELEVENLABS_API_KEY
+    if not key:
+        raise ValueError("ElevenLabs API key not configured")
     async with httpx.AsyncClient() as client:
         response = await client.post(
             f"https://api.elevenlabs.io/v1/text-to-speech/{vid}",
             headers={
-                "xi-api-key": ELEVENLABS_API_KEY,
+                "xi-api-key": key,
                 "Content-Type": "application/json"
             },
             json={
@@ -183,20 +198,25 @@ async def text_to_speech_elevenlabs(text: str, output_path: str, voice_id: str =
     return output_path
 
 
-async def generate_tts(text: str, voice_id: str = None) -> str:
+async def generate_tts(text: str, voice_id: str = None, openai_key: str = None, elevenlabs_key: str = None, provider: str = None) -> str:
     """Generate TTS audio and return the file path."""
     output_path = os.path.join(tempfile.gettempdir(), f"tts_{uuid.uuid4().hex[:8]}.wav")
-    if TTS_PROVIDER == "elevenlabs" and ELEVENLABS_API_KEY:
-        await text_to_speech_elevenlabs(text, output_path, voice_id)
+    use_provider = provider or TTS_PROVIDER
+    el_key = elevenlabs_key or ELEVENLABS_API_KEY
+    if use_provider == "elevenlabs" and el_key:
+        await text_to_speech_elevenlabs(text, output_path, voice_id, el_key)
     else:
-        await text_to_speech_openai(text, output_path)
+        await text_to_speech_openai(text, output_path, api_key=openai_key)
     return output_path
 
 
 # ─── GPT Functions ───────────────────────────────────────────────────────────
 
-async def generate_response(comment: str, persona: str, product_info: str = None) -> str:
+async def generate_response(comment: str, persona: str, product_info: str = None, api_key: str = None) -> str:
     """Generate a conversational response using GPT."""
+    key = api_key or OPENAI_API_KEY
+    if not key:
+        raise ValueError("OpenAI API key not configured")
     messages = [{"role": "system", "content": persona}]
     if product_info:
         messages.append({
@@ -212,7 +232,7 @@ async def generate_response(comment: str, persona: str, product_info: str = None
         response = await client.post(
             f"{OPENAI_API_BASE}/chat/completions",
             headers={
-                "Authorization": f"Bearer {OPENAI_API_KEY}",
+                "Authorization": f"Bearer {key}",
                 "Content-Type": "application/json"
             },
             json={
@@ -300,7 +320,7 @@ async def test_video(req: TestVideoRequest, x_api_key: str = Header(None)):
     elif req.audio_url:
         audio_path = await download_audio(req.audio_url)
     elif req.text:
-        audio_path = await generate_tts(req.text)
+        audio_path = await generate_tts(req.text, openai_key=req.openai_api_key, elevenlabs_key=req.elevenlabs_api_key, provider=req.tts_provider)
     else:
         raise HTTPException(status_code=400, detail="Provide audio_path, audio_url, or text")
 
@@ -368,7 +388,7 @@ async def speak(req: SpeakRequest, x_api_key: str = Header(None)):
     elif req.audio_url:
         audio_path = await download_audio(req.audio_url)
     elif req.text:
-        audio_path = await generate_tts(req.text, req.voice_id)
+        audio_path = await generate_tts(req.text, req.voice_id, req.openai_api_key, req.elevenlabs_api_key, req.tts_provider)
     else:
         raise HTTPException(status_code=400, detail="Provide text, audio_url, or audio_path")
 
@@ -399,13 +419,13 @@ async def respond_to_comment(req: RespondRequest, x_api_key: str = Header(None))
 
     # Step 1: GPT response
     start = time.time()
-    response_text = await generate_response(req.comment, req.persona, req.product_info)
+    response_text = await generate_response(req.comment, req.persona, req.product_info, req.openai_api_key)
     gpt_time = time.time() - start
     logger.info(f"GPT response ({gpt_time:.1f}s): {response_text}")
 
     # Step 2: TTS
     start = time.time()
-    audio_path = await generate_tts(response_text, req.voice_id)
+    audio_path = await generate_tts(response_text, req.voice_id, req.openai_api_key, req.elevenlabs_api_key, req.tts_provider)
     tts_time = time.time() - start
     logger.info(f"TTS generation ({tts_time:.1f}s): {audio_path}")
 
