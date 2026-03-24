@@ -1609,17 +1609,41 @@ def _musetalk_inference(
     result_img_dir = os.path.join(job_dir, "result_frames")
     os.makedirs(result_img_dir, exist_ok=True)
 
+    compose_errors = 0
     for i, res_frame in enumerate(res_frame_list):
         bbox = coord_list_cycle[i % len(coord_list_cycle)]
         ori_frame = copy.deepcopy(frame_list_cycle[i % len(frame_list_cycle)])
         x1, y1, x2, y2 = bbox
+
+        # Skip placeholder bboxes
+        if bbox == coord_placeholder:
+            cv2.imwrite(os.path.join(result_img_dir, f"{i:08d}.png"), ori_frame)
+            continue
+
         y2 = min(y2 + extra_margin, ori_frame.shape[0])
         try:
             res_frame = cv2.resize(res_frame.astype(np.uint8), (x2 - x1, y2 - y1))
         except Exception:
+            cv2.imwrite(os.path.join(result_img_dir, f"{i:08d}.png"), ori_frame)
+            compose_errors += 1
             continue
-        combine_frame = get_image(ori_frame, res_frame, [x1, y1, x2, y2], fp=fp)
-        cv2.imwrite(os.path.join(result_img_dir, f"{i:08d}.png"), combine_frame)
+
+        try:
+            combine_frame = get_image(ori_frame, res_frame, [x1, y1, x2, y2], fp=fp)
+            if combine_frame is None:
+                raise ValueError("get_image returned None")
+            cv2.imwrite(os.path.join(result_img_dir, f"{i:08d}.png"), combine_frame)
+        except Exception as e:
+            # Fallback: paste face directly without blending mask
+            try:
+                ori_frame[y1:y2, x1:x2] = res_frame
+                cv2.imwrite(os.path.join(result_img_dir, f"{i:08d}.png"), ori_frame)
+            except Exception:
+                cv2.imwrite(os.path.join(result_img_dir, f"{i:08d}.png"), ori_frame)
+            compose_errors += 1
+
+    if compose_errors > 0:
+        logger.warning(f"[DH {job_id}] {compose_errors}/{len(res_frame_list)} frames used fallback compositing")
 
     job["progress"] = 90
 
