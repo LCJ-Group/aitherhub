@@ -62,6 +62,7 @@ const LiveStreamPanel = forwardRef(function LiveStreamPanel({
   onAutoPilotToggle,
   autoPilotActive = false,
   autoPilotState: externalAutoPilotState,
+  parentSelectedPersonaId,
 }, ref) {
   // ── Tab State ──
   const [activeTab, setActiveTab] = useState("products"); // products | comments | queue | autopilot
@@ -100,6 +101,13 @@ const LiveStreamPanel = forwardRef(function LiveStreamPanel({
   const [personas, setPersonas] = useState([]);
   const [selectedPersonaId, setSelectedPersonaId] = useState("");
   const [loadingPersonas, setLoadingPersonas] = useState(false);
+
+  // Sync persona selection from parent (AiLiveCreatorPage) if provided
+  useEffect(() => {
+    if (parentSelectedPersonaId !== undefined && parentSelectedPersonaId !== null) {
+      setSelectedPersonaId(parentSelectedPersonaId);
+    }
+  }, [parentSelectedPersonaId]);
 
   // ── Session ──
   const [isCreatingSession, setIsCreatingSession] = useState(false);

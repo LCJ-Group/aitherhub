@@ -993,6 +993,7 @@ export default function AiLiveCreatorPage() {
                 onQueueUpdate={(queue) => setPreviewVideoQueue(queue)}
                 onCommentHistoryUpdate={(comments) => setPreviewCommentHistory(comments)}
                 onProductsUpdate={(products) => setPreviewProducts(products)}
+                parentSelectedPersonaId={selectedPersonaId}
               />
             </div>
           </div>
@@ -1483,6 +1484,7 @@ export default function AiLiveCreatorPage() {
                 onQueueUpdate={(queue) => setPreviewVideoQueue(queue)}
                 onCommentHistoryUpdate={(comments) => setPreviewCommentHistory(comments)}
                 onProductsUpdate={(products) => setPreviewProducts(products)}
+                parentSelectedPersonaId={selectedPersonaId}
               />
 
               {/* Job History */}

@@ -1222,6 +1222,7 @@ _musetalk_engine_lock = asyncio.Lock() if hasattr(asyncio, 'Lock') else None
 
 # Avatar cache: portrait_hash -> True (avatar already prepared)
 _avatar_cache: dict = {}  # portrait_hash -> {"prepared": True, "portrait_path": str}
+_current_avatar_hash: str = ""  # Hash of the avatar currently loaded in the engine
 
 
 def _get_portrait_hash(portrait_path: str) -> str:
@@ -1383,6 +1384,8 @@ async def digital_human_health():
         "engine": "musetalk_v2",
         "models_loaded": engine.models_loaded if engine else False,
         "avatar_cached": bool(_avatar_cache),
+        "current_avatar_hash": _current_avatar_hash or None,
+        "cached_avatars": len(_avatar_cache),
         "active_jobs": len([j for j in digital_human_jobs.values() if j["status"] in ("queued", "processing")]),
     }
 
@@ -1464,15 +1467,18 @@ async def _run_digital_human_job(req: DigitalHumanRequest):
         portrait_hash = await loop.run_in_executor(None, _get_portrait_hash, portrait_path)
         logger.info(f"[DH {req.job_id}] Portrait hash: {portrait_hash}")
 
-        if portrait_hash in _avatar_cache:
-            logger.info(f"[DH {req.job_id}] Avatar cache HIT - skipping preparation")
+        global _current_avatar_hash
+        if portrait_hash == _current_avatar_hash:
+            logger.info(f"[DH {req.job_id}] Avatar cache HIT (same avatar in engine) - skipping preparation")
         else:
-            logger.info(f"[DH {req.job_id}] Avatar cache MISS - preparing avatar...")
+            logger.info(f"[DH {req.job_id}] Avatar cache MISS or different avatar - preparing avatar...")
+            logger.info(f"[DH {req.job_id}]   current_hash={_current_avatar_hash}, new_hash={portrait_hash}")
             success = await loop.run_in_executor(None, engine.prepare_avatar, portrait_path)
             if not success:
                 raise RuntimeError("Failed to prepare avatar from portrait")
+            _current_avatar_hash = portrait_hash
             _avatar_cache[portrait_hash] = {"prepared": True, "portrait_path": portrait_path}
-            logger.info(f"[DH {req.job_id}] Avatar prepared and cached")
+            logger.info(f"[DH {req.job_id}] Avatar prepared and cached (now current)")
 
         job["progress"] = 35
 
