@@ -2,7 +2,8 @@
 ##############################################################################
 # RunPod Quick Setup Script
 #
-# Run this script inside a RunPod GPU Pod to set up the FaceFusion worker.
+# Run this script inside a RunPod GPU Pod to set up the FaceFusion worker
+# with MuseTalk digital human support.
 #
 # Usage:
 #   1. Create a RunPod GPU Pod (RTX 4090, Container Disk 50GB)
@@ -10,16 +11,19 @@
 #   3. Run: bash runpod-setup.sh
 #
 # The script will:
-#   - Install system dependencies
+#   - Install system dependencies (including ffmpeg)
 #   - Clone and install FaceFusion
+#   - Clone and install MuseTalk v1.5
 #   - Download only essential AI models (saves ~15GB disk)
+#   - Apply runtime patches for MuseTalk compatibility
 #   - Start the worker API server
 ##############################################################################
 
 set -e
 
 echo "============================================"
-echo "  AitherHub Face Swap Worker — RunPod Setup"
+echo "  AitherHub GPU Worker — RunPod Setup"
+echo "  (FaceFusion + MuseTalk)"
 echo "============================================"
 echo ""
 
@@ -31,7 +35,7 @@ WORKSPACE="/workspace"
 
 # ── System Dependencies ──────────────────────────────────────────────────────
 
-echo "[1/7] Installing system dependencies..."
+echo "[1/9] Installing system dependencies..."
 apt-get update -qq
 apt-get install -y -qq \
     ffmpeg \
@@ -43,7 +47,7 @@ echo "  Done."
 
 # ── FaceFusion ───────────────────────────────────────────────────────────────
 
-echo "[2/7] Installing FaceFusion..."
+echo "[2/9] Installing FaceFusion..."
 cd "$WORKSPACE"
 
 if [ ! -d "facefusion" ]; then
@@ -56,20 +60,13 @@ pip install --quiet -r requirements.txt
 pip install --quiet onnxruntime-gpu
 echo "  Done."
 
-# ── Download Essential Models Only ──────────────────────────────────────────
-# Instead of force-download (which downloads ALL models ~20GB+),
-# we only download the models we actually need:
-#   - inswapper_128_fp16: face swap model (~280MB)
-#   - gfpgan_1.4: face enhancer for quality (~350MB)
-#   - yoloface_8n: face detector (~6MB)
-#   - face_recognizer_arcface: face recognition (~250MB)
+# ── Download Essential FaceFusion Models ─────────────────────────────────────
 
-echo "[3/7] Downloading essential AI models only..."
+echo "[3/9] Downloading essential FaceFusion AI models..."
 
 MODEL_DIR="$WORKSPACE/facefusion/.assets/models"
 mkdir -p "$MODEL_DIR"
 
-# Base URL for HuggingFace facefusion models
 HF_BASE="https://huggingface.co/facefusion/models/resolve/main"
 
 download_model() {
@@ -87,37 +84,81 @@ download_model() {
     fi
 }
 
-# Face Swapper - inswapper_128_fp16 (best quality)
 download_model "inswapper_128_fp16.onnx"
-
-# Face Enhancer - GFPGAN 1.4 (highest quality face restoration)
 download_model "gfpgan_1.4.onnx"
-
-# Face Detector - YOLOFace 8n (fast and accurate)
 download_model "yoloface_8n.onnx"
-
-# Face Recognizer - ArcFace (for face matching)
 download_model "arcface_simswap.onnx"
-
-# Face Landmarker (required for processing)
 download_model "2dfan4.onnx"
 download_model "face_landmarker_68_5.onnx"
 
-echo "  Done. (Only essential models downloaded, ~1GB total)"
+echo "  Done."
+
+# ── MuseTalk v1.5 Installation ──────────────────────────────────────────────
+
+echo "[4/9] Installing MuseTalk v1.5..."
+cd "$WORKSPACE"
+
+if [ ! -d "MuseTalk" ]; then
+    echo "  Cloning MuseTalk..."
+    git clone https://github.com/TMElyralab/MuseTalk.git
+fi
+
+cd MuseTalk
+
+# Install MuseTalk Python dependencies
+echo "  Installing MuseTalk Python dependencies..."
+pip install --quiet opencv-python-headless einops face_alignment \
+    diffusers==0.30.2 transformers accelerate safetensors \
+    omegaconf yacs mmpose mmdet mmcv mediapipe \
+    2>/dev/null || true
+
+echo "  Done."
+
+# ── MuseTalk Runtime Patches ────────────────────────────────────────────────
+
+echo "[5/9] Applying MuseTalk runtime patches..."
+
+# Patch 1: Fix diffusers meta tensor issue in VAE loading
+# diffusers >= 0.28 defaults low_cpu_mem_usage=True which causes meta tensor errors
+VAE_FILE="$WORKSPACE/MuseTalk/musetalk/utils/vae.py"
+if [ -f "$VAE_FILE" ]; then
+    if grep -q "low_cpu_mem_usage" "$VAE_FILE"; then
+        echo "  [skip] vae.py already patched"
+    else
+        sed -i 's/AutoencoderKL.from_pretrained(model_path)/AutoencoderKL.from_pretrained(model_path, low_cpu_mem_usage=False)/g' "$VAE_FILE"
+        echo "  [done] vae.py patched (low_cpu_mem_usage=False)"
+    fi
+fi
+
+# Patch 2: Fix FaceParsing relative path issue
+# FaceParsing uses relative path ./models/face-parse-bisent/ which breaks
+# when cwd is not MUSETALK_DIR during inference
+FP_INIT="$WORKSPACE/MuseTalk/musetalk/utils/face_parsing/__init__.py"
+if [ -f "$FP_INIT" ]; then
+    if grep -q "/workspace/MuseTalk/models" "$FP_INIT"; then
+        echo "  [skip] FaceParsing __init__.py already patched"
+    else
+        sed -i "s|'./models/face-parse-bisent/resnet18-5c106cde.pth'|'/workspace/MuseTalk/models/face-parse-bisent/resnet18-5c106cde.pth'|g" "$FP_INIT"
+        sed -i "s|'./models/face-parse-bisent/79999_iter.pth'|'/workspace/MuseTalk/models/face-parse-bisent/79999_iter.pth'|g" "$FP_INIT"
+        echo "  [done] FaceParsing __init__.py patched (absolute paths)"
+    fi
+fi
+
+echo "  Done."
 
 # ── Worker API Dependencies ──────────────────────────────────────────────────
 
-echo "[4/7] Installing worker API dependencies..."
+echo "[6/9] Installing worker API dependencies..."
 cd "$WORKSPACE"
 pip install --quiet fastapi uvicorn httpx python-multipart pydantic
 echo "  Done."
 
 # ── Copy Worker Files ────────────────────────────────────────────────────────
 
-echo "[5/7] Setting up worker API..."
+echo "[7/9] Setting up worker API..."
 if [ ! -f "$WORKSPACE/worker_api.py" ]; then
     echo "  Downloading worker_api.py from GitHub..."
-    curl -sL "https://raw.githubusercontent.com/LCJ-Group/aitherhub/feature/face-swap-mode-b/gpu-worker/worker_api.py" \
+    curl -sL "https://raw.githubusercontent.com/proteanstudios/aitherhub-repo/main/gpu-worker/worker_api.py" \
         -o "$WORKSPACE/worker_api.py"
 fi
 
@@ -126,7 +167,7 @@ echo "  Done."
 
 # ── GPU Check ───────────────────────────────────────────────────────────────
 
-echo "[6/7] Checking GPU..."
+echo "[8/9] Checking GPU..."
 python3 -c "
 import torch
 if torch.cuda.is_available():
@@ -139,9 +180,10 @@ else:
 
 # ── Disk Usage Report ───────────────────────────────────────────────────────
 
-echo "[7/7] Disk usage report..."
-echo "  Models: $(du -sh "$MODEL_DIR" 2>/dev/null | cut -f1)"
+echo "[9/9] Disk usage report..."
+echo "  FaceFusion Models: $(du -sh "$MODEL_DIR" 2>/dev/null | cut -f1)"
 echo "  FaceFusion: $(du -sh "$WORKSPACE/facefusion" 2>/dev/null | cut -f1)"
+echo "  MuseTalk: $(du -sh "$WORKSPACE/MuseTalk" 2>/dev/null | cut -f1)"
 echo "  Total workspace: $(du -sh "$WORKSPACE" 2>/dev/null | cut -f1)"
 df -h / | tail -1 | awk '{print "  Disk free: "$4" / "$2}'
 
@@ -155,6 +197,10 @@ echo ""
 echo "  GPU Worker API: http://0.0.0.0:${WORKER_PORT}"
 echo "  API Key: ${WORKER_API_KEY:0:4}****"
 echo ""
+echo "  Features:"
+echo "    - FaceFusion (Mode B: Real-time face swap)"
+echo "    - MuseTalk v1.5 (Mode A: Digital human lip-sync)"
+echo ""
 echo "  Quick Test:"
 echo "    curl -H 'X-Api-Key: ${WORKER_API_KEY}' http://localhost:${WORKER_PORT}/api/health"
 echo ""
@@ -166,6 +212,7 @@ export WORKER_PORT="$WORKER_PORT"
 export FACEFUSION_DIR="$WORKSPACE/facefusion"
 export SOURCE_FACE_DIR="$WORKSPACE/source_faces"
 export TEMP_DIR="$WORKSPACE/tmp"
+export MUSETALK_DIR="$WORKSPACE/MuseTalk"
 
 cd "$WORKSPACE"
 python3 worker_api.py

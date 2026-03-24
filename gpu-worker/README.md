@@ -1,21 +1,26 @@
-# FaceFusion GPU Worker
+# AitherHub GPU Worker
 
-AitherHub Mode B（リアル顔ライブ配信）用の GPU ワーカーサーバーです。FaceFusion によるリアルタイム顔交換処理を担当し、AitherHub バックエンドから HTTP API で制御されます。
+AitherHub のGPUワーカーサーバーです。2つのモードをサポートしています。
+
+- **Mode A（デジタルヒューマン）**: MuseTalk v1.5 によるリップシンク動画生成
+- **Mode B（リアル顔ライブ配信）**: FaceFusion によるリアルタイム顔交換
 
 ## アーキテクチャ
 
 ```
+Mode A: デジタルヒューマン（リップシンク）
+┌──────────────┐   テキスト   ┌──────────────┐   音声+顔   ┌──────────────────┐
+│  AitherHub   │ ──────────▶│  Backend     │ ──────────▶│  GPU Worker       │
+│  Frontend    │            │  (TTS生成)   │            │  (MuseTalk v1.5   │
+│              │◀──────────│              │◀──────────│   リップシンク)    │
+└──────────────┘   動画URL   └──────────────┘   動画     └──────────────────┘
+
+Mode B: リアル顔ライブ配信（顔交換）
 ┌──────────────┐    RTMP     ┌──────────────────────┐    RTMP     ┌────────────────┐
 │  Body Double  │ ──────────▶│  GPU Worker           │ ──────────▶│  配信           │
 │  (カメラ +    │            │  (FaceFusion          │            │  プラットフォーム │
 │   商品紹介)   │            │   顔交換 + 補正)      │            │  (視聴者)       │
 └──────────────┘            └──────────────────────┘            └────────────────┘
-                                     ▲
-                              ┌──────┴──────┐
-                              │ AitherHub   │
-                              │ Backend     │
-                              │ (HTTP API)  │
-                              └─────────────┘
 ```
 
 ## クイックスタート（RunPod）
@@ -39,15 +44,22 @@ Pod の Web Terminal または SSH で以下を実行します。
 ```bash
 # リポジトリをクローン
 cd /workspace
-git clone https://github.com/LCJ-Group/aitherhub.git
-cd aitherhub/gpu-worker
+git clone https://github.com/proteanstudios/aitherhub-repo.git
+cd aitherhub-repo/gpu-worker
 
 # API キーを設定
 export WORKER_API_KEY="your-secret-key"
 
-# セットアップ＆起動
+# セットアップ＆起動（FaceFusion + MuseTalk 両方をインストール）
 bash runpod-setup.sh
 ```
+
+セットアップスクリプトが自動的に以下を行います：
+- システム依存関係のインストール（ffmpeg等）
+- FaceFusion のインストールとモデルダウンロード
+- MuseTalk v1.5 のインストールと依存関係
+- MuseTalk のランタイムパッチ適用（diffusers互換性、FaceParsing パス修正）
+- ワーカーAPIサーバーの起動
 
 ### 3. 動作確認
 
@@ -55,66 +67,78 @@ bash runpod-setup.sh
 # ヘルスチェック
 curl -H "X-Api-Key: your-secret-key" http://localhost:8000/api/health
 
-# ソース顔を設定（インフルエンサーの顔写真）
-curl -X POST -H "X-Api-Key: your-secret-key" \
-  -F "file=@influencer_face.jpg" \
-  http://localhost:8000/api/set-source
-
-# 単一フレームテスト
-curl -X POST -H "X-Api-Key: your-secret-key" \
-  -H "Content-Type: application/json" \
-  -d '{"image_base64": "<base64-encoded-image>", "quality": "high"}' \
-  http://localhost:8000/api/swap-frame
-```
-
-## Docker で起動
-
-```bash
-cd gpu-worker
-
-# .env を作成
-cp .env.example .env
-# WORKER_API_KEY を編集
-
-# ビルド＆起動
-docker compose up -d
-
-# ログ確認
-docker compose logs -f
+# MuseTalk ヘルスチェック
+curl -H "X-Api-Key: your-secret-key" http://localhost:8000/api/digital-human/health
 ```
 
 ## API エンドポイント
 
 すべてのリクエストに `X-Api-Key` ヘッダーが必要です。
 
+### Mode A: デジタルヒューマン（MuseTalk）
+
+| メソッド | パス | 説明 |
+|---------|------|------|
+| GET | `/api/digital-human/health` | MuseTalk の状態確認 |
+| POST | `/api/digital-human/generate` | リップシンク動画生成ジョブの開始 |
+| GET | `/api/digital-human/status/{job_id}` | ジョブの進行状況確認 |
+| GET | `/api/digital-human/download/{job_id}` | 生成された動画のダウンロード |
+
+### Mode B: 顔交換（FaceFusion）
+
 | メソッド | パス | 説明 |
 |---------|------|------|
 | GET | `/api/health` | GPU・FaceFusion の状態確認 |
-| POST | `/api/set-source` | ソース顔画像の設定（ファイル/Base64/URL） |
+| POST | `/api/set-source` | ソース顔画像の設定 |
 | POST | `/api/start-stream` | リアルタイム顔交換ストリーム開始 |
 | POST | `/api/stop-stream` | ストリーム停止 |
 | GET | `/api/stream-status` | ストリーム状態・メトリクス |
 | POST | `/api/swap-frame` | 単一フレームの顔交換テスト |
-| GET | `/api/config` | 現在の FaceFusion 設定を取得 |
-| POST | `/api/config` | FaceFusion 設定を変更 |
 
-## 品質プリセット
+## MuseTalk ランタイムパッチ
 
-| プリセット | face_swapper | face_enhancer | 推定 FPS (4090) | VRAM |
-|-----------|-------------|---------------|----------------|------|
-| `fast` | inswapper_128 | なし | 25-30 | ~4GB |
-| `balanced` | inswapper_128 | gfpgan_1.4 | 18-25 | ~8GB |
-| `high` | inswapper_128 | gfpgan_1.4 | 15-20 | ~12GB |
+`runpod-setup.sh` が自動的に以下のパッチを適用します：
+
+1. **vae.py**: `AutoencoderKL.from_pretrained()` に `low_cpu_mem_usage=False` を追加（diffusers >= 0.28 の meta tensor 問題を回避）
+2. **FaceParsing __init__.py**: モデルパスを相対パスから絶対パスに変更（cwd 依存の問題を回避）
 
 ## AitherHub バックエンドとの接続
 
-AitherHub バックエンドの `.env` に以下を追加します。
+AitherHub バックエンドは RunPod Discovery Service を使って GPU Worker を自動検出します。手動設定が必要な場合は `.env` に以下を追加します。
 
 ```bash
 # RunPod の公開 URL（Pod の設定画面で確認）
 FACE_SWAP_WORKER_URL=https://your-pod-id-8000.proxy.runpod.net
 FACE_SWAP_WORKER_API_KEY=your-secret-key
 ```
+
+## トラブルシューティング
+
+### MuseTalk モデルのロードに失敗する
+
+```
+Failed to load MuseTalk models: ...meta tensor...
+```
+
+`runpod-setup.sh` が自動的にパッチを適用しますが、手動で修正する場合：
+
+```bash
+# vae.py のパッチ
+sed -i 's/AutoencoderKL.from_pretrained(model_path)/AutoencoderKL.from_pretrained(model_path, low_cpu_mem_usage=False)/g' \
+    /workspace/MuseTalk/musetalk/utils/vae.py
+```
+
+### FaceParsing の resnet18 が見つからない
+
+```
+FileNotFoundError: ./models/face-parse-bisent/resnet18-5c106cde.pth
+```
+
+FaceParsing が相対パスを使用しているため、cwd が MuseTalk ディレクトリでない場合に発生します。`runpod-setup.sh` が自動的に絶対パスに修正します。
+
+### GPU メモリ不足
+
+MuseTalk + FaceFusion の両方をロードすると VRAM を大量に消費します。RTX 4090（24GB）を推奨します。
 
 ## コスト見積もり
 
@@ -126,24 +150,3 @@ FACE_SWAP_WORKER_API_KEY=your-secret-key
 | 毎日4時間 | 120時間 | **$40.80**（約6,120円） | **$70.80**（約10,620円） |
 
 ストレージ（30GB Volume）: 約 $1.50/月 追加
-
-## トラブルシューティング
-
-### GPU メモリ不足
-
-`high` 品質で VRAM 不足が発生する場合は、`balanced` または `fast` に切り替えてください。
-
-```bash
-curl -X POST -H "X-Api-Key: your-key" \
-  -H "Content-Type: application/json" \
-  -d '{"face_enhancer_enabled": false}' \
-  http://localhost:8000/api/config
-```
-
-### FaceFusion モデルのダウンロードが遅い
-
-初回起動時にモデル（約5GB）をダウンロードします。RunPod の Volume にモデルを保存すれば、Pod を再起動しても再ダウンロード不要です。
-
-### RTMP ストリームが接続できない
-
-OBS Studio の配信設定で、RTMP URL が正しいことを確認してください。GPU ワーカーの `input_rtmp` には、OBS が配信する RTMP サーバーの URL を指定します。
