@@ -1818,10 +1818,11 @@ async def _run_imtalker_job(req: IMTalkerRequest):
         src_video = os.path.join(output_dir, output_files[0])
         job["progress"] = 85
 
-        # ── Step 5: Composite onto 9:16 portrait ──
-        # Strategy v4: Blurred background from original portrait + IMTalker face
-        # centered in frame. No overlay on original face = no ghost effect.
-        logger.info(f"[IMT {req.job_id}] Compositing to 9:16 portrait video (v4 blur-bg, no ghost)...")
+        # ── Step 5: Composite onto original 9:16 portrait ──
+        # Strategy v5: Replicate IMTalker's crop logic to find the exact face
+        # region, then paste the animated face back onto the original portrait.
+        # Body, background, and everything outside the face stays untouched.
+        logger.info(f"[IMT {req.job_id}] Compositing v5: face-only replacement on original portrait...")
         final_output = os.path.join(job_dir, f"output_{req.job_id}.mp4")
 
         try:
@@ -1830,144 +1831,161 @@ async def _run_imtalker_job(req: IMTalkerRequest):
 
             img = Image.open(portrait_path)
             orig_w, orig_h = img.size
+            logger.info(f"[IMT {req.job_id}] Original portrait: {orig_w}x{orig_h}")
 
-            # Target: 9:16 aspect ratio
-            target_w, target_h = 720, 1280
-            if orig_w >= 1080:
-                target_w, target_h = 1080, 1920
+            # ── Replicate IMTalker's process_img crop logic ──
+            # This mirrors DataProcessor.process_img() in IMTalker/generator/generate.py
+            img_arr = np.array(img)
 
-            # IMTalker output is 512x512 (cropped face). Scale it to fill
-            # the target width while maintaining aspect ratio.
-            face_scale_w = target_w
-            face_scale_h = target_w  # 1:1 aspect ratio from 512x512
-
-            # Center the face vertically, shifted slightly upward (face at ~40% from top)
-            face_y = int(target_h * 0.15)  # top of face area
-            face_y = max(0, min(face_y, target_h - face_scale_h))
-
-            # Create blurred background image from original portrait
-            bg_img_path = os.path.join(job_dir, "bg_blurred.png")
-            compositing_bg_path = portrait_video_path if portrait_is_video else portrait_path
-
-            # Use ffmpeg to create a blurred background frame
-            bg_filter = (
-                f"scale={target_w}:{target_h}:force_original_aspect_ratio=increase,"
-                f"crop={target_w}:{target_h},"
-                f"gblur=sigma=30"
+            # Use face_alignment (same library as IMTalker) to detect face
+            import face_alignment
+            fa = face_alignment.FaceAlignment(
+                face_alignment.LandmarksType.TWO_D, flip_input=False,
+                device='cuda'  # GPU worker always has CUDA
             )
-            bg_cmd = [
-                "ffmpeg", "-y",
-                "-i", portrait_path,
-                "-vf", bg_filter,
-                "-frames:v", "1",
-                bg_img_path,
-            ]
-            bg_proc = await asyncio.create_subprocess_exec(
-                *bg_cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=job_dir,
-            )
-            await bg_proc.communicate()
-
-            if not os.path.exists(bg_img_path):
-                logger.warning(f"[IMT {req.job_id}] Blurred bg creation failed, using solid color")
-                # Create solid color background as fallback
-                solid_bg = Image.new('RGB', (target_w, target_h), (230, 220, 210))
-                solid_bg.save(bg_img_path)
-
-            # ── Generate soft rectangular mask for face region ──
-            mask_path = os.path.join(job_dir, "blend_mask.png")
-            feather_px = max(40, int(face_scale_h * 0.12))
-
-            # Vectorized mask generation (much faster than nested loops)
-            y_coords = np.arange(face_scale_h, dtype=np.float32)
-            x_coords = np.arange(face_scale_w, dtype=np.float32)
-            dy = np.minimum(y_coords, face_scale_h - 1 - y_coords) / max(feather_px, 1)
-            dx = np.minimum(x_coords, face_scale_w - 1 - x_coords) / max(feather_px, 1)
-            mask_arr = np.minimum(dy[:, None], dx[None, :])
-            mask_arr = np.clip(mask_arr, 0.0, 1.0) ** 0.6  # smooth gamma
-            mask_img = Image.fromarray((mask_arr * 255).astype(np.uint8), mode='L')
-            mask_img.save(mask_path)
-
-            logger.info(
-                f"[IMT {req.job_id}] v4 composite: face={face_scale_w}x{face_scale_h} "
-                f"at y={face_y}, bg=blurred, feather={feather_px}px"
-            )
-
-            # ── Build ffmpeg filter: blurred bg + IMTalker face with mask ──
-            filter_complex = (
-                f"[1:v]scale={target_w}:{target_h}[bg];"
-                f"[0:v]scale={face_scale_w}:{face_scale_h}:flags=lanczos[face_scaled];"
-                f"[2:v]scale={face_scale_w}:{face_scale_h}:flags=bilinear[mask_scaled];"
-                f"[face_scaled][mask_scaled]alphamerge[face_masked];"
-                f"[bg][face_masked]overlay=0:{face_y}:format=auto[out]"
-            )
-
-            composite_cmd = [
-                "ffmpeg", "-y",
-                "-i", src_video,                      # input 0: IMTalker animated face (512x512)
-                "-loop", "1", "-i", bg_img_path,      # input 1: blurred background image
-                "-loop", "1", "-i", mask_path,         # input 2: soft mask
-                "-filter_complex", filter_complex,
-                "-map", "[out]",
-                "-map", "0:a?",
-                "-c:v", "libx264", "-preset", "fast", "-crf", "18",
-                "-c:a", "aac", "-b:a", "128k",
-                "-shortest",
-                "-pix_fmt", "yuv420p",
-                final_output,
+            bboxes = fa.face_detector.detect_from_image(img_arr)
+            valid_bboxes = [
+                (int(x1), int(y1), int(x2), int(y2), score)
+                for (x1, y1, x2, y2, score) in bboxes if score > 0.95
             ]
 
-            comp_proc = await asyncio.create_subprocess_exec(
-                *composite_cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-                cwd=job_dir,
-            )
-            comp_out, _ = await comp_proc.communicate()
-            if comp_proc.returncode != 0:
-                comp_log = comp_out.decode('utf-8', errors='replace')[-800:]
-                logger.warning(f"[IMT {req.job_id}] v4 composite failed: {comp_log}")
+            if not valid_bboxes:
+                logger.warning(f"[IMT {req.job_id}] No face detected for v5 composite, lowering threshold")
+                valid_bboxes = [
+                    (int(x1), int(y1), int(x2), int(y2), score)
+                    for (x1, y1, x2, y2, score) in bboxes if score > 0.5
+                ]
 
-                # Fallback: simple scale to 9:16 with padding
-                filter_simple = (
-                    f"[0:v]scale={target_w}:{target_h}:"
-                    f"force_original_aspect_ratio=decrease,"
-                    f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:"
-                    f"color=0xE6DCD2[out]"
+            if valid_bboxes:
+                x1, y1, x2, y2, _ = valid_bboxes[0]
+                cx = (x1 + x2) // 2
+                cy = (y1 + y2) // 2
+
+                half_w = int((x2 - x1) * 0.8)
+                half_h = int((y2 - y1) * 0.8)
+                half = max(half_w, half_h)
+
+                crop_x1 = max(cx - half, 0)
+                crop_x2 = min(cx + half, orig_w)
+                crop_y1 = max(cy - half, 0)
+                crop_y2 = min(cy + half, orig_h)
+
+                side = min(crop_x2 - crop_x1, crop_y2 - crop_y1)
+                crop_x2 = crop_x1 + side
+                crop_y2 = crop_y1 + side
+
+                logger.info(
+                    f"[IMT {req.job_id}] v5 face crop: bbox=({x1},{y1},{x2},{y2}), "
+                    f"crop=({crop_x1},{crop_y1})-({crop_x2},{crop_y2}), side={side}"
                 )
-                fallback_cmd = [
+
+                # ── Generate soft elliptical mask for natural face blending ──
+                mask_path = os.path.join(job_dir, "blend_mask_v5.png")
+                feather_px = max(30, int(side * 0.15))  # 15% feather for smooth edge
+
+                # Create elliptical mask (more natural than rectangular)
+                y_coords = np.arange(side, dtype=np.float32)
+                x_coords = np.arange(side, dtype=np.float32)
+                cy_mask = side / 2.0
+                cx_mask = side / 2.0
+                # Ellipse: slightly taller than wide to match face shape
+                ry = side / 2.0 - feather_px * 0.3  # vertical radius
+                rx = side / 2.0 - feather_px * 0.5  # horizontal radius (narrower)
+                dy = (y_coords - cy_mask) / max(ry, 1)
+                dx = (x_coords - cx_mask) / max(rx, 1)
+                dist = np.sqrt(dy[:, None]**2 + dx[None, :]**2)
+                # Smooth falloff from 1.0 (inside) to 0.0 (outside)
+                mask_arr = np.clip(1.0 - (dist - 0.7) / 0.6, 0.0, 1.0)
+                mask_arr = mask_arr ** 0.8  # gamma for smoother transition
+                mask_img = Image.fromarray((mask_arr * 255).astype(np.uint8), mode='L')
+                mask_img.save(mask_path)
+
+                # ── Build ffmpeg filter: overlay animated face onto original portrait ──
+                # IMTalker output (512x512) → scale to crop size → overlay at crop position
+                filter_complex = (
+                    # Scale IMTalker face to match the original crop region size
+                    f"[0:v]scale={side}:{side}:flags=lanczos[face_scaled];"
+                    # Scale mask to same size
+                    f"[2:v]scale={side}:{side}:flags=bilinear[mask_scaled];"
+                    # Apply alpha mask to face
+                    f"[face_scaled][mask_scaled]alphamerge[face_masked];"
+                    # Use original portrait as background (static image, looped)
+                    f"[1:v]scale={orig_w}:{orig_h}[bg];"
+                    # Overlay masked face at the exact crop position
+                    f"[bg][face_masked]overlay={crop_x1}:{crop_y1}:format=auto[out]"
+                )
+
+                composite_cmd = [
                     "ffmpeg", "-y",
-                    "-i", src_video,
-                    "-filter_complex", filter_simple,
+                    "-i", src_video,                          # input 0: IMTalker animated face (512x512)
+                    "-loop", "1", "-i", portrait_path,        # input 1: original portrait (background)
+                    "-loop", "1", "-i", mask_path,             # input 2: soft elliptical mask
+                    "-filter_complex", filter_complex,
                     "-map", "[out]",
                     "-map", "0:a?",
                     "-c:v", "libx264", "-preset", "fast", "-crf", "18",
                     "-c:a", "aac", "-b:a", "128k",
-                    "-shortest", "-pix_fmt", "yuv420p",
+                    "-shortest",
+                    "-pix_fmt", "yuv420p",
                     final_output,
                 ]
-                fb_proc = await asyncio.create_subprocess_exec(
-                    *fallback_cmd,
+
+                comp_proc = await asyncio.create_subprocess_exec(
+                    *composite_cmd,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.STDOUT,
                     cwd=job_dir,
                 )
-                fb_out, _ = await fb_proc.communicate()
-                if fb_proc.returncode != 0:
-                    logger.warning(f"[IMT {req.job_id}] Fallback also failed, using raw output")
-                    import shutil
-                    shutil.move(src_video, final_output)
+                comp_out, _ = await comp_proc.communicate()
+                if comp_proc.returncode != 0:
+                    comp_log = comp_out.decode('utf-8', errors='replace')[-800:]
+                    logger.warning(f"[IMT {req.job_id}] v5 composite failed: {comp_log}")
+                    raise RuntimeError(f"v5 composite ffmpeg failed")
                 else:
-                    logger.info(f"[IMT {req.job_id}] Padded fallback success: {target_w}x{target_h}")
-            else:
-                logger.info(f"[IMT {req.job_id}] v4 composite success: {target_w}x{target_h}")
+                    logger.info(
+                        f"[IMT {req.job_id}] v5 composite success: face {side}x{side} "
+                        f"at ({crop_x1},{crop_y1}) on {orig_w}x{orig_h}"
+                    )
 
-            # Clean up temp files
-            for tmp_file in [mask_path, bg_img_path]:
-                if os.path.exists(tmp_file):
-                    os.remove(tmp_file)
+                # Clean up temp files
+                for tmp_file in [mask_path]:
+                    if os.path.exists(tmp_file):
+                        os.remove(tmp_file)
+            else:
+                raise RuntimeError("No face detected for v5 composite")
+
+        except Exception as e_v5:
+            logger.warning(f"[IMT {req.job_id}] v5 composite failed ({e_v5}), falling back to scaled output")
+            # Fallback: scale 512x512 to fit 9:16 with padding
+            target_w, target_h = (1080, 1920) if orig_w >= 1080 else (720, 1280)
+            filter_simple = (
+                f"[0:v]scale={target_w}:{target_h}:"
+                f"force_original_aspect_ratio=decrease,"
+                f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:"
+                f"color=0xE6DCD2[out]"
+            )
+            fallback_cmd = [
+                "ffmpeg", "-y",
+                "-i", src_video,
+                "-filter_complex", filter_simple,
+                "-map", "[out]",
+                "-map", "0:a?",
+                "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+                "-c:a", "aac", "-b:a", "128k",
+                "-shortest", "-pix_fmt", "yuv420p",
+                final_output,
+            ]
+            fb_proc = await asyncio.create_subprocess_exec(
+                *fallback_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                cwd=job_dir,
+            )
+            fb_out, _ = await fb_proc.communicate()
+            if fb_proc.returncode != 0:
+                logger.warning(f"[IMT {req.job_id}] Fallback also failed, using raw output")
+                import shutil
+                shutil.move(src_video, final_output)
 
         except Exception as e:
             logger.warning(f"[IMT {req.job_id}] Composite failed ({e}), using raw 512x512 output")
