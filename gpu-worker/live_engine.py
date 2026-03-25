@@ -4,13 +4,15 @@ Hybrid AI Live Streaming Engine
 Server-side complete live streaming engine that combines:
 - Base video loop with natural movement
 - MuseTalk real-time lip-sync (mouth-only replacement)
-- FFmpeg RTMP streaming output
+- FFmpeg RTMP streaming output with synchronized audio
 - Real-time GPT conversation + TTS audio pipeline
+- Autonomous conversation loop (product intros + comment responses)
 
 Architecture:
     Video Looper → LipSync Engine → Frame Compositor → RTMP Streamer
-                                  ↑
-    Audio Pipeline (TTS → Whisper features) ─┘
+                                  ↑                    ↑
+    Audio Pipeline (TTS → Whisper features) ─┘         │
+    Audio Injector (TTS wav → RTMP audio) ─────────────┘
 """
 
 import os
@@ -26,6 +28,8 @@ import threading
 import subprocess
 import logging
 import tempfile
+import wave
+import struct
 from typing import Optional, Dict, Any, List, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
@@ -79,6 +83,7 @@ class EngineConfig:
 
     # Audio settings
     sample_rate: int = 16000
+    rtmp_audio_rate: int = 44100
 
     # Model paths (relative to MUSETALK_DIR, used via chdir)
     unet_config: str = "models/musetalkV15/musetalk.json"
@@ -249,6 +254,7 @@ class MuseTalkEngine:
             self.mask_list_cycle = []
             self.mask_coords_list_cycle = []
 
+            # Use jaw_safe mode for sunglasses compatibility
             mode = self.config.parsing_mode if self.config.version == "v15" else "raw"
 
             for i, frame in enumerate(tqdm(self.frame_list_cycle, desc="Computing masks")):
@@ -407,31 +413,47 @@ class MuseTalkEngine:
 
 class RTMPStreamer:
     """
-    Manages FFmpeg RTMP output stream.
-    Accepts raw frames and audio, encodes and streams to RTMP destination.
+    Manages FFmpeg RTMP output stream with synchronized audio.
+    Uses two separate pipes: one for video frames, one for audio samples.
+    FFmpeg merges them into a single RTMP FLV stream.
     """
 
     def __init__(self, config: EngineConfig):
         self.config = config
         self.process: Optional[subprocess.Popen] = None
         self.is_streaming = False
+        self._audio_fifo = None
+        self._audio_fifo_path = ""
 
     def start(self, rtmp_url: str, width: int, height: int):
-        """Start the FFmpeg RTMP streaming process."""
+        """Start the FFmpeg RTMP streaming process with audio support."""
         if not rtmp_url:
             raise ValueError("RTMP URL is required")
+
+        # Create a named pipe for audio input
+        self._audio_fifo_path = os.path.join(tempfile.gettempdir(), f"rtmp_audio_{os.getpid()}.fifo")
+        if os.path.exists(self._audio_fifo_path):
+            os.unlink(self._audio_fifo_path)
+        os.mkfifo(self._audio_fifo_path)
+
+        audio_rate = self.config.rtmp_audio_rate
 
         cmd = [
             "ffmpeg",
             "-y",
+            # Video input: raw frames from stdin
             "-f", "rawvideo",
             "-vcodec", "rawvideo",
             "-pix_fmt", "bgr24",
             "-s", f"{width}x{height}",
             "-r", str(self.config.fps),
             "-i", "-",
-            "-f", "lavfi",
-            "-i", "anullsrc=r=44100:cl=stereo",
+            # Audio input: from named pipe (or silent fallback)
+            "-f", "s16le",
+            "-ar", str(audio_rate),
+            "-ac", "1",
+            "-i", self._audio_fifo_path,
+            # Video encoding
             "-c:v", "libx264",
             "-preset", self.config.preset,
             "-tune", "zerolatency",
@@ -440,9 +462,13 @@ class RTMPStreamer:
             "-bufsize", str(int(self.config.video_bitrate.replace("k", "")) * 2) + "k",
             "-pix_fmt", "yuv420p",
             "-g", str(self.config.fps * 2),
+            # Audio encoding
             "-c:a", "aac",
             "-b:a", self.config.audio_bitrate,
+            "-ar", str(audio_rate),
+            # Output
             "-f", "flv",
+            "-shortest",
             rtmp_url
         ]
 
@@ -453,10 +479,82 @@ class RTMPStreamer:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE
         )
+
+        # Open audio FIFO for writing in a separate thread
+        self._audio_write_queue = queue.Queue()
+        self._audio_thread = threading.Thread(target=self._audio_writer_loop, daemon=True)
+        self._audio_thread.start()
+
         self.is_streaming = True
         self._width = width
         self._height = height
-        logger.info("RTMP stream started.")
+        logger.info("RTMP stream started with audio pipe.")
+
+    def _audio_writer_loop(self):
+        """Background thread that writes audio samples to the FIFO pipe."""
+        try:
+            with open(self._audio_fifo_path, "wb") as fifo:
+                while self.is_streaming:
+                    try:
+                        audio_data = self._audio_write_queue.get(timeout=0.04)
+                        if audio_data is None:
+                            break
+                        fifo.write(audio_data)
+                        fifo.flush()
+                    except queue.Empty:
+                        # Write silence to keep audio stream alive
+                        silence = b'\x00\x00' * (self.config.rtmp_audio_rate // 25)
+                        fifo.write(silence)
+                        fifo.flush()
+        except (BrokenPipeError, OSError) as e:
+            logger.warning(f"Audio FIFO closed: {e}")
+
+    def inject_audio(self, audio_path: str, num_frames: int):
+        """
+        Read a WAV/PCM audio file and queue it for injection into the RTMP stream.
+        The audio will be resampled to match the RTMP audio rate and distributed
+        across the given number of video frames.
+        """
+        try:
+            # Convert audio to raw PCM at the RTMP audio rate
+            tmp_pcm = os.path.join(tempfile.gettempdir(), f"rtmp_pcm_{os.getpid()}.raw")
+            cmd = (
+                f"ffmpeg -y -v quiet -i {audio_path} "
+                f"-f s16le -ar {self.config.rtmp_audio_rate} -ac 1 {tmp_pcm}"
+            )
+            os.system(cmd)
+
+            if not os.path.exists(tmp_pcm):
+                logger.warning(f"Failed to convert audio to PCM: {audio_path}")
+                return
+
+            with open(tmp_pcm, "rb") as f:
+                pcm_data = f.read()
+            os.unlink(tmp_pcm)
+
+            if not pcm_data:
+                return
+
+            # Split audio into chunks matching video frame rate
+            samples_per_frame = self.config.rtmp_audio_rate // self.config.fps
+            bytes_per_frame = samples_per_frame * 2  # 16-bit = 2 bytes per sample
+
+            total_chunks = len(pcm_data) // bytes_per_frame
+            for i in range(total_chunks):
+                chunk = pcm_data[i * bytes_per_frame:(i + 1) * bytes_per_frame]
+                self._audio_write_queue.put(chunk)
+
+            # Handle remaining audio
+            remainder = len(pcm_data) % bytes_per_frame
+            if remainder > 0:
+                last_chunk = pcm_data[total_chunks * bytes_per_frame:]
+                last_chunk += b'\x00' * (bytes_per_frame - remainder)
+                self._audio_write_queue.put(last_chunk)
+
+            logger.info(f"Audio injected: {len(pcm_data)} bytes, {total_chunks} chunks")
+
+        except Exception as e:
+            logger.error(f"Audio injection failed: {e}", exc_info=True)
 
     def write_frame(self, frame: np.ndarray):
         """Write a single frame to the RTMP stream."""
@@ -474,6 +572,12 @@ class RTMPStreamer:
 
     def stop(self):
         """Stop the RTMP stream."""
+        self.is_streaming = False
+
+        # Signal audio thread to stop
+        if hasattr(self, '_audio_write_queue'):
+            self._audio_write_queue.put(None)
+
         if self.process:
             try:
                 self.process.stdin.close()
@@ -485,7 +589,14 @@ class RTMPStreamer:
             except Exception:
                 self.process.kill()
             self.process = None
-        self.is_streaming = False
+
+        # Cleanup FIFO
+        if self._audio_fifo_path and os.path.exists(self._audio_fifo_path):
+            try:
+                os.unlink(self._audio_fifo_path)
+            except Exception:
+                pass
+
         logger.info("RTMP stream stopped.")
 
 
@@ -513,11 +624,13 @@ class LiveStreamEngine:
 
         # Audio playback
         self._current_audio_path: Optional[str] = None
-        self._audio_process: Optional[subprocess.Popen] = None
 
         # Stats
         self._frames_sent = 0
         self._stream_start_time = 0.0
+
+        # Speak queue for autonomous mode
+        self._speak_queue: queue.Queue = queue.Queue()
 
     def prepare(self, video_path: str) -> bool:
         """Load models and prepare avatar from base video."""
@@ -591,6 +704,7 @@ class LiveStreamEngine:
                         self._speaking = False
                         self._current_lipsync_frames = []
                         self._lipsync_frame_idx = 0
+                        self.state = EngineState.STREAMING
                         frame = self.musetalk.frame_list_cycle[frame_idx % cycle_len]
                         frame_idx += 1
                 else:
@@ -610,6 +724,7 @@ class LiveStreamEngine:
     def speak(self, audio_path: str) -> bool:
         """
         Generate lip-sync frames from audio and inject into the stream.
+        Also injects audio into the RTMP stream for synchronized playback.
         """
         if self.state not in (EngineState.STREAMING, EngineState.SPEAKING):
             logger.error(f"Cannot speak in state: {self.state}")
@@ -625,10 +740,15 @@ class LiveStreamEngine:
 
             logger.info(f"Generated {len(frames)} lip-sync frames")
 
+            # Inject audio into RTMP stream
+            if self.rtmp.is_streaming:
+                self.rtmp.inject_audio(audio_path, len(frames))
+
             with self._speak_lock:
                 self._current_lipsync_frames = frames
                 self._lipsync_frame_idx = 0
                 self._speaking = True
+                self._current_audio_path = audio_path
 
             self.state = EngineState.SPEAKING
             return True
