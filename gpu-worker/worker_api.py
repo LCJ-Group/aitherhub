@@ -1614,7 +1614,8 @@ IMTALKER_DIR = os.getenv("IMTALKER_DIR", "/workspace/IMTalker")
 class IMTalkerRequest(BaseModel):
     """Request to generate a premium digital human video with IMTalker."""
     job_id: str = Field(..., description="Unique job ID")
-    portrait_url: str = Field(..., description="URL of portrait image (front-facing photo)")
+    portrait_url: str = Field(..., description="URL of portrait image or driving video")
+    portrait_type: str = Field(default="image", description="'image' or 'video'")
     audio_url: str = Field(..., description="URL of audio file (WAV/MP3)")
     a_cfg_scale: float = Field(default=1.5, description="Audio CFG scale (1.5 = natural, 2.0+ = exaggerated)")
     nfe: int = Field(default=32, description="Number of function evaluations for ODE solver (higher = better quality)")
@@ -1663,7 +1664,12 @@ async def _run_imtalker_job(req: IMTalkerRequest):
             r.raise_for_status()
             ct = r.headers.get("content-type", "").lower()
             url_lower = req.portrait_url.split("?")[0].lower()
-            if any(v in ct for v in ["video", "quicktime", "mp4", "mov"]) or url_lower.endswith((".mov", ".mp4", ".avi", ".mkv")):
+            # Use explicit portrait_type if provided, otherwise auto-detect from content-type/URL
+            is_video_by_type = req.portrait_type == "video"
+            is_video_by_ct = any(v in ct for v in ["video", "quicktime", "mp4", "mov"])
+            is_video_by_url = url_lower.endswith((".mov", ".mp4", ".avi", ".mkv"))
+            logger.info(f"[IMT {req.job_id}] Portrait detection: type={req.portrait_type}, ct={ct}, url_ext={url_lower[-10:]}, is_video={is_video_by_type or is_video_by_ct or is_video_by_url}")
+            if is_video_by_type or is_video_by_ct or is_video_by_url:
                 # Portrait is a VIDEO — save with correct extension, extract first frame for IMTalker
                 portrait_is_video = True
                 vid_ext = ".mov" if (url_lower.endswith(".mov") or "quicktime" in ct) else ".mp4"

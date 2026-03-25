@@ -33,6 +33,7 @@ Architecture:
 from __future__ import annotations
 
 import logging
+import os
 import time
 from typing import Optional
 
@@ -2398,6 +2399,7 @@ async def _generate_lipsync_video(
             payload = {
                 "job_id": job_id,
                 "portrait_url": portrait_sas,
+                "portrait_type": portrait_type,
                 "audio_url": audio_sas,
                 "a_cfg_scale": 1.5,
                 "nfe": 32,
@@ -2744,13 +2746,34 @@ async def autopilot_next(
         wav_blob_url = await _upload_audio_to_blob(wav_audio, audio_id)
         wav_audio_url = _ensure_sas_url(wav_blob_url)
 
-        # Also generate MP3 for fallback audio playback
-        mp3_audio = await el_service.text_to_speech(
-            text=script_text,
-            voice_id=voice_id,
-            output_format="mp3_44100_128",
-            language_code=req.language,
-        )
+        # Convert WAV to MP3 locally for fallback audio playback
+        # (avoids a second TTS API call, saving 3-5 seconds)
+        import subprocess
+        import tempfile
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as wav_tmp:
+                wav_tmp.write(wav_audio)
+                wav_tmp_path = wav_tmp.name
+            mp3_tmp_path = wav_tmp_path.replace(".wav", ".mp3")
+            proc = subprocess.run(
+                ["ffmpeg", "-y", "-i", wav_tmp_path, "-codec:a", "libmp3lame",
+                 "-b:a", "128k", "-ar", "44100", mp3_tmp_path],
+                capture_output=True, timeout=15,
+            )
+            if proc.returncode == 0 and os.path.exists(mp3_tmp_path):
+                with open(mp3_tmp_path, "rb") as f:
+                    mp3_audio = f.read()
+            else:
+                # Fallback: use WAV as MP3 (browser can play WAV too)
+                logger.warning("[AutoPilot] FFmpeg WAV→MP3 conversion failed, using WAV")
+                mp3_audio = wav_audio
+            # Clean up temp files
+            for p in [wav_tmp_path, mp3_tmp_path]:
+                if os.path.exists(p):
+                    os.remove(p)
+        except Exception as conv_err:
+            logger.warning(f"[AutoPilot] WAV→MP3 conversion error: {conv_err}, using WAV")
+            mp3_audio = wav_audio
         mp3_blob_url = await _upload_mp3_to_blob(mp3_audio, audio_id)
         mp3_audio_url = _ensure_sas_url(mp3_blob_url)
 

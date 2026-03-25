@@ -3867,3 +3867,33 @@ async def regenerate_product_exposures(
     except Exception as e:
         logger.exception(f"Failed to regenerate product exposures: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+
+# ──────────────────────────────────────────────
+# Admin: Reset User Password
+# ──────────────────────────────────────────────
+
+@router.post("/reset-user-password")
+async def admin_reset_user_password(
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    db: AsyncSession = Depends(get_db),
+    email: str = Query(...),
+    new_password: str = Query(...),
+):
+    """Admin endpoint to reset a user's password."""
+    expected_key = f"{ADMIN_ID}:{ADMIN_PASS}"
+    if x_admin_key != expected_key:
+        raise HTTPException(status_code=403, detail="Invalid admin credentials")
+
+    from app.repository.auth_repo import get_user_by_email
+    from app.utils.password import hash_password
+
+    user = await get_user_by_email(db, email)
+    if not user:
+        raise HTTPException(status_code=404, detail=f"User {email} not found")
+
+    user.hashed_password = hash_password(new_password)
+    await db.commit()
+
+    return {"success": True, "email": email, "message": "Password reset successfully"}
