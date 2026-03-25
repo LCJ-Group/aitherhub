@@ -1879,33 +1879,39 @@ async def _run_imtalker_job(req: IMTalkerRequest):
                     f"crop=({crop_x1},{crop_y1})-({crop_x2},{crop_y2}), side={side}"
                 )
 
-                # ── v5.3: Full replacement with rectangular feather mask ──
-                # v5.2 had visible square boundaries. This version adds a
-                # rectangular feather mask: fully opaque in the center (95%),
-                # with a smooth gradient to transparent at the edges (~5%).
-                # This eliminates both ghost artifacts AND visible boundaries.
-                feather = max(20, int(side * 0.05))  # 5% edge feather
+                # ── v5.4: Asymmetric feather mask ──
+                # v5.3 still had neck ghost because the bottom feather was
+                # too narrow. This version uses asymmetric feathering:
+                # - Bottom: 25% (neck/shoulders fully from original)
+                # - Top: 15% (hair/forehead from original)
+                # - Left/Right: 10% (ears/background from original)
+                # The face center (mouth, nose, eyes) is fully from IMTalker.
+                feather_top = max(30, int(side * 0.15))
+                feather_bot = max(50, int(side * 0.25))
+                feather_lr = max(20, int(side * 0.10))
                 mask_path = os.path.join(job_dir, "rect_feather_mask.png")
 
-                # Create rectangular feather mask
+                # Create asymmetric rectangular feather mask
                 y_coords = np.arange(side, dtype=np.float32)
                 x_coords = np.arange(side, dtype=np.float32)
-                # Distance from each edge, normalized to feather width
-                dy_top = np.clip(y_coords / max(feather, 1), 0, 1)
-                dy_bot = np.clip((side - 1 - y_coords) / max(feather, 1), 0, 1)
-                dx_left = np.clip(x_coords / max(feather, 1), 0, 1)
-                dx_right = np.clip((side - 1 - x_coords) / max(feather, 1), 0, 1)
+                # Distance from each edge, normalized to respective feather width
+                dy_top = np.clip(y_coords / max(feather_top, 1), 0, 1)
+                dy_bot = np.clip((side - 1 - y_coords) / max(feather_bot, 1), 0, 1)
+                dx_left = np.clip(x_coords / max(feather_lr, 1), 0, 1)
+                dx_right = np.clip((side - 1 - x_coords) / max(feather_lr, 1), 0, 1)
                 # Combine: minimum of all four edge distances
                 mask_arr = np.minimum(dy_top[:, None], dy_bot[:, None])
                 mask_arr = np.minimum(mask_arr, dx_left[None, :])
                 mask_arr = np.minimum(mask_arr, dx_right[None, :])
-                mask_arr = mask_arr ** 0.5  # sqrt for smoother gradient
+                # Smooth cubic falloff for more natural blending
+                mask_arr = mask_arr ** 0.6
                 mask_img = Image.fromarray((mask_arr * 255).astype(np.uint8), mode='L')
                 mask_img.save(mask_path)
 
                 logger.info(
-                    f"[IMT {req.job_id}] v5.3 rect-feather: side={side}, "
-                    f"crop=({crop_x1},{crop_y1})-({crop_x2},{crop_y2}), feather={feather}px"
+                    f"[IMT {req.job_id}] v5.4 asym-feather: side={side}, "
+                    f"crop=({crop_x1},{crop_y1})-({crop_x2},{crop_y2}), "
+                    f"feather top={feather_top} bot={feather_bot} lr={feather_lr}"
                 )
 
                 # Build ffmpeg filter with rectangular feather mask
@@ -1941,11 +1947,11 @@ async def _run_imtalker_job(req: IMTalkerRequest):
                 comp_out, _ = await comp_proc.communicate()
                 if comp_proc.returncode != 0:
                     comp_log = comp_out.decode('utf-8', errors='replace')[-800:]
-                    logger.warning(f"[IMT {req.job_id}] v5.3 composite failed: {comp_log}")
-                    raise RuntimeError(f"v5.3 composite ffmpeg failed")
+                    logger.warning(f"[IMT {req.job_id}] v5.4 composite failed: {comp_log}")
+                    raise RuntimeError(f"v5.4 composite ffmpeg failed")
                 else:
                     logger.info(
-                        f"[IMT {req.job_id}] v5.3 composite success: face {side}x{side} "
+                        f"[IMT {req.job_id}] v5.4 composite success: face {side}x{side} "
                         f"at ({crop_x1},{crop_y1}) on {orig_w}x{orig_h}"
                     )
 
