@@ -1372,9 +1372,9 @@ const LiveStreamPanel = forwardRef(function LiveStreamPanel({
                         {sp.speaking_style && <p><span className="font-medium">Style:</span> {sp.speaking_style}</p>}
                         {sp.catchphrases && <p><span className="font-medium">Catchphrases:</span> {sp.catchphrases}</p>}
                         {sp.finetune_model_id ? (
-                          <p className="text-green-600 font-medium">\u2713 Fine-tuned model active</p>
+                          <p className="text-green-600 font-medium">✓ Fine-tuned model active</p>
                         ) : (
-                          <p className="text-amber-600">\u26a0 Persona style only (not fine-tuned yet)</p>
+                          <p className="text-amber-600">⚠ Persona style only (not fine-tuned yet)</p>
                         )}
                       </div>
                     ) : null;
