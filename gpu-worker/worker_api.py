@@ -1880,23 +1880,33 @@ async def _run_imtalker_job(req: IMTalkerRequest):
                 )
 
                 # ── Generate soft elliptical mask for natural face blending ──
+                # The mask is centered slightly above the crop center to cover
+                # the face but fade out before the neck/shoulders, preventing
+                # ghost artifacts where IMTalker's animated neck meets the
+                # original static neck.
                 mask_path = os.path.join(job_dir, "blend_mask_v5.png")
-                feather_px = max(30, int(side * 0.15))  # 15% feather for smooth edge
+                feather_px = max(40, int(side * 0.18))  # 18% feather for very smooth edge
 
-                # Create elliptical mask (more natural than rectangular)
                 y_coords = np.arange(side, dtype=np.float32)
                 x_coords = np.arange(side, dtype=np.float32)
-                cy_mask = side / 2.0
+                # Shift ellipse center upward by 10% to keep neck area out
+                cy_mask = side * 0.42
                 cx_mask = side / 2.0
-                # Ellipse: slightly taller than wide to match face shape
-                ry = side / 2.0 - feather_px * 0.3  # vertical radius
-                rx = side / 2.0 - feather_px * 0.5  # horizontal radius (narrower)
+                # Ellipse radii: wider horizontally to cover ears,
+                # shorter vertically to avoid neck
+                ry = side * 0.38  # vertical radius (doesn't reach bottom)
+                rx = side * 0.42  # horizontal radius
                 dy = (y_coords - cy_mask) / max(ry, 1)
                 dx = (x_coords - cx_mask) / max(rx, 1)
                 dist = np.sqrt(dy[:, None]**2 + dx[None, :]**2)
-                # Smooth falloff from 1.0 (inside) to 0.0 (outside)
-                mask_arr = np.clip(1.0 - (dist - 0.7) / 0.6, 0.0, 1.0)
-                mask_arr = mask_arr ** 0.8  # gamma for smoother transition
+                # Smooth falloff: fully opaque inside, gradual fade outside
+                mask_arr = np.clip(1.0 - (dist - 0.65) / 0.55, 0.0, 1.0)
+                mask_arr = mask_arr ** 0.7  # gamma for smoother transition
+                # Extra: aggressively fade bottom 25% to prevent neck ghost
+                bottom_fade_start = int(side * 0.70)
+                for row in range(bottom_fade_start, side):
+                    fade = 1.0 - (row - bottom_fade_start) / max(side - bottom_fade_start, 1)
+                    mask_arr[row, :] *= max(fade, 0.0)
                 mask_img = Image.fromarray((mask_arr * 255).astype(np.uint8), mode='L')
                 mask_img.save(mask_path)
 
