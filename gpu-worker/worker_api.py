@@ -1879,55 +1879,68 @@ async def _run_imtalker_job(req: IMTalkerRequest):
                     f"crop=({crop_x1},{crop_y1})-({crop_x2},{crop_y2}), side={side}"
                 )
 
-                # ── v5.4: Asymmetric feather mask ──
-                # v5.3 still had neck ghost because the bottom feather was
-                # too narrow. This version uses asymmetric feathering:
-                # - Bottom: 25% (neck/shoulders fully from original)
-                # - Top: 15% (hair/forehead from original)
-                # - Left/Right: 10% (ears/background from original)
-                # The face center (mouth, nose, eyes) is fully from IMTalker.
-                feather_top = max(30, int(side * 0.15))
-                feather_bot = max(50, int(side * 0.25))
-                feather_lr = max(20, int(side * 0.10))
-                mask_path = os.path.join(job_dir, "rect_feather_mask.png")
+                # ── v6: Inner-face-only overlay ──
+                # Previous versions overlaid the entire crop region, causing
+                # ghost artifacts at the neck/hair boundary because IMTalker
+                # moves the entire face (including neck) during animation.
+                #
+                # v6 approach: only use the INNER 55% of IMTalker's output
+                # (mouth, nose, cheeks) and blend it onto the original image.
+                # The outer parts (forehead, ears, neck, hair) stay from the
+                # original static image. This minimizes ghost artifacts.
+                inner_ratio = 0.55  # use inner 55% of IMTalker output
+                inner_px = int(512 * inner_ratio)  # ~282 pixels
+                margin = (512 - inner_px) // 2     # ~115 pixels from each edge
 
-                # Create asymmetric rectangular feather mask
-                y_coords = np.arange(side, dtype=np.float32)
-                x_coords = np.arange(side, dtype=np.float32)
-                # Distance from each edge, normalized to respective feather width
-                dy_top = np.clip(y_coords / max(feather_top, 1), 0, 1)
-                dy_bot = np.clip((side - 1 - y_coords) / max(feather_bot, 1), 0, 1)
-                dx_left = np.clip(x_coords / max(feather_lr, 1), 0, 1)
-                dx_right = np.clip((side - 1 - x_coords) / max(feather_lr, 1), 0, 1)
-                # Combine: minimum of all four edge distances
-                mask_arr = np.minimum(dy_top[:, None], dy_bot[:, None])
-                mask_arr = np.minimum(mask_arr, dx_left[None, :])
-                mask_arr = np.minimum(mask_arr, dx_right[None, :])
-                # Smooth cubic falloff for more natural blending
-                mask_arr = mask_arr ** 0.6
+                # The inner region maps to a smaller area on the original image
+                inner_side = int(side * inner_ratio)
+                inner_x1 = crop_x1 + (side - inner_side) // 2
+                inner_y1 = crop_y1 + (side - inner_side) // 2
+
+                # Create elliptical mask for the inner region (on inner_px x inner_px)
+                mask_path = os.path.join(job_dir, "inner_face_mask.png")
+                feather_px = max(30, int(inner_px * 0.20))  # 20% feather
+
+                y_coords = np.arange(inner_px, dtype=np.float32)
+                x_coords = np.arange(inner_px, dtype=np.float32)
+                cy_m = inner_px * 0.47  # slightly above center (avoid chin)
+                cx_m = inner_px / 2.0
+                ry = inner_px * 0.45  # vertical radius
+                rx = inner_px * 0.48  # horizontal radius (wider for cheeks)
+                dy = (y_coords - cy_m) / max(ry, 1)
+                dx = (x_coords - cx_m) / max(rx, 1)
+                dist = np.sqrt(dy[:, None]**2 + dx[None, :]**2)
+                # Smooth falloff with wide feather
+                mask_arr = np.clip(1.0 - (dist - 0.55) / 0.65, 0.0, 1.0)
+                mask_arr = mask_arr ** 0.5  # sqrt for smoother transition
                 mask_img = Image.fromarray((mask_arr * 255).astype(np.uint8), mode='L')
                 mask_img.save(mask_path)
 
                 logger.info(
-                    f"[IMT {req.job_id}] v5.4 asym-feather: side={side}, "
-                    f"crop=({crop_x1},{crop_y1})-({crop_x2},{crop_y2}), "
-                    f"feather top={feather_top} bot={feather_bot} lr={feather_lr}"
+                    f"[IMT {req.job_id}] v6 inner-face: crop_side={side}, "
+                    f"inner_px={inner_px}, inner_side={inner_side}, "
+                    f"inner_pos=({inner_x1},{inner_y1}), feather={feather_px}px"
                 )
 
-                # Build ffmpeg filter with rectangular feather mask
+                # ffmpeg filter:
+                # 1. Crop inner region from IMTalker output (center 55%)
+                # 2. Scale to inner_side
+                # 3. Apply elliptical mask
+                # 4. Overlay on original portrait at inner position
                 filter_complex = (
-                    f"[0:v]scale={side}:{side}:flags=lanczos[face_scaled];"
-                    f"[2:v]scale={side}:{side}:flags=bilinear[mask_scaled];"
-                    f"[face_scaled][mask_scaled]alphamerge[face_masked];"
+                    f"[0:v]crop={inner_px}:{inner_px}:{margin}:{margin},"
+                    f"scale={inner_side}:{inner_side}:flags=lanczos[face_inner];"
+                    f"[2:v]scale={inner_side}:{inner_side}:flags=bilinear[mask_scaled];"
+                    f"[face_inner][mask_scaled]alphamerge[face_masked];"
                     f"[1:v]scale={orig_w}:{orig_h}[bg];"
-                    f"[bg][face_masked]overlay={crop_x1}:{crop_y1}:format=auto[out]"
+                    f"[bg][face_masked]overlay={inner_x1}:{inner_y1}:format=auto[out]"
                 )
 
                 composite_cmd = [
                     "ffmpeg", "-y",
-                    "-i", src_video,                          # input 0: IMTalker animated face (512x512)
-                    "-loop", "1", "-i", portrait_path,        # input 1: original portrait (background)
-                    "-loop", "1", "-i", mask_path,             # input 2: rectangular feather mask
+                    "-i", src_video,                          # input 0: IMTalker (512x512)
+                    "-loop", "1", "-i", portrait_path,        # input 1: original portrait
+                    "-loop", "1", "-i", mask_path,             # input 2: elliptical mask
                     "-filter_complex", filter_complex,
                     "-map", "[out]",
                     "-map", "0:a?",
@@ -1947,12 +1960,12 @@ async def _run_imtalker_job(req: IMTalkerRequest):
                 comp_out, _ = await comp_proc.communicate()
                 if comp_proc.returncode != 0:
                     comp_log = comp_out.decode('utf-8', errors='replace')[-800:]
-                    logger.warning(f"[IMT {req.job_id}] v5.4 composite failed: {comp_log}")
-                    raise RuntimeError(f"v5.4 composite ffmpeg failed")
+                    logger.warning(f"[IMT {req.job_id}] v6 composite failed: {comp_log}")
+                    raise RuntimeError(f"v6 composite ffmpeg failed")
                 else:
                     logger.info(
-                        f"[IMT {req.job_id}] v5.4 composite success: face {side}x{side} "
-                        f"at ({crop_x1},{crop_y1}) on {orig_w}x{orig_h}"
+                        f"[IMT {req.job_id}] v6 composite success: inner {inner_side}x{inner_side} "
+                        f"at ({inner_x1},{inner_y1}) on {orig_w}x{orig_h}"
                     )
 
                 # Clean up temp
