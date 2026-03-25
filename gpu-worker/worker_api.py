@@ -1656,13 +1656,39 @@ async def _run_imtalker_job(req: IMTalkerRequest):
     try:
         # ── Step 1: Download portrait and audio ──
         logger.info(f"[IMT {req.job_id}] Downloading portrait and audio...")
+        portrait_is_video = False
+        portrait_video_path = None
         async with httpx.AsyncClient(timeout=60) as client:
             r = await client.get(req.portrait_url)
             r.raise_for_status()
-            ext = ".png" if "png" in r.headers.get("content-type", "") else ".jpg"
-            portrait_path = os.path.join(job_dir, f"portrait{ext}")
-            with open(portrait_path, "wb") as f:
-                f.write(r.content)
+            ct = r.headers.get("content-type", "").lower()
+            url_lower = req.portrait_url.split("?")[0].lower()
+            if any(v in ct for v in ["video", "quicktime", "mp4", "mov"]) or url_lower.endswith((".mov", ".mp4", ".avi", ".mkv")):
+                # Portrait is a VIDEO — save with correct extension, extract first frame for IMTalker
+                portrait_is_video = True
+                vid_ext = ".mov" if (url_lower.endswith(".mov") or "quicktime" in ct) else ".mp4"
+                portrait_video_path = os.path.join(job_dir, f"portrait_video{vid_ext}")
+                with open(portrait_video_path, "wb") as f:
+                    f.write(r.content)
+                # Extract first frame as image for IMTalker --ref_path
+                portrait_path = os.path.join(job_dir, "portrait.png")
+                extract_proc = await asyncio.create_subprocess_exec(
+                    "ffmpeg", "-y", "-i", portrait_video_path,
+                    "-vframes", "1", "-q:v", "2", portrait_path,
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                )
+                await extract_proc.wait()
+                if not os.path.exists(portrait_path) or os.path.getsize(portrait_path) == 0:
+                    logger.warning(f"[IMT {req.job_id}] Failed to extract frame from video, using video directly")
+                    portrait_is_video = False
+                    portrait_path = portrait_video_path
+                else:
+                    logger.info(f"[IMT {req.job_id}] Extracted first frame from video portrait for IMTalker")
+            else:
+                ext = ".png" if ("png" in ct or url_lower.endswith(".png")) else ".jpg"
+                portrait_path = os.path.join(job_dir, f"portrait{ext}")
+                with open(portrait_path, "wb") as f:
+                    f.write(r.content)
 
             r = await client.get(req.audio_url)
             r.raise_for_status()
@@ -1762,7 +1788,10 @@ async def _run_imtalker_job(req: IMTalkerRequest):
         try:
             from PIL import Image
             import numpy as np
-            img = Image.open(portrait_path)
+            # For video portraits, use extracted first frame for face detection/sizing
+            # but use original video for compositing background
+            compositing_bg_path = portrait_video_path if portrait_is_video else portrait_path
+            img = Image.open(portrait_path)  # always use the image (extracted frame or original)
             orig_w, orig_h = img.size
 
             # Target: 9:16 aspect ratio
@@ -1876,7 +1905,7 @@ async def _run_imtalker_job(req: IMTalkerRequest):
             composite_cmd = [
                 "ffmpeg", "-y",
                 "-i", src_video,                    # input 0: IMTalker animated face
-                "-loop", "1", "-i", portrait_path,  # input 1: original portrait image
+                *([] if portrait_is_video else ["-loop", "1"]), "-i", compositing_bg_path,  # input 1: portrait (video or image)
                 "-loop", "1", "-i", mask_path,      # input 2: elliptical alpha mask
                 "-filter_complex", filter_complex,
                 "-map", "[out]",
@@ -1909,7 +1938,7 @@ async def _run_imtalker_job(req: IMTalkerRequest):
                 fallback_cmd = [
                     "ffmpeg", "-y",
                     "-i", src_video,
-                    "-loop", "1", "-i", portrait_path,
+                    *([] if portrait_is_video else ["-loop", "1"]), "-i", compositing_bg_path,
                     "-filter_complex", filter_simple,
                     "-map", "[out]",
                     "-map", "0:a?",
@@ -1960,7 +1989,7 @@ async def _run_imtalker_job(req: IMTalkerRequest):
         job["error"] = str(e)
     finally:
         # Clean up input files but keep output
-        for fname in ["portrait.png", "portrait.jpg", "audio.wav", "audio.mp3", "audio_16k.wav"]:
+        for fname in ["portrait.png", "portrait.jpg", "portrait_video.mp4", "portrait_video.mov", "audio.wav", "audio.mp3", "audio_16k.wav"]:
             p = os.path.join(job_dir, fname)
             if os.path.exists(p):
                 try:
