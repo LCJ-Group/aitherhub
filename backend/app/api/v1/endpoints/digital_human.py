@@ -2037,8 +2037,8 @@ async def comment_response_generate(
                         "portrait_url": portrait_url,
                         "portrait_type": portrait_type,
                         "audio_url": audio_url,
-                        "a_cfg_scale": 1.5,
-                        "nfe": 32,
+                        "a_cfg_scale": 3.5,
+                        "nfe": 48,
                         "crop": True if portrait_type == "image" else False,
                         "output_fps": 25,
                     }
@@ -2149,8 +2149,8 @@ async def generate_and_queue_video(
                 "portrait_url": portrait_url,
                 "portrait_type": portrait_type,
                 "audio_url": audio_url,
-                "a_cfg_scale": 1.5,
-                "nfe": 32,
+                "a_cfg_scale": 3.5,
+                "nfe": 48,
                 "crop": True if portrait_type == "image" else False,
                 "output_fps": 25,
             }
@@ -2401,8 +2401,8 @@ async def _generate_lipsync_video(
                 "portrait_url": portrait_sas,
                 "portrait_type": portrait_type,
                 "audio_url": audio_sas,
-                "a_cfg_scale": 1.5,
-                "nfe": 32,
+                "a_cfg_scale": 3.5,
+                "nfe": 48,
                 "crop": True,
                 "output_fps": 25,
             }

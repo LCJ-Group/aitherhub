@@ -1617,8 +1617,8 @@ class IMTalkerRequest(BaseModel):
     portrait_url: str = Field(..., description="URL of portrait image or driving video")
     portrait_type: str = Field(default="image", description="'image' or 'video'")
     audio_url: str = Field(..., description="URL of audio file (WAV/MP3)")
-    a_cfg_scale: float = Field(default=1.5, description="Audio CFG scale (1.5 = natural, 2.0+ = exaggerated)")
-    nfe: int = Field(default=32, description="Number of function evaluations for ODE solver (higher = better quality)")
+    a_cfg_scale: float = Field(default=3.5, description="Audio CFG scale (3.5 = strong natural lip sync, 1.5 = too subtle)")
+    nfe: int = Field(default=48, description="Number of function evaluations for ODE solver (higher = better quality)")
     crop: bool = Field(default=True, description="Whether to crop face region")
     output_fps: int = Field(default=25, description="Output video FPS")
 
@@ -1855,10 +1855,10 @@ async def _run_imtalker_job(req: IMTalkerRequest):
             # ── Determine overlay size based on face detection ──
             # IMTalker output is 512x512 (cropped face with forehead/chin/neck)
             if face_detected:
-                overlay_w = min(int(s_face_w * 1.4), target_w)
-                overlay_h = min(int(s_face_h * 1.3), int(target_h * 0.6))
+                overlay_w = min(int(s_face_w * 1.8), target_w)
+                overlay_h = min(int(s_face_h * 1.6), int(target_h * 0.7))
             else:
-                overlay_w = int(target_w * 0.65)
+                overlay_w = int(target_w * 0.80)
                 overlay_h = int(overlay_w * 1.1)
 
             # Ensure minimum size and even dimensions
@@ -1872,7 +1872,7 @@ async def _run_imtalker_job(req: IMTalkerRequest):
             overlay_y = max(0, min(face_in_frame_y - int(overlay_h * 0.4), target_h - overlay_h))
 
             # ── Generate elliptical alpha mask with feathering ──
-            feather_px = max(30, int(min(overlay_w, overlay_h) * 0.15))
+            feather_px = max(40, int(min(overlay_w, overlay_h) * 0.20))
             mask_path = os.path.join(job_dir, "blend_mask.png")
 
             mask_arr = np.zeros((overlay_h, overlay_w), dtype=np.float32)
@@ -1889,7 +1889,7 @@ async def _run_imtalker_job(req: IMTalkerRequest):
                 1.0 - (dist - 1.0) * (min(rx, ry) / max(feather_px, 1)),
                 0.0, 1.0
             )
-            mask_arr = mask_arr ** 0.7  # gamma < 1 = wider opaque center
+            mask_arr = mask_arr ** 0.5  # gamma < 1 = wider opaque center, 0.5 = very smooth blend
             mask_img = Image.fromarray((mask_arr * 255).astype(np.uint8), mode='L')
             mask_img.save(mask_path)
 
