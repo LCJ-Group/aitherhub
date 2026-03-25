@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import time
@@ -127,12 +128,15 @@ async def ensure_tables_exist():
         from app.core.db import engine
         from app.models.orm.live_analysis_job import LiveAnalysisJob
 
-        async with engine.begin() as conn:
-            await conn.run_sync(
-                LiveAnalysisJob.__table__.create,
-                checkfirst=True,
-            )
+        async with asyncio.timeout(30):
+            async with engine.begin() as conn:
+                await conn.run_sync(
+                    LiveAnalysisJob.__table__.create,
+                    checkfirst=True,
+                )
         logger.info("live_analysis_jobs table verified/created successfully")
+    except asyncio.TimeoutError:
+        logger.warning("Timeout (30s) while ensuring live_analysis_jobs table on startup")
     except Exception as e:
         logger.warning(f"Failed to ensure tables exist on startup: {e}")
 
@@ -141,7 +145,8 @@ async def ensure_tables_exist():
         from app.core.db import engine
         from sqlalchemy import text
 
-        async with engine.begin() as conn:
+        async with asyncio.timeout(60):
+          async with engine.begin() as conn:
             # Drop old table if schema is wrong (missing subtitle_style column)
             try:
                 check = await conn.execute(text("""
@@ -198,6 +203,8 @@ async def ensure_tables_exist():
                 except Exception as _e:
                     logger.debug(f"DDL skipped (likely already exists): {_e}")
         logger.info("subtitle_feedback table & video_clips columns verified/created")
+    except asyncio.TimeoutError:
+        logger.warning("Timeout (60s) while ensuring subtitle tables on startup")
     except Exception as e:
         logger.warning(f"Failed to ensure subtitle tables on startup: {e}")
 
@@ -206,7 +213,8 @@ async def ensure_tables_exist():
         from app.core.db import engine
         from sqlalchemy import text as _text
 
-        async with engine.begin() as conn:
+        async with asyncio.timeout(30):
+          async with engine.begin() as conn:
             await conn.execute(_text("""
                 CREATE TABLE IF NOT EXISTS video_error_logs (
                     id BIGSERIAL PRIMARY KEY,
@@ -237,6 +245,8 @@ async def ensure_tables_exist():
                 except Exception as _e:
                     logger.debug(f"DDL skipped (likely already exists): {_e}")
         logger.info("video_error_logs table & videos error columns verified/created")
+    except asyncio.TimeoutError:
+        logger.warning("Timeout (30s) while ensuring video_error_logs table on startup")
     except Exception as e:
         logger.warning(f"Failed to ensure video_error_logs table on startup: {e}")
 
@@ -245,7 +255,8 @@ async def ensure_tables_exist():
         from app.core.db import engine
         from sqlalchemy import text as _text
 
-        async with engine.begin() as conn:
+        async with asyncio.timeout(30):
+          async with engine.begin() as conn:
             # bug_reports: 問題→原因→解決策の記録
             await conn.execute(_text("""
                 CREATE TABLE IF NOT EXISTS bug_reports (
@@ -295,12 +306,15 @@ async def ensure_tables_exist():
                 CREATE INDEX IF NOT EXISTS idx_wl_created_at ON work_logs (created_at DESC)
             """))
         logger.info("bug_reports & work_logs tables verified/created")
+    except asyncio.TimeoutError:
+        logger.warning("Timeout (30s) while ensuring bug_reports/work_logs tables on startup")
     except Exception as e:
         logger.warning(f"Failed to ensure bug_reports/work_logs tables on startup: {e}")
 
     # ── Feedback Loop tables: clip_feedback extensions, sales_confirmation, clip_edit_log ──
     try:
-        async with engine.begin() as conn:
+        async with asyncio.timeout(60):
+          async with engine.begin() as conn:
             # Fix phase_index type: INTEGER → TEXT (Moment clips use string IDs like 'moment_strong_test4')
             try:
                 await conn.execute(_text("""
@@ -418,12 +432,15 @@ async def ensure_tables_exist():
                 ON clip_edit_log (clip_id)
             """))
         logger.info("Feedback loop tables (clip_feedback extensions, sales_confirmation, clip_edit_log) verified/created")
+    except asyncio.TimeoutError:
+        logger.warning("Timeout (60s) while ensuring feedback loop tables on startup")
     except Exception as e:
         logger.warning(f"Failed to ensure feedback loop tables on startup: {e}")
 
     # ── lessons_learned: プロジェクトの永続記憶 ──
     try:
-        async with engine.begin() as conn:
+        async with asyncio.timeout(30):
+          async with engine.begin() as conn:
             await conn.execute(_text("""
                 CREATE TABLE IF NOT EXISTS lessons_learned (
                     id BIGSERIAL PRIMARY KEY,
@@ -448,6 +465,8 @@ async def ensure_tables_exist():
                 CREATE INDEX IF NOT EXISTS idx_ll_created_at ON lessons_learned (created_at DESC)
             """))
         logger.info("lessons_learned table verified/created")
+    except asyncio.TimeoutError:
+        logger.warning("Timeout (30s) while ensuring lessons_learned table on startup")
     except Exception as e:
         logger.warning(f"Failed to ensure lessons_learned table on startup: {e}")
 
@@ -459,12 +478,15 @@ async def ensure_auto_video_jobs_table():
         from app.core.db import engine
         from app.models.orm.auto_video_job import AutoVideoJob
 
-        async with engine.begin() as conn:
-            await conn.run_sync(
-                AutoVideoJob.__table__.create,
-                checkfirst=True,
-            )
+        async with asyncio.timeout(30):
+            async with engine.begin() as conn:
+                await conn.run_sync(
+                    AutoVideoJob.__table__.create,
+                    checkfirst=True,
+                )
         logger.info("auto_video_jobs table verified/created successfully")
+    except asyncio.TimeoutError:
+        logger.warning("Timeout (30s) while ensuring auto_video_jobs table on startup")
     except Exception as e:
         logger.warning(f"Failed to ensure auto_video_jobs table on startup: {e}")
 
@@ -473,11 +495,14 @@ async def ensure_auto_video_jobs_table():
         from app.services.auto_video_db import restore_jobs_to_memory
         from app.services.auto_video_pipeline_service import auto_video_jobs
 
-        count = await restore_jobs_to_memory(auto_video_jobs)
+        async with asyncio.timeout(30):
+            count = await restore_jobs_to_memory(auto_video_jobs)
         if count > 0:
             logger.info(f"Restored {count} auto video jobs from database")
         else:
             logger.info("No auto video jobs to restore from database")
+    except asyncio.TimeoutError:
+        logger.warning("Timeout (30s) while restoring auto video jobs on startup")
     except Exception as e:
         logger.warning(f"Failed to restore auto video jobs on startup: {e}")
 
@@ -489,12 +514,15 @@ async def restore_live_sessions():
         from app.core.db import AsyncSessionLocal
         from app.services.live_event_service import restore_active_sessions
 
-        async with AsyncSessionLocal() as db_session:
-            count = await restore_active_sessions(db_session)
+        async with asyncio.timeout(30):
+            async with AsyncSessionLocal() as db_session:
+                count = await restore_active_sessions(db_session)
             if count > 0:
                 logger.info(f"Restored {count} active live sessions from database")
             else:
                 logger.info("No active live sessions to restore")
+    except asyncio.TimeoutError:
+        logger.warning("Timeout (30s) while restoring live sessions on startup")
     except Exception as e:
         logger.warning(f"Failed to restore live sessions on startup: {e}")
 
@@ -520,10 +548,13 @@ async def ensure_persona_tables():
         from app.core.db import engine
         from app.models.orm.persona import Persona, PersonaVideoTag, PersonaTrainingLog
 
-        async with engine.begin() as conn:
-            await conn.run_sync(Persona.__table__.create, checkfirst=True)
-            await conn.run_sync(PersonaVideoTag.__table__.create, checkfirst=True)
-            await conn.run_sync(PersonaTrainingLog.__table__.create, checkfirst=True)
+        async with asyncio.timeout(30):
+            async with engine.begin() as conn:
+                await conn.run_sync(Persona.__table__.create, checkfirst=True)
+                await conn.run_sync(PersonaVideoTag.__table__.create, checkfirst=True)
+                await conn.run_sync(PersonaTrainingLog.__table__.create, checkfirst=True)
         logger.info("Persona tables verified/created successfully")
+    except asyncio.TimeoutError:
+        logger.warning("Timeout (30s) while ensuring persona tables on startup")
     except Exception as e:
         logger.warning(f"Failed to ensure persona tables on startup: {e}")
