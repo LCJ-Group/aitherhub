@@ -1659,24 +1659,19 @@ async def _run_imtalker_job(req: IMTalkerRequest):
         logger.info(f"[IMT {req.job_id}] Downloading portrait and audio...")
         portrait_is_video = False
         portrait_video_path = None
-        async with httpx.AsyncClient(timeout=60) as client:
-            r = await client.get(req.portrait_url)
-            r.raise_for_status()
-            ct = r.headers.get("content-type", "").lower()
-            url_lower = req.portrait_url.split("?")[0].lower()
-            # Use explicit portrait_type if provided, otherwise auto-detect from content-type/URL
+
+        # Handle file:// URLs for local testing
+        if req.portrait_url.startswith('file://'):
+            import shutil as _shutil
+            _src = req.portrait_url[7:]
+            url_lower = _src.lower()
             is_video_by_type = req.portrait_type == "video"
-            is_video_by_ct = any(v in ct for v in ["video", "quicktime", "mp4", "mov"])
             is_video_by_url = url_lower.endswith((".mov", ".mp4", ".avi", ".mkv"))
-            logger.info(f"[IMT {req.job_id}] Portrait detection: type={req.portrait_type}, ct={ct}, url_ext={url_lower[-10:]}, is_video={is_video_by_type or is_video_by_ct or is_video_by_url}")
-            if is_video_by_type or is_video_by_ct or is_video_by_url:
-                # Portrait is a VIDEO — save with correct extension, extract first frame for IMTalker
+            if is_video_by_type or is_video_by_url:
                 portrait_is_video = True
-                vid_ext = ".mov" if (url_lower.endswith(".mov") or "quicktime" in ct) else ".mp4"
+                vid_ext = ".mov" if url_lower.endswith(".mov") else ".mp4"
                 portrait_video_path = os.path.join(job_dir, f"portrait_video{vid_ext}")
-                with open(portrait_video_path, "wb") as f:
-                    f.write(r.content)
-                # Extract first frame as image for IMTalker --ref_path
+                _shutil.copy2(_src, portrait_video_path)
                 portrait_path = os.path.join(job_dir, "portrait.png")
                 extract_proc = await asyncio.create_subprocess_exec(
                     "ffmpeg", "-y", "-i", portrait_video_path,
@@ -1685,23 +1680,62 @@ async def _run_imtalker_job(req: IMTalkerRequest):
                 )
                 await extract_proc.wait()
                 if not os.path.exists(portrait_path) or os.path.getsize(portrait_path) == 0:
-                    logger.warning(f"[IMT {req.job_id}] Failed to extract frame from video, using video directly")
                     portrait_is_video = False
                     portrait_path = portrait_video_path
-                else:
-                    logger.info(f"[IMT {req.job_id}] Extracted first frame from video portrait for IMTalker")
             else:
-                ext = ".png" if ("png" in ct or url_lower.endswith(".png")) else ".jpg"
+                ext = os.path.splitext(_src)[1] or '.png'
                 portrait_path = os.path.join(job_dir, f"portrait{ext}")
-                with open(portrait_path, "wb") as f:
-                    f.write(r.content)
+                _shutil.copy2(_src, portrait_path)
+        else:
+            async with httpx.AsyncClient(timeout=60) as client:
+                r = await client.get(req.portrait_url)
+                r.raise_for_status()
+                ct = r.headers.get("content-type", "").lower()
+                url_lower = req.portrait_url.split("?")[0].lower()
+                is_video_by_type = req.portrait_type == "video"
+                is_video_by_ct = any(v in ct for v in ["video", "quicktime", "mp4", "mov"])
+                is_video_by_url = url_lower.endswith((".mov", ".mp4", ".avi", ".mkv"))
+                logger.info(f"[IMT {req.job_id}] Portrait detection: type={req.portrait_type}, ct={ct}, url_ext={url_lower[-10:]}, is_video={is_video_by_type or is_video_by_ct or is_video_by_url}")
+                if is_video_by_type or is_video_by_ct or is_video_by_url:
+                    portrait_is_video = True
+                    vid_ext = ".mov" if (url_lower.endswith(".mov") or "quicktime" in ct) else ".mp4"
+                    portrait_video_path = os.path.join(job_dir, f"portrait_video{vid_ext}")
+                    with open(portrait_video_path, "wb") as f:
+                        f.write(r.content)
+                    portrait_path = os.path.join(job_dir, "portrait.png")
+                    extract_proc = await asyncio.create_subprocess_exec(
+                        "ffmpeg", "-y", "-i", portrait_video_path,
+                        "-vframes", "1", "-q:v", "2", portrait_path,
+                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                    )
+                    await extract_proc.wait()
+                    if not os.path.exists(portrait_path) or os.path.getsize(portrait_path) == 0:
+                        logger.warning(f"[IMT {req.job_id}] Failed to extract frame from video")
+                        portrait_is_video = False
+                        portrait_path = portrait_video_path
+                    else:
+                        logger.info(f"[IMT {req.job_id}] Extracted first frame from video portrait")
+                else:
+                    ext = ".png" if ("png" in ct or url_lower.endswith(".png")) else ".jpg"
+                    portrait_path = os.path.join(job_dir, f"portrait{ext}")
+                    with open(portrait_path, "wb") as f:
+                        f.write(r.content)
 
-            r = await client.get(req.audio_url)
-            r.raise_for_status()
-            audio_ext = ".wav" if "wav" in r.headers.get("content-type", "") else ".mp3"
+        # Download audio
+        if req.audio_url.startswith('file://'):
+            import shutil as _shutil
+            _src = req.audio_url[7:]
+            audio_ext = os.path.splitext(_src)[1] or '.wav'
             audio_path = os.path.join(job_dir, f"audio{audio_ext}")
-            with open(audio_path, "wb") as f:
-                f.write(r.content)
+            _shutil.copy2(_src, audio_path)
+        else:
+            async with httpx.AsyncClient(timeout=60) as client:
+                r = await client.get(req.audio_url)
+                r.raise_for_status()
+                audio_ext = ".wav" if "wav" in r.headers.get("content-type", "") else ".mp3"
+                audio_path = os.path.join(job_dir, f"audio{audio_ext}")
+                with open(audio_path, "wb") as f:
+                    f.write(r.content)
 
         job["progress"] = 10
 
