@@ -1354,7 +1354,7 @@ const LiveStreamPanel = forwardRef(function LiveStreamPanel({
                     className="w-full text-xs border border-purple-300 rounded-lg px-3 py-2 bg-white focus:ring-2 focus:ring-purple-400 focus:border-purple-400"
                   >
                     <option value="">Default AI (No Clone)</option>
-                    {personas.filter(p => p.status === 'ready').map((p) => (
+                    {personas.map((p) => (
                       <option key={p.id} value={p.id}>
                         {p.name} {p.finetune_model_id ? '\u2713 Trained' : '(Not trained)'}
                       </option>
