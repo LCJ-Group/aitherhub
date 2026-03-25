@@ -1879,34 +1879,49 @@ async def _run_imtalker_job(req: IMTalkerRequest):
                     f"crop=({crop_x1},{crop_y1})-({crop_x2},{crop_y2}), side={side}"
                 )
 
-                # ── v5.2: Full replacement of crop region (no alpha mask) ──
-                # Previous versions used elliptical masks which caused ghost
-                # artifacts because IMTalker moves the face during animation.
-                # Solution: completely replace the entire crop region with
-                # IMTalker output. Use only a thin edge feather (8px) via
-                # ffmpeg to soften the hard boundary.
-                feather = max(8, int(side * 0.02))  # ~2% thin edge feather
+                # ── v5.3: Full replacement with rectangular feather mask ──
+                # v5.2 had visible square boundaries. This version adds a
+                # rectangular feather mask: fully opaque in the center (95%),
+                # with a smooth gradient to transparent at the edges (~5%).
+                # This eliminates both ghost artifacts AND visible boundaries.
+                feather = max(20, int(side * 0.05))  # 5% edge feather
+                mask_path = os.path.join(job_dir, "rect_feather_mask.png")
+
+                # Create rectangular feather mask
+                y_coords = np.arange(side, dtype=np.float32)
+                x_coords = np.arange(side, dtype=np.float32)
+                # Distance from each edge, normalized to feather width
+                dy_top = np.clip(y_coords / max(feather, 1), 0, 1)
+                dy_bot = np.clip((side - 1 - y_coords) / max(feather, 1), 0, 1)
+                dx_left = np.clip(x_coords / max(feather, 1), 0, 1)
+                dx_right = np.clip((side - 1 - x_coords) / max(feather, 1), 0, 1)
+                # Combine: minimum of all four edge distances
+                mask_arr = np.minimum(dy_top[:, None], dy_bot[:, None])
+                mask_arr = np.minimum(mask_arr, dx_left[None, :])
+                mask_arr = np.minimum(mask_arr, dx_right[None, :])
+                mask_arr = mask_arr ** 0.5  # sqrt for smoother gradient
+                mask_img = Image.fromarray((mask_arr * 255).astype(np.uint8), mode='L')
+                mask_img.save(mask_path)
 
                 logger.info(
-                    f"[IMT {req.job_id}] v5.2 full replacement: side={side}, "
+                    f"[IMT {req.job_id}] v5.3 rect-feather: side={side}, "
                     f"crop=({crop_x1},{crop_y1})-({crop_x2},{crop_y2}), feather={feather}px"
                 )
 
-                # Build ffmpeg filter: scale face, overlay directly on portrait
-                # Use boxblur on the overlay edge for thin feather effect
+                # Build ffmpeg filter with rectangular feather mask
                 filter_complex = (
-                    # Scale IMTalker face to match the original crop region size
                     f"[0:v]scale={side}:{side}:flags=lanczos[face_scaled];"
-                    # Use original portrait as background (static image, looped)
+                    f"[2:v]scale={side}:{side}:flags=bilinear[mask_scaled];"
+                    f"[face_scaled][mask_scaled]alphamerge[face_masked];"
                     f"[1:v]scale={orig_w}:{orig_h}[bg];"
-                    # Direct overlay at crop position (full replacement, no mask)
-                    f"[bg][face_scaled]overlay={crop_x1}:{crop_y1}:format=auto[out]"
+                    f"[bg][face_masked]overlay={crop_x1}:{crop_y1}:format=auto[out]"
                 )
 
                 composite_cmd = [
                     "ffmpeg", "-y",
                     "-i", src_video,                          # input 0: IMTalker animated face (512x512)
                     "-loop", "1", "-i", portrait_path,        # input 1: original portrait (background)
+                    "-loop", "1", "-i", mask_path,             # input 2: rectangular feather mask
                     "-filter_complex", filter_complex,
                     "-map", "[out]",
                     "-map", "0:a?",
@@ -1926,13 +1941,17 @@ async def _run_imtalker_job(req: IMTalkerRequest):
                 comp_out, _ = await comp_proc.communicate()
                 if comp_proc.returncode != 0:
                     comp_log = comp_out.decode('utf-8', errors='replace')[-800:]
-                    logger.warning(f"[IMT {req.job_id}] v5.2 composite failed: {comp_log}")
-                    raise RuntimeError(f"v5.2 composite ffmpeg failed")
+                    logger.warning(f"[IMT {req.job_id}] v5.3 composite failed: {comp_log}")
+                    raise RuntimeError(f"v5.3 composite ffmpeg failed")
                 else:
                     logger.info(
-                        f"[IMT {req.job_id}] v5.2 composite success: face {side}x{side} "
+                        f"[IMT {req.job_id}] v5.3 composite success: face {side}x{side} "
                         f"at ({crop_x1},{crop_y1}) on {orig_w}x{orig_h}"
                     )
+
+                # Clean up temp
+                if os.path.exists(mask_path):
+                    os.remove(mask_path)
             else:
                 raise RuntimeError("No face detected for v5 composite")
 
