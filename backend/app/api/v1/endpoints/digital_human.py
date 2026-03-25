@@ -2373,6 +2373,7 @@ async def _generate_lipsync_video(
     portrait_url: str,
     audio_url: str,
     engine: str = "musetalk",
+    portrait_type: str = "image",
     max_wait_sec: int = 120,
 ) -> Optional[str]:
     """
@@ -2411,7 +2412,7 @@ async def _generate_lipsync_video(
             payload = {
                 "job_id": job_id,
                 "portrait_url": portrait_sas,
-                "portrait_type": "video",
+                "portrait_type": portrait_type,
                 "audio_url": audio_sas,
                 "bbox_shift": 0,
                 "extra_margin": 10,
@@ -2764,10 +2765,12 @@ async def autopilot_next(
                 f"[AutoPilot] Generating lip-sync video: "
                 f"engine={lipsync_engine}, portrait={portrait_url[:60]}..."
             )
+            portrait_type = session.get("portrait_type", "image")
             video_url = await _generate_lipsync_video(
                 portrait_url=portrait_url,
                 audio_url=wav_audio_url,
                 engine=lipsync_engine,
+                portrait_type=portrait_type,
                 max_wait_sec=180,
             )
             if video_url:
