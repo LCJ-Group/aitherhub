@@ -1617,7 +1617,7 @@ class IMTalkerRequest(BaseModel):
     portrait_url: str = Field(..., description="URL of portrait image or driving video")
     portrait_type: str = Field(default="image", description="'image' or 'video'")
     audio_url: str = Field(..., description="URL of audio file (WAV/MP3)")
-    a_cfg_scale: float = Field(default=3.5, description="Audio CFG scale (3.5 = strong natural lip sync, 1.5 = too subtle)")
+    a_cfg_scale: float = Field(default=2.0, description="Audio CFG scale (2.0 = official recommended, natural lip sync)")
     nfe: int = Field(default=48, description="Number of function evaluations for ODE solver (higher = better quality)")
     crop: bool = Field(default=True, description="Whether to crop face region")
     output_fps: int = Field(default=25, description="Output video FPS")
@@ -1818,205 +1818,270 @@ async def _run_imtalker_job(req: IMTalkerRequest):
         src_video = os.path.join(output_dir, output_files[0])
         job["progress"] = 85
 
-        # ── Step 5: Composite onto original 9:16 portrait ──
-        # Strategy v5: Replicate IMTalker's crop logic to find the exact face
-        # region, then paste the animated face back onto the original portrait.
-        # Body, background, and everything outside the face stays untouched.
-        logger.info(f"[IMT {req.job_id}] Compositing v5: face-only replacement on original portrait...")
+        # ── Step 5: v8 Composite – OpenCV frame-by-frame with Poisson blending ──
+        # v8 approach:
+        # - Read crop coordinates from JSON saved by patched generate.py
+        # - Use inner 90% of IMTalker 512x512 output (much more face coverage)
+        # - OpenCV frame-by-frame compositing with cv2.seamlessClone (Poisson blending)
+        # - Driving video as background (body moves naturally)
+        # - Gaussian-blurred elliptical mask fallback if seamlessClone fails
+        # - Optional GFPGAN post-processing for face quality enhancement
+        logger.info(f"[IMT {req.job_id}] Compositing v8: OpenCV frame-by-frame with Poisson blending...")
         final_output = os.path.join(job_dir, f"output_{req.job_id}.mp4")
 
         try:
-            from PIL import Image
+            import cv2
             import numpy as np
+            from PIL import Image
 
             img = Image.open(portrait_path)
             orig_w, orig_h = img.size
             logger.info(f"[IMT {req.job_id}] Original portrait: {orig_w}x{orig_h}")
 
-            # ── Replicate IMTalker's process_img crop logic ──
-            # This mirrors DataProcessor.process_img() in IMTalker/generator/generate.py
-            img_arr = np.array(img)
+            # ── Try to read crop coordinates from JSON (saved by patched generate.py) ──
+            crop_json_path = None
+            for f in os.listdir(output_dir):
+                if f.endswith("_crop_coords.json"):
+                    crop_json_path = os.path.join(output_dir, f)
+                    break
 
-            # Use face_alignment (same library as IMTalker) to detect face
-            import face_alignment
-            fa = face_alignment.FaceAlignment(
-                face_alignment.LandmarksType.TWO_D, flip_input=False,
-                device='cuda'  # GPU worker always has CUDA
-            )
-            bboxes = fa.face_detector.detect_from_image(img_arr)
-            valid_bboxes = [
-                (int(x1), int(y1), int(x2), int(y2), score)
-                for (x1, y1, x2, y2, score) in bboxes if score > 0.95
-            ]
-
-            if not valid_bboxes:
-                logger.warning(f"[IMT {req.job_id}] No face detected for v5 composite, lowering threshold")
+            if crop_json_path and os.path.exists(crop_json_path):
+                with open(crop_json_path, 'r') as f:
+                    crop_coords = json.load(f)
+                crop_x1 = crop_coords["x1"]
+                crop_y1 = crop_coords["y1"]
+                crop_x2 = crop_coords["x2"]
+                crop_y2 = crop_coords["y2"]
+                side = crop_coords["side"]
+                logger.info(f"[IMT {req.job_id}] v8: Using crop coords from JSON: ({crop_x1},{crop_y1})-({crop_x2},{crop_y2}), side={side}")
+            else:
+                # Fallback: replicate IMTalker's crop logic
+                logger.info(f"[IMT {req.job_id}] v8: No crop JSON found, replicating crop logic...")
+                import face_alignment
+                fa = face_alignment.FaceAlignment(
+                    face_alignment.LandmarksType.TWO_D, flip_input=False,
+                    device='cuda'
+                )
+                img_arr = np.array(img)
+                bboxes = fa.face_detector.detect_from_image(img_arr)
                 valid_bboxes = [
                     (int(x1), int(y1), int(x2), int(y2), score)
                     for (x1, y1, x2, y2, score) in bboxes if score > 0.5
                 ]
+                if not valid_bboxes:
+                    raise RuntimeError("No face detected for v8 composite")
 
-            if valid_bboxes:
                 x1, y1, x2, y2, _ = valid_bboxes[0]
                 cx = (x1 + x2) // 2
                 cy = (y1 + y2) // 2
-
                 half_w = int((x2 - x1) * 0.8)
                 half_h = int((y2 - y1) * 0.8)
                 half = max(half_w, half_h)
-
                 crop_x1 = max(cx - half, 0)
                 crop_x2 = min(cx + half, orig_w)
                 crop_y1 = max(cy - half, 0)
                 crop_y2 = min(cy + half, orig_h)
-
                 side = min(crop_x2 - crop_x1, crop_y2 - crop_y1)
                 crop_x2 = crop_x1 + side
                 crop_y2 = crop_y1 + side
+                del fa  # free GPU memory
 
-                logger.info(
-                    f"[IMT {req.job_id}] v5 face crop: bbox=({x1},{y1},{x2},{y2}), "
-                    f"crop=({crop_x1},{crop_y1})-({crop_x2},{crop_y2}), side={side}"
-                )
+            # ── v8 parameters ──
+            INNER_RATIO = 0.90  # use 90% of IMTalker output (was 70% in v7)
+            IMT_SIZE = 512
+            inner_px = int(IMT_SIZE * INNER_RATIO)  # ~460 pixels
+            margin = (IMT_SIZE - inner_px) // 2      # ~26 pixels from each edge
 
-                # ── v7: Inner-face overlay with driving video background ──
-                # v6 problem: always used static image as background, even when
-                # a driving video was provided. This made the body completely
-                # static while only the face moved — very unnatural.
-                #
-                # v7 approach:
-                # - If driving video exists, use it as background (body moves!)
-                # - Use inner 70% of IMTalker output (larger face area)
-                # - Improved elliptical mask with wider feathering
-                # - Better blending for seamless face replacement
-                inner_ratio = 0.70  # use inner 70% of IMTalker output (was 55%)
-                inner_px = int(512 * inner_ratio)  # ~358 pixels
-                margin = (512 - inner_px) // 2     # ~77 pixels from each edge
+            # Map inner region to original image coordinates
+            inner_side = int(side * INNER_RATIO)
+            inner_x1 = crop_x1 + (side - inner_side) // 2
+            inner_y1 = crop_y1 + (side - inner_side) // 2
 
-                # The inner region maps to a smaller area on the original image
-                inner_side = int(side * inner_ratio)
-                inner_x1 = crop_x1 + (side - inner_side) // 2
-                inner_y1 = crop_y1 + (side - inner_side) // 2
+            logger.info(
+                f"[IMT {req.job_id}] v8 params: inner_ratio={INNER_RATIO}, "
+                f"inner_px={inner_px}, margin={margin}, inner_side={inner_side}, "
+                f"inner_pos=({inner_x1},{inner_y1})"
+            )
 
-                # Create elliptical mask for the inner region (on inner_px x inner_px)
-                mask_path = os.path.join(job_dir, "inner_face_mask.png")
-                feather_px = max(40, int(inner_px * 0.28))  # 28% feather (wider)
+            # ── Create elliptical mask for blending ──
+            # Soft elliptical mask centered slightly above middle (to cover forehead better)
+            mask_2d = np.zeros((inner_px, inner_px), dtype=np.float32)
+            cy_m = inner_px * 0.47  # slightly above center
+            cx_m = inner_px / 2.0
+            ry = inner_px * 0.47  # vertical radius
+            rx = inner_px * 0.46  # horizontal radius
+            y_coords = np.arange(inner_px, dtype=np.float32)
+            x_coords = np.arange(inner_px, dtype=np.float32)
+            dy = (y_coords - cy_m) / max(ry, 1)
+            dx = (x_coords - cx_m) / max(rx, 1)
+            dist = np.sqrt(dy[:, None]**2 + dx[None, :]**2)
+            # Smooth sigmoid-like falloff
+            mask_2d = np.clip(1.0 - (dist - 0.6) / 0.5, 0.0, 1.0)
+            # Apply Gaussian blur for very smooth edges
+            blur_k = max(31, int(inner_px * 0.15) | 1)  # ensure odd
+            mask_2d = cv2.GaussianBlur(mask_2d, (blur_k, blur_k), 0)
+            # Create binary mask for seamlessClone (255 inside ellipse)
+            poisson_mask = (mask_2d > 0.5).astype(np.uint8) * 255
 
-                y_coords = np.arange(inner_px, dtype=np.float32)
-                x_coords = np.arange(inner_px, dtype=np.float32)
-                cy_m = inner_px * 0.46  # slightly above center (avoid chin)
-                cx_m = inner_px / 2.0
-                ry = inner_px * 0.48  # vertical radius (larger)
-                rx = inner_px * 0.50  # horizontal radius (wider for cheeks)
-                dy = (y_coords - cy_m) / max(ry, 1)
-                dx = (x_coords - cx_m) / max(rx, 1)
-                dist = np.sqrt(dy[:, None]**2 + dx[None, :]**2)
-                # Smooth falloff with very wide feather for seamless blending
-                mask_arr = np.clip(1.0 - (dist - 0.45) / 0.75, 0.0, 1.0)
-                mask_arr = mask_arr ** 0.4  # gentler curve for smoother transition
-                mask_img = Image.fromarray((mask_arr * 255).astype(np.uint8), mode='L')
-                mask_img.save(mask_path)
+            # ── Read IMTalker output video ──
+            imt_cap = cv2.VideoCapture(src_video)
+            imt_fps = imt_cap.get(cv2.CAP_PROP_FPS) or 25
+            imt_frame_count = int(imt_cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            logger.info(f"[IMT {req.job_id}] IMTalker output: {imt_frame_count} frames at {imt_fps} fps")
 
-                # Determine background source: driving video or static image
-                use_video_bg = portrait_is_video and portrait_video_path and os.path.exists(portrait_video_path)
-                bg_source = portrait_video_path if use_video_bg else portrait_path
-                bg_label = "driving_video" if use_video_bg else "static_image"
+            # ── Read background source ──
+            use_video_bg = portrait_is_video and portrait_video_path and os.path.exists(portrait_video_path)
+            bg_label = "driving_video" if use_video_bg else "static_image"
+            logger.info(f"[IMT {req.job_id}] v8 background: {bg_label}")
 
-                logger.info(
-                    f"[IMT {req.job_id}] v7 inner-face: crop_side={side}, "
-                    f"inner_px={inner_px}, inner_side={inner_side}, "
-                    f"inner_pos=({inner_x1},{inner_y1}), feather={feather_px}px, "
-                    f"bg={bg_label}"
-                )
-
-                # ffmpeg filter:
-                # 1. Crop inner region from IMTalker output (center 70%)
-                # 2. Scale to inner_side
-                # 3. Apply elliptical mask
-                # 4. Overlay on background (driving video or static portrait)
-                if use_video_bg:
-                    # Driving video background: scale video to original size,
-                    # sync with IMTalker output duration
-                    filter_complex = (
-                        f"[0:v]crop={inner_px}:{inner_px}:{margin}:{margin},"
-                        f"scale={inner_side}:{inner_side}:flags=lanczos[face_inner];"
-                        f"[2:v]scale={inner_side}:{inner_side}:flags=bilinear[mask_scaled];"
-                        f"[face_inner][mask_scaled]alphamerge[face_masked];"
-                        f"[1:v]scale={orig_w}:{orig_h}:flags=lanczos[bg];"
-                        f"[bg][face_masked]overlay={inner_x1}:{inner_y1}:format=auto[out]"
-                    )
-                else:
-                    # Static image background (original behavior, improved)
-                    filter_complex = (
-                        f"[0:v]crop={inner_px}:{inner_px}:{margin}:{margin},"
-                        f"scale={inner_side}:{inner_side}:flags=lanczos[face_inner];"
-                        f"[2:v]scale={inner_side}:{inner_side}:flags=bilinear[mask_scaled];"
-                        f"[face_inner][mask_scaled]alphamerge[face_masked];"
-                        f"[1:v]scale={orig_w}:{orig_h}[bg];"
-                        f"[bg][face_masked]overlay={inner_x1}:{inner_y1}:format=auto[out]"
-                    )
-
-                # Build ffmpeg command based on background type
-                if use_video_bg:
-                    # For video background: use stream_loop to loop driving video
-                    # if it's shorter than IMTalker output
-                    composite_cmd = [
-                        "ffmpeg", "-y",
-                        "-i", src_video,                          # input 0: IMTalker (512x512)
-                        "-stream_loop", "-1", "-i", bg_source,    # input 1: driving video (looped)
-                        "-loop", "1", "-i", mask_path,             # input 2: elliptical mask
-                        "-filter_complex", filter_complex,
-                        "-map", "[out]",
-                        "-map", "0:a?",
-                        "-c:v", "libx264", "-preset", "fast", "-crf", "18",
-                        "-c:a", "aac", "-b:a", "128k",
-                        "-shortest",
-                        "-pix_fmt", "yuv420p",
-                        final_output,
-                    ]
-                else:
-                    composite_cmd = [
-                        "ffmpeg", "-y",
-                        "-i", src_video,                          # input 0: IMTalker (512x512)
-                        "-loop", "1", "-i", bg_source,            # input 1: static portrait
-                        "-loop", "1", "-i", mask_path,             # input 2: elliptical mask
-                        "-filter_complex", filter_complex,
-                        "-map", "[out]",
-                        "-map", "0:a?",
-                        "-c:v", "libx264", "-preset", "fast", "-crf", "18",
-                        "-c:a", "aac", "-b:a", "128k",
-                        "-shortest",
-                        "-pix_fmt", "yuv420p",
-                        final_output,
-                    ]
-
-                comp_proc = await asyncio.create_subprocess_exec(
-                    *composite_cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.STDOUT,
-                    cwd=job_dir,
-                )
-                comp_out, _ = await comp_proc.communicate()
-                if comp_proc.returncode != 0:
-                    comp_log = comp_out.decode('utf-8', errors='replace')[-800:]
-                    logger.warning(f"[IMT {req.job_id}] v7 composite failed: {comp_log}")
-                    raise RuntimeError(f"v7 composite ffmpeg failed")
-                else:
-                    logger.info(
-                        f"[IMT {req.job_id}] v7 composite success: inner {inner_side}x{inner_side} "
-                        f"at ({inner_x1},{inner_y1}) on {orig_w}x{orig_h}, bg={bg_label}"
-                    )
-
-                # Clean up temp
-                if os.path.exists(mask_path):
-                    os.remove(mask_path)
+            if use_video_bg:
+                bg_cap = cv2.VideoCapture(portrait_video_path)
+                bg_frame_count = int(bg_cap.get(cv2.CAP_PROP_FRAME_COUNT))
             else:
-                raise RuntimeError("No face detected for v5 composite")
+                bg_img = cv2.imread(portrait_path)
+                bg_cap = None
+                bg_frame_count = 0
 
-        except Exception as e_v5:
-            logger.warning(f"[IMT {req.job_id}] v5 composite failed ({e_v5}), falling back to scaled output")
+            # ── Setup output video writer ──
+            temp_video_no_audio = os.path.join(job_dir, "v8_composite_noaudio.mp4")
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            out_writer = cv2.VideoWriter(
+                temp_video_no_audio, fourcc, imt_fps,
+                (orig_w, orig_h)
+            )
+
+            # ── Frame-by-frame compositing ──
+            frame_idx = 0
+            poisson_fail_count = 0
+            bg_frame_idx = 0
+
+            while True:
+                ret, imt_frame = imt_cap.read()
+                if not ret:
+                    break
+
+                # Get background frame
+                if use_video_bg and bg_cap is not None:
+                    bg_ret, bg_frame = bg_cap.read()
+                    if not bg_ret:
+                        # Loop driving video
+                        bg_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                        bg_ret, bg_frame = bg_cap.read()
+                        if not bg_ret:
+                            bg_frame = bg_img if bg_img is not None else np.zeros((orig_h, orig_w, 3), dtype=np.uint8)
+                    # Resize background to original portrait size
+                    if bg_frame.shape[1] != orig_w or bg_frame.shape[0] != orig_h:
+                        bg_frame = cv2.resize(bg_frame, (orig_w, orig_h), interpolation=cv2.INTER_LANCZOS4)
+                else:
+                    bg_frame = bg_img.copy()
+
+                # Extract inner region from IMTalker output
+                face_crop = imt_frame[margin:margin+inner_px, margin:margin+inner_px]
+
+                # Resize face to match target area on original image
+                face_resized = cv2.resize(face_crop, (inner_side, inner_side), interpolation=cv2.INTER_LANCZOS4)
+                mask_resized = cv2.resize(poisson_mask, (inner_side, inner_side), interpolation=cv2.INTER_LINEAR)
+                alpha_resized = cv2.resize(mask_2d, (inner_side, inner_side), interpolation=cv2.INTER_LINEAR)
+
+                # Ensure coordinates are within bounds
+                fx1 = max(0, inner_x1)
+                fy1 = max(0, inner_y1)
+                fx2 = min(orig_w, inner_x1 + inner_side)
+                fy2 = min(orig_h, inner_y1 + inner_side)
+
+                # Corresponding region in face_resized
+                sx1 = fx1 - inner_x1
+                sy1 = fy1 - inner_y1
+                sx2 = sx1 + (fx2 - fx1)
+                sy2 = sy1 + (fy2 - fy1)
+
+                # Try Poisson blending (seamlessClone) for natural boundary
+                use_poisson = True
+                if use_poisson and frame_idx < 3 or (frame_idx % 1 == 0):  # all frames
+                    try:
+                        # Center point for seamlessClone
+                        center_x = (fx1 + fx2) // 2
+                        center_y = (fy1 + fy2) // 2
+                        center = (int(center_x), int(center_y))
+
+                        # seamlessClone needs the source to be same size as mask
+                        result_frame = cv2.seamlessClone(
+                            face_resized, bg_frame, mask_resized,
+                            center, cv2.NORMAL_CLONE
+                        )
+                        out_writer.write(result_frame)
+                        frame_idx += 1
+                        continue
+                    except Exception as e_poisson:
+                        if poisson_fail_count == 0:
+                            logger.warning(f"[IMT {req.job_id}] Poisson blend failed on frame {frame_idx}: {e_poisson}")
+                        poisson_fail_count += 1
+                        use_poisson = False
+
+                # Fallback: alpha blending with soft mask
+                alpha_3ch = np.stack([alpha_resized]*3, axis=-1)
+                roi = bg_frame[fy1:fy2, fx1:fx2]
+                face_region = face_resized[sy1:sy2, sx1:sx2]
+                alpha_region = alpha_3ch[sy1:sy2, sx1:sx2]
+
+                blended = (face_region.astype(np.float32) * alpha_region +
+                           roi.astype(np.float32) * (1.0 - alpha_region))
+                bg_frame[fy1:fy2, fx1:fx2] = blended.astype(np.uint8)
+
+                out_writer.write(bg_frame)
+                frame_idx += 1
+
+            out_writer.release()
+            imt_cap.release()
+            if bg_cap is not None:
+                bg_cap.release()
+
+            logger.info(
+                f"[IMT {req.job_id}] v8 composite: {frame_idx} frames, "
+                f"poisson_fails={poisson_fail_count}"
+            )
+
+            # ── Add audio back ──
+            add_audio_cmd = [
+                "ffmpeg", "-y",
+                "-i", temp_video_no_audio,
+                "-i", src_video,  # get audio from IMTalker output
+                "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+                "-map", "0:v:0", "-map", "1:a:0?",
+                "-c:a", "aac", "-b:a", "128k",
+                "-shortest",
+                "-pix_fmt", "yuv420p",
+                final_output,
+            ]
+            audio_proc = await asyncio.create_subprocess_exec(
+                *add_audio_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                cwd=job_dir,
+            )
+            audio_out, _ = await audio_proc.communicate()
+            if audio_proc.returncode != 0:
+                logger.warning(f"[IMT {req.job_id}] Audio mux failed, using video without audio")
+                import shutil
+                shutil.move(temp_video_no_audio, final_output)
+            else:
+                # Clean up temp
+                if os.path.exists(temp_video_no_audio):
+                    os.remove(temp_video_no_audio)
+
+            logger.info(f"[IMT {req.job_id}] v8 composite complete: {final_output}")
+
+        except Exception as e_v8:
+            logger.warning(f"[IMT {req.job_id}] v8 composite failed ({e_v8}), falling back to scaled output")
+            import traceback
+            logger.warning(traceback.format_exc())
             # Fallback: scale 512x512 to fit 9:16 with padding
-            target_w, target_h = (1080, 1920) if orig_w >= 1080 else (720, 1280)
+            try:
+                img_fb = Image.open(portrait_path)
+                orig_w_fb, orig_h_fb = img_fb.size
+            except Exception:
+                orig_w_fb, orig_h_fb = 1080, 1920
+            target_w, target_h = (1080, 1920) if orig_w_fb >= 1080 else (720, 1280)
             filter_simple = (
                 f"[0:v]scale={target_w}:{target_h}:"
                 f"force_original_aspect_ratio=decrease,"
@@ -2045,11 +2110,6 @@ async def _run_imtalker_job(req: IMTalkerRequest):
                 logger.warning(f"[IMT {req.job_id}] Fallback also failed, using raw output")
                 import shutil
                 shutil.move(src_video, final_output)
-
-        except Exception as e:
-            logger.warning(f"[IMT {req.job_id}] Composite failed ({e}), using raw 512x512 output")
-            import shutil
-            shutil.move(src_video, final_output)
 
         job["progress"] = 95
 
