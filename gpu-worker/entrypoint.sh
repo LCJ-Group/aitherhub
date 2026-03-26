@@ -3,7 +3,7 @@ set -e
 
 echo "============================================"
 echo "  AitherHub GPU Worker — Entrypoint"
-echo "  (FaceFusion + MuseTalk + IMTalker)"
+echo "  (FaceFusion + MuseTalk + IMTalker + LivePortrait)"
 echo "============================================"
 echo ""
 
@@ -95,6 +95,11 @@ install_if_missing "flow_vis" "flow-vis"
 install_if_missing "av" "av==12.0.0"
 install_if_missing "librosa" "librosa"
 
+# FasterLivePortrait / JoyVASA dependencies
+install_if_missing "onnxruntime" "onnxruntime-gpu"
+install_if_missing "scipy" "scipy"
+install_if_missing "tyro" "tyro"
+
 echo "  Python dependencies check complete."
 
 # ── [4/7] v4l2loopback Setup ────────────────────────────────────────────────
@@ -165,6 +170,8 @@ if [ -d "$REPO_DIR/.git" ]; then
     cp -f "$REPO_DIR/gpu-worker/worker_api.py" "$WORKSPACE/worker_api.py" 2>/dev/null || true
     cp -f "$REPO_DIR/gpu-worker/live_api.py" "$WORKSPACE/live_api.py" 2>/dev/null || true
     cp -f "$REPO_DIR/gpu-worker/live_engine.py" "$WORKSPACE/live_engine.py" 2>/dev/null || true
+    cp -f "$REPO_DIR/gpu-worker/liveportrait_engine.py" "$WORKSPACE/liveportrait_engine.py" 2>/dev/null || true
+    cp -f "$REPO_DIR/gpu-worker/imtalker_generate_patch.py" "$WORKSPACE/imtalker_generate_patch.py" 2>/dev/null || true
     echo "  Latest code pulled and copied."
 else
     echo "  [skip] Git repo not found at $REPO_DIR. Using existing worker files."
@@ -183,6 +190,7 @@ export SOURCE_FACE_DIR="$WORKSPACE/source_faces"
 export TEMP_DIR="$WORKSPACE/tmp"
 export MUSETALK_DIR="${MUSETALK_DIR:-$WORKSPACE/MuseTalk}"
 export IMTALKER_DIR="${IMTALKER_DIR:-$WORKSPACE/IMTalker}"
+export FASTER_LIVEPORTRAIT_DIR="${FASTER_LIVEPORTRAIT_DIR:-$WORKSPACE/FasterLivePortrait}"
 
 # ── Start Worker API ────────────────────────────────────────────────────────
 
@@ -198,12 +206,14 @@ echo "  Features:"
 echo "    - FaceFusion (Mode B: Real-time face swap)"
 echo "    - MuseTalk v1.5 (Mode A: Digital human lip-sync)"
 echo "    - IMTalker (Premium: Full facial animation)"
+echo "    - LivePortrait 3-Layer (Next-gen: Audio-driven face animation)"
 echo ""
 echo "  Endpoints:"
 echo "    GET  /api/health                    - Health check"
 echo "    GET  /api/digital-human/health      - Digital human health"
 echo "    POST /api/digital-human/generate    - MuseTalk generate"
 echo "    POST /api/digital-human/imtalker/generate - IMTalker generate"
+echo "    POST /api/digital-human/liveportrait/generate - LivePortrait 3-layer"
 echo ""
 
 cd "$WORKSPACE"

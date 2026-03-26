@@ -2142,6 +2142,183 @@ async def _run_imtalker_job(req: IMTalkerRequest):
             shutil.rmtree(results_dir, ignore_errors=True)
 
 
+# ── LivePortrait 3-Layer Pipeline (Premium Digital Human v2) ──────────────────
+
+# Lazy-loaded LivePortrait engine
+_liveportrait_engine = None
+
+def _get_liveportrait_engine():
+    global _liveportrait_engine
+    if _liveportrait_engine is None:
+        from liveportrait_engine import LivePortraitEngine
+        _liveportrait_engine = LivePortraitEngine(gpu_id=0)
+    return _liveportrait_engine
+
+
+class LivePortraitRequest(BaseModel):
+    """Request to generate a premium digital human video with LivePortrait 3-layer pipeline."""
+    job_id: str = Field(..., description="Unique job ID")
+    portrait_url: str = Field(..., description="URL of portrait image")
+    portrait_type: str = Field(default="image", description="'image' or 'video'")
+    audio_url: str = Field(..., description="URL of audio file (WAV/MP3)")
+    output_fps: int = Field(default=25, description="Output video FPS")
+    enable_smoothing: bool = Field(default=True, description="Enable temporal smoothing (Layer 3)")
+    enable_angle_policy: bool = Field(default=True, description="Enable angle-aware blending")
+    enable_idle: bool = Field(default=False, description="Enable idle animation for silent parts")
+    smoothing_alpha_exp: float = Field(default=0.3, description="Expression smoothing alpha (0=full smooth, 1=no smooth)")
+    smoothing_alpha_pose: float = Field(default=0.2, description="Pose smoothing alpha")
+    flicker_threshold: float = Field(default=8.0, description="Flicker suppression threshold")
+
+
+@app.post("/api/digital-human/liveportrait/generate", dependencies=[Depends(verify_api_key)])
+async def liveportrait_generate(req: LivePortraitRequest):
+    """Start a premium digital human video generation job using LivePortrait 3-layer pipeline.
+    
+    3-Layer Architecture:
+    - Layer 1: FasterLivePortrait (face generation with stitching + paste-back)
+    - Layer 2: JoyVASA (audio → motion sequence)
+    - Layer 3: Temporal smoothing (EMA + flicker suppression)
+    """
+    if req.job_id in digital_human_jobs:
+        return {"error": f"Job {req.job_id} already exists"}
+
+    digital_human_jobs[req.job_id] = {
+        "status": "queued",
+        "progress": 0,
+        "output_path": None,
+        "error": None,
+        "engine": "liveportrait",
+        "created_at": time.time(),
+    }
+
+    asyncio.create_task(_run_liveportrait_job(req))
+    return {"job_id": req.job_id, "status": "queued", "engine": "liveportrait"}
+
+
+async def _run_liveportrait_job(req: LivePortraitRequest):
+    """Background task to run LivePortrait 3-layer pipeline."""
+    import httpx
+    job = digital_human_jobs[req.job_id]
+    job["status"] = "processing"
+    job["progress"] = 5
+
+    job_dir = os.path.join(TEMP_DIR, f"lp_{req.job_id}")
+    os.makedirs(job_dir, exist_ok=True)
+
+    try:
+        # ── Step 1: Download portrait and audio ──
+        logger.info(f"[LP {req.job_id}] Downloading portrait and audio...")
+
+        if req.portrait_url.startswith('file://'):
+            import shutil as _shutil
+            _src = req.portrait_url[7:]
+            ext = os.path.splitext(_src)[1] or '.png'
+            portrait_path = os.path.join(job_dir, f"portrait{ext}")
+            _shutil.copy2(_src, portrait_path)
+        else:
+            async with httpx.AsyncClient(timeout=60) as client:
+                r = await client.get(req.portrait_url)
+                r.raise_for_status()
+                ct = r.headers.get("content-type", "").lower()
+                ext = ".png" if ("png" in ct or req.portrait_url.lower().endswith(".png")) else ".jpg"
+                portrait_path = os.path.join(job_dir, f"portrait{ext}")
+                with open(portrait_path, "wb") as f:
+                    f.write(r.content)
+
+        # Download audio
+        if req.audio_url.startswith('file://'):
+            import shutil as _shutil
+            _src = req.audio_url[7:]
+            audio_ext = os.path.splitext(_src)[1] or '.wav'
+            audio_path = os.path.join(job_dir, f"audio{audio_ext}")
+            _shutil.copy2(_src, audio_path)
+        else:
+            async with httpx.AsyncClient(timeout=60) as client:
+                r = await client.get(req.audio_url)
+                r.raise_for_status()
+                audio_ext = ".wav" if "wav" in r.headers.get("content-type", "") else ".mp3"
+                audio_path = os.path.join(job_dir, f"audio{audio_ext}")
+                with open(audio_path, "wb") as f:
+                    f.write(r.content)
+
+        job["progress"] = 10
+
+        # ── Step 2: Convert audio to WAV 16kHz mono ──
+        wav_path = os.path.join(job_dir, "audio_16k.wav")
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-y", "-i", audio_path, "-ar", "16000", "-ac", "1", wav_path,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        await proc.wait()
+        if os.path.exists(wav_path):
+            audio_path = wav_path
+        job["progress"] = 15
+
+        # ── Step 3: Run LivePortrait 3-layer pipeline ──
+        logger.info(f"[LP {req.job_id}] Running LivePortrait 3-layer pipeline...")
+        output_path = os.path.join(job_dir, f"output_{req.job_id}.mp4")
+
+        engine = _get_liveportrait_engine()
+
+        # Configure smoother
+        engine.smoother = __import__('liveportrait_engine').TemporalSmoother(
+            alpha_exp=req.smoothing_alpha_exp,
+            alpha_pose=req.smoothing_alpha_pose,
+            flicker_threshold=req.flicker_threshold,
+        )
+
+        def progress_cb(pct, msg):
+            # Map engine progress (0-100) to job progress (15-95)
+            job["progress"] = 15 + int(pct * 0.8)
+            logger.info(f"[LP {req.job_id}] {pct}% - {msg}")
+
+        # Run in thread pool to avoid blocking event loop
+        loop = asyncio.get_event_loop()
+        success = await loop.run_in_executor(
+            None,
+            lambda: engine.generate_from_audio(
+                audio_path=audio_path,
+                output_path=output_path,
+                source_path=portrait_path,
+                fps=req.output_fps,
+                enable_smoothing=req.enable_smoothing,
+                enable_angle_policy=req.enable_angle_policy,
+                enable_idle=req.enable_idle,
+                progress_callback=progress_cb,
+            )
+        )
+
+        if not success:
+            raise RuntimeError("LivePortrait pipeline failed")
+
+        job["progress"] = 95
+
+        if os.path.exists(output_path):
+            file_size = os.path.getsize(output_path) / (1024 * 1024)
+            logger.info(f"[LP {req.job_id}] Output: {output_path} ({file_size:.1f} MB)")
+            job["status"] = "completed"
+            job["progress"] = 100
+            job["output_path"] = output_path
+        else:
+            raise RuntimeError("LivePortrait output file not found")
+
+    except Exception as e:
+        logger.error(f"[LP {req.job_id}] Error: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        job["status"] = "error"
+        job["error"] = str(e)
+    finally:
+        # Clean up input files but keep output
+        for fname in ["portrait.png", "portrait.jpg", "audio.wav", "audio.mp3", "audio_16k.wav"]:
+            p = os.path.join(job_dir, fname)
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except Exception:
+                    pass
+
+
 # ── Admin: Remote Exec (for installation/maintenance) ────────────────────────
 
 class ExecRequest(BaseModel):
