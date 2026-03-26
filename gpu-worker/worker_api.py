@@ -2175,9 +2175,9 @@ async def liveportrait_generate(req: LivePortraitRequest):
     """Start a premium digital human video generation job using LivePortrait 3-layer pipeline.
     
     3-Layer Architecture:
-    - Layer 1: FasterLivePortrait (face generation with stitching + paste-back)
+    - Layer 1: LivePortrait PyTorch (face generation with stitching + paste-back)
     - Layer 2: JoyVASA (audio → motion sequence)
-    - Layer 3: Temporal smoothing (EMA + flicker suppression)
+    - Layer 3: Temporal smoothing (EMA + flicker suppression) + Angle-aware blending
     """
     if req.job_id in digital_human_jobs:
         return {"error": f"Job {req.job_id} already exists"}

@@ -1,21 +1,19 @@
 """
-LivePortrait 3-Layer Pipeline Engine
-=====================================
-Layer 1: FasterLivePortrait (full face generation with stitching + paste-back)
-Layer 2: MuseTalk lip-sync refinement (optional, for enhanced mouth accuracy)
-Layer 3: Temporal smoothing (landmark EMA, expression EMA, flicker suppression)
+LivePortrait 3-Layer Pipeline Engine (v2 - PyTorch Backend)
+============================================================
+Layer 1: LivePortrait (PyTorch) for full face generation with stitching + paste-back
+Layer 2: Temporal smoothing (expression EMA, pose EMA, flicker suppression)
+Layer 3: Angle-aware blending policy + idle animation
 
 Architecture:
-    Audio → JoyVASA → Motion Sequence → LivePortrait → Frame Compositor
-                                                     ↓
-                                        Temporal Smoother → Output
+    Audio → JoyVASA → Motion Sequence → LivePortrait (PyTorch) → paste_back
+                                                                ↓
+                                                   Temporal Smoother → Output
 
-This replaces IMTalker as the core talking-head model, providing:
-- Higher quality face generation (LivePortrait stitching)
-- Built-in paste-back to original image
-- Angle-aware policy (frontal=strong, side=conservative)
-- Idle animation (micro-movements when not speaking)
-- Temporal consistency across frames
+Key changes from v1 (ONNX):
+- Uses original LivePortrait PyTorch models (no GridSample 5D issue)
+- Direct access to warp_decode, stitching, retarget_eye/lip
+- Built-in paste_back with mask for seamless compositing
 """
 
 import os
@@ -25,7 +23,7 @@ import time
 import json
 import logging
 import tempfile
-import pickle
+import subprocess
 from typing import Optional, Dict, Any, List, Tuple
 from dataclasses import dataclass, field
 
@@ -36,7 +34,10 @@ import torch
 logger = logging.getLogger("liveportrait_engine")
 
 # ── Paths ──────────────────────────────────────────────────────────────────
+LIVEPORTRAIT_DIR = "/workspace/LivePortrait"
 FASTER_LP_DIR = "/workspace/FasterLivePortrait"
+
+# JoyVASA models (still from FasterLivePortrait)
 JOYVASA_MOTION_MODEL = os.path.join(
     FASTER_LP_DIR, "checkpoints/joyvasa/motion_generator/motion_generator_hubert_chinese.pt"
 )
@@ -52,19 +53,13 @@ JOYVASA_AUDIO_MODEL = os.path.join(
 
 class TemporalSmoother:
     """
-    Layer 3: Temporal smoothing for frame-to-frame consistency.
+    Layer 2: Temporal smoothing for frame-to-frame consistency.
     Uses exponential moving average (EMA) on expression parameters
-    and one-euro filter for landmark positions.
+    and flicker suppression on pixel level.
     """
 
     def __init__(self, alpha_exp: float = 0.3, alpha_pose: float = 0.2,
                  flicker_threshold: float = 8.0):
-        """
-        Args:
-            alpha_exp: EMA weight for expression (0=full smooth, 1=no smooth)
-            alpha_pose: EMA weight for head pose (pitch/yaw/roll)
-            flicker_threshold: pixel-level threshold for flicker suppression
-        """
         self.alpha_exp = alpha_exp
         self.alpha_pose = alpha_pose
         self.flicker_threshold = flicker_threshold
@@ -75,67 +70,49 @@ class TemporalSmoother:
         self._frame_count = 0
 
     def reset(self):
-        """Reset smoother state for new sequence."""
         self._prev_exp = None
         self._prev_pose = None
         self._prev_frame = None
         self._frame_count = 0
 
-    def smooth_motion(self, motion_info: dict) -> dict:
-        """
-        Smooth motion parameters (expression + pose) using EMA.
-        Returns smoothed motion_info dict.
-        """
-        smoothed = copy.deepcopy(motion_info)
+    def smooth_expression(self, exp_tensor: torch.Tensor) -> torch.Tensor:
+        """Smooth expression tensor using EMA."""
+        if self._prev_exp is None:
+            self._prev_exp = exp_tensor.clone()
+            return exp_tensor
 
-        # Smooth expression
-        exp = smoothed.get("exp")
-        if exp is not None:
-            if self._prev_exp is not None:
-                smoothed["exp"] = (self.alpha_exp * exp +
-                                   (1 - self.alpha_exp) * self._prev_exp)
-            self._prev_exp = smoothed["exp"].copy()
+        smoothed = self.alpha_exp * exp_tensor + (1 - self.alpha_exp) * self._prev_exp
+        self._prev_exp = smoothed.clone()
+        return smoothed
 
-        # Smooth pose (pitch, yaw, roll, translation)
-        for key in ["pitch", "yaw", "roll", "t"]:
-            val = smoothed.get(key)
-            if val is not None:
-                if self._prev_pose is not None and key in self._prev_pose:
-                    smoothed[key] = (self.alpha_pose * val +
-                                     (1 - self.alpha_pose) * self._prev_pose[key])
-
+    def smooth_rotation(self, R: torch.Tensor) -> torch.Tensor:
+        """Smooth rotation matrix using EMA."""
         if self._prev_pose is None:
-            self._prev_pose = {}
-        for key in ["pitch", "yaw", "roll", "t"]:
-            if key in smoothed:
-                self._prev_pose[key] = smoothed[key].copy() if hasattr(smoothed[key], 'copy') else smoothed[key]
+            self._prev_pose = R.clone()
+            return R
 
-        self._frame_count += 1
+        smoothed = self.alpha_pose * R + (1 - self.alpha_pose) * self._prev_pose
+        self._prev_pose = smoothed.clone()
         return smoothed
 
     def suppress_flicker(self, frame: np.ndarray) -> np.ndarray:
-        """
-        Suppress temporal flicker by blending with previous frame
-        when pixel-level changes are below threshold.
-        """
+        """Suppress temporal flicker by blending with previous frame."""
         if self._prev_frame is None:
             self._prev_frame = frame.copy()
             return frame
 
-        # Compute per-pixel absolute difference
         diff = cv2.absdiff(frame, self._prev_frame).astype(np.float32)
-        mean_diff = diff.mean(axis=2)  # average across channels
+        mean_diff = diff.mean(axis=2)
 
-        # Create blend mask: where diff is small, blend more with previous
         blend_alpha = np.clip(mean_diff / self.flicker_threshold, 0.0, 1.0)
-        blend_alpha = blend_alpha[:, :, np.newaxis]  # expand for 3 channels
+        blend_alpha = blend_alpha[:, :, np.newaxis]
 
-        # Blend: high diff = use new frame, low diff = use previous
         result = (frame.astype(np.float32) * blend_alpha +
                   self._prev_frame.astype(np.float32) * (1.0 - blend_alpha))
         result = result.astype(np.uint8)
 
         self._prev_frame = result.copy()
+        self._frame_count += 1
         return result
 
 
@@ -143,27 +120,24 @@ class TemporalSmoother:
 
 class AnglePolicy:
     """
-    Layer 4: Angle-aware blending policy.
-    - Frontal (yaw < 15°): Full AI generation, strong blend
-    - Angled (15-35°): Moderate blend, reduce expression intensity
-    - Profile (>35°): Minimal AI, prefer original/driving frame
+    Layer 3: Angle-aware blending policy.
+    - Frontal (yaw < 15 deg): Full AI generation
+    - Angled (15-35 deg): Moderate blend
+    - Profile (>35 deg): Minimal AI, prefer original
     """
 
     @staticmethod
     def get_blend_weight(yaw_deg: float) -> float:
-        """Get AI blend weight based on head yaw angle."""
         abs_yaw = abs(yaw_deg)
         if abs_yaw < 15:
-            return 1.0  # Full AI
+            return 1.0
         elif abs_yaw < 35:
-            # Linear falloff from 1.0 to 0.3
             return 1.0 - 0.7 * (abs_yaw - 15) / 20
         else:
-            return 0.3  # Minimal AI, mostly original
+            return 0.3
 
     @staticmethod
     def get_expression_scale(yaw_deg: float) -> float:
-        """Scale expression intensity based on angle."""
         abs_yaw = abs(yaw_deg)
         if abs_yaw < 20:
             return 1.0
@@ -178,9 +152,8 @@ class AnglePolicy:
 class IdleAnimator:
     """
     Generate subtle micro-movements for idle state (not speaking).
-    - Random blinks at natural intervals (every 3-7 seconds)
+    - Random blinks at natural intervals (3-7 seconds)
     - Subtle head micro-movements
-    - Breathing-like torso movement
     """
 
     def __init__(self, fps: int = 25):
@@ -192,17 +165,12 @@ class IdleAnimator:
         self._schedule_next_blink()
 
     def _schedule_next_blink(self):
-        """Schedule next blink at random interval (3-7 seconds)."""
         interval = np.random.uniform(3.0, 7.0)
         self._next_blink_frame = self._frame_count + int(interval * self.fps)
         self._blink_duration = int(np.random.uniform(0.15, 0.3) * self.fps)
         self._blink_progress = 0
 
     def get_idle_modifiers(self) -> dict:
-        """
-        Get idle animation modifiers for current frame.
-        Returns dict with eye_ratio, lip_ratio, and micro head movement.
-        """
         self._frame_count += 1
         mods = {
             "eye_close_ratio": 0.0,
@@ -210,20 +178,17 @@ class IdleAnimator:
             "head_yaw_delta": 0.0,
         }
 
-        # Blink animation
         if self._frame_count >= self._next_blink_frame:
             if self._blink_progress < self._blink_duration:
-                # Blink curve: quick close, slower open
                 t = self._blink_progress / max(self._blink_duration, 1)
                 if t < 0.3:
-                    mods["eye_close_ratio"] = t / 0.3  # close
+                    mods["eye_close_ratio"] = t / 0.3
                 else:
-                    mods["eye_close_ratio"] = 1.0 - (t - 0.3) / 0.7  # open
+                    mods["eye_close_ratio"] = 1.0 - (t - 0.3) / 0.7
                 self._blink_progress += 1
             else:
                 self._schedule_next_blink()
 
-        # Subtle head micro-movement (Perlin-like using sin waves)
         t = self._frame_count / self.fps
         mods["head_pitch_delta"] = 0.3 * np.sin(t * 0.5) + 0.1 * np.sin(t * 1.3)
         mods["head_yaw_delta"] = 0.2 * np.sin(t * 0.3) + 0.1 * np.sin(t * 0.9)
@@ -231,14 +196,12 @@ class IdleAnimator:
         return mods
 
 
-# ── LivePortrait Engine ────────────────────────────────────────────────────
+# ── LivePortrait Engine (PyTorch) ─────────────────────────────────────────
 
 class LivePortraitEngine:
     """
-    Main engine that orchestrates the 3-layer pipeline:
-    1. FasterLivePortrait for face generation
-    2. Temporal smoothing for consistency
-    3. Angle-aware blending policy
+    Main engine using original LivePortrait PyTorch models.
+    Orchestrates: JoyVASA (audio→motion) + LivePortrait (motion→face) + paste_back
     """
 
     def __init__(self, gpu_id: int = 0):
@@ -246,55 +209,65 @@ class LivePortraitEngine:
         self.device = torch.device(f"cuda:{gpu_id}" if torch.cuda.is_available() else "cpu")
 
         # Pipeline components
-        self.pipeline = None       # FasterLivePortraitPipeline
+        self.pipeline = None       # LivePortraitPipeline
+        self.wrapper = None        # LivePortraitWrapper
+        self.cropper = None        # Cropper
         self.joyvasa = None        # JoyVASAAudio2MotionPipeline
+
+        # Layers
         self.smoother = TemporalSmoother()
         self.angle_policy = AnglePolicy()
         self.idle_animator = IdleAnimator()
 
-        # State
+        # Source state
         self.is_initialized = False
         self.source_prepared = False
+        self._source_info = None  # cached source info
 
     def initialize(self):
-        """Load FasterLivePortrait and JoyVASA models."""
+        """Load LivePortrait PyTorch models and JoyVASA."""
         if self.is_initialized:
             return True
 
-        logger.info("Initializing LivePortrait engine...")
+        logger.info("Initializing LivePortrait engine (PyTorch backend)...")
 
-        # Add FasterLivePortrait to path
-        if FASTER_LP_DIR not in sys.path:
-            sys.path.insert(0, FASTER_LP_DIR)
+        # Add LivePortrait to path
+        if LIVEPORTRAIT_DIR not in sys.path:
+            sys.path.insert(0, LIVEPORTRAIT_DIR)
 
         try:
-            from omegaconf import OmegaConf
-            from src.pipelines.faster_live_portrait_pipeline import FasterLivePortraitPipeline
+            from src.config import InferenceConfig, CropConfig
+            from src.live_portrait_pipeline import LivePortraitPipeline
+            from src.live_portrait_wrapper import LivePortraitWrapper
+            from src.utils.cropper import Cropper
 
-            # Load config
-            cfg_path = os.path.join(FASTER_LP_DIR, "configs/onnx_infer.yaml")
-            cfg = OmegaConf.load(cfg_path)
+            # Initialize configs
+            inf_cfg = InferenceConfig()
+            crop_cfg = CropConfig()
 
-            # Fix checkpoint paths to absolute
-            for name in cfg.models:
-                if isinstance(cfg.models[name].model_path, str):
-                    cfg.models[name].model_path = cfg.models[name].model_path.replace(
-                        "./checkpoints", os.path.join(FASTER_LP_DIR, "checkpoints"))
-                else:
-                    cfg.models[name].model_path = [
-                        p.replace("./checkpoints", os.path.join(FASTER_LP_DIR, "checkpoints"))
-                        for p in cfg.models[name].model_path
-                    ]
-
-            # Fix mask path
-            cfg.infer_params.mask_crop_path = os.path.join(FASTER_LP_DIR, "assets/mask_template.png")
+            # Enable stitching and paste-back for best quality
+            inf_cfg.flag_stitching = True
+            inf_cfg.flag_pasteback = True
+            inf_cfg.flag_do_crop = True
+            inf_cfg.flag_relative_motion = True
+            inf_cfg.animation_region = "all"
 
             # Initialize pipeline
-            self.pipeline = FasterLivePortraitPipeline(cfg)
-            logger.info("FasterLivePortrait pipeline loaded.")
+            self.pipeline = LivePortraitPipeline(
+                inference_cfg=inf_cfg,
+                crop_cfg=crop_cfg,
+            )
+            self.wrapper = self.pipeline.live_portrait_wrapper
+            self.cropper = self.pipeline.cropper
+            self.inf_cfg = inf_cfg
+            self.crop_cfg = crop_cfg
 
-            # Initialize JoyVASA
+            logger.info("LivePortrait PyTorch pipeline loaded.")
+
+            # Initialize JoyVASA for audio→motion
             if os.path.exists(JOYVASA_MOTION_MODEL):
+                if FASTER_LP_DIR not in sys.path:
+                    sys.path.insert(0, FASTER_LP_DIR)
                 from src.pipelines.joyvasa_audio_to_motion_pipeline import JoyVASAAudio2MotionPipeline
                 self.joyvasa = JoyVASAAudio2MotionPipeline(
                     motion_model_path=JOYVASA_MOTION_MODEL,
@@ -308,6 +281,7 @@ class LivePortraitEngine:
                 logger.warning(f"JoyVASA model not found at {JOYVASA_MOTION_MODEL}")
 
             self.is_initialized = True
+            logger.info("LivePortrait engine initialized successfully.")
             return True
 
         except Exception as e:
@@ -315,22 +289,161 @@ class LivePortraitEngine:
             return False
 
     def prepare_source(self, source_path: str) -> bool:
-        """Prepare source image/video for animation."""
+        """Prepare source image for animation."""
         if not self.is_initialized:
             if not self.initialize():
                 return False
 
         try:
-            ret = self.pipeline.prepare_source(source_path, realtime=False)
-            if ret:
-                self.source_prepared = True
-                logger.info(f"Source prepared: {source_path}")
-            else:
-                logger.error(f"Failed to prepare source: {source_path}")
-            return ret
+            from src.utils.io import load_image_rgb, resize_to_limit
+
+            # Load and resize source image
+            img_rgb = load_image_rgb(source_path)
+            img_rgb = resize_to_limit(img_rgb, self.inf_cfg.source_max_dim, self.inf_cfg.source_division)
+
+            # Crop source face
+            crop_info = self.cropper.crop_source_image(img_rgb, self.crop_cfg)
+            if crop_info is None:
+                logger.error("No face detected in source image!")
+                return False
+
+            # Prepare for network
+            img_crop_256 = crop_info["img_crop_256x256"]
+            I_s = self.wrapper.prepare_source(img_crop_256)
+
+            # Extract source features
+            x_s_info = self.wrapper.get_kp_info(I_s)
+            f_s = self.wrapper.extract_feature_3d(I_s)
+            x_s = self.wrapper.transform_keypoint(x_s_info)
+
+            # Get source landmark for retargeting
+            source_lmk = crop_info.get("lmk_crop")
+
+            # Prepare paste-back mask
+            from src.utils.crop import prepare_paste_back
+            mask_ori_float = prepare_paste_back(
+                self.inf_cfg.mask_crop,
+                crop_info['M_c2o'],
+                dsize=(img_rgb.shape[1], img_rgb.shape[0])
+            )
+
+            # Cache everything
+            self._source_info = {
+                "img_rgb": img_rgb,
+                "crop_info": crop_info,
+                "I_s": I_s,
+                "f_s": f_s,
+                "x_s": x_s,
+                "x_s_info": x_s_info,
+                "source_lmk": source_lmk,
+                "mask_ori_float": mask_ori_float,
+            }
+
+            self.source_prepared = True
+            logger.info(f"Source prepared: {source_path}")
+            return True
+
         except Exception as e:
             logger.error(f"Source preparation error: {e}", exc_info=True)
             return False
+
+    def _render_frame(
+        self,
+        x_d_i_info: dict,
+        c_d_eyes_i,
+        c_d_lip_i,
+        frame_idx: int,
+        R_d_0=None,
+        x_d_0_info=None,
+        enable_smoothing: bool = True,
+    ) -> Tuple[Optional[np.ndarray], dict]:
+        """
+        Render a single frame using LivePortrait PyTorch.
+
+        Returns:
+            (frame_rgb, state_dict) where frame_rgb is the paste-back result
+        """
+        from src.utils.crop import paste_back
+        from src.utils.helper import dct2device
+
+        si = self._source_info
+        device = self.wrapper.device
+
+        # Move driving info to device
+        x_d_i_info_dev = dct2device(x_d_i_info, device)
+
+        R_d_i = x_d_i_info_dev.get('R', x_d_i_info_dev.get('R_d'))
+        is_first = (frame_idx == 0)
+
+        if is_first:
+            R_d_0 = R_d_i
+            x_d_0_info = copy.deepcopy(x_d_i_info_dev)
+
+        # Apply temporal smoothing on expression
+        delta_new = si["x_s_info"]['exp'].clone()
+        if self.inf_cfg.flag_relative_motion:
+            # Relative rotation
+            R_new = (R_d_i @ R_d_0.permute(0, 2, 1)) @ si["x_s_info"]['R']
+
+            # Smooth rotation
+            if enable_smoothing and not is_first:
+                R_new = self.smoother.smooth_rotation(R_new)
+
+            # Relative expression
+            delta_new = si["x_s_info"]['exp'] + (x_d_i_info_dev['exp'] - x_d_0_info['exp'])
+
+            # Smooth expression
+            if enable_smoothing and not is_first:
+                delta_new = self.smoother.smooth_expression(delta_new)
+        else:
+            R_new = R_d_i
+            delta_new = x_d_i_info_dev['exp']
+
+        # Compute new keypoint
+        from src.utils.helper import get_rotation_matrix
+        scale = si["x_s_info"]['scale']
+        t_new = si["x_s_info"]['t'] + (x_d_i_info_dev['t'] - x_d_0_info['t']) if self.inf_cfg.flag_relative_motion else x_d_i_info_dev['t']
+        x_d_i_new = scale * (delta_new @ R_new) + t_new
+
+        # Eye retargeting
+        if si["source_lmk"] is not None and c_d_eyes_i is not None:
+            try:
+                combined_eye = self.wrapper.calc_combined_eye_ratio(c_d_eyes_i, si["source_lmk"])
+                eyes_delta = self.wrapper.retarget_eye(si["x_s"], combined_eye)
+                x_d_i_new = x_d_i_new + eyes_delta
+            except Exception:
+                pass
+
+        # Lip retargeting
+        if si["source_lmk"] is not None and c_d_lip_i is not None:
+            try:
+                combined_lip = self.wrapper.calc_combined_lip_ratio(c_d_lip_i, si["source_lmk"])
+                lip_delta = self.wrapper.retarget_lip(si["x_s"], combined_lip)
+                x_d_i_new = x_d_i_new + lip_delta
+            except Exception:
+                pass
+
+        # Stitching
+        if self.inf_cfg.flag_stitching:
+            x_d_i_new = self.wrapper.stitching(si["x_s"], x_d_i_new)
+
+        # Apply driving multiplier
+        x_d_i_new = si["x_s"] + (x_d_i_new - si["x_s"]) * self.inf_cfg.driving_multiplier
+
+        # Warp + Decode
+        out = self.wrapper.warp_decode(si["f_s"], si["x_s"], x_d_i_new)
+        I_p_i = self.wrapper.parse_output(out['out'])[0]  # HxWx3 uint8 RGB
+
+        # Paste back to original image
+        frame_rgb = paste_back(
+            I_p_i,
+            si["crop_info"]['M_c2o'],
+            si["img_rgb"],
+            si["mask_ori_float"]
+        )
+
+        state = {"R_d_0": R_d_0, "x_d_0_info": x_d_0_info}
+        return frame_rgb, state
 
     def generate_from_audio(
         self,
@@ -345,22 +458,11 @@ class LivePortraitEngine:
     ) -> bool:
         """
         Generate a talking-head video from audio using the 3-layer pipeline.
-
-        Args:
-            audio_path: Path to audio file (WAV/MP3)
-            output_path: Path for output video
-            source_path: Path to source image (if not already prepared)
-            fps: Output video FPS
-            enable_smoothing: Enable temporal smoothing (Layer 3)
-            enable_angle_policy: Enable angle-aware blending
-            enable_idle: Enable idle animation for silent parts
-            progress_callback: Optional callback(progress_pct, message)
         """
         if not self.is_initialized:
             if not self.initialize():
                 return False
 
-        # Prepare source if needed
         if source_path and not self.source_prepared:
             if not self.prepare_source(source_path):
                 return False
@@ -375,7 +477,7 @@ class LivePortraitEngine:
             logger.info(f"[LivePortrait] {pct}% - {msg}")
 
         try:
-            _progress(5, "Generating motion from audio...")
+            _progress(5, "Generating motion from audio via JoyVASA...")
 
             # ── Step 1: Audio → Motion sequence via JoyVASA ──
             if self.joyvasa is None:
@@ -396,12 +498,11 @@ class LivePortraitEngine:
             logger.info(f"JoyVASA generated {total_frames} motion frames at {output_fps} fps")
             _progress(20, f"Motion generated: {total_frames} frames")
 
-            # ── Step 2: Render frames with LivePortrait ──
-            _progress(25, "Rendering frames with LivePortrait...")
+            # ── Step 2: Render frames with LivePortrait PyTorch ──
+            _progress(25, "Rendering frames with LivePortrait (PyTorch)...")
 
-            src_img = self.pipeline.src_imgs[0]
-            src_info = self.pipeline.src_infos[0]
-            h, w = src_img.shape[:2]
+            si = self._source_info
+            h, w = si["img_rgb"].shape[:2]
 
             # Setup video writer
             temp_video = output_path + ".tmp.mp4"
@@ -411,50 +512,45 @@ class LivePortraitEngine:
             # Reset smoother
             self.smoother.reset()
 
+            R_d_0 = None
+            x_d_0_info = None
             render_times = []
+
             for frame_idx in range(total_frames):
                 t0 = time.time()
-                first_frame = (frame_idx == 0)
 
-                # Get motion info for this frame
-                dri_motion_info = [
-                    motion_lst[frame_idx],
-                    c_eyes_lst[frame_idx] if frame_idx < len(c_eyes_lst) else np.array([[0.0]]),
-                    c_lip_lst[frame_idx] if frame_idx < len(c_lip_lst) else np.array([[0.0]]),
-                ]
+                # Get motion for this frame
+                x_d_i_info = motion_lst[frame_idx]
+                c_eyes_i = c_eyes_lst[frame_idx] if frame_idx < len(c_eyes_lst) else None
+                c_lip_i = c_lip_lst[frame_idx] if frame_idx < len(c_lip_lst) else None
 
-                # Layer 3: Temporal smoothing on motion
-                if enable_smoothing and not first_frame:
-                    dri_motion_info[0] = self.smoother.smooth_motion(dri_motion_info[0])
-
-                # Run LivePortrait
-                out_crop, out_org = self.pipeline.run_with_pkl(
-                    dri_motion_info, src_img, src_info,
-                    first_frame=first_frame
+                # Render frame
+                frame_rgb, state = self._render_frame(
+                    x_d_i_info, c_eyes_i, c_lip_i,
+                    frame_idx=frame_idx,
+                    R_d_0=R_d_0,
+                    x_d_0_info=x_d_0_info,
+                    enable_smoothing=enable_smoothing,
                 )
 
-                if out_org is None:
-                    logger.warning(f"Frame {frame_idx}: no output, using previous")
+                if frame_idx == 0:
+                    R_d_0 = state["R_d_0"]
+                    x_d_0_info = state["x_d_0_info"]
+
+                if frame_rgb is None:
+                    logger.warning(f"Frame {frame_idx}: render failed, skipping")
                     continue
 
-                # Convert to BGR for OpenCV
-                if isinstance(out_org, torch.Tensor):
-                    out_frame = out_org.cpu().numpy().astype(np.uint8)
-                else:
-                    out_frame = out_org.astype(np.uint8) if out_org.dtype != np.uint8 else out_org
-
-                if out_frame.shape[2] == 3 and out_frame[0, 0, 0] != 0:
-                    # Check if RGB (LivePortrait outputs RGB)
-                    out_frame = cv2.cvtColor(out_frame, cv2.COLOR_RGB2BGR)
-
-                # Layer 3: Flicker suppression
+                # Flicker suppression
                 if enable_smoothing:
-                    out_frame = self.smoother.suppress_flicker(out_frame)
+                    frame_rgb = self.smoother.suppress_flicker(frame_rgb)
 
-                writer.write(out_frame)
+                # Convert RGB to BGR for OpenCV
+                frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+                writer.write(frame_bgr)
                 render_times.append(time.time() - t0)
 
-                # Progress update every 10%
+                # Progress update
                 if frame_idx % max(1, total_frames // 10) == 0:
                     pct = 25 + int(60 * frame_idx / total_frames)
                     avg_ms = np.mean(render_times[-10:]) * 1000
@@ -467,44 +563,30 @@ class LivePortraitEngine:
             _progress(85, "Adding audio...")
 
             # ── Step 3: Mux audio with video ──
-            import asyncio
-
-            async def _mux_audio():
-                cmd = [
-                    "ffmpeg", "-y",
-                    "-i", temp_video,
-                    "-i", audio_path,
-                    "-c:v", "libx264", "-preset", "fast", "-crf", "18",
-                    "-c:a", "aac", "-b:a", "128k",
-                    "-map", "0:v:0", "-map", "1:a:0",
-                    "-shortest",
-                    "-pix_fmt", "yuv420p",
-                    output_path,
-                ]
-                proc = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.STDOUT,
-                )
-                await proc.wait()
-                return proc.returncode
-
-            # Run mux
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as pool:
-                    rc = pool.submit(lambda: asyncio.run(_mux_audio())).result()
-            else:
-                rc = asyncio.run(_mux_audio())
-
-            if rc != 0:
-                logger.warning("Audio mux failed, using video without audio")
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", temp_video,
+                "-i", audio_path,
+                "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+                "-c:a", "aac", "-b:a", "128k",
+                "-map", "0:v:0", "-map", "1:a:0",
+                "-shortest",
+                "-pix_fmt", "yuv420p",
+                output_path,
+            ]
+            try:
+                result = subprocess.run(cmd, capture_output=True, timeout=120)
+                if result.returncode != 0:
+                    logger.warning(f"Audio mux failed: {result.stderr.decode()[:200]}")
+                    import shutil
+                    shutil.move(temp_video, output_path)
+                else:
+                    if os.path.exists(temp_video):
+                        os.remove(temp_video)
+            except Exception as e:
+                logger.warning(f"Audio mux error: {e}")
                 import shutil
                 shutil.move(temp_video, output_path)
-            else:
-                if os.path.exists(temp_video):
-                    os.remove(temp_video)
 
             _progress(100, "Complete!")
             return os.path.exists(output_path)
@@ -515,13 +597,11 @@ class LivePortraitEngine:
 
     def cleanup(self):
         """Release GPU resources."""
-        if self.pipeline:
-            try:
-                self.pipeline.clean_models()
-            except Exception:
-                pass
         self.pipeline = None
+        self.wrapper = None
+        self.cropper = None
         self.joyvasa = None
+        self._source_info = None
         self.is_initialized = False
         self.source_prepared = False
         torch.cuda.empty_cache()
