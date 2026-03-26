@@ -45,7 +45,7 @@ from pathlib import Path
 from typing import Optional
 
 import uvicorn
-from fastapi import Depends, FastAPI, Header, HTTPException, UploadFile, File
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -2068,6 +2068,41 @@ async def admin_exec(req: ExecRequest):
         return {"exit_code": proc.returncode, "output": output}
     except Exception as e:
         return {"exit_code": -1, "output": str(e)}
+
+# ── Live API Proxy ────────────────────────────────────────────────────────────
+# Proxy requests to live_api running on localhost:8002
+import httpx
+
+LIVE_API_BASE = os.environ.get("LIVE_API_BASE", "http://localhost:8002")
+
+@app.api_route("/api/v1/live/{path:path}", methods=["GET", "POST", "PUT", "DELETE"], dependencies=[Depends(verify_api_key)])
+async def proxy_live_api(path: str, request: Request):
+    """Proxy all /api/v1/live/* requests to live_api on port 8002."""
+    url = f"{LIVE_API_BASE}/api/v1/live/{path}"
+    try:
+        body = await request.body()
+        headers = {k: v for k, v in request.headers.items()
+                   if k.lower() not in ("host", "content-length", "transfer-encoding")}
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            resp = await client.request(
+                method=request.method,
+                url=url,
+                content=body,
+                headers=headers,
+                params=dict(request.query_params),
+            )
+        from fastapi.responses import Response
+        return Response(
+            content=resp.content,
+            status_code=resp.status_code,
+            headers=dict(resp.headers),
+            media_type=resp.headers.get("content-type"),
+        )
+    except httpx.ConnectError:
+        return {"error": "live_api not running on port 8002", "status": "offline"}
+    except Exception as e:
+        return {"error": str(e), "status": "proxy_error"}
+
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
