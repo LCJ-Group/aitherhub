@@ -227,6 +227,7 @@ class LivePortraitEngine:
         self.wrapper = None        # LivePortraitWrapper
         self.cropper = None        # Cropper
         self.joyvasa = None        # JoyVASAAudio2MotionPipeline
+        self.gfpgan_enhancer = None  # GFPGAN face enhancer
 
         # Layers
         self.smoother = TemporalSmoother()
@@ -318,6 +319,24 @@ class LivePortraitEngine:
                         sys.path.insert(0, LIVEPORTRAIT_DIR)
             else:
                 logger.warning(f"JoyVASA model not found at {JOYVASA_MOTION_MODEL}")
+
+            # Initialize GFPGAN for face enhancement
+            try:
+                from gfpgan import GFPGANer
+                gfpgan_model = os.path.join('/workspace/models', 'GFPGANv1.4.pth')
+                if os.path.exists(gfpgan_model):
+                    self.gfpgan_enhancer = GFPGANer(
+                        model_path=gfpgan_model,
+                        upscale=1,
+                        arch='clean',
+                        channel_multiplier=2,
+                        bg_upsampler=None,
+                    )
+                    logger.info("GFPGAN face enhancer loaded.")
+                else:
+                    logger.warning(f"GFPGAN model not found at {gfpgan_model}")
+            except Exception as e:
+                logger.warning(f"GFPGAN not available: {e}")
 
             self.is_initialized = True
             logger.info("LivePortrait engine initialized successfully.")
@@ -477,6 +496,18 @@ class LivePortraitEngine:
         # Warp + Decode
         out = self.wrapper.warp_decode(si["f_s"], si["x_s"], x_d_i_new)
         I_p_i = self.wrapper.parse_output(out['out'])[0]  # HxWx3 uint8 RGB
+
+        # GFPGAN face enhancement on cropped face before paste_back
+        if self.gfpgan_enhancer is not None:
+            try:
+                I_p_bgr = cv2.cvtColor(I_p_i, cv2.COLOR_RGB2BGR)
+                _, _, enhanced_bgr = self.gfpgan_enhancer.enhance(
+                    I_p_bgr, has_aligned=True, only_center_face=True, paste_back=False
+                )
+                if enhanced_bgr is not None:
+                    I_p_i = cv2.cvtColor(enhanced_bgr, cv2.COLOR_BGR2RGB)
+            except Exception:
+                pass  # Fall back to unenhanced
 
         # Paste back to original image
         frame_rgb = paste_back(
