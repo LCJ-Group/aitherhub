@@ -1879,18 +1879,19 @@ async def _run_imtalker_job(req: IMTalkerRequest):
                     f"crop=({crop_x1},{crop_y1})-({crop_x2},{crop_y2}), side={side}"
                 )
 
-                # ── v6: Inner-face-only overlay ──
-                # Previous versions overlaid the entire crop region, causing
-                # ghost artifacts at the neck/hair boundary because IMTalker
-                # moves the entire face (including neck) during animation.
+                # ── v7: Inner-face overlay with driving video background ──
+                # v6 problem: always used static image as background, even when
+                # a driving video was provided. This made the body completely
+                # static while only the face moved — very unnatural.
                 #
-                # v6 approach: only use the INNER 55% of IMTalker's output
-                # (mouth, nose, cheeks) and blend it onto the original image.
-                # The outer parts (forehead, ears, neck, hair) stay from the
-                # original static image. This minimizes ghost artifacts.
-                inner_ratio = 0.55  # use inner 55% of IMTalker output
-                inner_px = int(512 * inner_ratio)  # ~282 pixels
-                margin = (512 - inner_px) // 2     # ~115 pixels from each edge
+                # v7 approach:
+                # - If driving video exists, use it as background (body moves!)
+                # - Use inner 70% of IMTalker output (larger face area)
+                # - Improved elliptical mask with wider feathering
+                # - Better blending for seamless face replacement
+                inner_ratio = 0.70  # use inner 70% of IMTalker output (was 55%)
+                inner_px = int(512 * inner_ratio)  # ~358 pixels
+                margin = (512 - inner_px) // 2     # ~77 pixels from each edge
 
                 # The inner region maps to a smaller area on the original image
                 inner_side = int(side * inner_ratio)
@@ -1899,57 +1900,95 @@ async def _run_imtalker_job(req: IMTalkerRequest):
 
                 # Create elliptical mask for the inner region (on inner_px x inner_px)
                 mask_path = os.path.join(job_dir, "inner_face_mask.png")
-                feather_px = max(30, int(inner_px * 0.20))  # 20% feather
+                feather_px = max(40, int(inner_px * 0.28))  # 28% feather (wider)
 
                 y_coords = np.arange(inner_px, dtype=np.float32)
                 x_coords = np.arange(inner_px, dtype=np.float32)
-                cy_m = inner_px * 0.47  # slightly above center (avoid chin)
+                cy_m = inner_px * 0.46  # slightly above center (avoid chin)
                 cx_m = inner_px / 2.0
-                ry = inner_px * 0.45  # vertical radius
-                rx = inner_px * 0.48  # horizontal radius (wider for cheeks)
+                ry = inner_px * 0.48  # vertical radius (larger)
+                rx = inner_px * 0.50  # horizontal radius (wider for cheeks)
                 dy = (y_coords - cy_m) / max(ry, 1)
                 dx = (x_coords - cx_m) / max(rx, 1)
                 dist = np.sqrt(dy[:, None]**2 + dx[None, :]**2)
-                # Smooth falloff with wide feather
-                mask_arr = np.clip(1.0 - (dist - 0.55) / 0.65, 0.0, 1.0)
-                mask_arr = mask_arr ** 0.5  # sqrt for smoother transition
+                # Smooth falloff with very wide feather for seamless blending
+                mask_arr = np.clip(1.0 - (dist - 0.45) / 0.75, 0.0, 1.0)
+                mask_arr = mask_arr ** 0.4  # gentler curve for smoother transition
                 mask_img = Image.fromarray((mask_arr * 255).astype(np.uint8), mode='L')
                 mask_img.save(mask_path)
 
+                # Determine background source: driving video or static image
+                use_video_bg = portrait_is_video and portrait_video_path and os.path.exists(portrait_video_path)
+                bg_source = portrait_video_path if use_video_bg else portrait_path
+                bg_label = "driving_video" if use_video_bg else "static_image"
+
                 logger.info(
-                    f"[IMT {req.job_id}] v6 inner-face: crop_side={side}, "
+                    f"[IMT {req.job_id}] v7 inner-face: crop_side={side}, "
                     f"inner_px={inner_px}, inner_side={inner_side}, "
-                    f"inner_pos=({inner_x1},{inner_y1}), feather={feather_px}px"
+                    f"inner_pos=({inner_x1},{inner_y1}), feather={feather_px}px, "
+                    f"bg={bg_label}"
                 )
 
                 # ffmpeg filter:
-                # 1. Crop inner region from IMTalker output (center 55%)
+                # 1. Crop inner region from IMTalker output (center 70%)
                 # 2. Scale to inner_side
                 # 3. Apply elliptical mask
-                # 4. Overlay on original portrait at inner position
-                filter_complex = (
-                    f"[0:v]crop={inner_px}:{inner_px}:{margin}:{margin},"
-                    f"scale={inner_side}:{inner_side}:flags=lanczos[face_inner];"
-                    f"[2:v]scale={inner_side}:{inner_side}:flags=bilinear[mask_scaled];"
-                    f"[face_inner][mask_scaled]alphamerge[face_masked];"
-                    f"[1:v]scale={orig_w}:{orig_h}[bg];"
-                    f"[bg][face_masked]overlay={inner_x1}:{inner_y1}:format=auto[out]"
-                )
+                # 4. Overlay on background (driving video or static portrait)
+                if use_video_bg:
+                    # Driving video background: scale video to original size,
+                    # sync with IMTalker output duration
+                    filter_complex = (
+                        f"[0:v]crop={inner_px}:{inner_px}:{margin}:{margin},"
+                        f"scale={inner_side}:{inner_side}:flags=lanczos[face_inner];"
+                        f"[2:v]scale={inner_side}:{inner_side}:flags=bilinear[mask_scaled];"
+                        f"[face_inner][mask_scaled]alphamerge[face_masked];"
+                        f"[1:v]scale={orig_w}:{orig_h}:flags=lanczos[bg];"
+                        f"[bg][face_masked]overlay={inner_x1}:{inner_y1}:format=auto[out]"
+                    )
+                else:
+                    # Static image background (original behavior, improved)
+                    filter_complex = (
+                        f"[0:v]crop={inner_px}:{inner_px}:{margin}:{margin},"
+                        f"scale={inner_side}:{inner_side}:flags=lanczos[face_inner];"
+                        f"[2:v]scale={inner_side}:{inner_side}:flags=bilinear[mask_scaled];"
+                        f"[face_inner][mask_scaled]alphamerge[face_masked];"
+                        f"[1:v]scale={orig_w}:{orig_h}[bg];"
+                        f"[bg][face_masked]overlay={inner_x1}:{inner_y1}:format=auto[out]"
+                    )
 
-                composite_cmd = [
-                    "ffmpeg", "-y",
-                    "-i", src_video,                          # input 0: IMTalker (512x512)
-                    "-loop", "1", "-i", portrait_path,        # input 1: original portrait
-                    "-loop", "1", "-i", mask_path,             # input 2: elliptical mask
-                    "-filter_complex", filter_complex,
-                    "-map", "[out]",
-                    "-map", "0:a?",
-                    "-c:v", "libx264", "-preset", "fast", "-crf", "18",
-                    "-c:a", "aac", "-b:a", "128k",
-                    "-shortest",
-                    "-pix_fmt", "yuv420p",
-                    final_output,
-                ]
+                # Build ffmpeg command based on background type
+                if use_video_bg:
+                    # For video background: use stream_loop to loop driving video
+                    # if it's shorter than IMTalker output
+                    composite_cmd = [
+                        "ffmpeg", "-y",
+                        "-i", src_video,                          # input 0: IMTalker (512x512)
+                        "-stream_loop", "-1", "-i", bg_source,    # input 1: driving video (looped)
+                        "-loop", "1", "-i", mask_path,             # input 2: elliptical mask
+                        "-filter_complex", filter_complex,
+                        "-map", "[out]",
+                        "-map", "0:a?",
+                        "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+                        "-c:a", "aac", "-b:a", "128k",
+                        "-shortest",
+                        "-pix_fmt", "yuv420p",
+                        final_output,
+                    ]
+                else:
+                    composite_cmd = [
+                        "ffmpeg", "-y",
+                        "-i", src_video,                          # input 0: IMTalker (512x512)
+                        "-loop", "1", "-i", bg_source,            # input 1: static portrait
+                        "-loop", "1", "-i", mask_path,             # input 2: elliptical mask
+                        "-filter_complex", filter_complex,
+                        "-map", "[out]",
+                        "-map", "0:a?",
+                        "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+                        "-c:a", "aac", "-b:a", "128k",
+                        "-shortest",
+                        "-pix_fmt", "yuv420p",
+                        final_output,
+                    ]
 
                 comp_proc = await asyncio.create_subprocess_exec(
                     *composite_cmd,
@@ -1960,12 +1999,12 @@ async def _run_imtalker_job(req: IMTalkerRequest):
                 comp_out, _ = await comp_proc.communicate()
                 if comp_proc.returncode != 0:
                     comp_log = comp_out.decode('utf-8', errors='replace')[-800:]
-                    logger.warning(f"[IMT {req.job_id}] v6 composite failed: {comp_log}")
-                    raise RuntimeError(f"v6 composite ffmpeg failed")
+                    logger.warning(f"[IMT {req.job_id}] v7 composite failed: {comp_log}")
+                    raise RuntimeError(f"v7 composite ffmpeg failed")
                 else:
                     logger.info(
-                        f"[IMT {req.job_id}] v6 composite success: inner {inner_side}x{inner_side} "
-                        f"at ({inner_x1},{inner_y1}) on {orig_w}x{orig_h}"
+                        f"[IMT {req.job_id}] v7 composite success: inner {inner_side}x{inner_side} "
+                        f"at ({inner_x1},{inner_y1}) on {orig_w}x{orig_h}, bg={bg_label}"
                     )
 
                 # Clean up temp
