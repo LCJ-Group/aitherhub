@@ -356,7 +356,7 @@ class LivePortraitEngine:
             x_s = self.wrapper.transform_keypoint(x_s_info)
 
             # Compute source rotation matrix and store in x_s_info
-            from src.utils.helper import get_rotation_matrix
+            from src.utils.camera import get_rotation_matrix
             R_s = get_rotation_matrix(x_s_info['pitch'], x_s_info['yaw'], x_s_info['roll'])
             x_s_info['R'] = R_s
 
@@ -444,7 +444,7 @@ class LivePortraitEngine:
             delta_new = x_d_i_info_dev['exp']
 
         # Compute new keypoint
-        from src.utils.helper import get_rotation_matrix
+        from src.utils.camera import get_rotation_matrix
         scale = si["x_s_info"]['scale']
         t_new = si["x_s_info"]['t'] + (x_d_i_info_dev['t'] - x_d_0_info['t']) if self.inf_cfg.flag_relative_motion else x_d_i_info_dev['t']
         x_d_i_new = scale * (delta_new @ R_new) + t_new
