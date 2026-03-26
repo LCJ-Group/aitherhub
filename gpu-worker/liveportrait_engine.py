@@ -236,7 +236,8 @@ class LivePortraitEngine:
             sys.path.insert(0, LIVEPORTRAIT_DIR)
 
         try:
-            from src.config import InferenceConfig, CropConfig
+            from src.config.inference_config import InferenceConfig
+            from src.config.crop_config import CropConfig
             from src.live_portrait_pipeline import LivePortraitPipeline
             from src.live_portrait_wrapper import LivePortraitWrapper
             from src.utils.cropper import Cropper
