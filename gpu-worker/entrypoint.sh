@@ -207,4 +207,13 @@ echo "    POST /api/digital-human/imtalker/generate - IMTalker generate"
 echo ""
 
 cd "$WORKSPACE"
+
+# ── Start Live API (background) ─────────────────────────────────────────────
+if [ -f "$WORKSPACE/live_api.py" ]; then
+    echo "  Starting Live API on port 8002..."
+    nohup python3 live_api.py > /var/log/live_api.log 2>&1 &
+    LIVE_API_PID=$!
+    echo "  Live API started (PID: $LIVE_API_PID)"
+fi
+
 exec python3 worker_api.py
