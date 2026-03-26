@@ -43,7 +43,9 @@ JOYVASA_MOTION_MODEL = os.path.join(
 JOYVASA_MOTION_TEMPLATE = os.path.join(
     FASTER_LP_DIR, "checkpoints/joyvasa/motion_template/motion_template.pkl"
 )
-JOYVASA_AUDIO_MODEL = ""  # Uses built-in hubert from the motion model
+JOYVASA_AUDIO_MODEL = os.path.join(
+    FASTER_LP_DIR, "checkpoints/chinese-hubert-base"
+)
 
 
 # ── Temporal Smoother ──────────────────────────────────────────────────────
