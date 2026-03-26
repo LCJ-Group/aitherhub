@@ -28,6 +28,20 @@ from typing import Optional, Dict, Any, List, Tuple
 from dataclasses import dataclass, field
 
 import numpy as np
+
+# Monkey-patch: albucore 0.0.19+ moved preserve_channel_dim from utils to decorators,
+# but insightface still imports from albucore.utils. Fix the import.
+try:
+    import albucore.utils
+    import albucore.decorators
+    if not hasattr(albucore.utils, 'preserve_channel_dim'):
+        albucore.utils.preserve_channel_dim = albucore.decorators.preserve_channel_dim
+    if not hasattr(albucore.utils, 'clipped'):
+        albucore.utils.clipped = getattr(albucore.decorators, 'clipped', None)
+    if not hasattr(albucore.utils, 'maybe_process_in_chunks'):
+        albucore.utils.maybe_process_in_chunks = getattr(albucore.decorators, 'maybe_process_in_chunks', None)
+except ImportError:
+    pass  # albucore not installed, will fail later with clear error
 import cv2
 import torch
 
