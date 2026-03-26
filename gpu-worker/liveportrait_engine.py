@@ -266,18 +266,42 @@ class LivePortraitEngine:
             logger.info("LivePortrait PyTorch pipeline loaded.")
 
             # Initialize JoyVASA for audio→motion
+            # IMPORTANT: FasterLivePortrait and LivePortrait both have 'src' packages.
+            # We need to temporarily swap sys.path to import JoyVASA from FasterLivePortrait.
             if os.path.exists(JOYVASA_MOTION_MODEL):
+                import importlib
+                # Save current src module references
+                saved_src_modules = {k: v for k, v in sys.modules.items() if k == 'src' or k.startswith('src.')}
+                # Remove LivePortrait's src from modules cache
+                for k in list(saved_src_modules.keys()):
+                    del sys.modules[k]
+                # Temporarily put FasterLivePortrait first in path
+                if LIVEPORTRAIT_DIR in sys.path:
+                    sys.path.remove(LIVEPORTRAIT_DIR)
                 if FASTER_LP_DIR not in sys.path:
                     sys.path.insert(0, FASTER_LP_DIR)
-                from src.pipelines.joyvasa_audio_to_motion_pipeline import JoyVASAAudio2MotionPipeline
-                self.joyvasa = JoyVASAAudio2MotionPipeline(
-                    motion_model_path=JOYVASA_MOTION_MODEL,
-                    audio_model_path=JOYVASA_AUDIO_MODEL,
-                    motion_template_path=JOYVASA_MOTION_TEMPLATE,
-                    cfg_mode="incremental",
-                    cfg_scale=1.2,
-                )
-                logger.info("JoyVASA audio-to-motion pipeline loaded.")
+                try:
+                    from src.pipelines.joyvasa_audio_to_motion_pipeline import JoyVASAAudio2MotionPipeline
+                    self.joyvasa = JoyVASAAudio2MotionPipeline(
+                        motion_model_path=JOYVASA_MOTION_MODEL,
+                        audio_model_path=JOYVASA_AUDIO_MODEL,
+                        motion_template_path=JOYVASA_MOTION_TEMPLATE,
+                        cfg_mode="incremental",
+                        cfg_scale=1.2,
+                    )
+                    logger.info("JoyVASA audio-to-motion pipeline loaded.")
+                finally:
+                    # Restore LivePortrait's src modules and path
+                    # Remove FasterLivePortrait's src modules
+                    for k in list(sys.modules.keys()):
+                        if k.startswith('src.pipelines') or k.startswith('src.audio'):
+                            pass  # Keep JoyVASA-related modules
+                        elif k == 'src' or k.startswith('src.'):
+                            if k in saved_src_modules:
+                                sys.modules[k] = saved_src_modules[k]
+                    # Restore path order
+                    if LIVEPORTRAIT_DIR not in sys.path:
+                        sys.path.insert(0, LIVEPORTRAIT_DIR)
             else:
                 logger.warning(f"JoyVASA model not found at {JOYVASA_MOTION_MODEL}")
 
