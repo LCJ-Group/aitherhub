@@ -355,6 +355,11 @@ class LivePortraitEngine:
             f_s = self.wrapper.extract_feature_3d(I_s)
             x_s = self.wrapper.transform_keypoint(x_s_info)
 
+            # Compute source rotation matrix and store in x_s_info
+            from src.utils.helper import get_rotation_matrix
+            R_s = get_rotation_matrix(x_s_info['pitch'], x_s_info['yaw'], x_s_info['roll'])
+            x_s_info['R'] = R_s
+
             # Get source landmark for retargeting
             source_lmk = crop_info.get("lmk_crop")
 
