@@ -13,9 +13,9 @@ WORKSPACE="/workspace"
 WORKER_API_KEY="${WORKER_API_KEY:-change-me-in-production}"
 WORKER_PORT="${WORKER_PORT:-8000}"
 
-# ── [1/7] GPU Check ─────────────────────────────────────────────────────────
+# ── [1/8] GPU Check ─────────────────────────────────────────────────────────
 
-echo "[1/7] Checking GPU..."
+echo "[1/8] Checking GPU..."
 if command -v nvidia-smi &> /dev/null; then
     nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
     echo ""
@@ -23,10 +23,10 @@ else
     echo "WARNING: nvidia-smi not found. GPU may not be available."
 fi
 
-# ── [2/7] System Dependencies ────────────────────────────────────────────────
+# ── [2/8] System Dependencies ────────────────────────────────────────────────
 # System packages (apt) are lost on Pod restart, so always check.
 
-echo "[2/7] Checking system dependencies..."
+echo "[2/8] Checking system dependencies..."
 
 NEED_APT=0
 for cmd in ffmpeg git-lfs; do
@@ -52,10 +52,10 @@ else
     echo "  All system dependencies present."
 fi
 
-# ── [3/7] Python Dependencies ────────────────────────────────────────────────
+# ── [3/8] Python Dependencies ────────────────────────────────────────────────
 # pip packages outside /workspace are lost on Pod restart.
 
-echo "[3/7] Checking Python dependencies..."
+echo "[3/8] Checking Python dependencies..."
 
 install_if_missing() {
     local pkg="$1"
@@ -100,11 +100,83 @@ install_if_missing "onnxruntime" "onnxruntime-gpu"
 install_if_missing "scipy" "scipy"
 install_if_missing "tyro" "tyro"
 
+# GFPGAN / basicsr dependencies
+install_if_missing "gfpgan" "gfpgan"
+install_if_missing "basicsr" "basicsr==1.4.2"
+
 echo "  Python dependencies check complete."
 
-# ── [4/7] v4l2loopback Setup ────────────────────────────────────────────────
+# ── [4/8] Critical Compatibility Fixes ───────────────────────────────────────
+# These fixes are REQUIRED for LivePortrait engine to initialize.
+# Without them, onnxruntime/insightface and JoyVASA will fail.
 
-echo "[4/7] Setting up virtual webcam (v4l2loopback)..."
+echo "[4/8] Applying critical compatibility fixes..."
+
+# Fix 1: numpy must be <2.0 for onnxruntime (insightface dependency)
+# onnxruntime compiled against numpy 1.x crashes with numpy 2.x
+NUMPY_VER=$(python3 -c "import numpy; print(numpy.__version__)" 2>/dev/null || echo "0")
+NUMPY_MAJOR=$(echo "$NUMPY_VER" | cut -d. -f1)
+if [ "$NUMPY_MAJOR" -ge 2 ] 2>/dev/null; then
+    echo "  [fix] Downgrading numpy from $NUMPY_VER to 1.26.4 (onnxruntime compat)..."
+    pip install --quiet "numpy==1.26.4" 2>/dev/null || true
+else
+    echo "  [ok] numpy $NUMPY_VER (compatible)"
+fi
+
+# Fix 2: torchaudio must match torch version
+# After pip installs, torchaudio may be wrong version
+TORCH_VER=$(python3 -c "import torch; print(torch.__version__.split('+')[0])" 2>/dev/null || echo "0")
+TORCHAUDIO_OK=$(python3 -c "
+import torchaudio, torch
+tv = torch.__version__.split('+')[0]
+av = torchaudio.__version__.split('+')[0]
+print('ok' if tv.split('.')[:2] == av.split('.')[:2] else 'mismatch')
+" 2>/dev/null || echo "mismatch")
+if [ "$TORCHAUDIO_OK" != "ok" ]; then
+    echo "  [fix] Reinstalling torchaudio to match torch $TORCH_VER..."
+    pip install --quiet --force-reinstall --no-deps torchaudio 2>/dev/null || true
+else
+    echo "  [ok] torchaudio matches torch"
+fi
+
+# Fix 3: basicsr/torchvision compatibility for GFPGAN
+# basicsr 1.4.2 imports from torchvision.transforms.functional_tensor which was removed
+BASICSR_DEG="/usr/local/lib/python3.11/dist-packages/basicsr/data/degradations.py"
+if [ -f "$BASICSR_DEG" ]; then
+    if grep -q 'from torchvision.transforms.functional_tensor' "$BASICSR_DEG"; then
+        sed -i 's/from torchvision.transforms.functional_tensor import rgb_to_grayscale/from torchvision.transforms.functional import rgb_to_grayscale/' "$BASICSR_DEG"
+        echo "  [patched] basicsr degradations.py (torchvision compat)"
+    else
+        echo "  [ok] basicsr degradations.py already patched"
+    fi
+fi
+
+# Fix 4: JoyVASA torch.load needs weights_only=False for PyTorch 2.6+
+# PyTorch 2.6 changed default to weights_only=True, breaking old checkpoints
+JOYVASA_PIPELINE="$WORKSPACE/FasterLivePortrait/src/pipelines/joyvasa_audio_to_motion_pipeline.py"
+if [ -f "$JOYVASA_PIPELINE" ]; then
+    if grep -q 'torch.load(motion_model_path, map_location="cpu")' "$JOYVASA_PIPELINE" && \
+       ! grep -q 'weights_only=False' "$JOYVASA_PIPELINE"; then
+        sed -i 's/torch.load(motion_model_path, map_location="cpu")/torch.load(motion_model_path, map_location="cpu", weights_only=False)/' "$JOYVASA_PIPELINE"
+        echo "  [patched] JoyVASA pipeline (weights_only=False)"
+    else
+        echo "  [ok] JoyVASA pipeline already patched"
+    fi
+fi
+
+# Ensure GFPGAN model exists
+GFPGAN_MODEL="/workspace/models/GFPGANv1.4.pth"
+if [ ! -f "$GFPGAN_MODEL" ]; then
+    echo "  [download] GFPGAN model..."
+    mkdir -p /workspace/models
+    wget -q -O "$GFPGAN_MODEL" "https://github.com/TencentARC/GFPGAN/releases/download/v1.3.0/GFPGANv1.4.pth" || true
+fi
+
+echo "  Compatibility fixes complete."
+
+# ── [5/8] v4l2loopback Setup ────────────────────────────────────────────────
+
+echo "[5/8] Setting up virtual webcam (v4l2loopback)..."
 if [ -e /dev/video10 ]; then
     echo "  Virtual webcam /dev/video10 already exists."
 else
@@ -115,9 +187,9 @@ else
     fi
 fi
 
-# ── [5/7] FaceFusion Model Check ────────────────────────────────────────────
+# ── [6/8] FaceFusion Model Check ────────────────────────────────────────────
 
-echo "[5/7] Checking FaceFusion models..."
+echo "[6/8] Checking FaceFusion models..."
 FACEFUSION_DIR="${FACEFUSION_DIR:-$WORKSPACE/facefusion}"
 MODELS_DIR="$FACEFUSION_DIR/.assets/models"
 if [ -d "$MODELS_DIR" ] && [ "$(ls -A $MODELS_DIR 2>/dev/null)" ]; then
@@ -127,9 +199,9 @@ else
     echo "  Models not found. Will download on first use."
 fi
 
-# ── [6/7] MuseTalk Patches ──────────────────────────────────────────────────
+# ── [7/8] MuseTalk Patches ──────────────────────────────────────────────────
 
-echo "[6/7] Checking MuseTalk runtime patches..."
+echo "[7/8] Checking MuseTalk runtime patches..."
 
 MUSETALK_DIR="${MUSETALK_DIR:-$WORKSPACE/MuseTalk}"
 
@@ -158,9 +230,9 @@ fi
 
 echo "  Patches check complete."
 
-# ── [7/7] Pull Latest Code from GitHub ──────────────────────────────────────
+# ── [8/8] Pull Latest Code from GitHub ──────────────────────────────────────
 
-echo "[7/7] Pulling latest code from GitHub..."
+echo "[8/8] Pulling latest code from GitHub..."
 REPO_DIR="$WORKSPACE/aitherhub"
 if [ -d "$REPO_DIR/.git" ]; then
     cd "$REPO_DIR"
