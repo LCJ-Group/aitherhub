@@ -4,14 +4,11 @@
 # All-in-one image with: MuseTalk, FaceFusion, IMTalker, LivePortrait
 # Models are loaded from Network Volume at /runpod-volume/
 #
-# Build:
-#   docker build -t aitherhub/gpu-serverless:latest -f serverless/Dockerfile .
-#
-# Test locally:
-#   docker run --gpus all -p 8000:8000 aitherhub/gpu-serverless:latest
+# Base: nvidia/cuda 12.1 + Python 3.11 (NOT runpod/base which uses Python 3.13)
+# This avoids the pkg_resources/setuptools incompatibility with Python 3.13
 ##############################################################################
 
-FROM runpod/base:0.6.3-cuda12.1.0
+FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
 
 # Prevent interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
@@ -20,6 +17,13 @@ ENV TZ=Asia/Tokyo
 # ── System Dependencies ──────────────────────────────────────────────────────
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 \
+    python3.11-venv \
+    python3.11-dev \
+    python3.11-distutils \
     git \
     git-lfs \
     ffmpeg \
@@ -35,28 +39,40 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # ── Python Setup ─────────────────────────────────────────────────────────────
 
-# Set python3.11 as default
-RUN ln -sf $(which python3.11) /usr/local/bin/python && \
-    ln -sf $(which python3.11) /usr/local/bin/python3
+# Set python3.11 as default and install pip
+RUN ln -sf /usr/bin/python3.11 /usr/local/bin/python && \
+    ln -sf /usr/bin/python3.11 /usr/local/bin/python3 && \
+    curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11
+
+# Ensure setuptools and wheel are available
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
 # ── Working Directory ────────────────────────────────────────────────────────
 
 WORKDIR /workspace
 
+# ── Install RunPod SDK ──────────────────────────────────────────────────────
+
+RUN pip install --no-cache-dir runpod>=1.7.0
+
+# ── Install Core ML Dependencies ────────────────────────────────────────────
+
+RUN pip install --no-cache-dir \
+    torch>=2.0.0 \
+    torchvision>=0.15.0 \
+    torchaudio>=2.0.0 \
+    --index-url https://download.pytorch.org/whl/cu121
+
+# ── Install mmcv (pre-built binary for CUDA 12.1 + torch 2.x) ──────────────
+
+RUN pip install --no-cache-dir \
+    mmcv==2.1.0 -f https://download.openmmlab.com/mmcv/dist/cu121/torch2.1/index.html || \
+    pip install --no-cache-dir mmcv
+
 # ── Install Python Dependencies ──────────────────────────────────────────────
 
-# First ensure setuptools is available (required by mmcv build)
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel
-
-# Install mmcv pre-built binary separately (avoid building from source)
-RUN pip install --no-cache-dir mmcv==2.1.0 -f https://download.openmmlab.com/mmcv/dist/cu121/torch2.1/index.html || \
-    pip install --no-cache-dir mmcv-lite || \
-    echo 'mmcv pre-built not available, will install from requirements'
-
-# Install remaining dependencies
 COPY gpu-worker/serverless/requirements.txt /workspace/requirements.txt
-RUN pip install --no-cache-dir -r /workspace/requirements.txt || \
-    (pip install --no-cache-dir setuptools && pip install --no-cache-dir -r /workspace/requirements.txt)
+RUN pip install --no-cache-dir -r /workspace/requirements.txt
 
 # ── Install FaceFusion ───────────────────────────────────────────────────────
 
@@ -74,7 +90,6 @@ RUN git clone https://github.com/TMElyralab/MuseTalk.git /workspace/MuseTalk && 
 
 # ── Install IMTalker Dependencies ────────────────────────────────────────────
 
-# IMTalker will be cloned/linked from network volume if available
 RUN pip install --no-cache-dir \
     diffusers \
     transformers \
@@ -101,6 +116,10 @@ RUN pip install --no-cache-dir \
     azure-storage-blob \
     boto3
 
+# ── Install HTTP client ─────────────────────────────────────────────────────
+
+RUN pip install --no-cache-dir httpx>=0.27.0 pydantic>=2.6.0
+
 # ── Copy Worker Code ────────────────────────────────────────────────────────
 
 COPY gpu-worker/serverless/handler.py /workspace/handler.py
@@ -109,7 +128,6 @@ COPY gpu-worker/liveportrait_engine.py /workspace/liveportrait_engine.py
 COPY gpu-worker/imtalker_generate_patch.py /workspace/imtalker_generate_patch.py
 
 # ── Setup Script ─────────────────────────────────────────────────────────────
-# This script runs at container start to link network volume models
 
 COPY gpu-worker/serverless/setup.sh /workspace/setup.sh
 RUN chmod +x /workspace/setup.sh
@@ -125,6 +143,5 @@ ENV RUNPOD_VOLUME_PATH=/runpod-volume
 ENV PYTHONPATH=/workspace:/workspace/MuseTalk:/workspace/IMTalker
 
 # ── Entrypoint ───────────────────────────────────────────────────────────────
-# setup.sh links network volume models, then starts the handler
 
 CMD ["/bin/bash", "-c", "/workspace/setup.sh && python -u /workspace/handler.py"]
