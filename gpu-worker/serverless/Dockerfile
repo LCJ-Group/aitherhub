@@ -8,7 +8,7 @@
 # This avoids the pkg_resources/setuptools incompatibility with Python 3.13
 ##############################################################################
 
-FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+FROM nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
 
 # Prevent interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
@@ -24,6 +24,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.11-venv \
     python3.11-dev \
     python3.11-distutils \
+    build-essential \
+    g++ \
+    cmake \
     git \
     git-lfs \
     ffmpeg \
@@ -45,7 +48,7 @@ RUN ln -sf /usr/bin/python3.11 /usr/local/bin/python && \
     curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11
 
 # Ensure setuptools and wheel are available
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel numpy cython
 
 # ── Working Directory ────────────────────────────────────────────────────────
 
@@ -63,9 +66,10 @@ RUN pip install --no-cache-dir \
     torchaudio>=2.0.0 \
     --index-url https://download.pytorch.org/whl/cu121
 
-# ── Install insightface (chumpy needs special handling) ─────────────────────
+# ── Install insightface (chumpy + g++ needed) ───────────────────────────────
 
-RUN pip install --no-cache-dir chumpy || true && \
+# Install chumpy with --no-build-isolation to use already-installed pip/setuptools
+RUN pip install --no-cache-dir --no-build-isolation chumpy && \
     pip install --no-cache-dir insightface>=0.7.3
 
 # ── Install mmcv (pre-built binary for CUDA 12.1 + torch 2.x) ──────────────
