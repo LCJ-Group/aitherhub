@@ -46,7 +46,10 @@ WORKDIR /workspace
 # ── Install Python Dependencies ──────────────────────────────────────────────
 
 COPY gpu-worker/serverless/requirements.txt /workspace/requirements.txt
-RUN pip install --no-cache-dir --upgrade pip && \
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir mmcv==2.1.0 -f https://download.openmmlab.com/mmcv/dist/cu121/torch2.1/index.html || \
+    pip install --no-cache-dir mmcv-full || \
+    pip install --no-cache-dir mmcv && \
     pip install --no-cache-dir -r /workspace/requirements.txt
 
 # ── Install FaceFusion ───────────────────────────────────────────────────────
