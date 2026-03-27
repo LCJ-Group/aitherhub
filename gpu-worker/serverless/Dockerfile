@@ -63,6 +63,11 @@ RUN pip install --no-cache-dir \
     torchaudio>=2.0.0 \
     --index-url https://download.pytorch.org/whl/cu121
 
+# ── Install insightface (chumpy needs special handling) ─────────────────────
+
+RUN pip install --no-cache-dir chumpy || true && \
+    pip install --no-cache-dir insightface>=0.7.3
+
 # ── Install mmcv (pre-built binary for CUDA 12.1 + torch 2.x) ──────────────
 
 RUN pip install --no-cache-dir \

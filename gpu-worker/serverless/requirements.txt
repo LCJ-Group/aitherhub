@@ -10,8 +10,7 @@ numpy>=1.24.0
 librosa>=0.10.0
 soundfile>=0.12.0
 
-# FaceFusion dependencies
-insightface>=0.7.3
+# FaceFusion dependencies (insightface installed separately in Dockerfile)
 
 # MuseTalk dependencies (mmcv installed separately in Dockerfile)
 mmpose>=0.29.0
