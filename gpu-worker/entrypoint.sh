@@ -1,10 +1,26 @@
 #!/bin/bash
 # DO NOT use set -e — individual failures should not abort the whole startup.
 # RunPod's /start.sh calls /post_start.sh, which should symlink to this file.
+#
+# === /workspace/ Persistent Storage Strategy ===
+# Everything is stored in /workspace/ (RunPod volume disk) so that:
+#   - Pod stop/restart: instant recovery (all data persists)
+#   - New Pod with same volume: instant recovery
+#   - New Pod without volume: full install (first time only, ~15-20 min)
+#
+# Layout:
+#   /workspace/pip-packages/   — All Python packages (persistent)
+#   /workspace/.pip-cache/     — pip download cache (persistent)
+#   /workspace/aitherhub/      — GitHub repo (git pull on each start)
+#   /workspace/models/         — AI model files (persistent)
+#   /workspace/MuseTalk/       — MuseTalk repo + models
+#   /workspace/FasterLivePortrait/ — LivePortrait repo + models
+#   /workspace/*.py            — Worker scripts (copied from repo)
+#   /workspace/*.log           — Runtime logs
 
 echo "============================================"
-echo "  AitherHub GPU Worker — Entrypoint"
-echo "  (FaceFusion + MuseTalk + IMTalker + LivePortrait)"
+echo "  AitherHub GPU Worker — Entrypoint v2"
+echo "  Persistent /workspace/ Storage Mode"
 echo "============================================"
 echo ""
 
@@ -17,13 +33,15 @@ WORKSPACE="/workspace"
 WORKER_API_KEY="${WORKER_API_KEY:-change-me-in-production}"
 WORKER_PORT="${WORKER_PORT:-8000}"
 
+# Persistent package directory
+PIP_PKG_DIR="$WORKSPACE/pip-packages"
+PIP_CACHE_DIR="$WORKSPACE/.pip-cache"
+
 # ── [1/9] Self-install as /post_start.sh ───────────────────────────────────
-# Ensures this script runs automatically on every Pod restart.
 
 echo "[1/9] Ensuring entrypoint auto-start..."
 SELF_PATH="$WORKSPACE/aitherhub/gpu-worker/entrypoint.sh"
 if [ -f "$SELF_PATH" ]; then
-    # Create /post_start.sh that calls our entrypoint
     cat > /post_start.sh << 'POSTEOF'
 #!/bin/bash
 exec /workspace/aitherhub/gpu-worker/entrypoint.sh
@@ -37,7 +55,6 @@ fi
 # ── [2/9] GPU Check ─────────────────────────────────────────────────────────
 
 echo "[2/9] Checking GPU..."
-# nvidia-smi may not be in PATH; try common locations
 NVIDIA_SMI=""
 for p in /usr/bin/nvidia-smi /usr/local/bin/nvidia-smi /usr/lib/nvidia-smi; do
     if [ -x "$p" ]; then NVIDIA_SMI="$p"; break; fi
@@ -52,7 +69,6 @@ else
     echo "  WARNING: nvidia-smi not found in PATH."
 fi
 
-# Verify PyTorch can see GPU
 CUDA_OK=$(python3 -c "import torch; print('yes' if torch.cuda.is_available() else 'no')" 2>/dev/null || echo "no")
 if [ "$CUDA_OK" = "yes" ]; then
     GPU_NAME=$(python3 -c "import torch; print(torch.cuda.get_device_name(0))" 2>/dev/null || echo "unknown")
@@ -91,89 +107,133 @@ else
     echo "  All system dependencies present."
 fi
 
-# ── [4/9] Python Dependencies ────────────────────────────────────────────────
+# ── [4/9] Python Dependencies (Persistent in /workspace/) ───────────────────
+#
+# Strategy:
+#   1. Set PYTHONPATH to include /workspace/pip-packages/
+#   2. Use pip --target to install into persistent volume
+#   3. Use pip --cache-dir to cache downloads in persistent volume
+#   4. Check a marker file to skip if already installed
+#   5. Only re-install if marker is missing (first run or volume wiped)
 
 echo "[4/9] Checking Python dependencies..."
 
-install_if_missing() {
+# Set up persistent Python path
+mkdir -p "$PIP_PKG_DIR" "$PIP_CACHE_DIR"
+export PYTHONPATH="$PIP_PKG_DIR:${PYTHONPATH:-}"
+export PATH="$PIP_PKG_DIR/bin:$PATH"
+
+# Marker file to track successful installation
+MARKER_FILE="$PIP_PKG_DIR/.install-complete-v2"
+
+pip_install_persistent() {
+    # Install a package into /workspace/pip-packages/ with cache
     local pkg="$1"
-    local pip_name="${2:-$1}"
-    if ! python3 -c "import $pkg" 2>/dev/null; then
-        echo "  [install] $pip_name"
-        pip install --quiet "$pip_name" 2>/dev/null || true
-    else
-        echo "  [ok] $pkg"
-    fi
+    pip install --quiet --target="$PIP_PKG_DIR" --cache-dir="$PIP_CACHE_DIR" \
+        --upgrade --no-warn-script-location "$pkg" 2>/dev/null || true
 }
 
-# Worker API core
-install_if_missing "fastapi" "fastapi"
-install_if_missing "uvicorn" "uvicorn"
-install_if_missing "httpx" "httpx"
-install_if_missing "multipart" "python-multipart"
-install_if_missing "pydantic" "pydantic"
-
-# MuseTalk dependencies
-install_if_missing "cv2" "opencv-python-headless"
-install_if_missing "einops" "einops"
-install_if_missing "face_alignment" "face-alignment"
-install_if_missing "diffusers" "diffusers==0.30.2"
-install_if_missing "transformers" "transformers"
-install_if_missing "accelerate" "accelerate"
-install_if_missing "safetensors" "safetensors"
-install_if_missing "omegaconf" "omegaconf"
-install_if_missing "yacs" "yacs"
-install_if_missing "mediapipe" "mediapipe"
-
-# IMTalker dependencies
-install_if_missing "torchdiffeq" "torchdiffeq==0.2.5"
-install_if_missing "timm" "timm"
-install_if_missing "pytorch_lightning" "pytorch-lightning"
-install_if_missing "flow_vis" "flow-vis"
-install_if_missing "av" "av==12.0.0"
-install_if_missing "librosa" "librosa"
-
-# FasterLivePortrait / JoyVASA dependencies
-install_if_missing "onnxruntime" "onnxruntime-gpu"
-install_if_missing "scipy" "scipy"
-install_if_missing "tyro" "tyro"
-
-# GFPGAN / basicsr dependencies
-install_if_missing "gfpgan" "gfpgan"
-install_if_missing "basicsr" "basicsr==1.4.2"
-
-echo "  Python dependencies check complete."
-
-# ── [5/9] Critical Compatibility Fixes ───────────────────────────────────────
-
-echo "[5/9] Applying critical compatibility fixes..."
-
-# Fix 1: numpy must be <2.0 for onnxruntime (insightface dependency)
-NUMPY_VER=$(python3 -c "import numpy; print(numpy.__version__)" 2>/dev/null || echo "0")
-NUMPY_MAJOR=$(echo "$NUMPY_VER" | cut -d. -f1)
-if [ "$NUMPY_MAJOR" -ge 2 ] 2>/dev/null; then
-    echo "  [fix] Downgrading numpy from $NUMPY_VER to 1.26.4 (onnxruntime compat)..."
-    pip install --quiet "numpy==1.26.4" 2>/dev/null || true
+if [ -f "$MARKER_FILE" ]; then
+    echo "  [FAST MODE] Packages already installed in $PIP_PKG_DIR"
+    echo "  Marker: $(cat $MARKER_FILE)"
+    echo "  Skipping pip install phase entirely."
 else
-    echo "  [ok] numpy $NUMPY_VER (compatible)"
-fi
+    echo "  [FULL INSTALL] First run — installing all packages to $PIP_PKG_DIR"
+    echo "  This will take 15-20 minutes. Subsequent starts will be instant."
+    echo ""
 
-# Fix 2: torchaudio must match torch version
-TORCHAUDIO_OK=$(python3 -c "
+    # Worker API core
+    echo "  [1/7] Installing API framework..."
+    pip_install_persistent "fastapi"
+    pip_install_persistent "uvicorn"
+    pip_install_persistent "httpx"
+    pip_install_persistent "python-multipart"
+    pip_install_persistent "pydantic"
+
+    # MuseTalk dependencies
+    echo "  [2/7] Installing MuseTalk dependencies..."
+    pip_install_persistent "opencv-python-headless"
+    pip_install_persistent "einops"
+    pip_install_persistent "face-alignment"
+    pip_install_persistent "diffusers==0.30.2"
+    pip_install_persistent "transformers"
+    pip_install_persistent "accelerate"
+    pip_install_persistent "safetensors"
+    pip_install_persistent "omegaconf"
+    pip_install_persistent "yacs"
+    pip_install_persistent "mediapipe"
+
+    # IMTalker dependencies
+    echo "  [3/7] Installing IMTalker dependencies..."
+    pip_install_persistent "torchdiffeq==0.2.5"
+    pip_install_persistent "timm"
+    pip_install_persistent "pytorch-lightning"
+    pip_install_persistent "flow-vis"
+    pip_install_persistent "av==12.0.0"
+    pip_install_persistent "librosa"
+
+    # FasterLivePortrait / JoyVASA dependencies
+    echo "  [4/7] Installing LivePortrait dependencies..."
+    pip_install_persistent "onnxruntime-gpu"
+    pip_install_persistent "scipy"
+    pip_install_persistent "tyro"
+
+    # GFPGAN / basicsr dependencies
+    echo "  [5/7] Installing GFPGAN/basicsr..."
+    pip_install_persistent "gfpgan"
+    pip_install_persistent "basicsr==1.4.2"
+
+    # numpy downgrade for onnxruntime compat
+    echo "  [6/7] Fixing numpy version..."
+    pip_install_persistent "numpy==1.26.4"
+
+    # torchaudio fix
+    echo "  [7/7] Checking torchaudio..."
+    TORCHAUDIO_OK=$(python3 -c "
+import sys; sys.path.insert(0, '$PIP_PKG_DIR')
 import torchaudio, torch
 tv = torch.__version__.split('+')[0]
 av = torchaudio.__version__.split('+')[0]
 print('ok' if tv.split('.')[:2] == av.split('.')[:2] else 'mismatch')
 " 2>/dev/null || echo "mismatch")
-if [ "$TORCHAUDIO_OK" != "ok" ]; then
-    echo "  [fix] Reinstalling torchaudio to match torch..."
-    pip install --quiet --force-reinstall --no-deps torchaudio 2>/dev/null || true
-else
-    echo "  [ok] torchaudio matches torch"
+    if [ "$TORCHAUDIO_OK" != "ok" ]; then
+        echo "  [fix] Reinstalling torchaudio to match torch..."
+        pip install --quiet --force-reinstall --no-deps --target="$PIP_PKG_DIR" \
+            --cache-dir="$PIP_CACHE_DIR" torchaudio 2>/dev/null || true
+    fi
+
+    # Write marker
+    echo "Installed at $(date) on $(hostname)" > "$MARKER_FILE"
+    echo "  [DONE] All packages installed to $PIP_PKG_DIR"
 fi
 
-# Fix 3: basicsr/torchvision compatibility for GFPGAN
-BASICSR_DEG=$(python3 -c "import basicsr; import os; print(os.path.join(os.path.dirname(basicsr.__file__), 'data', 'degradations.py'))" 2>/dev/null || echo "")
+echo "  Python dependencies ready."
+
+# ── [5/9] Critical Compatibility Fixes ───────────────────────────────────────
+
+echo "[5/9] Applying critical compatibility fixes..."
+
+# Fix 1: numpy check (already handled in install phase, but verify)
+NUMPY_VER=$(python3 -c "import numpy; print(numpy.__version__)" 2>/dev/null || echo "0")
+NUMPY_MAJOR=$(echo "$NUMPY_VER" | cut -d. -f1)
+if [ "$NUMPY_MAJOR" -ge 2 ] 2>/dev/null; then
+    echo "  [fix] Downgrading numpy from $NUMPY_VER to 1.26.4..."
+    pip install --quiet --target="$PIP_PKG_DIR" --cache-dir="$PIP_CACHE_DIR" \
+        "numpy==1.26.4" 2>/dev/null || true
+else
+    echo "  [ok] numpy $NUMPY_VER (compatible)"
+fi
+
+# Fix 2: basicsr/torchvision compatibility for GFPGAN
+BASICSR_DEG=""
+# Check both system and persistent locations
+for base_dir in "$PIP_PKG_DIR" "/usr/local/lib/python3.11/dist-packages"; do
+    candidate="$base_dir/basicsr/data/degradations.py"
+    if [ -f "$candidate" ]; then
+        BASICSR_DEG="$candidate"
+        break
+    fi
+done
 if [ -n "$BASICSR_DEG" ] && [ -f "$BASICSR_DEG" ]; then
     if grep -q 'from torchvision.transforms.functional_tensor' "$BASICSR_DEG"; then
         sed -i 's/from torchvision.transforms.functional_tensor import rgb_to_grayscale/from torchvision.transforms.functional import rgb_to_grayscale/' "$BASICSR_DEG"
@@ -185,7 +245,7 @@ else
     echo "  [skip] basicsr degradations.py not found"
 fi
 
-# Fix 4: JoyVASA torch.load needs weights_only=False for PyTorch 2.6+
+# Fix 3: JoyVASA torch.load needs weights_only=False for PyTorch 2.6+
 JOYVASA_PIPELINE="$WORKSPACE/FasterLivePortrait/src/pipelines/joyvasa_audio_to_motion_pipeline.py"
 if [ -f "$JOYVASA_PIPELINE" ]; then
     if grep -q 'torch.load(motion_model_path, map_location="cpu")' "$JOYVASA_PIPELINE" && \
@@ -198,10 +258,10 @@ if [ -f "$JOYVASA_PIPELINE" ]; then
 fi
 
 # Ensure GFPGAN model exists
-GFPGAN_MODEL="/workspace/models/GFPGANv1.4.pth"
+GFPGAN_MODEL="$WORKSPACE/models/GFPGANv1.4.pth"
 if [ ! -f "$GFPGAN_MODEL" ]; then
     echo "  [download] GFPGAN model..."
-    mkdir -p /workspace/models
+    mkdir -p "$WORKSPACE/models"
     wget -q -O "$GFPGAN_MODEL" "https://github.com/TencentARC/GFPGAN/releases/download/v1.3.0/GFPGANv1.4.pth" || true
 fi
 
@@ -285,6 +345,8 @@ mkdir -p "$WORKSPACE/source_faces" "$WORKSPACE/tmp"
 
 # ── Environment Variables ───────────────────────────────────────────────────
 
+export PYTHONPATH="$PIP_PKG_DIR:${PYTHONPATH:-}"
+export PATH="$PIP_PKG_DIR/bin:$PATH"
 export WORKER_API_KEY="$WORKER_API_KEY"
 export WORKER_PORT="$WORKER_PORT"
 export FACEFUSION_DIR="${FACEFUSION_DIR:-$WORKSPACE/facefusion}"
@@ -309,6 +371,7 @@ echo "============================================"
 echo ""
 echo "  GPU Worker API: http://0.0.0.0:${WORKER_PORT}"
 echo "  API Key: ${WORKER_API_KEY:0:4}****"
+echo "  Packages: $PIP_PKG_DIR"
 echo ""
 echo "  Features:"
 echo "    - FaceFusion (Mode B: Real-time face swap)"
@@ -322,13 +385,13 @@ cd "$WORKSPACE"
 # Start Live API (background)
 if [ -f "$WORKSPACE/live_api.py" ]; then
     echo "  Starting Live API on port 8002..."
-    nohup python3 live_api.py > /var/log/live_api.log 2>&1 &
+    PYTHONPATH="$PIP_PKG_DIR:${PYTHONPATH:-}" nohup python3 live_api.py > /var/log/live_api.log 2>&1 &
     echo "  Live API started (PID: $!)"
 fi
 
-# Start Worker API (foreground via nohup so this script can return to /start.sh)
+# Start Worker API (background so this script can return to /start.sh)
 echo "  Starting Worker API on port ${WORKER_PORT}..."
-nohup python3 worker_api.py > /var/log/worker_api.log 2>&1 &
+PYTHONPATH="$PIP_PKG_DIR:${PYTHONPATH:-}" nohup python3 worker_api.py > /var/log/worker_api.log 2>&1 &
 WORKER_PID=$!
 echo "  Worker API started (PID: $WORKER_PID)"
 
