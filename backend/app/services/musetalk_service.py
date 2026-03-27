@@ -4,18 +4,30 @@ MuseTalk Lip-Sync Service for AitherHub — Mode C: AI Lip-Sync Video
 This module manages communication with the GPU Worker's MuseTalk endpoints
 to generate lip-synced digital human videos from a portrait image and audio.
 
-Architecture:
-  AitherHub Backend ←→ GPU Worker (RunPod)
-                          ↓
-  Portrait + Audio → MuseTalk v1.5 → H.264+AAC Video (lip-synced)
+Architecture (Serverless mode — default):
+  AitherHub Backend → RunPod Serverless API → GPU Worker (auto-scaled)
+  - No Pod management needed
+  - GPU spins up on demand, scales to zero when idle
+  - Cost: pay per second of GPU usage only
 
-GPU Worker Endpoints:
+Architecture (Legacy Pod mode — fallback):
+  AitherHub Backend ←→ GPU Worker (RunPod Pod)
+  - Requires manually running Pod
+  - Used when FACE_SWAP_WORKER_URL is explicitly set
+
+GPU Worker Actions (Serverless):
+  action="musetalk" → MuseTalk lip-sync generation
+
+GPU Worker Endpoints (Legacy Pod):
   POST /api/digital-human/generate       – Start generation job
   GET  /api/digital-human/status/{id}    – Check job progress
   GET  /api/digital-human/download/{id}  – Download output video
 
-The service reuses the same GPU Worker URL and API key as the face swap service,
-since both run on the same RunPod pod.
+Environment variables:
+  RUNPOD_API_KEY            — RunPod API key (for Serverless mode)
+  RUNPOD_ENDPOINT_ID        — Serverless endpoint ID
+  MUSETALK_WORKER_URL       — Legacy: direct Pod URL (overrides Serverless)
+  FACE_SWAP_WORKER_URL      — Legacy: fallback Pod URL
 """
 from __future__ import annotations
 
@@ -24,8 +36,6 @@ import os
 from typing import Any, Dict, Optional
 
 import httpx
-
-from app.services.runpod_discovery_service import get_runpod_discovery
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +48,9 @@ MUSETALK_WORKER_API_KEY = os.getenv(
 )
 WORKER_CONNECT_TIMEOUT = float(os.getenv("MUSETALK_CONNECT_TIMEOUT", "10"))
 WORKER_READ_TIMEOUT = float(os.getenv("MUSETALK_READ_TIMEOUT", "600"))
+
+# Serverless mode detection
+USE_SERVERLESS = os.getenv("RUNPOD_ENDPOINT_ID", "") != ""
 
 
 # ── Exceptions ───────────────────────────────────────────────────────────────
@@ -66,8 +79,8 @@ class MuseTalkService:
     """
     Client for the MuseTalk GPU Worker API.
 
-    Supports automatic GPU Worker URL discovery via RunPod API.
-    Falls back to MUSETALK_WORKER_URL or FACE_SWAP_WORKER_URL env vars.
+    Automatically uses RunPod Serverless when RUNPOD_ENDPOINT_ID is set.
+    Falls back to legacy Pod mode when MUSETALK_WORKER_URL or FACE_SWAP_WORKER_URL is set.
 
     Usage:
         service = MuseTalkService()
@@ -81,27 +94,375 @@ class MuseTalkService:
         worker_url: Optional[str] = None,
         api_key: Optional[str] = None,
     ):
-        # Try MUSETALK_WORKER_URL, then FACE_SWAP_WORKER_URL as fallback
-        url = worker_url or MUSETALK_WORKER_URL
-        if not url:
-            url = os.getenv("FACE_SWAP_WORKER_URL", "")
-        self._static_worker_url = url.rstrip("/") or None
-        self.api_key = api_key or MUSETALK_WORKER_API_KEY
-        self._discovery = get_runpod_discovery()
+        # Determine mode: Serverless or Legacy Pod
+        self._use_serverless = USE_SERVERLESS and not worker_url and not MUSETALK_WORKER_URL
+        self._serverless = None
+        self._discovery = None
 
-        if not self._static_worker_url and not self._discovery.is_configured:
-            logger.warning(
-                "Neither MUSETALK_WORKER_URL nor RUNPOD_API_KEY is set — "
-                "MuseTalk features disabled"
-            )
+        if self._use_serverless:
+            # Serverless mode
+            from app.services.runpod_serverless_service import get_runpod_serverless
+            self._serverless = get_runpod_serverless()
+            logger.info("MuseTalkService: Using RunPod Serverless mode")
+        else:
+            # Legacy Pod mode
+            from app.services.runpod_discovery_service import get_runpod_discovery
+            url = worker_url or MUSETALK_WORKER_URL
+            if not url:
+                url = os.getenv("FACE_SWAP_WORKER_URL", "")
+            self._static_worker_url = url.rstrip("/") or None
+            self.api_key = api_key or MUSETALK_WORKER_API_KEY
+            self._discovery = get_runpod_discovery()
+            logger.info("MuseTalkService: Using Legacy Pod mode")
+
+            if not self._static_worker_url and not self._discovery.is_configured:
+                logger.warning(
+                    "Neither MUSETALK_WORKER_URL nor RUNPOD_API_KEY is set — "
+                    "MuseTalk features disabled"
+                )
 
     @property
     def is_configured(self) -> bool:
-        """Check if the worker URL is configured (static or discoverable)."""
-        return bool(self._static_worker_url) or self._discovery.is_configured
+        """Check if the worker is configured (Serverless or Pod)."""
+        if self._use_serverless:
+            return self._serverless.is_configured
+        return bool(self._static_worker_url) or (
+            self._discovery is not None and self._discovery.is_configured
+        )
+
+    # ── Serverless Mode Methods ──────────────────────────────────────────────
+
+    async def generate(
+        self,
+        portrait_url: str,
+        audio_url: str,
+        job_id: Optional[str] = None,
+        portrait_type: str = "image",
+        bbox_shift: int = 0,
+        extra_margin: int = 10,
+        batch_size: int = 16,
+        output_fps: int = 25,
+    ) -> Dict[str, Any]:
+        """
+        Start a MuseTalk lip-sync video generation job.
+
+        In Serverless mode: submits job to RunPod and returns immediately.
+        In Pod mode: sends request to the Pod's API.
+        """
+        import uuid
+        if not job_id:
+            job_id = f"mt-{uuid.uuid4().hex[:12]}"
+
+        if self._use_serverless:
+            # Serverless mode: submit async job
+            result = await self._serverless.submit_job({
+                "action": "musetalk",
+                "job_id": job_id,
+                "portrait_url": portrait_url,
+                "portrait_type": portrait_type,
+                "audio_url": audio_url,
+                "bbox_shift": bbox_shift,
+                "extra_margin": extra_margin,
+                "batch_size": batch_size,
+                "output_fps": output_fps,
+            })
+            return {
+                "job_id": job_id,
+                "runpod_job_id": result.get("id"),
+                "status": "processing",
+                "mode": "serverless",
+            }
+        else:
+            # Legacy Pod mode
+            payload = {
+                "job_id": job_id,
+                "portrait_url": portrait_url,
+                "portrait_type": portrait_type,
+                "audio_url": audio_url,
+                "bbox_shift": bbox_shift,
+                "extra_margin": extra_margin,
+                "batch_size": batch_size,
+                "output_fps": output_fps,
+            }
+            resp = await self._request("POST", "/api/digital-human/generate", json=payload)
+            return resp.json()
+
+    async def generate_and_wait(
+        self,
+        portrait_url: str,
+        audio_url: str,
+        job_id: Optional[str] = None,
+        portrait_type: str = "image",
+        bbox_shift: int = 0,
+        extra_margin: int = 10,
+        batch_size: int = 16,
+        output_fps: int = 25,
+        timeout: int = 600,
+    ) -> Dict[str, Any]:
+        """
+        Generate a lip-sync video and wait for completion.
+        Returns the final result with output_url.
+        """
+        if self._use_serverless:
+            result = await self._serverless.run_musetalk(
+                portrait_url=portrait_url,
+                audio_url=audio_url,
+                job_id=job_id,
+                portrait_type=portrait_type,
+                bbox_shift=bbox_shift,
+                extra_margin=extra_margin,
+                batch_size=batch_size,
+                output_fps=output_fps,
+                timeout=timeout,
+            )
+            return result
+        else:
+            # Legacy: generate + poll
+            gen_result = await self.generate(
+                portrait_url=portrait_url,
+                audio_url=audio_url,
+                job_id=job_id,
+                portrait_type=portrait_type,
+                bbox_shift=bbox_shift,
+                extra_margin=extra_margin,
+                batch_size=batch_size,
+                output_fps=output_fps,
+            )
+            return gen_result
+
+    async def get_status(self, job_id: str, runpod_job_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Get the status of a MuseTalk generation job.
+        """
+        if self._use_serverless and runpod_job_id:
+            result = await self._serverless.get_status(runpod_job_id)
+            status = result.get("status", "UNKNOWN")
+
+            # Map RunPod status to our status format
+            status_map = {
+                "IN_QUEUE": "queued",
+                "IN_PROGRESS": "processing",
+                "COMPLETED": "completed",
+                "FAILED": "failed",
+            }
+
+            output = result.get("output", {})
+            return {
+                "job_id": job_id,
+                "runpod_job_id": runpod_job_id,
+                "status": status_map.get(status, status.lower()),
+                "output_url": output.get("output_url") if isinstance(output, dict) else None,
+                "mode": "serverless",
+            }
+        else:
+            # Legacy Pod mode
+            resp = await self._request("GET", f"/api/digital-human/status/{job_id}")
+            return resp.json()
+
+    async def download(self, job_id: str) -> bytes:
+        """
+        Download the generated video file.
+        In Serverless mode, the output_url is returned in get_status().
+        """
+        if self._use_serverless:
+            raise MuseTalkError(
+                "In Serverless mode, use get_status() to get output_url "
+                "instead of downloading directly."
+            )
+        resp = await self._request("GET", f"/api/digital-human/download/{job_id}")
+        return resp.content
+
+    # ── IMTalker (Serverless + Legacy Pod) ──────────────────────────────────
+
+    async def imtalker_generate(
+        self,
+        portrait_url: str,
+        audio_url: str,
+        job_id: Optional[str] = None,
+        a_cfg_scale: float = 2.0,
+        nfe: int = 48,
+        crop: bool = True,
+        output_fps: int = 25,
+    ) -> Dict[str, Any]:
+        """
+        Start an IMTalker premium digital human generation job.
+        In Serverless mode: submits to RunPod Serverless.
+        In Pod mode: sends request to the Pod's API.
+        """
+        import uuid
+        if not job_id:
+            job_id = f"imt-{uuid.uuid4().hex[:12]}"
+
+        if self._use_serverless:
+            result = await self._serverless.submit_job({
+                "action": "imtalker",
+                "job_id": job_id,
+                "portrait_url": portrait_url,
+                "audio_url": audio_url,
+                "a_cfg_scale": a_cfg_scale,
+                "nfe": nfe,
+                "crop": crop,
+                "output_fps": output_fps,
+            })
+            return {
+                "job_id": job_id,
+                "runpod_job_id": result.get("id"),
+                "status": "processing",
+                "mode": "serverless",
+                "engine": "imtalker",
+            }
+        else:
+            payload = {
+                "job_id": job_id,
+                "portrait_url": portrait_url,
+                "audio_url": audio_url,
+                "a_cfg_scale": a_cfg_scale,
+                "nfe": nfe,
+                "crop": crop,
+                "output_fps": output_fps,
+            }
+            resp = await self._request(
+                "POST", "/api/digital-human/imtalker/generate", json=payload
+            )
+            return resp.json()
+
+    async def imtalker_status(self, job_id: str, runpod_job_id: Optional[str] = None) -> Dict[str, Any]:
+        """Get IMTalker job status."""
+        if self._use_serverless and runpod_job_id:
+            result = await self._serverless.get_status(runpod_job_id)
+            status = result.get("status", "UNKNOWN")
+            status_map = {
+                "IN_QUEUE": "queued",
+                "IN_PROGRESS": "processing",
+                "COMPLETED": "completed",
+                "FAILED": "failed",
+            }
+            output = result.get("output", {})
+            return {
+                "job_id": job_id,
+                "runpod_job_id": runpod_job_id,
+                "status": status_map.get(status, status.lower()),
+                "output_url": output.get("output_url") if isinstance(output, dict) else None,
+                "mode": "serverless",
+                "engine": "imtalker",
+            }
+        else:
+            resp = await self._request("GET", f"/api/digital-human/imtalker/status/{job_id}")
+            return resp.json()
+
+    # ── LivePortrait (Serverless + Legacy Pod) ───────────────────────────────
+
+    async def liveportrait_generate(
+        self,
+        portrait_url: str,
+        audio_url: str,
+        job_id: Optional[str] = None,
+        output_fps: int = 25,
+        enable_smoothing: bool = True,
+        enable_angle_policy: bool = True,
+        enable_idle: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Start a LivePortrait 3-layer pipeline job.
+        In Serverless mode: submits to RunPod Serverless.
+        In Pod mode: sends request to the Pod's API.
+        """
+        import uuid
+        if not job_id:
+            job_id = f"lp-{uuid.uuid4().hex[:12]}"
+
+        if self._use_serverless:
+            result = await self._serverless.submit_job({
+                "action": "liveportrait",
+                "job_id": job_id,
+                "portrait_url": portrait_url,
+                "audio_url": audio_url,
+                "output_fps": output_fps,
+                "enable_smoothing": enable_smoothing,
+                "enable_angle_policy": enable_angle_policy,
+                "enable_idle": enable_idle,
+            })
+            return {
+                "job_id": job_id,
+                "runpod_job_id": result.get("id"),
+                "status": "processing",
+                "mode": "serverless",
+                "engine": "liveportrait",
+            }
+        else:
+            payload = {
+                "job_id": job_id,
+                "portrait_url": portrait_url,
+                "audio_url": audio_url,
+                "output_fps": output_fps,
+                "enable_smoothing": enable_smoothing,
+                "enable_angle_policy": enable_angle_policy,
+                "enable_idle": enable_idle,
+            }
+            resp = await self._request(
+                "POST", "/api/digital-human/liveportrait/generate", json=payload
+            )
+            return resp.json()
+
+    async def liveportrait_status(self, job_id: str, runpod_job_id: Optional[str] = None) -> Dict[str, Any]:
+        """Get LivePortrait job status."""
+        if self._use_serverless and runpod_job_id:
+            result = await self._serverless.get_status(runpod_job_id)
+            status = result.get("status", "UNKNOWN")
+            status_map = {
+                "IN_QUEUE": "queued",
+                "IN_PROGRESS": "processing",
+                "COMPLETED": "completed",
+                "FAILED": "failed",
+            }
+            output = result.get("output", {})
+            return {
+                "job_id": job_id,
+                "runpod_job_id": runpod_job_id,
+                "status": status_map.get(status, status.lower()),
+                "output_url": output.get("output_url") if isinstance(output, dict) else None,
+                "mode": "serverless",
+                "engine": "liveportrait",
+            }
+        else:
+            resp = await self._request("GET", f"/api/digital-human/liveportrait/status/{job_id}")
+            return resp.json()
+
+    async def health_check(self) -> Dict[str, Any]:
+        """Quick health check."""
+        if self._use_serverless:
+            return await self._serverless.health_check()
+
+        if not self.is_configured:
+            return {
+                "status": "not_configured",
+                "error": "MUSETALK_WORKER_URL not set",
+            }
+
+        try:
+            resp = await self._request("GET", "/api/health")
+            data = resp.json()
+            gpu = data.get("gpu", {})
+            return {
+                "status": "ok",
+                "mode": "pod",
+                "worker_url": (await self._get_worker_url())[:50] + "...",
+                "gpu_name": gpu.get("gpu_name") or data.get("gpu_name"),
+                "gpu_memory_used_mb": gpu.get("gpu_memory_used_mb") or data.get("gpu_memory_used_mb"),
+                "gpu_memory_total_mb": gpu.get("gpu_memory_total_mb") or data.get("gpu_memory_total_mb"),
+                "musetalk_loaded": data.get("musetalk_loaded", False),
+            }
+        except MuseTalkConnectionError as e:
+            return {"status": "unreachable", "error": str(e)}
+        except MuseTalkAPIError as e:
+            return {"status": "error", "error": str(e)}
+        except Exception as e:
+            return {"status": "error", "error": f"Unexpected: {str(e)}"}
+
+    # ── Legacy Pod Mode Internal Methods ─────────────────────────────────────
 
     async def _get_worker_url(self) -> str:
-        """Resolve the current worker URL."""
+        """Resolve the current worker URL (Legacy Pod mode only)."""
         if self._static_worker_url:
             return self._static_worker_url
 
@@ -123,10 +484,7 @@ class MuseTalkService:
         _retry_on_discovery: bool = True,
         **kwargs,
     ) -> httpx.Response:
-        """
-        Make an HTTP request to the GPU worker.
-        Returns the raw httpx.Response for flexibility (JSON or streaming).
-        """
+        """Make an HTTP request to the GPU worker (Legacy Pod mode only)."""
         if not self.is_configured:
             raise MuseTalkConnectionError("MuseTalk worker not configured")
 
@@ -155,7 +513,6 @@ class MuseTalkService:
                     except Exception:
                         pass
 
-                    # If 404 and using auto-discovery, try refreshing the URL
                     if (
                         resp.status_code == 404
                         and _retry_on_discovery
@@ -194,100 +551,3 @@ class MuseTalkService:
             raise MuseTalkConnectionError(
                 f"Timeout connecting to GPU worker at {url}: {e}"
             ) from e
-
-    # ── Public API ───────────────────────────────────────────────────────────
-
-    async def generate(
-        self,
-        portrait_url: str,
-        audio_url: str,
-        job_id: Optional[str] = None,
-        portrait_type: str = "image",
-        bbox_shift: int = 0,
-        extra_margin: int = 10,
-        batch_size: int = 16,
-        output_fps: int = 25,
-    ) -> Dict[str, Any]:
-        """
-        Start a MuseTalk lip-sync video generation job.
-
-        Args:
-            portrait_url: URL of the portrait image or driving video
-            audio_url: URL of the audio file (WAV or MP3)
-            job_id: Optional custom job ID (auto-generated if not provided)
-            portrait_type: 'image' for static photo, 'video' for 9:16 driving video
-            bbox_shift: Vertical shift for face bounding box
-            extra_margin: Extra margin below face for v1.5
-            batch_size: Inference batch size
-            output_fps: Output video FPS
-
-        Returns:
-            dict with job_id and status
-        """
-        import uuid
-        if not job_id:
-            job_id = f"mt-{uuid.uuid4().hex[:12]}"
-
-        payload = {
-            "job_id": job_id,
-            "portrait_url": portrait_url,
-            "portrait_type": portrait_type,
-            "audio_url": audio_url,
-            "bbox_shift": bbox_shift,
-            "extra_margin": extra_margin,
-            "batch_size": batch_size,
-            "output_fps": output_fps,
-        }
-
-        resp = await self._request("POST", "/api/digital-human/generate", json=payload)
-        return resp.json()
-
-    async def get_status(self, job_id: str) -> Dict[str, Any]:
-        """
-        Get the status of a MuseTalk generation job.
-
-        Returns:
-            dict with job_id, status, progress, error
-        """
-        resp = await self._request("GET", f"/api/digital-human/status/{job_id}")
-        return resp.json()
-
-    async def download(self, job_id: str) -> bytes:
-        """
-        Download the generated video file.
-
-        Returns:
-            Raw video bytes (MP4)
-        """
-        resp = await self._request("GET", f"/api/digital-human/download/{job_id}")
-        return resp.content
-
-    async def health_check(self) -> Dict[str, Any]:
-        """
-        Quick health check by calling the worker's health endpoint.
-        """
-        if not self.is_configured:
-            return {
-                "status": "not_configured",
-                "error": "MUSETALK_WORKER_URL not set",
-            }
-
-        try:
-            resp = await self._request("GET", "/api/health")
-            data = resp.json()
-            # GPU info may be nested under "gpu" key
-            gpu = data.get("gpu", {})
-            return {
-                "status": "ok",
-                "worker_url": (await self._get_worker_url())[:50] + "...",
-                "gpu_name": gpu.get("gpu_name") or data.get("gpu_name"),
-                "gpu_memory_used_mb": gpu.get("gpu_memory_used_mb") or data.get("gpu_memory_used_mb"),
-                "gpu_memory_total_mb": gpu.get("gpu_memory_total_mb") or data.get("gpu_memory_total_mb"),
-                "musetalk_loaded": data.get("musetalk_loaded", False),
-            }
-        except MuseTalkConnectionError as e:
-            return {"status": "unreachable", "error": str(e)}
-        except MuseTalkAPIError as e:
-            return {"status": "error", "error": str(e)}
-        except Exception as e:
-            return {"status": "error", "error": f"Unexpected: {str(e)}"}
