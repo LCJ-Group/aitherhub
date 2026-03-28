@@ -91,6 +91,7 @@ MUSETALK_MODEL_DIRS=(
     "whisper"
     "sd-vae-ft-mse"
     "musetalk"
+    "musetalkV15"
 )
 
 # Check if models exist in Network Volume first
@@ -119,7 +120,7 @@ fi
 
 # Check if all critical models are present
 MODELS_READY=true
-for subdir in "sd-vae-ft-mse" "musetalk" "whisper"; do
+for subdir in "sd-vae-ft-mse" "musetalk" "musetalkV15" "whisper"; do
     if [ ! -d "$MUSETALK_MODELS/$subdir" ] || [ -z "$(ls -A $MUSETALK_MODELS/$subdir 2>/dev/null)" ]; then
         echo "  [MISSING] $subdir — will download"
         MODELS_READY=false
@@ -160,6 +161,24 @@ if os.path.isdir(src):
 else:
     print('  [warn] musetalk weights not found in HF download')
 " 2>/dev/null || echo "  [warn] musetalk weights download failed"
+    fi
+
+    # musetalkV15 model weights (v1.5)
+    if [ ! -d "$MUSETALK_MODELS/musetalkV15" ] || [ -z "$(ls -A $MUSETALK_MODELS/musetalkV15 2>/dev/null)" ]; then
+        echo "  [download] musetalkV15 weights..."
+        mkdir -p "$MUSETALK_MODELS/musetalkV15"
+        python -c "
+from huggingface_hub import snapshot_download
+snapshot_download(repo_id='TMElyralab/MuseTalk', local_dir='/tmp/musetalk_hf_v15', allow_patterns=['musetalkV15/*'])
+import shutil, os
+src = '/tmp/musetalk_hf_v15/musetalkV15'
+if os.path.isdir(src):
+    for f in os.listdir(src):
+        shutil.copy2(os.path.join(src, f), '$MUSETALK_MODELS/musetalkV15/')
+    print('  [done] musetalkV15 weights')
+else:
+    print('  [warn] musetalkV15 weights not found in HF download')
+" 2>/dev/null || echo "  [warn] musetalkV15 weights download failed"
     fi
 
     # whisper model
