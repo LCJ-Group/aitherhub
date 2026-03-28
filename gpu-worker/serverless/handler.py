@@ -60,14 +60,15 @@ logger = logging.getLogger("aitherhub-serverless")
 
 VOLUME_PATH = os.getenv("RUNPOD_VOLUME_PATH", "/runpod-volume")
 WORKSPACE = os.getenv("WORKSPACE", "/workspace")
+APP_DIR = os.getenv("APP_DIR", "/app")
 TEMP_DIR = os.getenv("TEMP_DIR", "/tmp/aitherhub")
 os.makedirs(TEMP_DIR, exist_ok=True)
 
-# Paths for AI tools (symlinked from Network Volume by setup.sh)
-# setup.sh creates: /workspace/facefusion -> /runpod-volume/facefusion etc.
-FACEFUSION_DIR = os.getenv("FACEFUSION_DIR", f"{WORKSPACE}/facefusion")
-MUSETALK_DIR = os.getenv("MUSETALK_DIR", f"{WORKSPACE}/MuseTalk")
-IMTALKER_DIR = os.getenv("IMTALKER_DIR", f"{WORKSPACE}/IMTalker")
+# Paths for AI tools (baked into Docker image at /app/)
+# Network Volume paths are checked as fallback by setup.sh
+FACEFUSION_DIR = os.getenv("FACEFUSION_DIR", f"{APP_DIR}/facefusion")
+MUSETALK_DIR = os.getenv("MUSETALK_DIR", f"{APP_DIR}/MuseTalk")
+IMTALKER_DIR = os.getenv("IMTALKER_DIR", f"{APP_DIR}/IMTalker")
 
 # Azure Blob Storage config (for result upload)
 AZURE_CONNECTION_STRING = os.getenv("AZURE_STORAGE_CONNECTION_STRING", "")
@@ -86,11 +87,14 @@ _models_loaded = False
 
 
 def _ensure_workspace():
-    """Ensure workspace directories exist, linking from network volume if available."""
+    """Ensure workspace directories exist. Docker image has tools at /app/."""
+    # Create workspace dir if it doesn't exist
+    os.makedirs(WORKSPACE, exist_ok=True)
+
+    # If network volume has workspace data, link it (optional)
     volume_workspace = os.path.join(VOLUME_PATH, "workspace")
-    if os.path.isdir(volume_workspace) and not os.path.isdir(WORKSPACE):
-        os.symlink(volume_workspace, WORKSPACE)
-        logger.info(f"Linked {WORKSPACE} -> {volume_workspace}")
+    if os.path.isdir(volume_workspace):
+        logger.info(f"Network volume workspace found at {volume_workspace}")
 
     for d in [TEMP_DIR, f"{WORKSPACE}/source_faces", f"{WORKSPACE}/tmp"]:
         os.makedirs(d, exist_ok=True)
@@ -264,9 +268,19 @@ def handle_musetalk(job_input: Dict[str, Any]) -> Dict[str, Any]:
         # Step 2: Load MuseTalk engine
         global _musetalk_engine
         if _musetalk_engine is None:
-            engine_path = os.path.join(WORKSPACE, "live_engine.py")
-            if not os.path.exists(engine_path):
-                engine_path = os.path.join(os.path.dirname(__file__), "..", "live_engine.py")
+            # Search for live_engine.py in multiple locations
+            engine_path = None
+            for candidate in [
+                os.path.join(APP_DIR, "live_engine.py"),
+                os.path.join(WORKSPACE, "live_engine.py"),
+                os.path.join(os.path.dirname(__file__), "live_engine.py"),
+                os.path.join(os.path.dirname(__file__), "..", "live_engine.py"),
+            ]:
+                if os.path.exists(candidate):
+                    engine_path = candidate
+                    break
+            if engine_path is None:
+                raise FileNotFoundError("live_engine.py not found in any search path")
 
             import importlib.util
             spec = importlib.util.spec_from_file_location("live_engine", engine_path)
@@ -783,6 +797,7 @@ def handle_health(job_input: Dict[str, Any]) -> Dict[str, Any]:
         "facefusion_dir": os.path.isdir(FACEFUSION_DIR),
         "musetalk_dir": os.path.isdir(MUSETALK_DIR),
         "imtalker_dir": os.path.isdir(IMTALKER_DIR),
+        "app_dir": APP_DIR,
         "workspace": WORKSPACE,
         "volume_path": VOLUME_PATH,
     }

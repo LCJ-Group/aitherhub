@@ -1,79 +1,219 @@
 #!/bin/bash
 # ──────────────────────────────────────────────────────────────────────────────
-# AitherHub GPU Worker — Serverless Setup Script (v2)
+# AitherHub GPU Worker — Serverless Setup Script (v3 Self-Contained)
 #
 # Runs at container start (cold start) to:
-#   1. Link AI tools and models from Network Volume (/runpod-volume/)
-#   2. Apply runtime patches for compatibility
-#   3. Verify critical paths and GPU
-#   4. Hand off to handler.py
+#   1. Check if Network Volume is available (optional, for models/cache)
+#   2. Verify AI tools are present (baked into Docker image at /app/)
+#   3. Download MuseTalk models if not present
+#   4. Apply runtime patches for compatibility
+#   5. Verify GPU and critical paths
+#   6. Hand off to handler.py
 #
-# Network Volume Layout (must be pre-populated):
-#   /runpod-volume/
-#   ├── facefusion/          — FaceFusion repo + models
-#   ├── MuseTalk/            — MuseTalk repo + models
-#   ├── IMTalker/            — IMTalker repo + checkpoints
-#   ├── FasterLivePortrait/  — LivePortrait repo + models
-#   └── models/              — Shared model files (GFPGAN, etc.)
+# Docker Image Layout (always available):
+#   /app/
+#   ├── facefusion/          — FaceFusion repo + essential models
+#   ├── MuseTalk/            — MuseTalk repo (models downloaded at first start)
+#   ├── models/              — Shared model files (GFPGAN, etc.)
+#   ├── handler.py           — RunPod Serverless handler
+#   ├── live_engine.py       — MuseTalk engine
+#   ├── liveportrait_engine.py
+#   └── setup.sh             — This script
+#
+# Optional Network Volume (/runpod-volume/):
+#   If attached, MuseTalk models are cached here for faster cold starts.
+#   If not attached, models are downloaded to /app/ (slower first start).
 # ──────────────────────────────────────────────────────────────────────────────
 
-VOLUME="${RUNPOD_VOLUME_PATH:-/runpod-volume}"
+APP_DIR="/app"
 WORKSPACE="/workspace"
+VOLUME="${RUNPOD_VOLUME_PATH:-/runpod-volume}"
 
-echo "=== AitherHub Serverless Setup v2 ==="
+echo "=== AitherHub Serverless Setup v3 (Self-Contained) ==="
 echo "Timestamp: $(date)"
-echo "Volume path: $VOLUME"
+echo "App dir: $APP_DIR"
 echo "Workspace: $WORKSPACE"
+echo "Volume path: $VOLUME"
 
-# ── 1. Network Volume Check ─────────────────────────────────────────────────
+# ── 1. Network Volume Check (Optional) ────────────────────────────────────
 
 if [ -d "$VOLUME" ] && [ "$(ls -A $VOLUME 2>/dev/null)" ]; then
     echo "[OK] Network volume found and not empty"
+    HAS_VOLUME=true
 else
-    echo "[WARNING] Network volume not found or empty at $VOLUME"
-    echo "  AI tools (MuseTalk, FaceFusion, etc.) will NOT be available."
-    echo "  Please attach a Network Volume with pre-populated AI tools."
+    echo "[INFO] No network volume — using Docker image contents only"
+    HAS_VOLUME=false
 fi
 
-# ── 2. Symlink AI Tools from Network Volume ─────────────────────────────────
-
-link_if_exists() {
-    local src="$1"
-    local dst="$2"
-    if [ -d "$src" ]; then
-        # Remove existing (file, symlink, or empty dir)
-        rm -rf "$dst" 2>/dev/null || true
-        ln -sf "$src" "$dst"
-        echo "  [linked] $dst -> $src"
-    else
-        echo "  [skip] $src not found"
-    fi
-}
+# ── 2. Verify AI Tools (baked into Docker image) ──────────────────────────
 
 echo ""
-echo "=== Linking AI Tools ==="
+echo "=== Verifying AI Tools ==="
 
-# Main AI tool directories
-link_if_exists "$VOLUME/facefusion" "$WORKSPACE/facefusion"
-link_if_exists "$VOLUME/MuseTalk" "$WORKSPACE/MuseTalk"
-link_if_exists "$VOLUME/IMTalker" "$WORKSPACE/IMTalker"
-link_if_exists "$VOLUME/FasterLivePortrait" "$WORKSPACE/FasterLivePortrait"
+for dir_name in "facefusion" "MuseTalk"; do
+    app_path="$APP_DIR/$dir_name"
+    if [ -d "$app_path" ]; then
+        echo "  [OK] $dir_name at $app_path"
+    else
+        echo "  [MISSING] $dir_name at $app_path"
+    fi
+done
 
-# Shared models directory
-link_if_exists "$VOLUME/models" "$WORKSPACE/models"
-
-# ── 3. MuseTalk Model Symlinks (if models are in separate location) ──────────
-
-if [ -d "$VOLUME/models/musetalk" ] && [ -d "$WORKSPACE/MuseTalk" ]; then
-    echo ""
-    echo "=== Linking MuseTalk Models ==="
-    mkdir -p "$WORKSPACE/MuseTalk/models"
-
-    for subdir in dwpose face-parse-bisenet face-parse-bisent whisper sd-vae-ft-mse musetalk; do
-        if [ -d "$VOLUME/models/$subdir" ]; then
-            link_if_exists "$VOLUME/models/$subdir" "$WORKSPACE/MuseTalk/models/$subdir"
+# If Network Volume has IMTalker or FasterLivePortrait, link them
+if [ "$HAS_VOLUME" = true ]; then
+    for dir_name in "IMTalker" "FasterLivePortrait"; do
+        vol_path="$VOLUME/$dir_name"
+        ws_path="$WORKSPACE/$dir_name"
+        if [ -d "$vol_path" ] && [ ! -e "$ws_path" ]; then
+            ln -sf "$vol_path" "$ws_path"
+            echo "  [linked] $ws_path -> $vol_path"
         fi
     done
+fi
+
+# ── 3. MuseTalk Models ────────────────────────────────────────────────────
+# MuseTalk needs several model directories. Check if they exist in:
+#   1. Network Volume (fastest, cached)
+#   2. Docker image /app/MuseTalk/models/
+#   3. Download from HuggingFace (first cold start only)
+
+echo ""
+echo "=== MuseTalk Models ==="
+
+MUSETALK_MODELS="$APP_DIR/MuseTalk/models"
+mkdir -p "$MUSETALK_MODELS"
+
+# Model directories needed by MuseTalk
+MUSETALK_MODEL_DIRS=(
+    "dwpose"
+    "face-parse-bisenet"
+    "face-parse-bisent"
+    "whisper"
+    "sd-vae-ft-mse"
+    "musetalk"
+)
+
+# Check if models exist in Network Volume first
+if [ "$HAS_VOLUME" = true ] && [ -d "$VOLUME/models" ]; then
+    echo "  Checking Network Volume for cached models..."
+    for subdir in "${MUSETALK_MODEL_DIRS[@]}"; do
+        vol_model="$VOLUME/models/$subdir"
+        local_model="$MUSETALK_MODELS/$subdir"
+        if [ -d "$vol_model" ] && [ ! -e "$local_model" ]; then
+            ln -sf "$vol_model" "$local_model"
+            echo "  [cached] $subdir -> $vol_model"
+        fi
+    done
+    # Also check MuseTalk-specific location
+    if [ -d "$VOLUME/MuseTalk/models" ]; then
+        for subdir in "${MUSETALK_MODEL_DIRS[@]}"; do
+            vol_model="$VOLUME/MuseTalk/models/$subdir"
+            local_model="$MUSETALK_MODELS/$subdir"
+            if [ -d "$vol_model" ] && [ ! -e "$local_model" ]; then
+                ln -sf "$vol_model" "$local_model"
+                echo "  [cached] $subdir -> $vol_model"
+            fi
+        done
+    fi
+fi
+
+# Check if all critical models are present
+MODELS_READY=true
+for subdir in "sd-vae-ft-mse" "musetalk" "whisper"; do
+    if [ ! -d "$MUSETALK_MODELS/$subdir" ] || [ -z "$(ls -A $MUSETALK_MODELS/$subdir 2>/dev/null)" ]; then
+        echo "  [MISSING] $subdir — will download"
+        MODELS_READY=false
+    else
+        echo "  [OK] $subdir"
+    fi
+done
+
+# Download missing MuseTalk models if needed
+if [ "$MODELS_READY" = false ]; then
+    echo ""
+    echo "  Downloading MuseTalk models (first cold start, ~5-10 min)..."
+
+    # sd-vae-ft-mse
+    if [ ! -d "$MUSETALK_MODELS/sd-vae-ft-mse" ] || [ -z "$(ls -A $MUSETALK_MODELS/sd-vae-ft-mse 2>/dev/null)" ]; then
+        echo "  [download] sd-vae-ft-mse..."
+        mkdir -p "$MUSETALK_MODELS/sd-vae-ft-mse"
+        python -c "
+from huggingface_hub import snapshot_download
+snapshot_download(repo_id='stabilityai/sd-vae-ft-mse', local_dir='$MUSETALK_MODELS/sd-vae-ft-mse')
+print('  [done] sd-vae-ft-mse')
+" 2>/dev/null || echo "  [warn] sd-vae-ft-mse download failed"
+    fi
+
+    # musetalk model weights
+    if [ ! -d "$MUSETALK_MODELS/musetalk" ] || [ -z "$(ls -A $MUSETALK_MODELS/musetalk 2>/dev/null)" ]; then
+        echo "  [download] musetalk weights..."
+        mkdir -p "$MUSETALK_MODELS/musetalk"
+        python -c "
+from huggingface_hub import snapshot_download
+snapshot_download(repo_id='TMElyralab/MuseTalk', local_dir='/tmp/musetalk_hf', allow_patterns=['models/musetalk/*'])
+import shutil, os
+src = '/tmp/musetalk_hf/models/musetalk'
+if os.path.isdir(src):
+    for f in os.listdir(src):
+        shutil.copy2(os.path.join(src, f), '$MUSETALK_MODELS/musetalk/')
+    print('  [done] musetalk weights')
+else:
+    print('  [warn] musetalk weights not found in HF download')
+" 2>/dev/null || echo "  [warn] musetalk weights download failed"
+    fi
+
+    # whisper model
+    if [ ! -d "$MUSETALK_MODELS/whisper" ] || [ -z "$(ls -A $MUSETALK_MODELS/whisper 2>/dev/null)" ]; then
+        echo "  [download] whisper..."
+        mkdir -p "$MUSETALK_MODELS/whisper"
+        python -c "
+from huggingface_hub import snapshot_download
+snapshot_download(repo_id='openai/whisper-tiny', local_dir='$MUSETALK_MODELS/whisper')
+print('  [done] whisper')
+" 2>/dev/null || echo "  [warn] whisper download failed"
+    fi
+
+    # dwpose
+    if [ ! -d "$MUSETALK_MODELS/dwpose" ] || [ -z "$(ls -A $MUSETALK_MODELS/dwpose 2>/dev/null)" ]; then
+        echo "  [download] dwpose..."
+        mkdir -p "$MUSETALK_MODELS/dwpose"
+        python -c "
+from huggingface_hub import hf_hub_download
+hf_hub_download(repo_id='yzd-v/DWPose', filename='dw-ll_ucoco_384.onnx', local_dir='$MUSETALK_MODELS/dwpose')
+print('  [done] dwpose')
+" 2>/dev/null || echo "  [warn] dwpose download failed"
+    fi
+
+    # face-parse-bisent
+    if [ ! -d "$MUSETALK_MODELS/face-parse-bisent" ] || [ -z "$(ls -A $MUSETALK_MODELS/face-parse-bisent 2>/dev/null)" ]; then
+        echo "  [download] face-parse-bisent..."
+        mkdir -p "$MUSETALK_MODELS/face-parse-bisent"
+        # These are standard pretrained weights
+        wget -q -O "$MUSETALK_MODELS/face-parse-bisent/resnet18-5c106cde.pth" \
+            "https://download.pytorch.org/models/resnet18-5c106cde.pth" 2>/dev/null || true
+        python -c "
+from huggingface_hub import hf_hub_download
+hf_hub_download(repo_id='TMElyralab/MuseTalk', filename='models/face-parse-bisent/79999_iter.pth', local_dir='/tmp/musetalk_fp')
+import shutil, os
+src = '/tmp/musetalk_fp/models/face-parse-bisent/79999_iter.pth'
+if os.path.isfile(src):
+    shutil.copy2(src, '$MUSETALK_MODELS/face-parse-bisent/79999_iter.pth')
+    print('  [done] face-parse-bisent')
+" 2>/dev/null || echo "  [warn] face-parse-bisent download failed"
+    fi
+
+    # Cache downloaded models to Network Volume if available
+    if [ "$HAS_VOLUME" = true ]; then
+        echo "  Caching models to Network Volume for future cold starts..."
+        mkdir -p "$VOLUME/models"
+        for subdir in "${MUSETALK_MODEL_DIRS[@]}"; do
+            src="$MUSETALK_MODELS/$subdir"
+            dst="$VOLUME/models/$subdir"
+            if [ -d "$src" ] && [ ! -L "$src" ] && [ ! -d "$dst" ]; then
+                cp -r "$src" "$dst" 2>/dev/null && echo "  [cached] $subdir to volume" || true
+            fi
+        done
+    fi
 fi
 
 # ── 4. Apply Runtime Patches ────────────────────────────────────────────────
@@ -93,44 +233,32 @@ except:
 if [ -n "$BASICSR_DEG" ] && [ -f "$BASICSR_DEG" ]; then
     if grep -q 'from torchvision.transforms.functional_tensor' "$BASICSR_DEG" 2>/dev/null; then
         sed -i 's/from torchvision.transforms.functional_tensor import rgb_to_grayscale/from torchvision.transforms.functional import rgb_to_grayscale/' "$BASICSR_DEG"
-        echo "  [patched] basicsr degradations.py (torchvision compat)"
+        echo "  [patched] basicsr degradations.py"
     else
         echo "  [ok] basicsr already patched"
     fi
 fi
 
 # Patch 2: MuseTalk VAE low_cpu_mem_usage fix
-VAE_FILE="$WORKSPACE/MuseTalk/musetalk/utils/vae.py"
+VAE_FILE="$APP_DIR/MuseTalk/musetalk/utils/vae.py"
 if [ -f "$VAE_FILE" ]; then
     if grep -q "low_cpu_mem_usage" "$VAE_FILE"; then
         echo "  [ok] MuseTalk vae.py already patched"
     else
         sed -i 's/AutoencoderKL.from_pretrained(model_path)/AutoencoderKL.from_pretrained(model_path, low_cpu_mem_usage=False)/g' "$VAE_FILE"
-        echo "  [patched] MuseTalk vae.py (low_cpu_mem_usage=False)"
+        echo "  [patched] MuseTalk vae.py"
     fi
 fi
 
 # Patch 3: MuseTalk FaceParsing absolute path fix
-FP_INIT="$WORKSPACE/MuseTalk/musetalk/utils/face_parsing/__init__.py"
+FP_INIT="$APP_DIR/MuseTalk/musetalk/utils/face_parsing/__init__.py"
 if [ -f "$FP_INIT" ]; then
-    if grep -q "$WORKSPACE/MuseTalk/models" "$FP_INIT"; then
+    if grep -q "$APP_DIR/MuseTalk/models" "$FP_INIT"; then
         echo "  [ok] FaceParsing __init__.py already patched"
     else
-        sed -i "s|'./models/face-parse-bisent/resnet18-5c106cde.pth'|'$WORKSPACE/MuseTalk/models/face-parse-bisent/resnet18-5c106cde.pth'|g" "$FP_INIT"
-        sed -i "s|'./models/face-parse-bisent/79999_iter.pth'|'$WORKSPACE/MuseTalk/models/face-parse-bisent/79999_iter.pth'|g" "$FP_INIT"
-        echo "  [patched] FaceParsing __init__.py (absolute paths)"
-    fi
-fi
-
-# Patch 4: JoyVASA weights_only fix for PyTorch 2.6+
-JOYVASA_PIPELINE="$WORKSPACE/FasterLivePortrait/src/pipelines/joyvasa_audio_to_motion_pipeline.py"
-if [ -f "$JOYVASA_PIPELINE" ]; then
-    if grep -q 'torch.load(motion_model_path, map_location="cpu")' "$JOYVASA_PIPELINE" && \
-       ! grep -q 'weights_only=False' "$JOYVASA_PIPELINE"; then
-        sed -i 's/torch.load(motion_model_path, map_location="cpu")/torch.load(motion_model_path, map_location="cpu", weights_only=False)/' "$JOYVASA_PIPELINE"
-        echo "  [patched] JoyVASA pipeline (weights_only=False)"
-    else
-        echo "  [ok] JoyVASA pipeline"
+        sed -i "s|'./models/face-parse-bisent/resnet18-5c106cde.pth'|'$APP_DIR/MuseTalk/models/face-parse-bisent/resnet18-5c106cde.pth'|g" "$FP_INIT"
+        sed -i "s|'./models/face-parse-bisent/79999_iter.pth'|'$APP_DIR/MuseTalk/models/face-parse-bisent/79999_iter.pth'|g" "$FP_INIT"
+        echo "  [patched] FaceParsing __init__.py"
     fi
 fi
 
@@ -144,7 +272,7 @@ mkdir -p "$WORKSPACE/tmp"
 
 echo ""
 echo "=== Path Verification ==="
-for dir in "$WORKSPACE/facefusion" "$WORKSPACE/MuseTalk" "$WORKSPACE/IMTalker" "$WORKSPACE/FasterLivePortrait"; do
+for dir in "$APP_DIR/facefusion" "$APP_DIR/MuseTalk"; do
     if [ -d "$dir" ]; then
         echo "  [OK] $dir"
     else
@@ -152,18 +280,23 @@ for dir in "$WORKSPACE/facefusion" "$WORKSPACE/MuseTalk" "$WORKSPACE/IMTalker" "
     fi
 done
 
-# Check for key model files
-echo ""
-echo "=== Model Verification ==="
-GFPGAN_MODEL="$WORKSPACE/models/GFPGANv1.4.pth"
-if [ -f "$GFPGAN_MODEL" ]; then
+# Check FaceFusion models
+FF_MODELS="$APP_DIR/facefusion/.assets/models"
+if [ -d "$FF_MODELS" ]; then
+    MODEL_COUNT=$(ls "$FF_MODELS/" 2>/dev/null | wc -l)
+    echo "  [OK] FaceFusion models: $MODEL_COUNT files"
+else
+    echo "  [MISSING] FaceFusion models"
+fi
+
+# Check GFPGAN model
+if [ -f "$APP_DIR/models/GFPGANv1.4.pth" ]; then
     echo "  [OK] GFPGAN model"
 else
-    echo "  [MISSING] GFPGAN model at $GFPGAN_MODEL"
-    # Try to download if missing
-    mkdir -p "$WORKSPACE/models"
-    wget -q -O "$GFPGAN_MODEL" "https://github.com/TencentARC/GFPGAN/releases/download/v1.3.0/GFPGANv1.4.pth" 2>/dev/null && \
-        echo "  [downloaded] GFPGAN model" || echo "  [failed] Could not download GFPGAN model"
+    echo "  [MISSING] GFPGAN model — downloading..."
+    mkdir -p "$APP_DIR/models"
+    wget -q -O "$APP_DIR/models/GFPGANv1.4.pth" \
+        "https://github.com/TencentARC/GFPGAN/releases/download/v1.3.0/GFPGANv1.4.pth" 2>/dev/null || true
 fi
 
 # ── 7. GPU Check ────────────────────────────────────────────────────────────

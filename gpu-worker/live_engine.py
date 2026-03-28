@@ -39,8 +39,8 @@ import cv2
 import torch
 from tqdm import tqdm
 
-# MuseTalk directory
-MUSETALK_DIR = "/workspace/MuseTalk"
+# MuseTalk directory — use env var (set by Dockerfile), fallback to /app/MuseTalk
+MUSETALK_DIR = os.getenv("MUSETALK_DIR", "/app/MuseTalk")
 
 logger = logging.getLogger("live_engine")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")

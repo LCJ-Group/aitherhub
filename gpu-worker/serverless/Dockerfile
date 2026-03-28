@@ -1,15 +1,17 @@
 ##############################################################################
-# AitherHub GPU Worker — RunPod Serverless Docker Image (Optimized v2)
+# AitherHub GPU Worker — RunPod Serverless Docker Image (v3 Self-Contained)
 #
-# Multi-stage build for fast CI:
-#   Stage 1 (builder): Compile native extensions (insightface, chumpy)
-#   Stage 2 (runtime): Slim runtime with pre-built wheels + compiled packages
+# Multi-stage build:
+#   Stage 1 (builder): Compile native extensions (insightface, chumpy, mmcv)
+#   Stage 2 (runtime): Slim runtime + FaceFusion code + MuseTalk code + models
 #
-# MuseTalk, FaceFusion, IMTalker, LivePortrait code and models are loaded
-# from RunPod Network Volume at /runpod-volume/ — NOT baked into the image.
-# This keeps the Docker image small (~8-10GB) and build time under 30 min.
+# This image is FULLY SELF-CONTAINED:
+#   - FaceFusion code + essential models baked in
+#   - MuseTalk code baked in (models downloaded at first cold start)
+#   - No Network Volume required (but supported if available)
+#   - Pod stop/restart safe: Serverless workers auto-scale independently
 #
-# Base: nvidia/cuda 12.1 runtime + Python 3.11
+# Base: nvidia/cuda 12.1 + Python 3.11
 ##############################################################################
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -43,19 +45,16 @@ RUN ln -sf /usr/bin/python3.11 /usr/local/bin/python && \
 
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel numpy cython
 
-# Install PyTorch (CUDA 12.1) — needed for mmcv pre-built wheel compatibility
+# Install PyTorch (CUDA 12.1)
 RUN pip install --no-cache-dir \
     torch==2.1.2 \
     torchvision==0.16.2 \
     torchaudio==2.1.2 \
     --index-url https://download.pytorch.org/whl/cu121
 
-# Install insightface + chumpy
-# chumpy's setup.py does `import pip` which fails with build isolation,
-# so we disable it. insightface only needs chumpy for SMPL body models
-# (not used in our face-swap pipeline), so we tolerate chumpy failure.
+# Install insightface + chumpy (compiled extensions)
 RUN pip install --no-cache-dir --no-build-isolation chumpy || \
-    echo "WARNING: chumpy install failed (optional for face analysis)"
+    echo "WARNING: chumpy install failed (optional)"
 RUN pip install --no-cache-dir insightface>=0.7.3
 
 # Install mmcv pre-built binary (cu121 + torch2.1 + cp311)
@@ -63,14 +62,14 @@ RUN pip install --no-cache-dir \
     mmcv==2.1.0 -f https://download.openmmlab.com/mmcv/dist/cu121/torch2.1/index.html
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Stage 2: Runtime — slim image with only what's needed
+# Stage 2: Runtime — self-contained image
 # ═══════════════════════════════════════════════════════════════════════════
 FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Asia/Tokyo
 
-# Runtime system dependencies only (no build tools)
+# Runtime system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common \
     && add-apt-repository ppa:deadsnakes/ppa \
@@ -103,12 +102,12 @@ COPY --from=builder /usr/local/lib/python3.11/dist-packages /usr/local/lib/pytho
 COPY --from=builder /usr/local/bin /usr/local/bin
 
 # ── Working Directory ────────────────────────────────────────────────────────
-WORKDIR /workspace
+WORKDIR /app
 
 # ── Install RunPod SDK ──────────────────────────────────────────────────────
 RUN pip install --no-cache-dir runpod>=1.7.0
 
-# ── Install remaining Python dependencies (pure Python, no compilation) ─────
+# ── Install remaining Python dependencies ─────────────────────────────────
 RUN pip install --no-cache-dir \
     opencv-python-headless>=4.8.0 \
     Pillow>=10.0.0 \
@@ -118,7 +117,7 @@ RUN pip install --no-cache-dir \
     mmpose>=0.29.0 \
     mmdet>=3.2.0 \
     onnxruntime-gpu \
-    diffusers \
+    diffusers==0.30.2 \
     transformers \
     accelerate \
     safetensors \
@@ -143,7 +142,7 @@ RUN pip install --no-cache-dir \
     face-alignment \
     yacs
 
-# ── Fix numpy version (must be 1.x for onnxruntime/insightface compat) ────
+# ── Fix numpy version ────────────────────────────────────────────────────
 RUN pip install --no-cache-dir --force-reinstall numpy==1.26.4
 
 # ── Fix basicsr torchvision import ─────────────────────────────────────────
@@ -152,25 +151,71 @@ RUN BASICSR_DEG=$(python -c "import basicsr; import os; print(os.path.join(os.pa
         sed -i 's/from torchvision.transforms.functional_tensor import rgb_to_grayscale/from torchvision.transforms.functional import rgb_to_grayscale/' "$BASICSR_DEG" || true; \
     fi
 
-# ── Copy Worker Code ────────────────────────────────────────────────────────
-COPY gpu-worker/serverless/handler.py /workspace/handler.py
-COPY gpu-worker/serverless/setup.sh /workspace/setup.sh
-COPY gpu-worker/live_engine.py /workspace/live_engine.py
-COPY gpu-worker/liveportrait_engine.py /workspace/liveportrait_engine.py
-COPY gpu-worker/imtalker_generate_patch.py /workspace/imtalker_generate_patch.py
+# ═══════════════════════════════════════════════════════════════════════════
+# Clone AI Tools (code only, models downloaded separately)
+# ═══════════════════════════════════════════════════════════════════════════
 
-RUN chmod +x /workspace/setup.sh
+# ── FaceFusion ────────────────────────────────────────────────────────────
+RUN cd /app && \
+    git clone --depth 1 https://github.com/facefusion/facefusion.git && \
+    cd facefusion && \
+    pip install --no-cache-dir -r requirements.txt 2>/dev/null || true
+
+# Download essential FaceFusion models (small enough to bake in)
+RUN mkdir -p /app/facefusion/.assets/models && \
+    cd /app/facefusion/.assets/models && \
+    curl -sL "https://huggingface.co/facefusion/models/resolve/main/inswapper_128_fp16.onnx" -o inswapper_128_fp16.onnx && \
+    curl -sL "https://huggingface.co/facefusion/models/resolve/main/inswapper_128.onnx" -o inswapper_128.onnx && \
+    curl -sL "https://huggingface.co/facefusion/models/resolve/main/gfpgan_1.4.onnx" -o gfpgan_1.4.onnx && \
+    curl -sL "https://huggingface.co/facefusion/models/resolve/main/yoloface_8n.onnx" -o yoloface_8n.onnx && \
+    curl -sL "https://huggingface.co/facefusion/models/resolve/main/arcface_simswap.onnx" -o arcface_simswap.onnx && \
+    curl -sL "https://huggingface.co/facefusion/models/resolve/main/2dfan4.onnx" -o 2dfan4.onnx && \
+    curl -sL "https://huggingface.co/facefusion/models/resolve/main/face_landmarker_68_5.onnx" -o face_landmarker_68_5.onnx && \
+    echo "FaceFusion models downloaded"
+
+# ── MuseTalk ──────────────────────────────────────────────────────────────
+RUN cd /app && \
+    git clone --depth 1 https://github.com/TMElyralab/MuseTalk.git
+
+# ── GFPGAN model ──────────────────────────────────────────────────────────
+RUN mkdir -p /app/models && \
+    wget -q -O /app/models/GFPGANv1.4.pth \
+    "https://github.com/TencentARC/GFPGAN/releases/download/v1.3.0/GFPGANv1.4.pth"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Copy Worker Code
+# ═══════════════════════════════════════════════════════════════════════════
+COPY gpu-worker/serverless/handler.py /app/handler.py
+COPY gpu-worker/serverless/setup.sh /app/setup.sh
+COPY gpu-worker/live_engine.py /app/live_engine.py
+COPY gpu-worker/liveportrait_engine.py /app/liveportrait_engine.py
+COPY gpu-worker/imtalker_generate_patch.py /app/imtalker_generate_patch.py
+
+RUN chmod +x /app/setup.sh
+
+# ── Create workspace symlinks ─────────────────────────────────────────────
+# handler.py and live_engine.py expect tools at /workspace/*
+# Create symlinks so both /workspace/ and /app/ paths work
+RUN mkdir -p /workspace && \
+    ln -sf /app/facefusion /workspace/facefusion && \
+    ln -sf /app/MuseTalk /workspace/MuseTalk && \
+    ln -sf /app/models /workspace/models && \
+    ln -sf /app/handler.py /workspace/handler.py && \
+    ln -sf /app/live_engine.py /workspace/live_engine.py && \
+    ln -sf /app/liveportrait_engine.py /workspace/liveportrait_engine.py && \
+    ln -sf /app/imtalker_generate_patch.py /workspace/imtalker_generate_patch.py && \
+    mkdir -p /workspace/source_faces /workspace/tmp /tmp/aitherhub
 
 # ── Environment Variables ────────────────────────────────────────────────────
 ENV WORKSPACE=/workspace
-ENV FACEFUSION_DIR=/runpod-volume/facefusion
-ENV MUSETALK_DIR=/runpod-volume/MuseTalk
-ENV IMTALKER_DIR=/runpod-volume/IMTalker
+ENV FACEFUSION_DIR=/app/facefusion
+ENV MUSETALK_DIR=/app/MuseTalk
+ENV IMTALKER_DIR=/app/IMTalker
 ENV TEMP_DIR=/tmp/aitherhub
 ENV RUNPOD_VOLUME_PATH=/runpod-volume
-ENV PYTHONPATH=/workspace:/runpod-volume/MuseTalk:/runpod-volume/IMTalker
+ENV PYTHONPATH=/app:/app/MuseTalk:/app/IMTalker:/workspace
 # Extend cold start timeout (model loading can take time on first request)
 ENV RUNPOD_INIT_TIMEOUT=600
 
 # ── Entrypoint ───────────────────────────────────────────────────────────────
-CMD ["/bin/bash", "-c", "/workspace/setup.sh && python -u /workspace/handler.py"]
+CMD ["/bin/bash", "-c", "/app/setup.sh && python -u /app/handler.py"]
