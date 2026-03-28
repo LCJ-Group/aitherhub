@@ -25,7 +25,7 @@ face-alignment
 yacs
 
 # IMTalker dependencies
-diffusers
+diffusers>=0.32.0
 transformers
 accelerate
 safetensors
