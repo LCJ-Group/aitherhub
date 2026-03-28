@@ -7,7 +7,7 @@
 #
 # This image is FULLY SELF-CONTAINED:
 #   - FaceFusion code + essential models baked in
-#   - MuseTalk code baked in (models downloaded at first cold start)
+#   - MuseTalk code + ALL models baked in (no cold-start downloads)
 #   - IMTalker code baked in (models downloaded at first cold start)
 #   - No Network Volume required (but supported if available)
 #   - Pod stop/restart safe: Serverless workers auto-scale independently
@@ -152,7 +152,8 @@ RUN pip install --no-cache-dir \
 RUN pip install --no-cache-dir --force-reinstall numpy==1.26.4
 
 # ── Fix basicsr torchvision import ─────────────────────────────────────────
-RUN BASICSR_DEG=$(python3 -c "import basicsr; import os; print(os.path.join(os.path.dirname(basicsr.__file__), 'data', 'degradations.py'))" 2>/dev/null) && \
+RUN python3 -c "import basicsr,os; p=os.path.join(os.path.dirname(basicsr.__file__),'data','degradations.py'); open(p,'r+').read().replace('from torchvision.transforms.functional_tensor import rgb_to_grayscale','from torchvision.transforms.functional import rgb_to_grayscale') if os.path.isfile(p) else None" 2>/dev/null; \
+    BASICSR_DEG=$(python3 -c "import basicsr,os;print(os.path.join(os.path.dirname(basicsr.__file__),'data','degradations.py'))" 2>/dev/null) && \
     if [ -f "$BASICSR_DEG" ]; then \
         sed -i 's/from torchvision.transforms.functional_tensor import rgb_to_grayscale/from torchvision.transforms.functional import rgb_to_grayscale/' "$BASICSR_DEG" || true; \
     fi || true
@@ -183,80 +184,17 @@ RUN mkdir -p /app/facefusion/.assets/models && \
 RUN cd /app && \
     git clone --depth 1 https://github.com/TMElyralab/MuseTalk.git
 
-# ── MuseTalk Models (baked into image to avoid cold-start download failures) ──
-# face-parse-bisent (CRITICAL: this was the root cause of worker crashes)
+# ── MuseTalk Models (ALL baked into image — no cold-start downloads) ──────
+# Uses a Python script to avoid Dockerfile FROM parse errors with inline python
+COPY gpu-worker/serverless/download_models.py /tmp/download_models.py
+
+# Download resnet18 (from PyTorch, not HuggingFace)
 RUN mkdir -p /app/MuseTalk/models/face-parse-bisent && \
     wget -q -O /app/MuseTalk/models/face-parse-bisent/resnet18-5c106cde.pth \
-        "https://download.pytorch.org/models/resnet18-5c106cde.pth" && \
-    python3 -c "
-from huggingface_hub import hf_hub_download
-import shutil
-path = hf_hub_download(repo_id='ManyOtherFunctions/face-parse-bisent', filename='79999_iter.pth')
-shutil.copy2(path, '/app/MuseTalk/models/face-parse-bisent/79999_iter.pth')
-print('[done] face-parse-bisent models')
-" && \
-    echo "face-parse-bisent models downloaded" && \
-    ls -la /app/MuseTalk/models/face-parse-bisent/
+        "https://download.pytorch.org/models/resnet18-5c106cde.pth"
 
-# dwpose
-RUN mkdir -p /app/MuseTalk/models/dwpose && \
-    python3 -c "
-from huggingface_hub import hf_hub_download
-import shutil
-path = hf_hub_download(repo_id='yzd-v/DWPose', filename='dw-ll_ucoco_384.onnx')
-shutil.copy2(path, '/app/MuseTalk/models/dwpose/dw-ll_ucoco_384.onnx')
-print('[done] dwpose')
-" && \
-    echo "dwpose model downloaded"
-
-# sd-vae-ft-mse
-RUN mkdir -p /app/MuseTalk/models/sd-vae-ft-mse && \
-    python3 -c "
-from huggingface_hub import snapshot_download
-snapshot_download(repo_id='stabilityai/sd-vae-ft-mse', local_dir='/app/MuseTalk/models/sd-vae-ft-mse')
-print('[done] sd-vae-ft-mse')
-" && \
-    ln -sf /app/MuseTalk/models/sd-vae-ft-mse /app/MuseTalk/models/sd-vae && \
-    echo "sd-vae-ft-mse downloaded + sd-vae symlink created"
-
-# musetalk weights
-RUN mkdir -p /app/MuseTalk/models/musetalk && \
-    python3 -c "
-from huggingface_hub import snapshot_download
-import shutil, os
-snapshot_download(repo_id='TMElyralab/MuseTalk', local_dir='/tmp/musetalk_hf', allow_patterns=['models/musetalk/*'])
-src = '/tmp/musetalk_hf/models/musetalk'
-if os.path.isdir(src):
-    for f in os.listdir(src):
-        shutil.copy2(os.path.join(src, f), '/app/MuseTalk/models/musetalk/')
-print('[done] musetalk weights')
-" && \
-    rm -rf /tmp/musetalk_hf && \
-    echo "musetalk weights downloaded"
-
-# musetalkV15 weights
-RUN mkdir -p /app/MuseTalk/models/musetalkV15 && \
-    python3 -c "
-from huggingface_hub import snapshot_download
-import shutil, os
-snapshot_download(repo_id='TMElyralab/MuseTalk', local_dir='/tmp/musetalk_hf_v15', allow_patterns=['musetalkV15/*'])
-src = '/tmp/musetalk_hf_v15/musetalkV15'
-if os.path.isdir(src):
-    for f in os.listdir(src):
-        shutil.copy2(os.path.join(src, f), '/app/MuseTalk/models/musetalkV15/')
-print('[done] musetalkV15 weights')
-" && \
-    rm -rf /tmp/musetalk_hf_v15 && \
-    echo "musetalkV15 weights downloaded"
-
-# whisper model
-RUN mkdir -p /app/MuseTalk/models/whisper && \
-    python3 -c "
-from huggingface_hub import snapshot_download
-snapshot_download(repo_id='openai/whisper-tiny', local_dir='/app/MuseTalk/models/whisper')
-print('[done] whisper')
-" && \
-    echo "whisper model downloaded"
+# Download all remaining MuseTalk models via script
+RUN python3 /tmp/download_models.py && rm -f /tmp/download_models.py
 
 # Apply MuseTalk FaceParsing absolute path patch at build time
 RUN FP_INIT="/app/MuseTalk/musetalk/utils/face_parsing/__init__.py" && \
@@ -272,16 +210,6 @@ RUN VAE_FILE="/app/MuseTalk/musetalk/utils/vae.py" && \
         sed -i 's/AutoencoderKL.from_pretrained(vae_type)/AutoencoderKL.from_pretrained(vae_type, low_cpu_mem_usage=False)/g' "$VAE_FILE" && \
         echo "MuseTalk vae.py patched"; \
     fi
-
-# Verify all critical models exist
-RUN echo "=== Verifying MuseTalk models ===" && \
-    ls -la /app/MuseTalk/models/face-parse-bisent/ && \
-    ls -la /app/MuseTalk/models/dwpose/ && \
-    ls /app/MuseTalk/models/sd-vae-ft-mse/ | head -5 && \
-    ls /app/MuseTalk/models/musetalk/ | head -5 && \
-    ls /app/MuseTalk/models/whisper/ | head -5 && \
-    test -f /app/MuseTalk/models/face-parse-bisent/79999_iter.pth && \
-    echo "ALL MUSETALK MODELS VERIFIED OK"
 
 # ── IMTalker ──────────────────────────────────────────────────────────────
 # Clone IMTalker repo (models are large, downloaded at first cold start via setup.sh)
