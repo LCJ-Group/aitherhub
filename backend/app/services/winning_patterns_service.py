@@ -554,71 +554,113 @@ async def generate_data_driven_script(
     )
 
     # Step 5: Generate with LLM
-    try:
-        import os
-        from openai import AsyncAzureOpenAI
+    # Strategy: Azure OpenAI first, then OpenAI fallback (same pattern as live_session_service)
+    import os
+    import openai
 
-        client = AsyncAzureOpenAI(
-            api_key=os.getenv("AZURE_OPENAI_KEY"),
-            azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
-            api_version=os.getenv("VISION_API_VERSION", "2024-06-01"),
-        )
-        gpt_model = os.getenv("VISION_MODEL", "gpt-4o")
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are an elite live commerce script writer. "
+                "You write scripts based on REAL sales data, not guesses. "
+                "Every CTA, every product description timing, every engagement hook "
+                "is backed by actual performance metrics from past livestreams."
+            ),
+        },
+        {"role": "user", "content": prompt},
+    ]
+    target_chars = duration_minutes * 250
+    script = None
+    errors = []
 
-        target_chars = duration_minutes * 250
-        response = await client.chat.completions.create(
-            model=gpt_model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are an elite live commerce script writer. "
-                        "You write scripts based on REAL sales data, not guesses. "
-                        "Every CTA, every product description timing, every engagement hook "
-                        "is backed by actual performance metrics from past livestreams."
-                    ),
-                },
-                {"role": "user", "content": prompt},
-            ],
-            max_tokens=8192,
-            temperature=0.7,
-        )
-        script = response.choices[0].message.content.strip()
+    # Strategy 1: Azure OpenAI
+    azure_key = os.getenv("AZURE_OPENAI_KEY", "")
+    azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
+    azure_model = os.getenv("GPT5_MODEL") or os.getenv("GPT5_DEPLOYMENT") or "gpt-4.1-mini"
+    if azure_key and azure_endpoint:
+        try:
+            client = openai.AzureOpenAI(
+                api_key=azure_key,
+                azure_endpoint=azure_endpoint,
+                api_version=os.getenv("GPT5_API_VERSION", "2025-04-01-preview"),
+            )
+            input_payload = [{"role": m["role"], "content": m["content"]} for m in messages]
+            response = client.responses.create(
+                model=azure_model,
+                input=input_payload,
+                max_output_tokens=8192,
+            )
+            result = ""
+            if hasattr(response, "output_text") and response.output_text:
+                result = response.output_text.strip()
+            elif hasattr(response, "output") and response.output:
+                for item in response.output:
+                    if hasattr(item, "content"):
+                        for part in item.content:
+                            if hasattr(part, "text"):
+                                result += part.text
+                result = result.strip()
+            if result:
+                script = result
+                logger.info(f"Script generation: Azure OpenAI success ({len(result)} chars, model={azure_model})")
+            else:
+                errors.append("Azure OpenAI: empty response")
+        except Exception as e:
+            errors.append(f"Azure OpenAI: {str(e)[:200]}")
+            logger.warning(f"Script generation Azure OpenAI failed: {e}")
 
-        # Post-process
-        script = re.sub(r'\*\*', '', script)
-        script = re.sub(r'\*', '', script)
-        script = re.sub(r'【[^】]*】', '', script)
-        script = re.sub(r'#{1,6}\s*', '', script)
-        script = re.sub(r'\n{3,}', '\n\n', script)
-        script = script.strip()
+    # Strategy 2: OpenAI fallback
+    if script is None:
+        openai_key = os.getenv("OPENAI_API_KEY", "")
+        if openai_key:
+            try:
+                client2 = openai.AsyncOpenAI()
+                response = await client2.chat.completions.create(
+                    model="gpt-4.1-mini",
+                    messages=messages,
+                    max_tokens=8192,
+                    temperature=0.7,
+                )
+                script = response.choices[0].message.content.strip()
+                logger.info(f"Script generation: OpenAI fallback success ({len(script)} chars)")
+            except Exception as e:
+                errors.append(f"OpenAI: {str(e)[:200]}")
+                logger.warning(f"Script generation OpenAI fallback failed: {e}")
 
-        char_count = len(script)
-        estimated_duration = round(char_count / 250, 1)
+    if script is None:
+        raise RuntimeError(f"All LLM strategies failed: {'; '.join(errors)}")
 
-        return {
-            "script": script,
-            "char_count": char_count,
-            "estimated_duration_minutes": estimated_duration,
-            "patterns_used": {
-                "cta_phrases_found": len(cta_phrases),
-                "products_analyzed": len(product_durations),
-                "top_phases_used": len(top_phases),
-                "cross_video_patterns": bool(cross_patterns),
-                "videos_in_cross_analysis": cross_patterns.get("videos_analyzed", 0) if cross_patterns else 0,
-            },
-            "data_insights": {
-                "cta_contexts": cta_phrases[:5],
-                "product_duration_insights": product_durations[:5],
-                "top_techniques": cross_patterns.get("top_techniques", [])[:5] if cross_patterns else [],
-            },
-            "model": "gpt-4.1-mini",
-            "source_video": str(video["id"]),
-        }
+    # Post-process
+    script = re.sub(r'\*\*', '', script)
+    script = re.sub(r'\*', '', script)
+    script = re.sub(r'【[^】]*】', '', script)
+    script = re.sub(r'#{1,6}\s*', '', script)
+    script = re.sub(r'\n{3,}', '\n\n', script)
+    script = script.strip()
 
-    except Exception as e:
-        logger.exception(f"Data-driven script generation failed: {e}")
-        raise
+    char_count = len(script)
+    estimated_duration = round(char_count / 250, 1)
+
+    return {
+        "script": script,
+        "char_count": char_count,
+        "estimated_duration_minutes": estimated_duration,
+        "patterns_used": {
+            "cta_phrases_found": len(cta_phrases),
+            "products_analyzed": len(product_durations),
+            "top_phases_used": len(top_phases),
+            "cross_video_patterns": bool(cross_patterns),
+            "videos_in_cross_analysis": cross_patterns.get("videos_analyzed", 0) if cross_patterns else 0,
+        },
+        "data_insights": {
+            "cta_contexts": cta_phrases[:5],
+            "product_duration_insights": product_durations[:5],
+            "top_techniques": cross_patterns.get("top_techniques", [])[:5] if cross_patterns else [],
+        },
+        "model": azure_model if azure_key else "gpt-4.1-mini",
+        "source_video": str(video["id"]),
+    }
 
 
 def _build_data_driven_prompt(
