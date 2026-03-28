@@ -85,6 +85,21 @@ export default function ScriptGeneratorPanel({ videoId, videoData }) {
     });
   };
 
+  // Helper: format seconds to "X分Y秒"
+  const formatDuration = (sec) => {
+    if (!sec && sec !== 0) return "—";
+    const m = Math.floor(sec / 60);
+    const s = Math.floor(sec % 60);
+    return m > 0 ? `${m}分${s}秒` : `${s}秒`;
+  };
+
+  // Helper: truncate CTA pre_talk to a short phrase
+  const extractCTAPhrase = (cta) => {
+    const text = cta.pre_talk || "";
+    // Take first 60 chars as a representative phrase
+    return text.length > 60 ? text.slice(0, 60) + "..." : text;
+  };
+
   return (
     <div className="w-full mt-4 mx-auto">
       <div className="rounded-2xl bg-gradient-to-br from-indigo-50 to-purple-50 border border-indigo-200/60 shadow-sm">
@@ -147,17 +162,25 @@ export default function ScriptGeneratorPanel({ videoId, videoData }) {
                       </svg>
                     </div>
                     <span className="text-xs font-semibold text-gray-700">CTA（行動喚起）</span>
+                    {patterns.cta_phrases?.length > 0 && (
+                      <span className="text-[10px] text-orange-500 font-medium">{patterns.cta_phrases.length}件</span>
+                    )}
                   </div>
                   {patterns.cta_phrases?.length > 0 ? (
                     <div className="space-y-1">
                       {patterns.cta_phrases.slice(0, 5).map((cta, i) => (
                         <div key={i} className="text-xs text-gray-600 bg-orange-50 rounded-lg px-2 py-1.5 leading-relaxed">
-                          <span className="font-medium text-orange-700">"{cta.phrase}"</span>
-                          {cta.impact_score && (
-                            <span className="ml-1 text-[10px] text-orange-500">
-                              (効果: {(cta.impact_score * 100).toFixed(0)}%)
+                          <span className="font-medium text-orange-700">"{extractCTAPhrase(cta)}"</span>
+                          <div className="flex items-center gap-1 mt-0.5">
+                            <span className="text-[10px] text-orange-500">
+                              {cta.moment_type === "order" ? "注文" : "クリック"}
                             </span>
-                          )}
+                            {cta.confidence && (
+                              <span className="text-[10px] text-gray-400">
+                                信頼度: {(cta.confidence * 100).toFixed(0)}%
+                              </span>
+                            )}
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -175,15 +198,27 @@ export default function ScriptGeneratorPanel({ videoId, videoData }) {
                       </svg>
                     </div>
                     <span className="text-xs font-semibold text-gray-700">商品説明の最適時間</span>
+                    {patterns.product_durations?.length > 0 && (
+                      <span className="text-[10px] text-green-500 font-medium">{patterns.product_durations.length}件</span>
+                    )}
                   </div>
                   {patterns.product_durations?.length > 0 ? (
                     <div className="space-y-1">
                       {patterns.product_durations.slice(0, 5).map((pd, i) => (
                         <div key={i} className="text-xs text-gray-600 bg-green-50 rounded-lg px-2 py-1.5">
-                          <span className="font-medium text-green-700">{pd.product_name}</span>
-                          <span className="ml-1 text-[10px] text-green-500">
-                            {Math.floor(pd.total_seconds / 60)}分{Math.floor(pd.total_seconds % 60)}秒
+                          <span className="font-medium text-green-700">
+                            {(pd.product_name || "").length > 25
+                              ? pd.product_name.slice(0, 25) + "..."
+                              : pd.product_name}
                           </span>
+                          <div className="flex items-center gap-1 mt-0.5">
+                            <span className="text-[10px] text-green-500">
+                              {formatDuration(pd.total_exposure_sec)}
+                            </span>
+                            {pd.had_sales && (
+                              <span className="text-[10px] text-green-600 font-semibold">★売上あり</span>
+                            )}
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -201,19 +236,31 @@ export default function ScriptGeneratorPanel({ videoId, videoData }) {
                       </svg>
                     </div>
                     <span className="text-xs font-semibold text-gray-700">高パフォーマンスフェーズ</span>
+                    {patterns.top_phases?.length > 0 && (
+                      <span className="text-[10px] text-purple-500 font-medium">{patterns.top_phases.length}件</span>
+                    )}
                   </div>
                   {patterns.top_phases?.length > 0 ? (
                     <div className="space-y-1">
                       {patterns.top_phases.slice(0, 5).map((phase, i) => (
                         <div key={i} className="text-xs text-gray-600 bg-purple-50 rounded-lg px-2 py-1.5">
                           <span className="font-medium text-purple-700">
-                            {phase.description?.slice(0, 40) || `Phase ${phase.phase_index}`}
+                            {(phase.phase_description || "").length > 40
+                              ? phase.phase_description.slice(0, 40) + "..."
+                              : phase.phase_description || `Phase ${phase.phase_index}`}
                           </span>
-                          {phase.score && (
-                            <span className="ml-1 text-[10px] text-purple-500">
-                              (スコア: {phase.score.toFixed(1)})
-                            </span>
-                          )}
+                          <div className="flex items-center gap-1 mt-0.5">
+                            {phase.composite_score != null && (
+                              <span className="text-[10px] text-purple-500">
+                                スコア: {phase.composite_score.toFixed(1)}
+                              </span>
+                            )}
+                            {phase.gmv != null && phase.gmv > 0 && (
+                              <span className="text-[10px] text-purple-400">
+                                GMV: ¥{phase.gmv.toLocaleString()}
+                              </span>
+                            )}
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -237,7 +284,7 @@ export default function ScriptGeneratorPanel({ videoId, videoData }) {
                     value={productFocus}
                     onChange={(e) => setProductFocus(e.target.value)}
                     placeholder="例: KYOGOKU シグネチャーシャンプー"
-                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-300 focus:border-indigo-400 outline-none transition-all"
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-300 focus:border-indigo-400 outline-none transition-all bg-white"
                   />
                 </div>
 
@@ -373,27 +420,27 @@ export default function ScriptGeneratorPanel({ videoId, videoData }) {
                   </button>
                 </div>
 
-                {/* Data Sources Badge */}
-                {script.data_sources && (
+                {/* Data Sources Badge — uses patterns_used from backend */}
+                {script.patterns_used && (
                   <div className="flex flex-wrap gap-1.5">
-                    {script.data_sources.cta_phrases_count > 0 && (
+                    {script.patterns_used.cta_phrases_found > 0 && (
                       <span className="px-2 py-0.5 rounded-full bg-orange-50 text-orange-600 text-[10px] font-medium border border-orange-100">
-                        CTA {script.data_sources.cta_phrases_count}件
+                        CTA {script.patterns_used.cta_phrases_found}件
                       </span>
                     )}
-                    {script.data_sources.top_phases_count > 0 && (
+                    {script.patterns_used.top_phases_used > 0 && (
                       <span className="px-2 py-0.5 rounded-full bg-purple-50 text-purple-600 text-[10px] font-medium border border-purple-100">
-                        高パフォーマンス {script.data_sources.top_phases_count}件
+                        高パフォーマンス {script.patterns_used.top_phases_used}件
                       </span>
                     )}
-                    {script.data_sources.product_durations_count > 0 && (
+                    {script.patterns_used.products_analyzed > 0 && (
                       <span className="px-2 py-0.5 rounded-full bg-green-50 text-green-600 text-[10px] font-medium border border-green-100">
-                        商品分析 {script.data_sources.product_durations_count}件
+                        商品分析 {script.patterns_used.products_analyzed}件
                       </span>
                     )}
-                    {script.data_sources.cross_video_patterns && (
+                    {script.patterns_used.cross_video_patterns && (
                       <span className="px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 text-[10px] font-medium border border-blue-100">
-                        クロス配信分析
+                        クロス配信分析 ({script.patterns_used.videos_in_cross_analysis}本)
                       </span>
                     )}
                   </div>
