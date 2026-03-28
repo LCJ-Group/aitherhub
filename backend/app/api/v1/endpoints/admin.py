@@ -3912,31 +3912,50 @@ async def get_winning_patterns(
 ):
     """
     Extract winning patterns from a video's real performance data.
-
-    Returns CTA phrases, product durations, and top-performing phases
-    backed by actual sales data.
     """
     _check_admin(x_admin_key)
-    from app.services.winning_patterns_service import (
-        extract_cta_phrases,
-        analyze_product_durations,
-        extract_top_phases,
-    )
+    import traceback as tb_mod
+    results = {"video_id": video_id, "steps": {}}
 
+    # Step 1: Test basic DB query
     try:
-        cta_phrases = await extract_cta_phrases(db, video_id)
-        product_durations = await analyze_product_durations(db, video_id)
-        top_phases = await extract_top_phases(db, video_id, limit=10)
-
-        return {
-            "video_id": video_id,
-            "cta_phrases": cta_phrases,
-            "product_durations": product_durations,
-            "top_phases": top_phases,
-        }
+        r = await db.execute(text(
+            "SELECT id, status FROM videos WHERE id = :vid"
+        ), {"vid": video_id})
+        row = r.first()
+        results["steps"]["db_check"] = {"ok": True, "status": row[1] if row else "NOT_FOUND"}
     except Exception as e:
-        import traceback
-        return {"error": str(e), "traceback": traceback.format_exc(), "type": type(e).__name__}
+        results["steps"]["db_check"] = {"ok": False, "error": str(e), "tb": tb_mod.format_exc()[-500:]}
+        return results
+
+    # Step 2: Test CTA extraction
+    try:
+        from app.services.winning_patterns_service import extract_cta_phrases
+        cta = await extract_cta_phrases(db, video_id)
+        results["steps"]["cta"] = {"ok": True, "count": len(cta)}
+        results["cta_phrases"] = cta
+    except Exception as e:
+        results["steps"]["cta"] = {"ok": False, "error": str(e), "tb": tb_mod.format_exc()[-500:]}
+
+    # Step 3: Test product durations
+    try:
+        from app.services.winning_patterns_service import analyze_product_durations
+        dur = await analyze_product_durations(db, video_id)
+        results["steps"]["durations"] = {"ok": True, "count": len(dur)}
+        results["product_durations"] = dur
+    except Exception as e:
+        results["steps"]["durations"] = {"ok": False, "error": str(e), "tb": tb_mod.format_exc()[-500:]}
+
+    # Step 4: Test top phases
+    try:
+        from app.services.winning_patterns_service import extract_top_phases
+        phases = await extract_top_phases(db, video_id, limit=10)
+        results["steps"]["phases"] = {"ok": True, "count": len(phases)}
+        results["top_phases"] = phases
+    except Exception as e:
+        results["steps"]["phases"] = {"ok": False, "error": str(e), "tb": tb_mod.format_exc()[-500:]}
+
+    return results
 
 
 @router.get("/winning-patterns/aggregate")
