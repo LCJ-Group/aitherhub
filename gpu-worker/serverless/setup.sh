@@ -216,6 +216,14 @@ if os.path.isfile(src):
     fi
 fi
 
+# ── 3b. Create sd-vae symlink ────────────────────────────────────────────────
+# MuseTalk's load_all_model() uses vae_type="sd-vae" → "models/sd-vae"
+# but the actual model is downloaded as sd-vae-ft-mse
+if [ -d "$MUSETALK_MODELS/sd-vae-ft-mse" ] && [ ! -e "$MUSETALK_MODELS/sd-vae" ]; then
+    ln -sf "$MUSETALK_MODELS/sd-vae-ft-mse" "$MUSETALK_MODELS/sd-vae"
+    echo "  [symlink] sd-vae -> sd-vae-ft-mse"
+fi
+
 # ── 4. Apply Runtime Patches ────────────────────────────────────────────────
 
 echo ""
