@@ -50,9 +50,13 @@ RUN pip install --no-cache-dir \
     torchaudio==2.1.2 \
     --index-url https://download.pytorch.org/whl/cu121
 
-# Install insightface + chumpy (requires compilation)
-RUN pip install --no-cache-dir chumpy && \
-    pip install --no-cache-dir insightface>=0.7.3
+# Install insightface + chumpy
+# chumpy's setup.py does `import pip` which fails with build isolation,
+# so we disable it. insightface only needs chumpy for SMPL body models
+# (not used in our face-swap pipeline), so we tolerate chumpy failure.
+RUN pip install --no-cache-dir --no-build-isolation chumpy || \
+    echo "WARNING: chumpy install failed (optional for face analysis)"
+RUN pip install --no-cache-dir insightface>=0.7.3
 
 # Install mmcv pre-built binary (cu121 + torch2.1 + cp311)
 RUN pip install --no-cache-dir \
