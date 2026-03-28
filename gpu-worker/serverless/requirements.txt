@@ -27,11 +27,15 @@ yacs
 # IMTalker dependencies
 diffusers==0.30.2
 huggingface_hub==0.30.2
-transformers
+transformers>=4.40.0,<5.0.0
 accelerate
 safetensors
 einops
 omegaconf
+timm
+matplotlib
+torchdiffeq
+av>=13.0.0,<14.0.0
 
 # LivePortrait dependencies
 tyro

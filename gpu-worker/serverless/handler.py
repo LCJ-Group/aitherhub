@@ -5,7 +5,7 @@ AitherHub GPU Worker — RunPod Serverless Handler
 Unified handler for all GPU-accelerated AI tasks:
   - MuseTalk lip-sync (digital human)
   - FaceFusion face swap (video & single frame)
-  - IMTalker premium digital human
+  - IMTalker premium digital human (with v8 Poisson compositing)
   - LivePortrait 3-layer pipeline
 
 Architecture:
@@ -120,6 +120,7 @@ def _load_models():
     paths_to_check = {
         "FaceFusion": FACEFUSION_DIR,
         "MuseTalk": MUSETALK_DIR,
+        "IMTalker": IMTALKER_DIR,
     }
     for name, path in paths_to_check.items():
         if os.path.isdir(path):
@@ -299,76 +300,26 @@ def handle_musetalk(job_input: Dict[str, Any]) -> Dict[str, Any]:
                 version="v15",
                 bbox_shift=job_input.get("bbox_shift", 0),
                 extra_margin=job_input.get("extra_margin", 10),
-                batch_size=job_input.get("batch_size", 20),
-                parsing_mode="jaw",
-                left_cheek_width=90,
-                right_cheek_width=90,
-                audio_padding_length_left=2,
-                audio_padding_length_right=2,
+                batch_size=job_input.get("batch_size", 16),
             )
-            try:
-                _musetalk_engine = live_engine_mod.MuseTalkEngine(config)
-                _musetalk_engine.load_models()
-                logger.info("MuseTalkEngine loaded")
-            except Exception as e:
-                _musetalk_engine = None
-                raise RuntimeError(f"Failed to load MuseTalk engine: {e}") from e
+            _musetalk_engine = live_engine_mod.MuseTalkEngine(config)
+            logger.info("MuseTalk engine loaded")
 
         engine = _musetalk_engine
 
-        # Step 3: Prepare avatar
-        portrait_hash = hashlib.md5(open(portrait_path, "rb").read()).hexdigest()
-        engine.prepare_avatar(portrait_path)
-        logger.info(f"Avatar prepared: {portrait_hash}")
-
-        # Step 4: Generate lip-sync frames
-        frames = engine.generate_lipsync_frames(audio_path)
-        if not frames:
-            raise RuntimeError("No lip-sync frames generated")
-
-        logger.info(f"Generated {len(frames)} lip-sync frames")
-
-        # Step 5: Encode video
+        # Step 3: Generate lip-sync video
         output_path = os.path.join(job_dir, f"output_{job_id}.mp4")
-        temp_vid = os.path.join(job_dir, "temp_video.mp4")
-        fps = job_input.get("output_fps", 25)
-
-        h, w = frames[0].shape[:2]
-        ffmpeg_proc = subprocess.Popen(
-            [
-                "ffmpeg", "-y", "-v", "warning",
-                "-f", "rawvideo", "-pix_fmt", "bgr24",
-                "-s", f"{w}x{h}", "-r", str(fps),
-                "-i", "pipe:0",
-                "-vcodec", "libx264", "-pix_fmt", "yuv420p",
-                "-crf", "18", "-preset", "fast",
-                temp_vid,
-            ],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+        success = engine.generate_from_audio(
+            audio_path=audio_path,
+            output_path=output_path,
+            source_path=portrait_path,
+            fps=job_input.get("output_fps", 25),
         )
 
-        for frame in frames:
-            try:
-                ffmpeg_proc.stdin.write(frame.tobytes())
-            except BrokenPipeError:
-                break
+        if not success or not os.path.exists(output_path):
+            raise RuntimeError("MuseTalk pipeline failed")
 
-        ffmpeg_proc.stdin.close()
-        ffmpeg_proc.wait()
-
-        # Merge audio
-        merge_cmd = f"ffmpeg -y -v warning -i {temp_vid} -i {audio_path} -c:v copy -c:a aac -shortest {output_path}"
-        os.system(merge_cmd)
-
-        if os.path.exists(temp_vid):
-            os.remove(temp_vid)
-
-        if not os.path.exists(output_path):
-            raise RuntimeError("Failed to produce output video")
-
-        # Step 6: Upload result
+        # Upload result
         output_filename = f"musetalk_{job_id}_{int(time.time())}.mp4"
         output_url = upload_result(output_path, output_filename)
 
@@ -381,17 +332,14 @@ def handle_musetalk(job_input: Dict[str, Any]) -> Dict[str, Any]:
             "job_id": job_id,
             "duration_sec": round(duration, 1),
             "file_size_mb": round(file_size_mb, 1),
-            "frame_count": len(frames),
+            "engine": "musetalk",
         }
 
     except Exception as e:
         logger.error(f"MuseTalk error: {e}")
-        import traceback
-        traceback.print_exc()
         return {"status": "error", "error": str(e), "job_id": job_id}
 
     finally:
-        # Cleanup
         if os.path.isdir(job_dir):
             shutil.rmtree(job_dir, ignore_errors=True)
 
@@ -401,96 +349,72 @@ def handle_facefusion_video(job_input: Dict[str, Any]) -> Dict[str, Any]:
     FaceFusion video face swap: source face + target video → face-swapped video.
 
     Input:
-      source_face_url, video_url, face_enhancer, quality, output_video_quality
+      source_face_url, target_video_url, quality, face_enhancer, trim_start, trim_end
     """
     start_time = time.time()
-    job_id = job_input.get("job_id", f"ff-{uuid.uuid4().hex[:12]}")
-    job_dir = os.path.join(TEMP_DIR, f"ff_{job_id}")
+    job_id = job_input.get("job_id", f"ffv-{uuid.uuid4().hex[:12]}")
+    job_dir = os.path.join(TEMP_DIR, f"ffv_{job_id}")
     os.makedirs(job_dir, exist_ok=True)
 
-    # FaceFusion quality presets
-    QUALITY_PRESETS = {
-        "fast": {
-            "face_swapper_model": "inswapper_128_fp16",
-            "face_swapper_pixel_boost": "128x128",
-            "face_enhancer_enabled": False,
-            "face_detector_model": "yolo_face",
-        },
-        "balanced": {
-            "face_swapper_model": "inswapper_128",
-            "face_swapper_pixel_boost": "256x256",
-            "face_enhancer_enabled": False,
-            "face_detector_model": "retinaface",
-        },
-        "high": {
-            "face_swapper_model": "inswapper_128",
-            "face_swapper_pixel_boost": "512x512",
-            "face_enhancer_enabled": True,
-            "face_enhancer_model": "gfpgan_1.4",
-            "face_detector_model": "retinaface",
-        },
-    }
-
     try:
-        # Step 1: Download files
+        # Download files
         source_face_path = download_file(
             job_input["source_face_url"],
             os.path.join(job_dir, "source_face.jpg"),
         )
-        video_path = download_file(
-            job_input["video_url"],
-            os.path.join(job_dir, "input_video.mp4"),
+        target_video_path = download_file(
+            job_input["target_video_url"],
+            os.path.join(job_dir, "target.mp4"),
         )
 
-        # Step 2: Apply quality preset
+        # Build command
+        output_path = os.path.join(job_dir, "output.mp4")
         quality = job_input.get("quality", "high")
-        preset = QUALITY_PRESETS.get(quality, QUALITY_PRESETS["high"])
-        face_enhancer = job_input.get("face_enhancer", preset.get("face_enhancer_enabled", False))
+        face_enhancer = job_input.get("face_enhancer", False)
 
-        # Step 3: Build FaceFusion command
-        output_path = os.path.join(job_dir, f"output_{job_id}.mp4")
         processors = ["face_swapper"]
-        if face_enhancer and quality != "fast":
+        if face_enhancer:
             processors.append("face_enhancer")
 
         cmd = [
             sys.executable, f"{FACEFUSION_DIR}/facefusion.py", "headless-run",
             "--source-paths", source_face_path,
-            "--target-path", video_path,
+            "--target-path", target_video_path,
             "--output-path", output_path,
             "--processors", *processors,
-            "--face-swapper-model", preset["face_swapper_model"],
-            "--face-swapper-pixel-boost", preset["face_swapper_pixel_boost"],
-            "--face-detector-model", preset.get("face_detector_model", "retinaface"),
+            "--face-swapper-model", "inswapper_128",
+            "--face-swapper-pixel-boost", "512x512",
+            "--face-detector-model", "retinaface",
             "--face-detector-score", "0.5",
             "--face-mask-types", "box",
             "--face-mask-blur", "0.3",
             "--face-mask-padding", "0", "0", "0", "0",
-            "--output-video-quality", str(job_input.get("output_video_quality", 90)),
+            "--output-video-quality", "80",
+            "--output-video-encoder", "libx264",
             "--execution-providers", "cuda",
             "--execution-thread-count", "4",
         ]
 
-        if face_enhancer and quality != "fast":
-            cmd.extend(["--face-enhancer-model", preset.get("face_enhancer_model", "gfpgan_1.4")])
+        if face_enhancer:
+            cmd.extend(["--face-enhancer-model", "gfpgan_1.4"])
 
-        logger.info(f"Running FaceFusion: {' '.join(cmd[:8])}...")
+        trim_start = job_input.get("trim_start")
+        trim_end = job_input.get("trim_end")
+        if trim_start is not None:
+            cmd.extend(["--trim-frame-start", str(trim_start)])
+        if trim_end is not None:
+            cmd.extend(["--trim-frame-end", str(trim_end)])
+
         result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=1800,  # 30 min max
+            cmd, capture_output=True, text=True, timeout=1800,
             cwd=FACEFUSION_DIR,
         )
 
-        if result.returncode != 0:
+        if result.returncode != 0 or not os.path.exists(output_path):
             raise RuntimeError(f"FaceFusion failed: {result.stderr[:500]}")
 
-        if not os.path.exists(output_path):
-            raise RuntimeError("FaceFusion produced no output")
-
-        # Step 4: Upload result
-        output_filename = f"faceswap_{job_id}_{int(time.time())}.mp4"
+        # Upload result
+        output_filename = f"facefusion_{job_id}_{int(time.time())}.mp4"
         output_url = upload_result(output_path, output_filename)
 
         duration = time.time() - start_time
@@ -604,9 +528,252 @@ def handle_facefusion_frame(job_input: Dict[str, Any]) -> Dict[str, Any]:
             shutil.rmtree(job_dir, ignore_errors=True)
 
 
+# ── IMTalker v8 Compositing Helpers ──────────────────────────────────────────
+
+def _extract_first_frame(video_path: str, output_path: str) -> bool:
+    """Extract the first frame from a video using ffmpeg."""
+    result = subprocess.run(
+        ["ffmpeg", "-y", "-i", video_path, "-vframes", "1", "-q:v", "2", output_path],
+        capture_output=True, timeout=30,
+    )
+    return os.path.exists(output_path) and os.path.getsize(output_path) > 0
+
+
+def _imtalker_v8_composite(
+    src_video: str,
+    portrait_path: str,
+    portrait_video_path: Optional[str],
+    portrait_is_video: bool,
+    final_output: str,
+    job_dir: str,
+    job_id: str,
+) -> bool:
+    """
+    v8 Composite: OpenCV frame-by-frame with Poisson blending.
+
+    Reads crop coordinates from JSON saved by patched generate.py,
+    uses inner 90% of IMTalker 512x512 output, applies seamlessClone
+    (Poisson blending) with the driving video/image as background.
+    Falls back to Gaussian-blurred elliptical mask if seamlessClone fails.
+    """
+    import cv2
+    import numpy as np
+    from PIL import Image
+
+    img = Image.open(portrait_path)
+    orig_w, orig_h = img.size
+    logger.info(f"[IMT {job_id}] v8: Original portrait: {orig_w}x{orig_h}")
+
+    # ── Read crop coordinates from JSON (saved by patched generate.py) ──
+    output_dir = os.path.dirname(src_video)
+    crop_json_path = None
+    for f in os.listdir(output_dir):
+        if f.endswith("_crop_coords.json"):
+            crop_json_path = os.path.join(output_dir, f)
+            break
+
+    if crop_json_path and os.path.exists(crop_json_path):
+        with open(crop_json_path, 'r') as f:
+            crop_coords = json.load(f)
+        crop_x1 = crop_coords["x1"]
+        crop_y1 = crop_coords["y1"]
+        crop_x2 = crop_coords["x2"]
+        crop_y2 = crop_coords["y2"]
+        side = crop_coords["side"]
+        logger.info(f"[IMT {job_id}] v8: Crop coords from JSON: ({crop_x1},{crop_y1})-({crop_x2},{crop_y2}), side={side}")
+    else:
+        # Fallback: replicate IMTalker's crop logic using face_alignment
+        logger.info(f"[IMT {job_id}] v8: No crop JSON, replicating crop logic...")
+        import face_alignment
+        fa = face_alignment.FaceAlignment(
+            face_alignment.LandmarksType.TWO_D, flip_input=False, device='cuda'
+        )
+        img_arr = np.array(img)
+        bboxes = fa.face_detector.detect_from_image(img_arr)
+        valid_bboxes = [
+            (int(x1), int(y1), int(x2), int(y2), score)
+            for (x1, y1, x2, y2, score) in bboxes if score > 0.5
+        ]
+        if not valid_bboxes:
+            raise RuntimeError("No face detected for v8 composite")
+        x1, y1, x2, y2, _ = valid_bboxes[0]
+        cx = (x1 + x2) // 2
+        cy = (y1 + y2) // 2
+        half_w = int((x2 - x1) * 0.8)
+        half_h = int((y2 - y1) * 0.8)
+        half = max(half_w, half_h)
+        crop_x1 = max(cx - half, 0)
+        crop_x2 = min(cx + half, orig_w)
+        crop_y1 = max(cy - half, 0)
+        crop_y2 = min(cy + half, orig_h)
+        side = min(crop_x2 - crop_x1, crop_y2 - crop_y1)
+        crop_x2 = crop_x1 + side
+        crop_y2 = crop_y1 + side
+        del fa  # free GPU memory
+
+    # ── v8 parameters ──
+    INNER_RATIO = 0.90
+    IMT_SIZE = 512
+    inner_px = int(IMT_SIZE * INNER_RATIO)
+    margin = (IMT_SIZE - inner_px) // 2
+    inner_side = int(side * INNER_RATIO)
+    inner_x1 = crop_x1 + (side - inner_side) // 2
+    inner_y1 = crop_y1 + (side - inner_side) // 2
+
+    logger.info(
+        f"[IMT {job_id}] v8 params: inner_ratio={INNER_RATIO}, "
+        f"inner_px={inner_px}, margin={margin}, inner_side={inner_side}, "
+        f"inner_pos=({inner_x1},{inner_y1})"
+    )
+
+    # ── Create elliptical mask for blending ──
+    mask_2d = np.zeros((inner_px, inner_px), dtype=np.float32)
+    cy_m = inner_px * 0.47
+    cx_m = inner_px / 2.0
+    ry = inner_px * 0.47
+    rx = inner_px * 0.46
+    y_coords = np.arange(inner_px, dtype=np.float32)
+    x_coords = np.arange(inner_px, dtype=np.float32)
+    dy = (y_coords - cy_m) / max(ry, 1)
+    dx = (x_coords - cx_m) / max(rx, 1)
+    dist = np.sqrt(dy[:, None]**2 + dx[None, :]**2)
+    mask_2d = np.clip(1.0 - (dist - 0.6) / 0.5, 0.0, 1.0)
+    blur_k = max(31, int(inner_px * 0.15) | 1)
+    mask_2d = cv2.GaussianBlur(mask_2d, (blur_k, blur_k), 0)
+    poisson_mask = (mask_2d > 0.5).astype(np.uint8) * 255
+
+    # ── Read IMTalker output video ──
+    imt_cap = cv2.VideoCapture(src_video)
+    imt_fps = imt_cap.get(cv2.CAP_PROP_FPS) or 25
+    imt_frame_count = int(imt_cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    logger.info(f"[IMT {job_id}] IMTalker output: {imt_frame_count} frames at {imt_fps} fps")
+
+    # ── Read background source ──
+    use_video_bg = portrait_is_video and portrait_video_path and os.path.exists(portrait_video_path)
+    bg_label = "driving_video" if use_video_bg else "static_image"
+    logger.info(f"[IMT {job_id}] v8 background: {bg_label}")
+
+    if use_video_bg:
+        bg_cap = cv2.VideoCapture(portrait_video_path)
+        bg_frame_count = int(bg_cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    else:
+        bg_img = cv2.imread(portrait_path)
+        bg_cap = None
+        bg_frame_count = 0
+
+    # ── Setup output video writer ──
+    temp_video_no_audio = os.path.join(job_dir, "v8_composite_noaudio.mp4")
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out_writer = cv2.VideoWriter(
+        temp_video_no_audio, fourcc, imt_fps, (orig_w, orig_h)
+    )
+
+    # ── Frame-by-frame compositing ──
+    frame_idx = 0
+    poisson_fail_count = 0
+
+    while True:
+        ret, imt_frame = imt_cap.read()
+        if not ret:
+            break
+
+        # Get background frame
+        if use_video_bg and bg_cap is not None:
+            bg_ret, bg_frame = bg_cap.read()
+            if not bg_ret:
+                bg_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                bg_ret, bg_frame = bg_cap.read()
+                if not bg_ret:
+                    bg_frame = bg_img.copy() if bg_img is not None else np.zeros((orig_h, orig_w, 3), dtype=np.uint8)
+            bg_frame = cv2.resize(bg_frame, (orig_w, orig_h))
+        else:
+            bg_frame = bg_img.copy()
+
+        # Extract inner region from IMTalker output
+        face_crop = imt_frame[margin:margin+inner_px, margin:margin+inner_px]
+        face_resized = cv2.resize(face_crop, (inner_side, inner_side))
+
+        # Resize mask
+        alpha_resized = cv2.resize(mask_2d, (inner_side, inner_side))
+        mask_resized = cv2.resize(poisson_mask, (inner_side, inner_side))
+
+        # Ensure coordinates are within bounds
+        fx1 = max(0, inner_x1)
+        fy1 = max(0, inner_y1)
+        fx2 = min(orig_w, inner_x1 + inner_side)
+        fy2 = min(orig_h, inner_y1 + inner_side)
+        sx1 = fx1 - inner_x1
+        sy1 = fy1 - inner_y1
+        sx2 = sx1 + (fx2 - fx1)
+        sy2 = sy1 + (fy2 - fy1)
+
+        # Try Poisson blending (seamlessClone)
+        try:
+            center_x = (fx1 + fx2) // 2
+            center_y = (fy1 + fy2) // 2
+            center = (int(center_x), int(center_y))
+            result_frame = cv2.seamlessClone(
+                face_resized, bg_frame, mask_resized, center, cv2.NORMAL_CLONE
+            )
+            out_writer.write(result_frame)
+            frame_idx += 1
+            continue
+        except Exception as e_poisson:
+            if poisson_fail_count == 0:
+                logger.warning(f"[IMT {job_id}] Poisson blend failed on frame {frame_idx}: {e_poisson}")
+            poisson_fail_count += 1
+
+        # Fallback: alpha blending with soft mask
+        alpha_3ch = np.stack([alpha_resized]*3, axis=-1)
+        roi = bg_frame[fy1:fy2, fx1:fx2]
+        face_region = face_resized[sy1:sy2, sx1:sx2]
+        alpha_region = alpha_3ch[sy1:sy2, sx1:sx2]
+        blended = (face_region.astype(np.float32) * alpha_region +
+                   roi.astype(np.float32) * (1.0 - alpha_region))
+        bg_frame[fy1:fy2, fx1:fx2] = blended.astype(np.uint8)
+        out_writer.write(bg_frame)
+        frame_idx += 1
+
+    out_writer.release()
+    imt_cap.release()
+    if bg_cap is not None:
+        bg_cap.release()
+
+    logger.info(
+        f"[IMT {job_id}] v8 composite: {frame_idx} frames, "
+        f"poisson_fails={poisson_fail_count}"
+    )
+
+    # ── Add audio back ──
+    add_audio_cmd = [
+        "ffmpeg", "-y",
+        "-i", temp_video_no_audio,
+        "-i", src_video,
+        "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+        "-map", "0:v:0", "-map", "1:a:0?",
+        "-c:a", "aac", "-b:a", "128k",
+        "-shortest",
+        "-pix_fmt", "yuv420p",
+        final_output,
+    ]
+    audio_result = subprocess.run(
+        add_audio_cmd, capture_output=True, timeout=120, cwd=job_dir,
+    )
+    if audio_result.returncode != 0:
+        logger.warning(f"[IMT {job_id}] Audio mux failed, using video without audio")
+        shutil.move(temp_video_no_audio, final_output)
+    else:
+        if os.path.exists(temp_video_no_audio):
+            os.remove(temp_video_no_audio)
+
+    logger.info(f"[IMT {job_id}] v8 composite complete: {final_output}")
+    return True
+
+
 def handle_imtalker(job_input: Dict[str, Any]) -> Dict[str, Any]:
     """
     IMTalker premium digital human: portrait + audio → full facial animation video.
+    Includes v8 Poisson compositing for natural full-resolution output.
 
     Input:
       portrait_url, audio_url, portrait_type, a_cfg_scale, nfe, crop, output_fps
@@ -620,16 +787,33 @@ def handle_imtalker(job_input: Dict[str, Any]) -> Dict[str, Any]:
         # Step 1: Download files
         portrait_url = job_input["portrait_url"]
         audio_url = job_input["audio_url"]
+        portrait_type = job_input.get("portrait_type", "image")
 
         url_lower = portrait_url.split("?")[0].lower()
-        if url_lower.endswith((".mov", ".mp4")):
+        is_video_by_type = portrait_type == "video"
+        is_video_by_url = url_lower.endswith((".mov", ".mp4", ".avi", ".mkv"))
+        portrait_is_video = is_video_by_type or is_video_by_url
+
+        if portrait_is_video:
             p_ext = ".mp4"
         elif url_lower.endswith(".png"):
             p_ext = ".png"
         else:
             p_ext = ".jpg"
 
-        portrait_path = download_file(portrait_url, os.path.join(job_dir, f"portrait{p_ext}"))
+        portrait_download_path = download_file(portrait_url, os.path.join(job_dir, f"portrait{p_ext}"))
+
+        # If video portrait, extract first frame for IMTalker (needs still image)
+        portrait_video_path = None
+        if portrait_is_video:
+            portrait_video_path = portrait_download_path
+            portrait_path = os.path.join(job_dir, "portrait_frame.png")
+            if not _extract_first_frame(portrait_video_path, portrait_path):
+                logger.warning(f"[IMT {job_id}] Frame extraction failed, using video directly")
+                portrait_is_video = False
+                portrait_path = portrait_download_path
+        else:
+            portrait_path = portrait_download_path
 
         a_url_lower = audio_url.split("?")[0].lower()
         a_ext = ".wav" if a_url_lower.endswith(".wav") else ".mp3"
@@ -638,7 +822,7 @@ def handle_imtalker(job_input: Dict[str, Any]) -> Dict[str, Any]:
         # Convert audio
         audio_path = convert_audio_to_wav(audio_path, job_dir)
 
-        # Step 2: Run IMTalker
+        # Step 2: Run IMTalker inference (produces 512x512 output)
         output_dir = os.path.join(job_dir, "results")
         os.makedirs(output_dir, exist_ok=True)
 
@@ -659,7 +843,7 @@ def handle_imtalker(job_input: Dict[str, Any]) -> Dict[str, Any]:
             cmd.append("--crop")
 
         env = os.environ.copy()
-        env["PYTHONPATH"] = f"{IMTALKER_DIR}:{env.get('PYTHONPATH', '')}"
+        env["PYTHONPATH"] = f"{IMTALKER_DIR}:{IMTALKER_DIR}/generator:{env.get('PYTHONPATH', '')}"
 
         result = subprocess.run(
             cmd, capture_output=True, text=True, timeout=1800,
@@ -676,7 +860,47 @@ def handle_imtalker(job_input: Dict[str, Any]) -> Dict[str, Any]:
 
         src_video = os.path.join(output_dir, output_files[0])
         final_output = os.path.join(job_dir, f"output_{job_id}.mp4")
-        shutil.move(src_video, final_output)
+
+        # Step 3: v8 Composite — full-resolution Poisson blending
+        try:
+            _imtalker_v8_composite(
+                src_video=src_video,
+                portrait_path=portrait_path,
+                portrait_video_path=portrait_video_path,
+                portrait_is_video=portrait_is_video,
+                final_output=final_output,
+                job_dir=job_dir,
+                job_id=job_id,
+            )
+        except Exception as e_v8:
+            logger.warning(f"[IMT {job_id}] v8 composite failed ({e_v8}), falling back to scaled output")
+            # Fallback: scale 512x512 to fit 9:16 with padding
+            from PIL import Image as PILImage
+            try:
+                img_fb = PILImage.open(portrait_path)
+                orig_w_fb, orig_h_fb = img_fb.size
+            except Exception:
+                orig_w_fb, orig_h_fb = 1080, 1920
+            target_w, target_h = (1080, 1920) if orig_w_fb >= 1080 else (720, 1280)
+            filter_simple = (
+                f"[0:v]scale={target_w}:{target_h}:"
+                f"force_original_aspect_ratio=decrease,"
+                f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:"
+                f"color=0xE6DCD2[out]"
+            )
+            fallback_cmd = [
+                "ffmpeg", "-y",
+                "-i", src_video,
+                "-filter_complex", filter_simple,
+                "-map", "[out]", "-map", "0:a?",
+                "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+                "-c:a", "aac", "-b:a", "128k",
+                "-shortest", "-pix_fmt", "yuv420p",
+                final_output,
+            ]
+            subprocess.run(fallback_cmd, capture_output=True, timeout=120)
+            if not os.path.exists(final_output):
+                shutil.move(src_video, final_output)
 
         # Upload result
         output_filename = f"imtalker_{job_id}_{int(time.time())}.mp4"
@@ -794,9 +1018,11 @@ def handle_health(job_input: Dict[str, Any]) -> Dict[str, Any]:
 
     gpu_info = {}
     if torch.cuda.is_available():
+        props = torch.cuda.get_device_properties(0)
+        total_mem = getattr(props, 'total_memory', getattr(props, 'total_mem', 0))
         gpu_info = {
             "gpu_name": torch.cuda.get_device_name(0),
-            "gpu_memory_total_mb": round(getattr(torch.cuda.get_device_properties(0), 'total_memory', getattr(torch.cuda.get_device_properties(0), 'total_mem', 0)) / 1024 / 1024),
+            "gpu_memory_total_mb": round(total_mem / 1024 / 1024),
             "gpu_memory_used_mb": round(torch.cuda.memory_allocated(0) / 1024 / 1024),
         }
 

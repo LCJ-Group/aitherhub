@@ -138,7 +138,7 @@ if [ "$MODELS_READY" = false ]; then
     if [ ! -d "$MUSETALK_MODELS/sd-vae-ft-mse" ] || [ -z "$(ls -A $MUSETALK_MODELS/sd-vae-ft-mse 2>/dev/null)" ]; then
         echo "  [download] sd-vae-ft-mse..."
         mkdir -p "$MUSETALK_MODELS/sd-vae-ft-mse"
-        python -c "
+        python3 -c "
 from huggingface_hub import snapshot_download
 snapshot_download(repo_id='stabilityai/sd-vae-ft-mse', local_dir='$MUSETALK_MODELS/sd-vae-ft-mse')
 print('  [done] sd-vae-ft-mse')
@@ -149,7 +149,7 @@ print('  [done] sd-vae-ft-mse')
     if [ ! -d "$MUSETALK_MODELS/musetalk" ] || [ -z "$(ls -A $MUSETALK_MODELS/musetalk 2>/dev/null)" ]; then
         echo "  [download] musetalk weights..."
         mkdir -p "$MUSETALK_MODELS/musetalk"
-        python -c "
+        python3 -c "
 from huggingface_hub import snapshot_download
 snapshot_download(repo_id='TMElyralab/MuseTalk', local_dir='/tmp/musetalk_hf', allow_patterns=['models/musetalk/*'])
 import shutil, os
@@ -167,7 +167,7 @@ else:
     if [ ! -d "$MUSETALK_MODELS/musetalkV15" ] || [ -z "$(ls -A $MUSETALK_MODELS/musetalkV15 2>/dev/null)" ]; then
         echo "  [download] musetalkV15 weights..."
         mkdir -p "$MUSETALK_MODELS/musetalkV15"
-        python -c "
+        python3 -c "
 from huggingface_hub import snapshot_download
 snapshot_download(repo_id='TMElyralab/MuseTalk', local_dir='/tmp/musetalk_hf_v15', allow_patterns=['musetalkV15/*'])
 import shutil, os
@@ -185,7 +185,7 @@ else:
     if [ ! -d "$MUSETALK_MODELS/whisper" ] || [ -z "$(ls -A $MUSETALK_MODELS/whisper 2>/dev/null)" ]; then
         echo "  [download] whisper..."
         mkdir -p "$MUSETALK_MODELS/whisper"
-        python -c "
+        python3 -c "
 from huggingface_hub import snapshot_download
 snapshot_download(repo_id='openai/whisper-tiny', local_dir='$MUSETALK_MODELS/whisper')
 print('  [done] whisper')
@@ -196,7 +196,7 @@ print('  [done] whisper')
     if [ ! -d "$MUSETALK_MODELS/dwpose" ] || [ -z "$(ls -A $MUSETALK_MODELS/dwpose 2>/dev/null)" ]; then
         echo "  [download] dwpose..."
         mkdir -p "$MUSETALK_MODELS/dwpose"
-        python -c "
+        python3 -c "
 from huggingface_hub import hf_hub_download
 hf_hub_download(repo_id='yzd-v/DWPose', filename='dw-ll_ucoco_384.onnx', local_dir='$MUSETALK_MODELS/dwpose')
 print('  [done] dwpose')
@@ -211,7 +211,7 @@ print('  [done] dwpose')
         wget -q -O "$MUSETALK_MODELS/face-parse-bisent/resnet18-5c106cde.pth" \
             "https://download.pytorch.org/models/resnet18-5c106cde.pth" 2>/dev/null || true
         # Download 79999_iter.pth from HuggingFace mirror
-        python -c "
+        python3 -c "
 from huggingface_hub import hf_hub_download
 import shutil, os
 path = hf_hub_download(repo_id='ManyOtherFunctions/face-parse-bisent', filename='79999_iter.pth')
@@ -224,7 +224,7 @@ else:
 " 2>/dev/null || echo "  [warn] face-parse-bisent HF download failed, trying gdown..."
         # Fallback: try gdown from Google Drive
         if [ ! -f "$MUSETALK_MODELS/face-parse-bisent/79999_iter.pth" ]; then
-            python -c "
+            python3 -c "
 import gdown, os
 output = '$MUSETALK_MODELS/face-parse-bisent/79999_iter.pth'
 gdown.download(id='154JgKpzCPW82qINcVieuPH3fZ2e0P812', output=output, quiet=True)
@@ -264,7 +264,7 @@ echo ""
 echo "=== Applying Runtime Patches ==="
 
 # Patch 1: basicsr torchvision compatibility
-BASICSR_DEG=$(python -c "
+BASICSR_DEG=$(python3 -c "
 try:
     import basicsr, os
     print(os.path.join(os.path.dirname(basicsr.__file__), 'data', 'degradations.py'))
@@ -347,7 +347,7 @@ echo ""
 echo "=== GPU Status ==="
 nvidia-smi --query-gpu=name,memory.total,memory.free --format=csv,noheader 2>/dev/null || echo "  No GPU detected"
 
-python -c "
+python3 -c "
 import torch
 if torch.cuda.is_available():
     print(f'  PyTorch CUDA: {torch.cuda.get_device_name(0)}')

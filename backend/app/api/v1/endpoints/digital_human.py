@@ -2375,16 +2375,22 @@ async def _generate_lipsync_video(
     audio_url: str,
     engine: str = "musetalk",
     portrait_type: str = "image",
-    max_wait_sec: int = 120,
+    max_wait_sec: int = 180,
 ) -> Optional[str]:
     """
-    Generate a lip-synced video using MuseTalk or IMTalker GPU Worker.
-    Submits the job, polls for completion, downloads the video,
-    uploads to Azure Blob, and returns the SAS URL.
+    Generate a lip-synced video using MuseTalk or IMTalker.
+    Works with both Serverless and Legacy Pod modes transparently.
 
-    Returns None if GPU Worker is unavailable or generation fails.
+    Serverless mode: Uses service.imtalker_generate/generate → polls with
+    runpod_job_id → gets output_url from RunPod → downloads → uploads to Azure.
+    Pod mode: Uses service._request → polls → downloads → uploads to Azure.
+
+    Returns Azure Blob SAS URL or None on failure.
     """
     import uuid
+    import asyncio
+    import httpx
+
     job_id = f"ap-{uuid.uuid4().hex[:10]}"
 
     try:
@@ -2394,63 +2400,85 @@ async def _generate_lipsync_video(
         portrait_sas = _ensure_sas_url(portrait_url)
         audio_sas = _ensure_sas_url(audio_url)
 
+        # ── Submit job (works for both Serverless and Pod) ──────────────
         if engine == "imtalker":
-            # IMTalker: full facial animation + lip-sync
-            payload = {
-                "job_id": job_id,
-                "portrait_url": portrait_sas,
-                "portrait_type": portrait_type,
-                "audio_url": audio_sas,
-                "a_cfg_scale": 3.5,
-                "nfe": 48,
-                "crop": True,
-                "output_fps": 25,
-            }
-            resp = await service._request(
-                "POST", "/api/digital-human/imtalker/generate", json=payload
+            result = await service.imtalker_generate(
+                portrait_url=portrait_sas,
+                audio_url=audio_sas,
+                job_id=job_id,
+                a_cfg_scale=3.5,
+                nfe=48,
+                crop=True,
+                output_fps=25,
             )
         else:
-            # MuseTalk: standard lip-sync (faster)
-            payload = {
-                "job_id": job_id,
-                "portrait_url": portrait_sas,
-                "portrait_type": portrait_type,
-                "audio_url": audio_sas,
-                "bbox_shift": 0,
-                "extra_margin": 10,
-                "batch_size": 16,
-                "output_fps": 25,
-            }
-            resp = await service._request(
-                "POST", "/api/digital-human/generate", json=payload
+            result = await service.generate(
+                portrait_url=portrait_sas,
+                audio_url=audio_sas,
+                job_id=job_id,
+                portrait_type=portrait_type,
+                bbox_shift=0,
+                extra_margin=10,
+                batch_size=16,
+                output_fps=25,
             )
 
-        result = resp.json()
         actual_job_id = result.get("job_id", job_id)
-        logger.info(f"[AutoPilot LipSync] Job submitted: {actual_job_id} (engine={engine})")
+        runpod_job_id = result.get("runpod_job_id")  # Only set in Serverless mode
+        is_serverless = result.get("mode") == "serverless"
+        logger.info(
+            f"[AutoPilot LipSync] Job submitted: {actual_job_id} "
+            f"(engine={engine}, mode={'serverless' if is_serverless else 'pod'}"
+            f"{', runpod_id=' + runpod_job_id if runpod_job_id else ''})"
+        )
 
-        # Poll for completion
-        import asyncio
-        poll_interval = 3  # seconds
+        # ── Poll for completion ─────────────────────────────────────────
+        poll_interval = 5
         elapsed = 0
         while elapsed < max_wait_sec:
             await asyncio.sleep(poll_interval)
             elapsed += poll_interval
 
-            status_resp = await service.get_status(actual_job_id)
+            if engine == "imtalker":
+                status_resp = await service.imtalker_status(
+                    actual_job_id, runpod_job_id=runpod_job_id
+                )
+            else:
+                status_resp = await service.get_status(
+                    actual_job_id, runpod_job_id=runpod_job_id
+                )
+
             status = status_resp.get("status", "unknown")
             progress = status_resp.get("progress", 0)
-
             logger.info(
                 f"[AutoPilot LipSync] Job {actual_job_id}: status={status}, "
                 f"progress={progress}%, elapsed={elapsed}s"
             )
 
             if status == "completed":
-                # Download the video
-                video_bytes = await service.download(actual_job_id)
+                # ── Get the video ───────────────────────────────────────
+                if is_serverless:
+                    # Serverless: output_url is an S3 URL from RunPod worker
+                    output_url = status_resp.get("output_url")
+                    if not output_url:
+                        logger.error(
+                            f"[AutoPilot LipSync] No output_url in serverless result "
+                            f"for {actual_job_id}"
+                        )
+                        return None
+                    # Download from S3 URL and re-upload to Azure Blob
+                    async with httpx.AsyncClient(timeout=60) as client:
+                        dl_resp = await client.get(output_url)
+                        dl_resp.raise_for_status()
+                        video_bytes = dl_resp.content
+                else:
+                    # Pod mode: download from worker API
+                    video_bytes = await service.download(actual_job_id)
+
                 if not video_bytes:
-                    logger.error(f"[AutoPilot LipSync] Empty video download for {actual_job_id}")
+                    logger.error(
+                        f"[AutoPilot LipSync] Empty video download for {actual_job_id}"
+                    )
                     return None
 
                 # Upload to Azure Blob
@@ -2464,10 +2492,14 @@ async def _generate_lipsync_video(
 
             elif status in ("error", "failed"):
                 error_msg = status_resp.get("error", "Unknown error")
-                logger.error(f"[AutoPilot LipSync] Job {actual_job_id} failed: {error_msg}")
+                logger.error(
+                    f"[AutoPilot LipSync] Job {actual_job_id} failed: {error_msg}"
+                )
                 return None
 
-        logger.warning(f"[AutoPilot LipSync] Job {actual_job_id} timed out after {max_wait_sec}s")
+        logger.warning(
+            f"[AutoPilot LipSync] Job {actual_job_id} timed out after {max_wait_sec}s"
+        )
         return None
 
     except Exception as e:

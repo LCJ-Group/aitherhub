@@ -1,13 +1,14 @@
 ##############################################################################
-# AitherHub GPU Worker — RunPod Serverless Docker Image (v3 Self-Contained)
+# AitherHub GPU Worker — RunPod Serverless Docker Image (v4 Self-Contained)
 #
 # Multi-stage build:
 #   Stage 1 (builder): Compile native extensions (insightface, chumpy, mmcv)
-#   Stage 2 (runtime): Slim runtime + FaceFusion code + MuseTalk code + models
+#   Stage 2 (runtime): Slim runtime + FaceFusion + MuseTalk + IMTalker + models
 #
 # This image is FULLY SELF-CONTAINED:
 #   - FaceFusion code + essential models baked in
 #   - MuseTalk code baked in (models downloaded at first cold start)
+#   - IMTalker code baked in (models downloaded at first cold start)
 #   - No Network Volume required (but supported if available)
 #   - Pod stop/restart safe: Serverless workers auto-scale independently
 #
@@ -119,7 +120,7 @@ RUN pip install --no-cache-dir \
     onnxruntime-gpu \
     diffusers==0.30.2 \
     huggingface_hub==0.30.2 \
-    transformers \
+    "transformers>=4.40.0,<5.0.0" \
     accelerate \
     safetensors \
     einops \
@@ -141,7 +142,11 @@ RUN pip install --no-cache-dir \
     basicsr==1.4.2 \
     mediapipe \
     face-alignment \
-    yacs
+    yacs \
+    timm \
+    matplotlib \
+    torchdiffeq \
+    "av>=13.0.0,<14.0.0"
 
 # ── Fix numpy version ────────────────────────────────────────────────────
 RUN pip install --no-cache-dir --force-reinstall numpy==1.26.4
@@ -178,6 +183,13 @@ RUN mkdir -p /app/facefusion/.assets/models && \
 RUN cd /app && \
     git clone --depth 1 https://github.com/TMElyralab/MuseTalk.git
 
+# ── IMTalker ──────────────────────────────────────────────────────────────
+# Clone IMTalker repo (models are large, downloaded at first cold start via setup.sh)
+RUN cd /app && \
+    git clone --depth 1 https://github.com/AcademiCodeLab/IMTalker.git && \
+    mkdir -p /app/IMTalker/checkpoints && \
+    echo "IMTalker code cloned (models downloaded at cold start)"
+
 # ── GFPGAN model ──────────────────────────────────────────────────────────
 RUN mkdir -p /app/models && \
     wget -q -O /app/models/GFPGANv1.4.pth \
@@ -194,12 +206,21 @@ COPY gpu-worker/imtalker_generate_patch.py /app/imtalker_generate_patch.py
 
 RUN chmod +x /app/setup.sh
 
+# ── Apply IMTalker generate.py patch (fps fix + crop coords JSON) ─────────
+# The patched version saves crop coordinates to JSON for v8 compositing
+# and fixes numpy.float64 fps → int conversion
+RUN if [ -d /app/IMTalker/generator ]; then \
+        cp /app/imtalker_generate_patch.py /app/IMTalker/generator/generate.py && \
+        echo "IMTalker generate.py patched"; \
+    fi
+
 # ── Create workspace symlinks ─────────────────────────────────────────────
 # handler.py and live_engine.py expect tools at /workspace/*
 # Create symlinks so both /workspace/ and /app/ paths work
 RUN mkdir -p /workspace && \
     ln -sf /app/facefusion /workspace/facefusion && \
     ln -sf /app/MuseTalk /workspace/MuseTalk && \
+    ln -sf /app/IMTalker /workspace/IMTalker && \
     ln -sf /app/models /workspace/models && \
     ln -sf /app/handler.py /workspace/handler.py && \
     ln -sf /app/live_engine.py /workspace/live_engine.py && \
@@ -214,9 +235,9 @@ ENV MUSETALK_DIR=/app/MuseTalk
 ENV IMTALKER_DIR=/app/IMTalker
 ENV TEMP_DIR=/tmp/aitherhub
 ENV RUNPOD_VOLUME_PATH=/runpod-volume
-ENV PYTHONPATH=/app:/app/MuseTalk:/app/IMTalker:/workspace
+ENV PYTHONPATH=/app:/app/MuseTalk:/app/IMTalker:/app/IMTalker/generator:/workspace
 # Extend cold start timeout (model loading can take time on first request)
 ENV RUNPOD_INIT_TIMEOUT=600
 
 # ── Entrypoint ───────────────────────────────────────────────────────────────
-CMD ["/bin/bash", "-c", "/app/setup.sh && python -u /app/handler.py"]
+CMD ["/bin/bash", "-c", "/app/setup.sh && python3 -u /app/handler.py"]
