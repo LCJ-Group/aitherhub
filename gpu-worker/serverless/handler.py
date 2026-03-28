@@ -37,6 +37,14 @@ Environment variables:
   AZURE_STORAGE_CONTAINER — Azure container name
 """
 
+# ── Compatibility patch: torch 2.1.x + diffusers 0.30.x ──────────────────────
+# diffusers 0.30.2 uses torch.utils._pytree.register_pytree_node which was
+# added in torch 2.3. For torch 2.1.x we alias the private _register_pytree_node.
+import torch.utils._pytree
+if not hasattr(torch.utils._pytree, 'register_pytree_node'):
+    torch.utils._pytree.register_pytree_node = torch.utils._pytree._register_pytree_node
+# ──────────────────────────────────────────────────────────────────────────────
+
 import asyncio
 import hashlib
 import json

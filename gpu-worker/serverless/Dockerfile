@@ -118,7 +118,7 @@ RUN pip install --no-cache-dir \
     mmdet>=3.2.0 \
     onnxruntime-gpu \
     diffusers==0.30.2 \
-    'huggingface_hub<1.0.0' \
+    huggingface_hub==0.30.2 \
     transformers \
     accelerate \
     safetensors \
