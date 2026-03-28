@@ -49,8 +49,9 @@ MUSETALK_WORKER_API_KEY = os.getenv(
 WORKER_CONNECT_TIMEOUT = float(os.getenv("MUSETALK_CONNECT_TIMEOUT", "10"))
 WORKER_READ_TIMEOUT = float(os.getenv("MUSETALK_READ_TIMEOUT", "600"))
 
-# Serverless mode detection
-USE_SERVERLESS = os.getenv("RUNPOD_ENDPOINT_ID", "") != ""
+# Serverless mode detection — use the resolved endpoint ID from runpod_serverless_service
+from app.services.runpod_serverless_service import RUNPOD_ENDPOINT_ID as _RESOLVED_ENDPOINT_ID
+USE_SERVERLESS = bool(_RESOLVED_ENDPOINT_ID)
 
 
 # ── Exceptions ───────────────────────────────────────────────────────────────
