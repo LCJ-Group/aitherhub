@@ -210,16 +210,30 @@ print('  [done] dwpose')
         # These are standard pretrained weights
         wget -q -O "$MUSETALK_MODELS/face-parse-bisent/resnet18-5c106cde.pth" \
             "https://download.pytorch.org/models/resnet18-5c106cde.pth" 2>/dev/null || true
-        # Download 79999_iter.pth from Google Drive (official MuseTalk source)
+        # Download 79999_iter.pth from HuggingFace mirror
         python -c "
+from huggingface_hub import hf_hub_download
+import shutil, os
+path = hf_hub_download(repo_id='ManyOtherFunctions/face-parse-bisent', filename='79999_iter.pth')
+dst = '$MUSETALK_MODELS/face-parse-bisent/79999_iter.pth'
+shutil.copy2(path, dst)
+if os.path.isfile(dst) and os.path.getsize(dst) > 1000:
+    print('  [done] face-parse-bisent/79999_iter.pth')
+else:
+    print('  [warn] face-parse-bisent download may have failed')
+" 2>/dev/null || echo "  [warn] face-parse-bisent HF download failed, trying gdown..."
+        # Fallback: try gdown from Google Drive
+        if [ ! -f "$MUSETALK_MODELS/face-parse-bisent/79999_iter.pth" ]; then
+            python -c "
 import gdown, os
 output = '$MUSETALK_MODELS/face-parse-bisent/79999_iter.pth'
 gdown.download(id='154JgKpzCPW82qINcVieuPH3fZ2e0P812', output=output, quiet=True)
 if os.path.isfile(output) and os.path.getsize(output) > 1000:
-    print('  [done] face-parse-bisent/79999_iter.pth')
+    print('  [done] face-parse-bisent/79999_iter.pth via gdown')
 else:
-    print('  [warn] face-parse-bisent download may have failed')
-" 2>/dev/null || echo "  [warn] face-parse-bisent download failed"
+    print('  [FAIL] face-parse-bisent download failed')
+" 2>/dev/null || echo "  [warn] gdown fallback also failed"
+        fi
     fi
 
     # Cache downloaded models to Network Volume if available
