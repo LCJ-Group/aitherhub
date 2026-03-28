@@ -574,41 +574,33 @@ async def generate_data_driven_script(
     script = None
     errors = []
 
-    # Strategy 1: Azure OpenAI
+    # Strategy 1: Azure OpenAI Chat Completions (same pattern as RAG services)
     azure_key = os.getenv("AZURE_OPENAI_KEY", "")
     azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
-    azure_model = os.getenv("GPT5_MODEL") or os.getenv("GPT5_DEPLOYMENT") or "gpt-4.1-mini"
+    azure_model = os.getenv("VISION_MODEL", "gpt-4o")
+    azure_api_version = os.getenv("VISION_API_VERSION", "2024-06-01")
     if azure_key and azure_endpoint:
         try:
             client = openai.AzureOpenAI(
                 api_key=azure_key,
                 azure_endpoint=azure_endpoint,
-                api_version=os.getenv("GPT5_API_VERSION", "2025-04-01-preview"),
+                api_version=azure_api_version,
             )
-            input_payload = [{"role": m["role"], "content": m["content"]} for m in messages]
-            response = client.responses.create(
+            response = client.chat.completions.create(
                 model=azure_model,
-                input=input_payload,
-                max_output_tokens=8192,
+                messages=messages,
+                max_tokens=8192,
+                temperature=0.7,
             )
-            result = ""
-            if hasattr(response, "output_text") and response.output_text:
-                result = response.output_text.strip()
-            elif hasattr(response, "output") and response.output:
-                for item in response.output:
-                    if hasattr(item, "content"):
-                        for part in item.content:
-                            if hasattr(part, "text"):
-                                result += part.text
-                result = result.strip()
+            result = response.choices[0].message.content
             if result:
-                script = result
-                logger.info(f"Script generation: Azure OpenAI success ({len(result)} chars, model={azure_model})")
+                script = result.strip()
+                logger.info(f"Script generation: Azure OpenAI Chat success ({len(script)} chars, model={azure_model})")
             else:
-                errors.append("Azure OpenAI: empty response")
+                errors.append("Azure OpenAI Chat: empty response")
         except Exception as e:
-            errors.append(f"Azure OpenAI: {str(e)[:200]}")
-            logger.warning(f"Script generation Azure OpenAI failed: {e}")
+            errors.append(f"Azure OpenAI Chat: {str(e)[:200]}")
+            logger.warning(f"Script generation Azure OpenAI Chat failed: {e}")
 
     # Strategy 2: OpenAI fallback
     if script is None:
