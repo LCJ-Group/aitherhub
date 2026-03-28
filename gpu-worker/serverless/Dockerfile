@@ -183,6 +183,106 @@ RUN mkdir -p /app/facefusion/.assets/models && \
 RUN cd /app && \
     git clone --depth 1 https://github.com/TMElyralab/MuseTalk.git
 
+# ── MuseTalk Models (baked into image to avoid cold-start download failures) ──
+# face-parse-bisent (CRITICAL: this was the root cause of worker crashes)
+RUN mkdir -p /app/MuseTalk/models/face-parse-bisent && \
+    wget -q -O /app/MuseTalk/models/face-parse-bisent/resnet18-5c106cde.pth \
+        "https://download.pytorch.org/models/resnet18-5c106cde.pth" && \
+    python3 -c "
+from huggingface_hub import hf_hub_download
+import shutil
+path = hf_hub_download(repo_id='ManyOtherFunctions/face-parse-bisent', filename='79999_iter.pth')
+shutil.copy2(path, '/app/MuseTalk/models/face-parse-bisent/79999_iter.pth')
+print('[done] face-parse-bisent models')
+" && \
+    echo "face-parse-bisent models downloaded" && \
+    ls -la /app/MuseTalk/models/face-parse-bisent/
+
+# dwpose
+RUN mkdir -p /app/MuseTalk/models/dwpose && \
+    python3 -c "
+from huggingface_hub import hf_hub_download
+import shutil
+path = hf_hub_download(repo_id='yzd-v/DWPose', filename='dw-ll_ucoco_384.onnx')
+shutil.copy2(path, '/app/MuseTalk/models/dwpose/dw-ll_ucoco_384.onnx')
+print('[done] dwpose')
+" && \
+    echo "dwpose model downloaded"
+
+# sd-vae-ft-mse
+RUN mkdir -p /app/MuseTalk/models/sd-vae-ft-mse && \
+    python3 -c "
+from huggingface_hub import snapshot_download
+snapshot_download(repo_id='stabilityai/sd-vae-ft-mse', local_dir='/app/MuseTalk/models/sd-vae-ft-mse')
+print('[done] sd-vae-ft-mse')
+" && \
+    ln -sf /app/MuseTalk/models/sd-vae-ft-mse /app/MuseTalk/models/sd-vae && \
+    echo "sd-vae-ft-mse downloaded + sd-vae symlink created"
+
+# musetalk weights
+RUN mkdir -p /app/MuseTalk/models/musetalk && \
+    python3 -c "
+from huggingface_hub import snapshot_download
+import shutil, os
+snapshot_download(repo_id='TMElyralab/MuseTalk', local_dir='/tmp/musetalk_hf', allow_patterns=['models/musetalk/*'])
+src = '/tmp/musetalk_hf/models/musetalk'
+if os.path.isdir(src):
+    for f in os.listdir(src):
+        shutil.copy2(os.path.join(src, f), '/app/MuseTalk/models/musetalk/')
+print('[done] musetalk weights')
+" && \
+    rm -rf /tmp/musetalk_hf && \
+    echo "musetalk weights downloaded"
+
+# musetalkV15 weights
+RUN mkdir -p /app/MuseTalk/models/musetalkV15 && \
+    python3 -c "
+from huggingface_hub import snapshot_download
+import shutil, os
+snapshot_download(repo_id='TMElyralab/MuseTalk', local_dir='/tmp/musetalk_hf_v15', allow_patterns=['musetalkV15/*'])
+src = '/tmp/musetalk_hf_v15/musetalkV15'
+if os.path.isdir(src):
+    for f in os.listdir(src):
+        shutil.copy2(os.path.join(src, f), '/app/MuseTalk/models/musetalkV15/')
+print('[done] musetalkV15 weights')
+" && \
+    rm -rf /tmp/musetalk_hf_v15 && \
+    echo "musetalkV15 weights downloaded"
+
+# whisper model
+RUN mkdir -p /app/MuseTalk/models/whisper && \
+    python3 -c "
+from huggingface_hub import snapshot_download
+snapshot_download(repo_id='openai/whisper-tiny', local_dir='/app/MuseTalk/models/whisper')
+print('[done] whisper')
+" && \
+    echo "whisper model downloaded"
+
+# Apply MuseTalk FaceParsing absolute path patch at build time
+RUN FP_INIT="/app/MuseTalk/musetalk/utils/face_parsing/__init__.py" && \
+    if [ -f "$FP_INIT" ]; then \
+        sed -i "s|'./models/face-parse-bisent/resnet18-5c106cde.pth'|'/app/MuseTalk/models/face-parse-bisent/resnet18-5c106cde.pth'|g" "$FP_INIT" && \
+        sed -i "s|'./models/face-parse-bisent/79999_iter.pth'|'/app/MuseTalk/models/face-parse-bisent/79999_iter.pth'|g" "$FP_INIT" && \
+        echo "FaceParsing __init__.py patched with absolute paths"; \
+    fi
+
+# Apply MuseTalk vae.py low_cpu_mem_usage patch at build time
+RUN VAE_FILE="/app/MuseTalk/musetalk/utils/vae.py" && \
+    if [ -f "$VAE_FILE" ]; then \
+        sed -i 's/AutoencoderKL.from_pretrained(vae_type)/AutoencoderKL.from_pretrained(vae_type, low_cpu_mem_usage=False)/g' "$VAE_FILE" && \
+        echo "MuseTalk vae.py patched"; \
+    fi
+
+# Verify all critical models exist
+RUN echo "=== Verifying MuseTalk models ===" && \
+    ls -la /app/MuseTalk/models/face-parse-bisent/ && \
+    ls -la /app/MuseTalk/models/dwpose/ && \
+    ls /app/MuseTalk/models/sd-vae-ft-mse/ | head -5 && \
+    ls /app/MuseTalk/models/musetalk/ | head -5 && \
+    ls /app/MuseTalk/models/whisper/ | head -5 && \
+    test -f /app/MuseTalk/models/face-parse-bisent/79999_iter.pth && \
+    echo "ALL MUSETALK MODELS VERIFIED OK"
+
 # ── IMTalker ──────────────────────────────────────────────────────────────
 # Clone IMTalker repo (models are large, downloaded at first cold start via setup.sh)
 RUN cd /app && \
