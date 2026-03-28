@@ -186,7 +186,7 @@ RUN cd /app && \
 # ── IMTalker ──────────────────────────────────────────────────────────────
 # Clone IMTalker repo (models are large, downloaded at first cold start via setup.sh)
 RUN cd /app && \
-    git clone --depth 1 https://github.com/AcademiCodeLab/IMTalker.git && \
+    git clone --depth 1 https://github.com/bigai-nlco/IMTalker.git && \
     mkdir -p /app/IMTalker/checkpoints && \
     echo "IMTalker code cloned (models downloaded at cold start)"
 
