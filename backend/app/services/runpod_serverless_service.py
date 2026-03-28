@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 # ── Configuration ────────────────────────────────────────────────────────────
 
 RUNPOD_API_KEY = os.getenv("RUNPOD_API_KEY", "") or "rpa_4YVI" + "WUNRIGH5SBN8AGW" + "403MFUIXFIAPBM4BVR5M312hgot"
-RUNPOD_ENDPOINT_ID = os.getenv("RUNPOD_ENDPOINT_ID", "") or "2noptqoq7n8f8g"
+RUNPOD_ENDPOINT_ID = os.getenv("RUNPOD_ENDPOINT_ID", "") or "6zijuwhqmdjf7j"
 RUNPOD_API_BASE = "https://api.runpod.ai/v2"
 RUNPOD_SERVERLESS_TIMEOUT = int(os.getenv("RUNPOD_SERVERLESS_TIMEOUT", "300"))
 
