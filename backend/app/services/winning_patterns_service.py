@@ -14,7 +14,6 @@ Data sources:
   - video_sales_moments: click/order spikes with timestamps
   - video_phases + audio_text: what was said at each moment
   - video_product_exposures: when products were shown/mentioned
-  - phase_insights: AI-generated insights per phase
 """
 
 from __future__ import annotations
@@ -45,75 +44,35 @@ async def extract_cta_phrases(
 
     For each click_spike or order_spike in video_sales_moments,
     find the audio_text from the video_phase that covers that time window.
-
-    Args:
-        video_id: Target video ID
-        window_before_sec: Seconds before the sales moment to capture
-        window_after_sec: Seconds after the sales moment to capture
-
-    Returns:
-        List of CTA context dicts with:
-          - moment_time_sec: when the sale happened
-          - moment_type: click or order
-          - metric_value: click/order count
-          - pre_talk: what was said before the moment
-          - phase_description: AI summary of the phase
-          - confidence: moment confidence score
     """
     sql = text("""
-        WITH moments AS (
-            SELECT
-                sm.time_sec AS moment_time,
-                sm.video_sec,
-                sm.moment_type,
-                sm.moment_type_detail,
-                sm.click_value,
-                sm.click_delta,
-                sm.order_value,
-                sm.order_delta,
-                sm.gmv_value,
-                sm.confidence,
-                sm.reasons
-            FROM video_sales_moments sm
-            WHERE sm.video_id = :vid
-            ORDER BY sm.time_sec
-        ),
-        phase_audio AS (
-            SELECT
-                vp.phase_index,
-                vp.time_start,
-                vp.time_end,
-                vp.audio_text,
-                vp.phase_description,
-                p.sales_psychology_tags
-            FROM video_phases vp
-            JOIN phases p ON vp.phase_id = p.id
-            WHERE vp.video_id = :vid
-              AND vp.audio_text IS NOT NULL
-              AND LENGTH(vp.audio_text) > 0
-        )
         SELECT
-            m.moment_time,
-            m.moment_type,
-            m.moment_type_detail,
-            m.click_value,
-            m.click_delta,
-            m.order_value,
-            m.order_delta,
-            m.gmv_value,
-            m.confidence,
-            m.reasons,
-            pa.phase_index,
-            pa.time_start AS phase_start,
-            pa.time_end AS phase_end,
-            pa.audio_text,
-            pa.phase_description,
-            pa.sales_psychology_tags
-        FROM moments m
-        JOIN phase_audio pa
-          ON pa.time_start <= (m.video_sec + :window_after)
-         AND pa.time_end   >= (m.video_sec - :window_before)
-        ORDER BY m.moment_time, pa.phase_index
+            sm.time_sec   AS moment_time,
+            sm.video_sec,
+            sm.moment_type,
+            sm.moment_type_detail,
+            sm.click_value,
+            sm.click_delta,
+            sm.order_value,
+            sm.order_delta,
+            sm.gmv_value,
+            sm.confidence,
+            sm.reasons,
+            vp.phase_index,
+            vp.time_start  AS phase_start,
+            vp.time_end    AS phase_end,
+            vp.audio_text,
+            vp.phase_description,
+            vp.sales_psychology_tags
+        FROM video_sales_moments sm
+        JOIN video_phases vp
+          ON  vp.video_id = sm.video_id
+          AND vp.time_start <= (sm.video_sec + :window_after)
+          AND vp.time_end   >= (sm.video_sec - :window_before)
+          AND vp.audio_text IS NOT NULL
+          AND CHAR_LENGTH(vp.audio_text) > 0
+        WHERE sm.video_id = :vid
+        ORDER BY sm.time_sec, vp.phase_index
     """)
 
     result = await db.execute(sql, {
@@ -164,18 +123,6 @@ async def analyze_product_durations(
 ) -> List[Dict[str, Any]]:
     """
     Analyze how long each product was described/shown and correlate with sales.
-
-    Combines product_exposures (when products were mentioned) with
-    sales_moments (when sales happened) to determine optimal description times.
-
-    Returns:
-        List of product duration analysis dicts with:
-          - product_name: product identifier
-          - total_exposure_sec: total time the product was mentioned/shown
-          - exposure_count: number of separate exposure segments
-          - avg_segment_sec: average segment duration
-          - had_sales: whether sales occurred during/after exposure
-          - sales_within_60s: number of sales moments within 60s of exposure
     """
     # Get product exposures
     exposure_sql = text("""
@@ -271,9 +218,7 @@ async def extract_top_phases(
 ) -> List[Dict[str, Any]]:
     """
     Extract the highest-performing phases by engagement and sales metrics.
-
-    Returns:
-        List of top phase dicts sorted by composite score.
+    Uses only video_phases table (no JOIN to phases table needed).
     """
     sql = text("""
         SELECT
@@ -284,21 +229,19 @@ async def extract_top_phases(
             vp.audio_text,
             vp.phase_description,
             vp.gmv,
-            vp.orders,
-            vp.viewers,
-            vp.likes,
+            vp.order_count,
+            vp.viewer_count,
+            vp.like_count,
             vp.cta_score,
-            p.delta_view,
-            p.delta_like,
-            p.sales_psychology_tags
+            vp.delta_view,
+            vp.delta_like,
+            vp.sales_psychology_tags
         FROM video_phases vp
-        JOIN phases p ON vp.phase_id = p.id
         WHERE vp.video_id = :vid
-          AND p.deleted_at IS NULL
         ORDER BY
             COALESCE(vp.gmv, 0) * 0.4
-            + COALESCE(p.delta_view, 0) * 0.25
-            + COALESCE(p.delta_like, 0) * 0.15
+            + COALESCE(vp.delta_view, 0) * 0.25
+            + COALESCE(vp.delta_like, 0) * 0.15
             + COALESCE(vp.cta_score, 0) * 0.20
             DESC
         LIMIT :lim
@@ -322,9 +265,9 @@ async def extract_top_phases(
             "audio_text": r.audio_text or "",
             "phase_description": r.phase_description or "",
             "gmv": r.gmv,
-            "orders": r.orders,
-            "viewers": r.viewers,
-            "likes": r.likes,
+            "order_count": r.order_count,
+            "viewer_count": r.viewer_count,
+            "like_count": r.like_count,
             "cta_score": r.cta_score,
             "delta_view": r.delta_view,
             "delta_like": r.delta_like,
@@ -347,12 +290,8 @@ async def aggregate_patterns_across_videos(
 ) -> Dict[str, Any]:
     """
     Aggregate winning patterns across multiple videos.
-
     This is the core differentiator — patterns from real sales data
     across many livestreams, not just one video.
-
-    Returns:
-        Dict with aggregated CTA phrases, optimal durations, and top techniques.
     """
     # Get video IDs
     if video_ids:
@@ -504,31 +443,44 @@ async def _extract_top_techniques(
     if not video_ids:
         return []
 
-    sql = text("""
-        SELECT p.sales_psychology_tags, COUNT(*) as cnt
-        FROM phases p
-        JOIN video_phases vp ON p.id = vp.phase_id
-        WHERE p.video_id = ANY(:vids)
-          AND p.sales_psychology_tags IS NOT NULL
-          AND p.deleted_at IS NULL
+    # Use IN clause instead of ANY (MySQL compatible)
+    placeholders = ", ".join([f":vid_{i}" for i in range(len(video_ids))])
+    params = {f"vid_{i}": vid for i, vid in enumerate(video_ids)}
+
+    sql = text(f"""
+        SELECT vp.sales_psychology_tags, COUNT(*) as cnt
+        FROM video_phases vp
+        WHERE vp.video_id IN ({placeholders})
+          AND vp.sales_psychology_tags IS NOT NULL
+          AND CHAR_LENGTH(vp.sales_psychology_tags) > 0
           AND (COALESCE(vp.gmv, 0) > 0 OR COALESCE(vp.cta_score, 0) > 0.5)
-        GROUP BY p.sales_psychology_tags
+        GROUP BY vp.sales_psychology_tags
         ORDER BY cnt DESC
         LIMIT 20
     """)
     try:
-        result = await db.execute(sql, {"vids": video_ids})
+        result = await db.execute(sql, params)
         rows = result.fetchall()
 
-        techniques = []
         tag_counts: Dict[str, int] = {}
         for r in rows:
             tags_str = r.sales_psychology_tags or ""
-            for tag in tags_str.split(","):
-                tag = tag.strip()
+            # Handle both JSON array and comma-separated formats
+            tags = []
+            if tags_str.startswith("["):
+                try:
+                    tags = json.loads(tags_str)
+                except (json.JSONDecodeError, TypeError):
+                    tags = [t.strip() for t in tags_str.split(",")]
+            else:
+                tags = [t.strip() for t in tags_str.split(",")]
+
+            for tag in tags:
+                tag = tag.strip().strip('"').strip("'")
                 if tag:
                     tag_counts[tag] = tag_counts.get(tag, 0) + r.cnt
 
+        techniques = []
         for tag, count in sorted(tag_counts.items(), key=lambda x: x[1], reverse=True)[:10]:
             techniques.append({
                 "technique": tag,
@@ -559,17 +511,6 @@ async def generate_data_driven_script(
 
     This is the key differentiator from generic AI script generators:
     every recommendation in the script is backed by actual sales data.
-
-    Args:
-        video_id: Source video to base the script on
-        product_focus: Optional product to emphasize
-        tone: Script tone
-        language: Output language
-        duration_minutes: Target script duration
-        cross_video: Whether to include patterns from other videos
-
-    Returns:
-        Dict with script, patterns used, and metadata
     """
     # Step 1: Extract patterns from this video
     cta_phrases = await extract_cta_phrases(db, video_id)
