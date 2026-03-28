@@ -784,7 +784,7 @@ def handle_health(job_input: Dict[str, Any]) -> Dict[str, Any]:
     if torch.cuda.is_available():
         gpu_info = {
             "gpu_name": torch.cuda.get_device_name(0),
-            "gpu_memory_total_mb": round(torch.cuda.get_device_properties(0).total_mem / 1024 / 1024),
+            "gpu_memory_total_mb": round(getattr(torch.cuda.get_device_properties(0), 'total_memory', getattr(torch.cuda.get_device_properties(0), 'total_mem', 0)) / 1024 / 1024),
             "gpu_memory_used_mb": round(torch.cuda.memory_allocated(0) / 1024 / 1024),
         }
 
