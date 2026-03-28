@@ -1,20 +1,57 @@
-# NOTE: torch, torchvision, torchaudio, mmcv, runpod are installed
-# separately in Dockerfile with specific index URLs / pre-built binaries.
+# AitherHub GPU Worker — Serverless Python Dependencies
+#
+# NOTE: The following are installed separately in Dockerfile:
+#   - torch, torchvision, torchaudio (CUDA 12.1 wheels)
+#   - mmcv (pre-built binary for cu121/torch2.1)
+#   - insightface + chumpy (compiled in builder stage)
+#   - runpod SDK
+#
+# All packages below are pure Python or have pre-built wheels.
 
 # Image/Video processing
 opencv-python-headless>=4.8.0
 Pillow>=10.0.0
-numpy>=1.24.0
+numpy==1.26.4
 
 # Audio processing
 librosa>=0.10.0
 soundfile>=0.12.0
 
-# FaceFusion dependencies (insightface installed separately in Dockerfile)
-
-# MuseTalk dependencies (mmcv installed separately in Dockerfile)
+# MuseTalk dependencies
 mmpose>=0.29.0
 mmdet>=3.2.0
+mediapipe
+face-alignment
+yacs
 
-# Utilities
+# IMTalker dependencies
+diffusers
+transformers
+accelerate
+safetensors
+einops
+omegaconf
+
+# LivePortrait dependencies
+tyro
+dill
+scipy
+imageio
+imageio-ffmpeg
+lmdb
+tqdm
+rich
+
+# GFPGAN / face enhancement
+gfpgan
+basicsr==1.4.2
+onnxruntime-gpu
+
+# Cloud storage
+azure-storage-blob
+boto3
+
+# HTTP client
+httpx>=0.27.0
+pydantic>=2.6.0
 python-multipart>=0.0.9

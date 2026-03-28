@@ -63,7 +63,8 @@ WORKSPACE = os.getenv("WORKSPACE", "/workspace")
 TEMP_DIR = os.getenv("TEMP_DIR", "/tmp/aitherhub")
 os.makedirs(TEMP_DIR, exist_ok=True)
 
-# Paths for AI tools (installed in Docker image or Network Volume)
+# Paths for AI tools (symlinked from Network Volume by setup.sh)
+# setup.sh creates: /workspace/facefusion -> /runpod-volume/facefusion etc.
 FACEFUSION_DIR = os.getenv("FACEFUSION_DIR", f"{WORKSPACE}/facefusion")
 MUSETALK_DIR = os.getenv("MUSETALK_DIR", f"{WORKSPACE}/MuseTalk")
 IMTALKER_DIR = os.getenv("IMTALKER_DIR", f"{WORKSPACE}/IMTalker")
