@@ -3913,7 +3913,9 @@ async def get_winning_patterns(
     """
     Extract winning patterns from a video's real performance data.
     """
-    _check_admin(x_admin_key)
+    expected_key = f"{ADMIN_ID}:{ADMIN_PASS}"
+    if x_admin_key != expected_key:
+        raise HTTPException(status_code=403, detail="Invalid admin credentials")
     import traceback as tb_mod
     results = {"video_id": video_id, "steps": {}}
 
@@ -3970,7 +3972,9 @@ async def get_aggregate_patterns(
     This is the core differentiator — patterns from real sales data
     across many livestreams.
     """
-    _check_admin(x_admin_key)
+    expected_key = f"{ADMIN_ID}:{ADMIN_PASS}"
+    if x_admin_key != expected_key:
+        raise HTTPException(status_code=403, detail="Invalid admin credentials")
     from app.services.winning_patterns_service import aggregate_patterns_across_videos
 
     try:
@@ -4006,7 +4010,9 @@ async def generate_data_driven_script_endpoint(
     and engagement hook in this script is backed by actual sales metrics
     from past livestreams.
     """
-    _check_admin(x_admin_key)
+    expected_key = f"{ADMIN_ID}:{ADMIN_PASS}"
+    if x_admin_key != expected_key:
+        raise HTTPException(status_code=403, detail="Invalid admin credentials")
     from app.services.winning_patterns_service import generate_data_driven_script
 
     try:
