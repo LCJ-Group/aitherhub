@@ -16,6 +16,7 @@ import LiveReportSection from "./LiveReportSection";
 import SectionErrorBoundary from "./SectionErrorBoundary";
 import CsvAssetPanel from "./CsvAssetPanel";
 import CsvReplaceModal from "./CsvReplaceModal";
+import ScriptGeneratorPanel from "./ScriptGeneratorPanel";
 // ProductTimeline is now integrated into AnalyticsSection
 
 export default function VideoDetail({ videoData, editorParams }) {
@@ -1042,6 +1043,13 @@ export default function VideoDetail({ videoData, editorParams }) {
               }}
             />
           </SectionErrorBoundary>
+
+          {/* Data-Driven Script Generator */}
+          {videoData?.status === 'DONE' && (
+            <SectionErrorBoundary sectionName="売れる台本生成">
+              <ScriptGeneratorPanel videoId={videoData?.id} videoData={videoData} />
+            </SectionErrorBoundary>
+          )}
 
           {/* Live Report v1 - 3-layer report */}
           <SectionErrorBoundary sectionName="ライブレポート">

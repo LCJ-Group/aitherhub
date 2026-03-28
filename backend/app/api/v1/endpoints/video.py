@@ -1965,6 +1965,107 @@ async def _retry_live_boost_analysis(
 
 # =========================
 
+
+# ──────────────────────────────────────────────
+# Data-Driven Script Generation (User-facing)
+# ──────────────────────────────────────────────
+from pydantic import BaseModel, Field
+
+
+class UserScriptRequest(BaseModel):
+    product_focus: Optional[str] = Field(None, description="Product to emphasize")
+    tone: str = Field("professional_friendly", description="Script tone")
+    language: str = Field("ja", description="Output language")
+    duration_minutes: int = Field(10, ge=1, le=60, description="Target duration in minutes")
+    cross_video: bool = Field(True, description="Include patterns from other videos")
+
+
+@router.post("/{video_id}/generate-script")
+async def generate_script_for_video(
+    video_id: str,
+    body: UserScriptRequest,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Generate a data-driven live commerce script based on real performance data.
+
+    This analyzes the video's sales moments, product exposures, and audio transcripts
+    to create a script grounded in actual sales data — not generic AI guesses.
+    """
+    # Verify video belongs to user
+    result = await db.execute(
+        text("SELECT id, user_id FROM videos WHERE id = :vid"),
+        {"vid": video_id},
+    )
+    video = result.fetchone()
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+    if video.user_id != current_user.get("id"):
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    from app.services.winning_patterns_service import generate_data_driven_script
+
+    try:
+        result = await generate_data_driven_script(
+            db=db,
+            video_id=video_id,
+            product_focus=body.product_focus,
+            tone=body.tone,
+            language=body.language,
+            duration_minutes=body.duration_minutes,
+            cross_video=body.cross_video,
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception(f"Script generation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{video_id}/winning-patterns")
+async def get_video_winning_patterns(
+    video_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Get winning patterns (CTA phrases, product durations, top phases)
+    extracted from this video's real performance data.
+    """
+    # Verify video belongs to user
+    result = await db.execute(
+        text("SELECT id, user_id FROM videos WHERE id = :vid"),
+        {"vid": video_id},
+    )
+    video = result.fetchone()
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+    if video.user_id != current_user.get("id"):
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    from app.services.winning_patterns_service import (
+        extract_cta_phrases,
+        analyze_product_durations,
+        extract_top_phases,
+    )
+
+    try:
+        cta_phrases = await extract_cta_phrases(db, video_id)
+        product_durations = await analyze_product_durations(db, video_id)
+        top_phases = await extract_top_phases(db, video_id, limit=10)
+
+        return {
+            "video_id": video_id,
+            "cta_phrases": cta_phrases,
+            "product_durations": product_durations,
+            "top_phases": top_phases,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ============================================================
 # Include split sub-modules
 # ============================================================

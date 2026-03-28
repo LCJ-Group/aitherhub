@@ -4,10 +4,11 @@ Provides platform-wide statistics for the master dashboard.
 Each query is isolated with rollback on failure to prevent cascade errors.
 """
 from fastapi import APIRouter, Depends, HTTPException, Header, Query, Request
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 from loguru import logger
-from typing import Optional
+from typing import Optional, List
 
 from app.core.dependencies import get_db, get_current_user
 
@@ -3897,3 +3898,110 @@ async def admin_reset_user_password(
     await db.commit()
 
     return {"success": True, "email": email, "message": "Password reset successfully"}
+
+
+# ──────────────────────────────────────────────
+# Admin: Winning Patterns Analysis
+# ──────────────────────────────────────────────
+
+@router.get("/videos/{video_id}/winning-patterns")
+async def get_winning_patterns(
+    video_id: str,
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Extract winning patterns from a video's real performance data.
+
+    Returns CTA phrases, product durations, and top-performing phases
+    backed by actual sales data.
+    """
+    _check_admin(x_admin_key)
+    from app.services.winning_patterns_service import (
+        extract_cta_phrases,
+        analyze_product_durations,
+        extract_top_phases,
+    )
+
+    try:
+        cta_phrases = await extract_cta_phrases(db, video_id)
+        product_durations = await analyze_product_durations(db, video_id)
+        top_phases = await extract_top_phases(db, video_id, limit=10)
+
+        return {
+            "video_id": video_id,
+            "cta_phrases": cta_phrases,
+            "product_durations": product_durations,
+            "top_phases": top_phases,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/winning-patterns/aggregate")
+async def get_aggregate_patterns(
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    db: AsyncSession = Depends(get_db),
+    limit_videos: int = Query(50, ge=1, le=200),
+):
+    """
+    Aggregate winning patterns across all DONE videos.
+
+    This is the core differentiator — patterns from real sales data
+    across many livestreams.
+    """
+    _check_admin(x_admin_key)
+    from app.services.winning_patterns_service import aggregate_patterns_across_videos
+
+    try:
+        patterns = await aggregate_patterns_across_videos(db, limit_videos=limit_videos)
+        return patterns
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ──────────────────────────────────────────────
+# Admin: Data-Driven Script Generation
+# ──────────────────────────────────────────────
+
+class DataDrivenScriptRequest(BaseModel):
+    product_focus: Optional[str] = None
+    tone: str = "professional_friendly"
+    language: str = "ja"
+    duration_minutes: int = 10
+    cross_video: bool = True
+
+
+@router.post("/videos/{video_id}/generate-data-script")
+async def generate_data_driven_script_endpoint(
+    video_id: str,
+    body: DataDrivenScriptRequest,
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Generate a script grounded in real performance data.
+
+    Unlike generic AI script generators, every CTA, product description timing,
+    and engagement hook in this script is backed by actual sales metrics
+    from past livestreams.
+    """
+    _check_admin(x_admin_key)
+    from app.services.winning_patterns_service import generate_data_driven_script
+
+    try:
+        result = await generate_data_driven_script(
+            db=db,
+            video_id=video_id,
+            product_focus=body.product_focus,
+            tone=body.tone,
+            language=body.language,
+            duration_minutes=body.duration_minutes,
+            cross_video=body.cross_video,
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception(f"Data-driven script generation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

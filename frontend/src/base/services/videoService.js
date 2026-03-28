@@ -1556,5 +1556,43 @@ class VideoService extends BaseApiService {
       throw error;
     }
   }
+
+  /**
+   * Get winning patterns (CTA phrases, product durations, top phases)
+   * extracted from real performance data.
+   * @param {string} videoId
+   * @returns {Promise<Object>}
+   */
+  async getWinningPatterns(videoId) {
+    try {
+      const response = await this.get(`/api/v1/videos/${videoId}/winning-patterns`);
+      return response;
+    } catch (error) {
+      console.error('Failed to fetch winning patterns:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Generate a data-driven live commerce script based on real performance data.
+   * @param {string} videoId
+   * @param {Object} options
+   * @returns {Promise<Object>}
+   */
+  async generateScript(videoId, options = {}) {
+    try {
+      const response = await this.post(`/api/v1/videos/${videoId}/generate-script`, {
+        product_focus: options.product_focus || null,
+        tone: options.tone || 'professional_friendly',
+        language: options.language || 'ja',
+        duration_minutes: options.duration_minutes || 10,
+        cross_video: options.cross_video !== false,
+      });
+      return response;
+    } catch (error) {
+      console.error('Failed to generate script:', error);
+      throw error;
+    }
+  }
 }
 export default new VideoService();
