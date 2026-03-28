@@ -524,6 +524,11 @@ async def generate_data_driven_script(
             cross_patterns = await aggregate_patterns_across_videos(db, limit_videos=20)
         except Exception as e:
             logger.warning(f"Cross-video aggregation failed: {e}")
+            # Rollback to clear any failed transaction state
+            try:
+                await db.rollback()
+            except Exception:
+                pass
 
     # Step 3: Get video info
     video_sql = text("""
@@ -550,12 +555,19 @@ async def generate_data_driven_script(
 
     # Step 5: Generate with LLM
     try:
-        import openai
-        client = openai.AsyncOpenAI()
+        import os
+        from openai import AsyncAzureOpenAI
+
+        client = AsyncAzureOpenAI(
+            api_key=os.getenv("AZURE_OPENAI_KEY"),
+            azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
+            api_version=os.getenv("VISION_API_VERSION", "2024-06-01"),
+        )
+        gpt_model = os.getenv("VISION_MODEL", "gpt-4o")
 
         target_chars = duration_minutes * 250
         response = await client.chat.completions.create(
-            model="gpt-4.1-mini",
+            model=gpt_model,
             messages=[
                 {
                     "role": "system",
