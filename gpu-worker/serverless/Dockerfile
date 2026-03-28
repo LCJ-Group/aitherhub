@@ -147,10 +147,10 @@ RUN pip install --no-cache-dir \
 RUN pip install --no-cache-dir --force-reinstall numpy==1.26.4
 
 # ── Fix basicsr torchvision import ─────────────────────────────────────────
-RUN BASICSR_DEG=$(python -c "import basicsr; import os; print(os.path.join(os.path.dirname(basicsr.__file__), 'data', 'degradations.py'))" 2>/dev/null) && \
+RUN BASICSR_DEG=$(python3 -c "import basicsr; import os; print(os.path.join(os.path.dirname(basicsr.__file__), 'data', 'degradations.py'))" 2>/dev/null) && \
     if [ -f "$BASICSR_DEG" ]; then \
         sed -i 's/from torchvision.transforms.functional_tensor import rgb_to_grayscale/from torchvision.transforms.functional import rgb_to_grayscale/' "$BASICSR_DEG" || true; \
-    fi
+    fi || true
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Clone AI Tools (code only, models downloaded separately)
