@@ -3935,7 +3935,8 @@ async def get_winning_patterns(
             "top_phases": top_phases,
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc(), "type": type(e).__name__}
 
 
 @router.get("/winning-patterns/aggregate")
