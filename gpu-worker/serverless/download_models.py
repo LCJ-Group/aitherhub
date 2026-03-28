@@ -55,7 +55,7 @@ def main():
         os.symlink(vae_dir, sd_vae_link)
     print(f"  [done] sd-vae-ft-mse + sd-vae symlink")
     
-    # 4. musetalk weights
+    # 4. musetalk weights (repo has musetalk/ at root, NOT models/musetalk/)
     print("[4/6] Downloading musetalk weights...")
     mt_dir = os.path.join(models_dir, "musetalk")
     os.makedirs(mt_dir, exist_ok=True)
@@ -63,14 +63,20 @@ def main():
     snapshot_download(
         repo_id="TMElyralab/MuseTalk",
         local_dir=tmp_dir,
-        allow_patterns=["models/musetalk/*"]
+        allow_patterns=["musetalk/*"]
     )
-    src = os.path.join(tmp_dir, "models", "musetalk")
+    src = os.path.join(tmp_dir, "musetalk")
     if os.path.isdir(src):
         for f in os.listdir(src):
             shutil.copy2(os.path.join(src, f), os.path.join(mt_dir, f))
+            print(f"    copied {f}")
+    else:
+        print(f"    WARNING: {src} not found, listing tmp_dir:")
+        for root, dirs, files in os.walk(tmp_dir):
+            for f in files:
+                print(f"      {os.path.join(root, f)}")
     shutil.rmtree(tmp_dir, ignore_errors=True)
-    print(f"  [done] musetalk weights")
+    print(f"  [done] musetalk weights ({len(os.listdir(mt_dir))} files)")
     
     # 5. musetalkV15 weights
     print("[5/6] Downloading musetalkV15 weights...")
