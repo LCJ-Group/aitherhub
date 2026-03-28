@@ -88,7 +88,7 @@ class EngineConfig:
     # Model paths (relative to MUSETALK_DIR, used via chdir)
     unet_config: str = "models/musetalkV15/musetalk.json"
     unet_model_path: str = "models/musetalkV15/unet.pth"
-    vae_type: str = "sd-vae"
+    vae_type: str = "sd-vae-ft-mse"
     whisper_dir: str = "models/whisper"
 
     # GPU

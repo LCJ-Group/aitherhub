@@ -306,9 +306,13 @@ def handle_musetalk(job_input: Dict[str, Any]) -> Dict[str, Any]:
                 audio_padding_length_left=2,
                 audio_padding_length_right=2,
             )
-            _musetalk_engine = live_engine_mod.MuseTalkEngine(config)
-            _musetalk_engine.load_models()
-            logger.info("MuseTalkEngine loaded")
+            try:
+                _musetalk_engine = live_engine_mod.MuseTalkEngine(config)
+                _musetalk_engine.load_models()
+                logger.info("MuseTalkEngine loaded")
+            except Exception as e:
+                _musetalk_engine = None
+                raise RuntimeError(f"Failed to load MuseTalk engine: {e}") from e
 
         engine = _musetalk_engine
 
