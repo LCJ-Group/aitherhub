@@ -26,6 +26,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Header, Query
+from typing import Union
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -350,6 +351,60 @@ async def get_image_upload_url(
     except Exception as e:
         logger.exception(f"Image upload SAS generation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ──────────────────────────────────────────────
+# GET /script-generator/debug-patterns (admin only)
+# ──────────────────────────────────────────────
+
+@router.get("/debug-patterns")
+async def debug_patterns(
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Debug endpoint to test cross_patterns and feedback_knowledge extraction."""
+    expected_key = f"{os.getenv('ADMIN_ID', 'aither')}:{os.getenv('ADMIN_PASS', 'hub')}"
+    if x_admin_key != expected_key:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    from app.services.winning_patterns_service import (
+        aggregate_patterns_across_videos,
+        extract_feedback_knowledge,
+    )
+
+    result = {"cross_patterns": None, "feedback_knowledge": None, "errors": []}
+
+    try:
+        cross_patterns = await aggregate_patterns_across_videos(db, limit_videos=50)
+        result["cross_patterns"] = {
+            "videos_analyzed": cross_patterns.get("videos_analyzed", 0),
+            "cta_phrases_count": len(cross_patterns.get("cta_phrases", [])),
+            "product_durations_count": len(cross_patterns.get("product_durations", [])),
+            "top_techniques_count": len(cross_patterns.get("top_techniques", [])),
+            "raw_cta_count": cross_patterns.get("raw_cta_count", 0),
+            "raw_duration_count": cross_patterns.get("raw_duration_count", 0),
+            "top_techniques": cross_patterns.get("top_techniques", [])[:5],
+        }
+    except Exception as e:
+        result["errors"].append(f"cross_patterns: {str(e)}")
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+
+    try:
+        feedback_knowledge = await extract_feedback_knowledge(db, top_limit=15, bottom_limit=10)
+        if feedback_knowledge:
+            result["feedback_knowledge"] = {
+                "stats": feedback_knowledge.get("stats", {}),
+                "winning_count": len(feedback_knowledge.get("winning_patterns", [])),
+                "losing_count": len(feedback_knowledge.get("losing_patterns", [])),
+                "winning_sample": feedback_knowledge.get("winning_patterns", [])[:2],
+            }
+    except Exception as e:
+        result["errors"].append(f"feedback_knowledge: {str(e)}")
+
+    return result
 
 
 # ──────────────────────────────────────────────
