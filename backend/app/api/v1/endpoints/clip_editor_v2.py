@@ -72,6 +72,12 @@ class SubtitleCaption(BaseModel):
     words: Optional[list] = None
 
 
+class SplitSegment(BaseModel):
+    start: float = Field(..., description="Segment start time in seconds (local to clip)")
+    end: float = Field(..., description="Segment end time in seconds (local to clip)")
+    enabled: bool = Field(default=True, description="Whether this segment is included in export")
+
+
 class ExportSubtitledClipRequest(BaseModel):
     clip_url: str = Field(..., description="URL of the source clip video")
     captions: list[SubtitleCaption] = Field(..., description="List of caption segments")
@@ -79,6 +85,7 @@ class ExportSubtitledClipRequest(BaseModel):
     position_x: float = Field(default=50.0, description="Subtitle X position (0-100%)")
     position_y: float = Field(default=85.0, description="Subtitle Y position (0-100%)")
     time_start: float = Field(default=0.0, description="Clip start time for offset calculation")
+    split_segments: Optional[list[SplitSegment]] = Field(default=None, description="Split segments for selective export. If provided, only enabled segments are included.")
 
 
 # ─── ① Segment Scores ─────────────────────────────────────────────────────
@@ -1490,7 +1497,8 @@ def _save_cached_export(cache_key: str, download_url: str, file_size: int):
 
 
 async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, style: str,
-                          position_x: float, position_y: float, time_start: float):
+                          position_x: float, position_y: float, time_start: float,
+                          split_segments: list = None):
     """Background task: download clip, burn subtitles, upload result."""
     import shutil
     import functools
@@ -1541,6 +1549,68 @@ async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, s
         await asyncio.get_event_loop().run_in_executor(None, _download_http)
         file_size = os.path.getsize(video_path)
         logger.info(f"[export-job {job_id}] Downloaded: {file_size/1024/1024:.1f} MB")
+
+        # ── Step 1b: Handle split segments (cut & concat) ──
+        if split_segments:
+            enabled_segs = [s for s in split_segments if s.get('enabled', True)]
+            if enabled_segs and len(enabled_segs) < len(split_segments):
+                logger.info(f"[export-job {job_id}] Split export: {len(enabled_segs)}/{len(split_segments)} segments enabled")
+                # Build ffmpeg concat filter for enabled segments
+                concat_parts = []
+                concat_list_path = os.path.join(tmp_dir, "concat_list.txt")
+                for si, seg in enumerate(enabled_segs):
+                    seg_path = os.path.join(tmp_dir, f"seg_{si:03d}.mp4")
+                    seg_start = seg.get('start', 0)
+                    seg_end = seg.get('end', 0)
+                    seg_dur = seg_end - seg_start
+                    if seg_dur <= 0:
+                        continue
+                    # Extract segment with ffmpeg
+                    seg_cmd = [
+                        "ffmpeg", "-y", "-hide_banner",
+                        "-ss", str(seg_start), "-t", str(seg_dur),
+                        "-i", video_path,
+                        "-c", "copy", "-avoid_negative_ts", "make_zero",
+                        seg_path,
+                    ]
+                    seg_proc = await asyncio.create_subprocess_exec(
+                        *seg_cmd,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    await asyncio.wait_for(seg_proc.wait(), timeout=60)
+                    if seg_proc.returncode == 0 and os.path.exists(seg_path):
+                        concat_parts.append(seg_path)
+                    else:
+                        logger.warning(f"[export-job {job_id}] Segment {si} extraction failed")
+
+                if concat_parts:
+                    # Write concat list
+                    with open(concat_list_path, 'w') as f:
+                        for p in concat_parts:
+                            f.write(f"file '{p}'\n")
+                    # Concat segments
+                    merged_path = os.path.join(tmp_dir, "merged.mp4")
+                    concat_cmd = [
+                        "ffmpeg", "-y", "-hide_banner",
+                        "-f", "concat", "-safe", "0",
+                        "-i", concat_list_path,
+                        "-c", "copy",
+                        merged_path,
+                    ]
+                    concat_proc = await asyncio.create_subprocess_exec(
+                        *concat_cmd,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    await asyncio.wait_for(concat_proc.wait(), timeout=120)
+                    if concat_proc.returncode == 0 and os.path.exists(merged_path):
+                        # Replace source with merged file
+                        os.replace(merged_path, video_path)
+                        file_size = os.path.getsize(video_path)
+                        logger.info(f"[export-job {job_id}] Merged {len(concat_parts)} segments: {file_size/1024/1024:.1f} MB")
+                    else:
+                        logger.warning(f"[export-job {job_id}] Concat failed, using original")
 
         # ── Step 2: Generate ASS subtitle file ──
         _update_job(job_id, status="encoding", progress_pct=15)
@@ -1788,9 +1858,11 @@ async def export_subtitled_clip(
     })
 
     # Launch background task
+    split_segs = [s.dict() if hasattr(s, 'dict') else s for s in req.split_segments] if req.split_segments else None
     asyncio.create_task(_run_export_job(
         job_id, video_id, req.clip_url, cap_dicts,
         req.style, req.position_x, req.position_y, req.time_start,
+        split_segments=split_segs,
     ))
 
     return {

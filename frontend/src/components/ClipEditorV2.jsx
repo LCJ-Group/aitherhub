@@ -189,6 +189,8 @@ const SUBTITLE_PRESET_ORDER = ['simple', 'box', 'outline', 'pop', 'gradient', 'k
 const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
   const videoRef = useRef(null);
   const timelineRef = useRef(null);
+  const waveformCanvasRef = useRef(null);
+  const waveformContainerRef = useRef(null);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -230,6 +232,15 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
 
   // Subtitle timing offset (seconds): positive = delay subtitles, negative = advance
   const [captionOffset, setCaptionOffset] = useState(0);
+
+  // ─── Waveform & Split state ──────────────────────────────────
+  const [waveformData, setWaveformData] = useState(null); // Float32Array of amplitudes
+  const [waveformLoading, setWaveformLoading] = useState(false);
+  const [silentRegions, setSilentRegions] = useState([]); // [{start, end}] in seconds
+  const [splitPoints, setSplitPoints] = useState([]); // [seconds] sorted
+  const [disabledSegments, setDisabledSegments] = useState(new Set()); // Set of segment indices
+  const [hoveredSegIdx, setHoveredSegIdx] = useState(null);
+  const [timelineCursorPos, setTimelineCursorPos] = useState(null); // mouse X position on timeline
 
   const clipDur = trimEnd - trimStart;
 
@@ -526,6 +537,252 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
   const setSpeed = useCallback((r) => {
     setPlaybackRate(r);
     if (videoRef.current) videoRef.current.playbackRate = r;
+  }, []);
+
+  // ─── Waveform extraction (Web Audio API) ──────────────────────
+  const extractWaveform = useCallback(async () => {
+    if (!videoUrl || waveformLoading || waveformData) return;
+    setWaveformLoading(true);
+    try {
+      const response = await fetch(videoUrl);
+      const arrayBuffer = await response.arrayBuffer();
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+      const rawData = audioBuffer.getChannelData(0);
+      const sampleRate = audioBuffer.sampleRate;
+      const audioDuration = audioBuffer.duration;
+
+      // Downsample to ~500 samples for display
+      const SAMPLES = 500;
+      const blockSize = Math.floor(rawData.length / SAMPLES);
+      const peaks = new Float32Array(SAMPLES);
+      for (let i = 0; i < SAMPLES; i++) {
+        let sum = 0;
+        const start = i * blockSize;
+        for (let j = 0; j < blockSize; j++) {
+          sum += Math.abs(rawData[start + j] || 0);
+        }
+        peaks[i] = sum / blockSize;
+      }
+      // Normalize to 0-1
+      const maxPeak = Math.max(...peaks) || 1;
+      for (let i = 0; i < SAMPLES; i++) peaks[i] /= maxPeak;
+      setWaveformData(peaks);
+
+      // Detect silent regions (amplitude < threshold for > 0.5s)
+      const SILENCE_THRESHOLD = 0.05;
+      const MIN_SILENCE_DURATION = 0.5; // seconds
+      const silences = [];
+      let silStart = null;
+      const samplesPerSec = SAMPLES / audioDuration;
+      for (let i = 0; i < SAMPLES; i++) {
+        if (peaks[i] < SILENCE_THRESHOLD) {
+          if (silStart === null) silStart = i;
+        } else {
+          if (silStart !== null) {
+            const startSec = silStart / samplesPerSec;
+            const endSec = i / samplesPerSec;
+            if (endSec - startSec >= MIN_SILENCE_DURATION) {
+              silences.push({ start: startSec, end: endSec });
+            }
+            silStart = null;
+          }
+        }
+      }
+      if (silStart !== null) {
+        const startSec = silStart / samplesPerSec;
+        const endSec = audioDuration;
+        if (endSec - startSec >= MIN_SILENCE_DURATION) {
+          silences.push({ start: startSec, end: endSec });
+        }
+      }
+      setSilentRegions(silences);
+      audioCtx.close();
+      console.log(`[Waveform] Extracted ${SAMPLES} samples, ${silences.length} silent regions`);
+    } catch (e) {
+      console.warn('[Waveform] Extraction failed:', e);
+    } finally {
+      setWaveformLoading(false);
+    }
+  }, [videoUrl, waveformLoading, waveformData]);
+
+  // Auto-extract waveform when video is ready
+  useEffect(() => {
+    if (videoReady && videoUrl && !waveformData && !waveformLoading) {
+      extractWaveform();
+    }
+  }, [videoReady, videoUrl, waveformData, waveformLoading, extractWaveform]);
+
+  // ─── Draw waveform on canvas ──────────────────────────────────
+  useEffect(() => {
+    const canvas = waveformCanvasRef.current;
+    if (!canvas || !waveformData || !duration) return;
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width;
+    const H = canvas.height;
+    ctx.clearRect(0, 0, W, H);
+
+    const samples = waveformData.length;
+    const barW = W / samples;
+
+    // Draw silent region backgrounds
+    ctx.fillStyle = 'rgba(239, 68, 68, 0.12)';
+    for (const sr of silentRegions) {
+      const x1 = (sr.start / duration) * W;
+      const x2 = (sr.end / duration) * W;
+      ctx.fillRect(x1, 0, x2 - x1, H);
+    }
+
+    // Draw disabled segments
+    if (splitPoints.length > 0) {
+      const allPoints = [0, ...splitPoints, duration];
+      for (let i = 0; i < allPoints.length - 1; i++) {
+        if (disabledSegments.has(i)) {
+          const x1 = (allPoints[i] / duration) * W;
+          const x2 = (allPoints[i + 1] / duration) * W;
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+          ctx.fillRect(x1, 0, x2 - x1, H);
+        }
+      }
+    }
+
+    // Draw waveform bars
+    for (let i = 0; i < samples; i++) {
+      const amp = waveformData[i];
+      const x = i * barW;
+      const barH = Math.max(1, amp * H * 0.9);
+      const timeSec = (i / samples) * duration;
+
+      // Check if this sample is in a silent region
+      const isSilent = silentRegions.some(sr => timeSec >= sr.start && timeSec <= sr.end);
+      // Check if this sample is in a disabled segment
+      let isDisabled = false;
+      if (splitPoints.length > 0) {
+        const allPoints = [0, ...splitPoints, duration];
+        for (let si = 0; si < allPoints.length - 1; si++) {
+          if (disabledSegments.has(si) && timeSec >= allPoints[si] && timeSec < allPoints[si + 1]) {
+            isDisabled = true;
+            break;
+          }
+        }
+      }
+
+      if (isDisabled) {
+        ctx.fillStyle = 'rgba(100, 100, 120, 0.3)';
+      } else if (isSilent) {
+        ctx.fillStyle = 'rgba(239, 68, 68, 0.4)';
+      } else {
+        ctx.fillStyle = amp > 0.6 ? 'rgba(16, 185, 129, 0.8)' : amp > 0.3 ? 'rgba(99, 102, 241, 0.7)' : 'rgba(136, 136, 170, 0.5)';
+      }
+      ctx.fillRect(x, H - barH, barW - 0.5, barH);
+    }
+
+    // Draw split point lines
+    ctx.strokeStyle = '#FFE135';
+    ctx.lineWidth = 2;
+    for (const sp of splitPoints) {
+      const x = (sp / duration) * W;
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, H);
+      ctx.stroke();
+    }
+
+    // Draw playhead
+    if (currentTime >= 0) {
+      const px = (currentTime / duration) * W;
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(px, 0);
+      ctx.lineTo(px, H);
+      ctx.stroke();
+    }
+
+    // Draw cursor position
+    if (timelineCursorPos !== null) {
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.moveTo(timelineCursorPos, 0);
+      ctx.lineTo(timelineCursorPos, H);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }, [waveformData, duration, silentRegions, splitPoints, disabledSegments, currentTime, timelineCursorPos]);
+
+  // ─── Split segments helper ────────────────────────────────────
+  const splitSegments = useMemo(() => {
+    if (splitPoints.length === 0) return [];
+    const allPoints = [0, ...splitPoints, duration || 0];
+    return allPoints.slice(0, -1).map((start, i) => ({
+      index: i,
+      start,
+      end: allPoints[i + 1],
+      enabled: !disabledSegments.has(i),
+    }));
+  }, [splitPoints, duration, disabledSegments]);
+
+  // ─── Keyboard shortcut: W to split ────────────────────────────
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      // Don't trigger if user is typing in an input/textarea
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      if (e.key === 'w' || e.key === 'W') {
+        e.preventDefault();
+        if (!duration || currentTime <= 0 || currentTime >= duration) return;
+        // Don't add duplicate split points (within 0.5s)
+        const isDuplicate = splitPoints.some(sp => Math.abs(sp - currentTime) < 0.5);
+        if (isDuplicate) return;
+        setSplitPoints(prev => [...prev, Math.round(currentTime * 10) / 10].sort((a, b) => a - b));
+        console.log(`[Split] Added split at ${currentTime.toFixed(1)}s`);
+      }
+      // Delete/Backspace to remove last split point
+      if (e.key === 'Backspace' && e.ctrlKey) {
+        e.preventDefault();
+        setSplitPoints(prev => prev.slice(0, -1));
+        setDisabledSegments(new Set());
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [duration, currentTime, splitPoints]);
+
+  // ─── Toggle segment enabled/disabled ──────────────────────────
+  const toggleSegment = useCallback((segIdx) => {
+    setDisabledSegments(prev => {
+      const next = new Set(prev);
+      if (next.has(segIdx)) next.delete(segIdx);
+      else next.add(segIdx);
+      return next;
+    });
+  }, []);
+
+  // ─── Remove a split point ─────────────────────────────────────
+  const removeSplitPoint = useCallback((splitTime) => {
+    setSplitPoints(prev => prev.filter(sp => Math.abs(sp - splitTime) > 0.3));
+    setDisabledSegments(new Set());
+  }, []);
+
+  // ─── Waveform click to seek ───────────────────────────────────
+  const onWaveformClick = useCallback((e) => {
+    const container = waveformContainerRef.current;
+    if (!container || !duration) return;
+    const rect = container.getBoundingClientRect();
+    const t = Math.max(0, Math.min(duration, ((e.clientX - rect.left) / rect.width) * duration));
+    seek(t);
+  }, [duration, seek]);
+
+  const onWaveformMouseMove = useCallback((e) => {
+    const container = waveformContainerRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    setTimelineCursorPos(e.clientX - rect.left);
+  }, []);
+
+  const onWaveformMouseLeave = useCallback(() => {
+    setTimelineCursorPos(null);
   }, []);
 
   // ─── Timeline ──────────────────────────────────────────────────
@@ -957,6 +1214,13 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                     position_x: subtitlePos.x,
                     position_y: subtitlePos.y,
                     time_start: clip.time_start || origStart,
+                    ...(splitPoints.length > 0 ? {
+                      split_segments: splitSegments.map(s => ({
+                        start: s.start,
+                        end: s.end,
+                        enabled: s.enabled,
+                      }))
+                    } : {}),
                   }, {
                     onProgress: (st, pct) => {
                       setExportProgress(pct || 0);
@@ -2142,6 +2406,152 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                 boxShadow: "0 0 4px rgba(255,255,255,0.5)",
               }}
             />
+          )}
+        </div>
+
+        {/* ═══ WAVEFORM + SPLIT UI ═══ */}
+        <div
+          ref={waveformContainerRef}
+          onClick={onWaveformClick}
+          onMouseMove={onWaveformMouseMove}
+          onMouseLeave={onWaveformMouseLeave}
+          style={{
+            position: 'relative',
+            height: 48,
+            backgroundColor: C.bg,
+            borderRadius: 4,
+            overflow: 'hidden',
+            cursor: 'pointer',
+            marginBottom: 4,
+            border: `1px solid ${C.border}`,
+          }}
+        >
+          {waveformData ? (
+            <canvas
+              ref={waveformCanvasRef}
+              width={1000}
+              height={96}
+              style={{ width: '100%', height: '100%' }}
+            />
+          ) : (
+            <div style={{
+              width: '100%', height: '100%',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              color: C.textDim, fontSize: 11,
+            }}>
+              {waveformLoading ? '波形読み込み中...' : '波形なし'}
+            </div>
+          )}
+          {/* Split point markers on waveform */}
+          {splitPoints.map((sp, i) => (
+            <div
+              key={`sp${i}`}
+              onClick={(e) => { e.stopPropagation(); removeSplitPoint(sp); }}
+              style={{
+                position: 'absolute',
+                top: 0,
+                bottom: 0,
+                left: `${(sp / (duration || 1)) * 100}%`,
+                width: 3,
+                backgroundColor: '#FFE135',
+                cursor: 'pointer',
+                zIndex: 3,
+                transform: 'translateX(-1.5px)',
+              }}
+              title={`分割点 ${fmt(sp)} (クリックで削除)`}
+            />
+          ))}
+          {/* Segment labels */}
+          {splitSegments.map((seg) => (
+            <div
+              key={`seg${seg.index}`}
+              onClick={(e) => { e.stopPropagation(); toggleSegment(seg.index); }}
+              onMouseEnter={() => setHoveredSegIdx(seg.index)}
+              onMouseLeave={() => setHoveredSegIdx(null)}
+              style={{
+                position: 'absolute',
+                bottom: 0,
+                left: `${(seg.start / (duration || 1)) * 100}%`,
+                width: `${((seg.end - seg.start) / (duration || 1)) * 100}%`,
+                height: 14,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: 9,
+                fontWeight: 600,
+                color: seg.enabled ? '#fff' : '#888',
+                backgroundColor: !seg.enabled
+                  ? 'rgba(239, 68, 68, 0.3)'
+                  : hoveredSegIdx === seg.index
+                    ? 'rgba(99, 102, 241, 0.4)'
+                    : 'rgba(99, 102, 241, 0.15)',
+                cursor: 'pointer',
+                borderRight: '1px solid rgba(255,255,255,0.1)',
+                transition: 'background-color 0.15s ease',
+                userSelect: 'none',
+                overflow: 'hidden',
+                textDecoration: !seg.enabled ? 'line-through' : 'none',
+              }}
+              title={seg.enabled ? `クリックで削除: ${fmt(seg.start)}-${fmt(seg.end)}` : `クリックで復元: ${fmt(seg.start)}-${fmt(seg.end)}`}
+            >
+              {fmt(seg.start)}-{fmt(seg.end)}
+            </div>
+          ))}
+        </div>
+
+        {/* Split info bar */}
+        {splitPoints.length > 0 && (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            marginBottom: 4,
+            padding: '3px 8px',
+            backgroundColor: C.surfaceLight,
+            borderRadius: 4,
+            fontSize: 10,
+          }}>
+            <span style={{ color: '#FFE135', fontWeight: 700 }}>✂ {splitPoints.length}分割</span>
+            <span style={{ color: C.textMuted }}>
+              {splitSegments.filter(s => s.enabled).length}/{splitSegments.length}セグメント有効
+            </span>
+            {disabledSegments.size > 0 && (
+              <span style={{ color: C.red, fontWeight: 600 }}>
+                削除: {splitSegments.filter(s => !s.enabled).map(s => `${fmt(s.start)}-${fmt(s.end)}`).join(', ')}
+              </span>
+            )}
+            <div style={{ flex: 1 }} />
+            <button
+              onClick={() => { setSplitPoints([]); setDisabledSegments(new Set()); }}
+              style={{
+                padding: '2px 8px',
+                border: `1px solid ${C.border}`,
+                borderRadius: 4,
+                backgroundColor: C.bg,
+                color: C.textMuted,
+                fontSize: 10,
+                cursor: 'pointer',
+              }}
+            >
+              全リセット
+            </button>
+          </div>
+        )}
+
+        {/* Shortcut hint */}
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          marginBottom: 4,
+          fontSize: 10,
+          color: C.textDim,
+        }}>
+          <span><kbd style={{ padding: '1px 5px', backgroundColor: C.surfaceLight, borderRadius: 3, border: `1px solid ${C.border}`, fontSize: 10, fontWeight: 700, color: '#FFE135' }}>W</kbd> 分割</span>
+          <span>セグメントクリックで削除/復元</span>
+          <span>黄色線クリックで分割点削除</span>
+          {silentRegions.length > 0 && (
+            <span style={{ color: C.red }}>赤 = 無音区間 ({silentRegions.length}箇所)</span>
           )}
         </div>
 
