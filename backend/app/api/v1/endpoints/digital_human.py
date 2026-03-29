@@ -69,6 +69,11 @@ from app.services.elevenlabs_tts_service import (
     ElevenLabsTTSService,
     ElevenLabsError,
 )
+from app.services.heygen_service import (
+    HeyGenService,
+    HeyGenError,
+    get_heygen_service,
+)
 from app.services.hybrid_livestream_service import HybridLivestreamService
 from app.services.script_generator_service import (
     generate_liveroom_scripts,
@@ -103,6 +108,7 @@ async def verify_admin_key(x_admin_key: str = Header(...)):
 _tencent_service: Optional[TencentDigitalHumanService] = None
 _elevenlabs_service: Optional[ElevenLabsTTSService] = None
 _hybrid_service: Optional[HybridLivestreamService] = None
+_heygen_service: Optional[HeyGenService] = None
 
 
 def get_tencent_service() -> TencentDigitalHumanService:
@@ -2378,24 +2384,95 @@ async def _upload_video_to_blob(video_bytes: bytes, job_id: str) -> str:
 async def _generate_lipsync_video(
     portrait_url: str,
     audio_url: str,
-    engine: str = "musetalk",
+    engine: str = "heygen",
     portrait_type: str = "image",
-    max_wait_sec: int = 180,
+    max_wait_sec: int = 300,
+    talking_photo_id: str = "",
 ) -> Optional[str]:
     """
-    Generate a lip-synced video using MuseTalk or IMTalker.
-    Works with both Serverless and Legacy Pod modes transparently.
+    Generate a lip-synced video.
 
-    Serverless mode: Uses service.imtalker_generate/generate → polls with
-    runpod_job_id → gets output_url from RunPod → downloads → uploads to Azure.
-    Pod mode: Uses service._request → polls → downloads → uploads to Azure.
+    Engine priority:
+      1. "heygen" (default) — HeyGen Studio Video API (cloud, stable, Arcads-level)
+      2. "musetalk" / "imtalker" — RunPod GPU Worker (legacy fallback)
 
-    Returns Azure Blob SAS URL or None on failure.
+    Returns video URL or None on failure.
     """
     import uuid
     import asyncio
     import httpx
 
+    # ── HeyGen Engine (Primary) ──────────────────────────────────────
+    if engine == "heygen":
+        try:
+            heygen = get_heygen_service()
+            if not heygen.api_key:
+                logger.warning("[AutoPilot LipSync] HEYGEN_API_KEY not set, falling back to musetalk")
+                return await _generate_lipsync_video(
+                    portrait_url=portrait_url,
+                    audio_url=audio_url,
+                    engine="musetalk",
+                    portrait_type=portrait_type,
+                    max_wait_sec=max_wait_sec,
+                )
+
+            # Ensure audio URL has SAS token for HeyGen to access
+            audio_sas = _ensure_sas_url(audio_url)
+
+            # Get or create talking_photo_id
+            if not talking_photo_id:
+                portrait_sas = _ensure_sas_url(portrait_url)
+                talking_photo_id = await heygen.create_photo_avatar(
+                    image_url=portrait_sas,
+                    name=f"AitherHub-{uuid.uuid4().hex[:6]}",
+                )
+
+            if not talking_photo_id:
+                logger.error("[AutoPilot LipSync] Failed to create HeyGen photo avatar")
+                return None
+
+            # Generate video and wait for completion
+            video_url = await heygen.generate_and_wait(
+                talking_photo_id=talking_photo_id,
+                audio_url=audio_sas,
+                dimension={"width": 1080, "height": 1920},
+                title=f"AutoPilot-{uuid.uuid4().hex[:8]}",
+                max_wait_sec=max_wait_sec,
+                poll_interval=5,
+            )
+
+            if video_url:
+                # Download HeyGen video and re-upload to Azure Blob for persistence
+                # (HeyGen URLs expire after 7 days)
+                try:
+                    async with httpx.AsyncClient(timeout=120) as client:
+                        dl_resp = await client.get(video_url)
+                        dl_resp.raise_for_status()
+                        video_bytes = dl_resp.content
+
+                    job_id = f"heygen-{uuid.uuid4().hex[:10]}"
+                    blob_url = await _upload_video_to_blob(video_bytes, job_id)
+                    azure_url = _ensure_sas_url(blob_url)
+                    logger.info(
+                        f"[AutoPilot LipSync HeyGen] Video ready: {azure_url[:80]}... "
+                        f"({len(video_bytes)} bytes)"
+                    )
+                    return azure_url
+                except Exception as dl_err:
+                    logger.warning(
+                        f"[AutoPilot LipSync HeyGen] Failed to re-upload to Azure: {dl_err}. "
+                        f"Returning HeyGen URL directly."
+                    )
+                    return video_url
+            else:
+                logger.error("[AutoPilot LipSync HeyGen] Video generation failed or timed out")
+                return None
+
+        except Exception as e:
+            logger.error(f"[AutoPilot LipSync HeyGen] Error: {e}")
+            return None
+
+    # ── MuseTalk / IMTalker Engine (Legacy Fallback) ─────────────────
     job_id = f"ap-{uuid.uuid4().hex[:10]}"
 
     try:
@@ -2766,39 +2843,48 @@ async def autopilot_next(
         if not script_text:
             script_text = f"この{product_name}は本当に素晴らしい商品です！"
 
-        # Generate TTS audio — two formats in parallel:
-        # 1. MP3 for immediate browser playback (fast response)
-        # 2. PCM→WAV for GPU Worker lip-sync (background task)
+        # Generate TTS audio
+        # HeyGen accepts MP3 directly — no need for PCM/WAV conversion
+        # MuseTalk fallback still needs WAV, but we only generate it if needed
         import asyncio as _asyncio
         el_service = get_elevenlabs_service()
         voice_id = req.voice_id or session.get("voice_id")
         audio_id = f"script-{int(time.time())}"
+        lipsync_engine_check = session.get("engine", "heygen")
 
-        # Parallel TTS: MP3 + PCM
-        mp3_task = el_service.text_to_speech(
-            text=script_text,
-            voice_id=voice_id,
-            output_format="mp3_44100_128",
-            language_code=req.language,
-        )
-        pcm_task = el_service.text_to_speech(
-            text=script_text,
-            voice_id=voice_id,
-            output_format="pcm_16000",
-            language_code=req.language,
-        )
-        mp3_audio, pcm_audio = await _asyncio.gather(mp3_task, pcm_task)
-
-        wav_audio = _pcm_to_wav(pcm_audio, sample_rate=16000)
-        tts_duration_ms = len(pcm_audio) / (16000 * 2) * 1000
-
-        # Upload both in parallel
-        wav_upload = _upload_audio_to_blob(wav_audio, audio_id)
-        mp3_upload = _upload_mp3_to_blob(mp3_audio, audio_id)
-        wav_blob_url, mp3_blob_url = await _asyncio.gather(wav_upload, mp3_upload)
-
-        wav_audio_url = _ensure_sas_url(wav_blob_url)
-        mp3_audio_url = _ensure_sas_url(mp3_blob_url)
+        if lipsync_engine_check in ("musetalk", "imtalker"):
+            # Legacy: need both MP3 + PCM→WAV
+            mp3_task = el_service.text_to_speech(
+                text=script_text,
+                voice_id=voice_id,
+                output_format="mp3_44100_128",
+                language_code=req.language,
+            )
+            pcm_task = el_service.text_to_speech(
+                text=script_text,
+                voice_id=voice_id,
+                output_format="pcm_16000",
+                language_code=req.language,
+            )
+            mp3_audio, pcm_audio = await _asyncio.gather(mp3_task, pcm_task)
+            wav_audio = _pcm_to_wav(pcm_audio, sample_rate=16000)
+            tts_duration_ms = len(pcm_audio) / (16000 * 2) * 1000
+            wav_upload = _upload_audio_to_blob(wav_audio, audio_id)
+            mp3_upload = _upload_mp3_to_blob(mp3_audio, audio_id)
+            wav_blob_url, mp3_blob_url = await _asyncio.gather(wav_upload, mp3_upload)
+            wav_audio_url = _ensure_sas_url(wav_blob_url)
+            mp3_audio_url = _ensure_sas_url(mp3_blob_url)
+        else:
+            # HeyGen: MP3 only (faster — single TTS call)
+            mp3_audio = await el_service.text_to_speech(
+                text=script_text,
+                voice_id=voice_id,
+                output_format="mp3_44100_128",
+                language_code=req.language,
+            )
+            tts_duration_ms = len(mp3_audio) / 16.0  # 128kbps = 16 bytes/ms
+            mp3_blob_url = await _upload_mp3_to_blob(mp3_audio, audio_id)
+            mp3_audio_url = _ensure_sas_url(mp3_blob_url)
 
         # ── Async Lip-Sync Video Generation ──────────────────────────
         # Instead of blocking for 30-180s waiting for GPU Worker,
@@ -2806,7 +2892,7 @@ async def autopilot_next(
         # in the background. The video is cached in the session and
         # returned with the NEXT autopilot/next call.
         portrait_url = session.get("portrait_url", "")
-        lipsync_engine = session.get("engine", "musetalk")
+        lipsync_engine = session.get("engine", "heygen")
 
         # Check if a previously generated lip-sync video is ready
         cached_video_url = autopilot.pop("_cached_video_url", None)
@@ -2821,7 +2907,10 @@ async def autopilot_next(
                 f"engine={lipsync_engine}, portrait={portrait_url[:60]}..."
             )
 
-            async def _bg_lipsync(sess, ap, p_url, a_url, eng, p_type):
+            # Get cached talking_photo_id to avoid re-creating avatar each time
+            cached_talking_photo_id = autopilot.get("_heygen_talking_photo_id", "")
+
+            async def _bg_lipsync(sess, ap, p_url, a_url, eng, p_type, tp_id):
                 """Background task: generate lip-sync video and cache in session."""
                 try:
                     video_url = await _generate_lipsync_video(
@@ -2829,7 +2918,8 @@ async def autopilot_next(
                         audio_url=a_url,
                         engine=eng,
                         portrait_type=p_type,
-                        max_wait_sec=180,
+                        max_wait_sec=300,
+                        talking_photo_id=tp_id,
                     )
                     if video_url:
                         ap["_cached_video_url"] = video_url
@@ -2842,8 +2932,8 @@ async def autopilot_next(
             import asyncio
             asyncio.create_task(
                 _bg_lipsync(
-                    session, autopilot, portrait_url, wav_audio_url,
-                    lipsync_engine, portrait_type,
+                    session, autopilot, portrait_url, mp3_audio_url,
+                    lipsync_engine, portrait_type, cached_talking_photo_id,
                 )
             )
 
