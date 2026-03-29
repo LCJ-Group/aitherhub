@@ -609,3 +609,54 @@ async def ensure_persona_tables():
         logger.warning("Timeout (30s) while ensuring persona tables on startup")
     except Exception as e:
         logger.warning(f"Failed to ensure persona tables on startup: {e}")
+
+
+@app.on_event("startup")
+async def ensure_script_generations_table():
+    """Ensure script_generations table exists for script scoring/learning."""
+    try:
+        from app.core.db import engine
+        from sqlalchemy import text as _text
+
+        async with asyncio.timeout(30):
+          async with engine.begin() as conn:
+            await conn.execute(_text("""
+                CREATE TABLE IF NOT EXISTS script_generations (
+                    id VARCHAR(36) PRIMARY KEY,
+                    user_email VARCHAR(255),
+                    product_name VARCHAR(200) NOT NULL,
+                    product_description TEXT,
+                    original_price VARCHAR(100),
+                    discounted_price VARCHAR(100),
+                    benefits TEXT,
+                    target_audience VARCHAR(500),
+                    tone VARCHAR(50) DEFAULT 'professional_friendly',
+                    language VARCHAR(10) DEFAULT 'ja',
+                    duration_minutes INT DEFAULT 10,
+                    generated_script TEXT NOT NULL,
+                    char_count INT,
+                    model_used VARCHAR(100),
+                    patterns_used JSONB,
+                    product_analysis JSONB,
+                    rating INT,
+                    rating_comment TEXT,
+                    rating_good_tags JSONB,
+                    rating_bad_tags JSONB,
+                    rated_at TIMESTAMPTZ,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """))
+            await conn.execute(_text("""
+                CREATE INDEX IF NOT EXISTS idx_sg_created_at ON script_generations (created_at DESC)
+            """))
+            await conn.execute(_text("""
+                CREATE INDEX IF NOT EXISTS idx_sg_rating ON script_generations (rating) WHERE rating IS NOT NULL
+            """))
+            await conn.execute(_text("""
+                CREATE INDEX IF NOT EXISTS idx_sg_user_email ON script_generations (user_email)
+            """))
+        logger.info("script_generations table verified/created successfully")
+    except asyncio.TimeoutError:
+        logger.warning("Timeout (30s) while ensuring script_generations table on startup")
+    except Exception as e:
+        logger.warning(f"Failed to ensure script_generations table on startup: {e}")

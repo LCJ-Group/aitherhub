@@ -59,8 +59,17 @@ class ScriptGenerateRequest(BaseModel):
     additional_instructions: Optional[str] = Field(None, max_length=1000, description="Any extra instructions")
 
 
+class ScriptRateRequest(BaseModel):
+    """Request body for rating a generated script."""
+    rating: int = Field(..., ge=1, le=5, description="Star rating 1-5")
+    comment: Optional[str] = Field(None, max_length=2000, description="Free-form comment")
+    good_tags: Optional[List[str]] = Field(None, description="Good point tags")
+    bad_tags: Optional[List[str]] = Field(None, description="Bad point tags")
+
+
 class ScriptGenerateResponse(BaseModel):
     """Response for script generation."""
+    script_id: Optional[str] = None
     script: str
     char_count: int
     estimated_duration_minutes: float
@@ -338,26 +347,81 @@ async def generate_standalone_script(
     if feedback_knowledge:
         feedback_stats = feedback_knowledge.get("stats", {})
 
+    patterns_used_data = {
+        "cross_video_patterns": bool(cross_patterns),
+        "videos_in_cross_analysis": cross_patterns.get("videos_analyzed", 0) if cross_patterns else 0,
+        "cta_patterns_found": len(cross_patterns.get("cta_phrases", [])) if cross_patterns else 0,
+        "feedback_knowledge_used": bool(feedback_knowledge),
+        "feedback_total_rated": feedback_stats.get("total_rated", 0),
+        "feedback_winning_patterns": len(feedback_knowledge.get("winning_patterns", [])) if feedback_knowledge else 0,
+        "feedback_losing_patterns": len(feedback_knowledge.get("losing_patterns", [])) if feedback_knowledge else 0,
+        "product_image_analyzed": bool(product_analysis),
+        "images_analyzed_count": images_analyzed_count,
+    }
+    data_insights_data = {
+        "cta_phrases": cross_patterns.get("cta_phrases", [])[:5] if cross_patterns else [],
+        "duration_insights": cross_patterns.get("product_durations", [])[:5] if cross_patterns else [],
+        "top_techniques": cross_patterns.get("top_techniques", [])[:5] if cross_patterns else [],
+    }
+
+    # Save to DB for scoring/learning
+    script_id = None
+    try:
+        import uuid
+        script_id = str(uuid.uuid4())
+        user_email = current_user.get("email", "anonymous")
+        await db.execute(
+            text("""
+                INSERT INTO script_generations (
+                    id, user_email, product_name, product_description,
+                    original_price, discounted_price, benefits,
+                    target_audience, tone, language, duration_minutes,
+                    generated_script, char_count, model_used,
+                    patterns_used, product_analysis, created_at
+                ) VALUES (
+                    :id, :user_email, :product_name, :product_description,
+                    :original_price, :discounted_price, :benefits,
+                    :target_audience, :tone, :language, :duration_minutes,
+                    :generated_script, :char_count, :model_used,
+                    :patterns_used, :product_analysis, NOW()
+                )
+            """),
+            {
+                "id": script_id,
+                "user_email": user_email,
+                "product_name": body.product_name,
+                "product_description": body.product_description,
+                "original_price": body.original_price or body.product_price,
+                "discounted_price": body.discounted_price,
+                "benefits": body.benefits,
+                "target_audience": body.target_audience,
+                "tone": body.tone,
+                "language": body.language,
+                "duration_minutes": body.duration_minutes,
+                "generated_script": script,
+                "char_count": char_count,
+                "model_used": model_used,
+                "patterns_used": json.dumps(patterns_used_data),
+                "product_analysis": json.dumps(product_analysis) if product_analysis else None,
+            },
+        )
+        await db.commit()
+        logger.info(f"Script generation saved to DB: {script_id}")
+    except Exception as e:
+        logger.warning(f"Failed to save script generation to DB: {e}")
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+        script_id = None
+
     return ScriptGenerateResponse(
+        script_id=script_id,
         script=script,
         char_count=char_count,
         estimated_duration_minutes=estimated_duration,
-        patterns_used={
-            "cross_video_patterns": bool(cross_patterns),
-            "videos_in_cross_analysis": cross_patterns.get("videos_analyzed", 0) if cross_patterns else 0,
-            "cta_patterns_found": len(cross_patterns.get("cta_phrases", [])) if cross_patterns else 0,
-            "feedback_knowledge_used": bool(feedback_knowledge),
-            "feedback_total_rated": feedback_stats.get("total_rated", 0),
-            "feedback_winning_patterns": len(feedback_knowledge.get("winning_patterns", [])) if feedback_knowledge else 0,
-            "feedback_losing_patterns": len(feedback_knowledge.get("losing_patterns", [])) if feedback_knowledge else 0,
-            "product_image_analyzed": bool(product_analysis),
-            "images_analyzed_count": images_analyzed_count,
-        },
-        data_insights={
-            "cta_phrases": cross_patterns.get("cta_phrases", [])[:5] if cross_patterns else [],
-            "duration_insights": cross_patterns.get("product_durations", [])[:5] if cross_patterns else [],
-            "top_techniques": cross_patterns.get("top_techniques", [])[:5] if cross_patterns else [],
-        },
+        patterns_used=patterns_used_data,
+        data_insights=data_insights_data,
         product_analysis=product_analysis,
         model=model_used,
     )
@@ -483,6 +547,207 @@ async def debug_patterns(
         result["errors"].append(f"feedback_knowledge: {str(e)}")
 
     return result
+
+
+# ──────────────────────────────────────────────
+# POST /script-generator/{script_id}/rate
+# ──────────────────────────────────────────────
+
+@router.post("/{script_id}/rate")
+async def rate_script(
+    script_id: str,
+    body: ScriptRateRequest,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Rate a generated script. Users can provide star rating (1-5),
+    good/bad tags, and a free-form comment.
+    """
+    # Verify script exists
+    result = await db.execute(
+        text("SELECT id FROM script_generations WHERE id = :id"),
+        {"id": script_id},
+    )
+    if not result.fetchone():
+        raise HTTPException(status_code=404, detail="Script not found")
+
+    try:
+        await db.execute(
+            text("""
+                UPDATE script_generations
+                SET rating = :rating,
+                    rating_comment = :comment,
+                    rating_good_tags = :good_tags,
+                    rating_bad_tags = :bad_tags,
+                    rated_at = NOW()
+                WHERE id = :id
+            """),
+            {
+                "id": script_id,
+                "rating": body.rating,
+                "comment": body.comment,
+                "good_tags": json.dumps(body.good_tags) if body.good_tags else None,
+                "bad_tags": json.dumps(body.bad_tags) if body.bad_tags else None,
+            },
+        )
+        await db.commit()
+        logger.info(f"Script {script_id} rated: {body.rating} stars")
+        return {"status": "ok", "script_id": script_id, "rating": body.rating}
+    except Exception as e:
+        logger.exception(f"Failed to rate script {script_id}: {e}")
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ──────────────────────────────────────────────
+# GET /script-generator/admin/generations (admin only)
+# ──────────────────────────────────────────────
+
+@router.get("/admin/generations")
+async def admin_list_script_generations(
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    rated_only: bool = Query(False),
+):
+    """Admin endpoint: list all script generations with ratings."""
+    expected_key = f"{os.getenv('ADMIN_ID', 'aither')}:{os.getenv('ADMIN_PASS', 'hub')}"
+    if x_admin_key != expected_key:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    try:
+        # Count total
+        count_sql = "SELECT COUNT(*) FROM script_generations"
+        if rated_only:
+            count_sql += " WHERE rating IS NOT NULL"
+        count_result = await db.execute(text(count_sql))
+        total = count_result.scalar() or 0
+
+        # Stats
+        stats_result = await db.execute(text("""
+            SELECT
+                COUNT(*) as total_generated,
+                COUNT(rating) as total_rated,
+                ROUND(AVG(rating)::numeric, 1) as avg_rating,
+                COUNT(CASE WHEN rating >= 4 THEN 1 END) as good_count,
+                COUNT(CASE WHEN rating <= 2 THEN 1 END) as bad_count,
+                ROUND(AVG(char_count)::numeric, 0) as avg_char_count
+            FROM script_generations
+        """))
+        stats_row = stats_result.fetchone()
+        stats = {
+            "total_generated": stats_row[0] if stats_row else 0,
+            "total_rated": stats_row[1] if stats_row else 0,
+            "avg_rating": float(stats_row[2]) if stats_row and stats_row[2] else None,
+            "good_count": stats_row[3] if stats_row else 0,
+            "bad_count": stats_row[4] if stats_row else 0,
+            "avg_char_count": int(stats_row[5]) if stats_row and stats_row[5] else 0,
+        }
+
+        # List
+        where_clause = "WHERE rating IS NOT NULL" if rated_only else ""
+        list_result = await db.execute(
+            text(f"""
+                SELECT id, user_email, product_name, original_price, discounted_price,
+                       char_count, model_used, rating, rating_comment,
+                       rating_good_tags, rating_bad_tags, rated_at, created_at
+                FROM script_generations
+                {where_clause}
+                ORDER BY created_at DESC
+                LIMIT :limit OFFSET :offset
+            """),
+            {"limit": limit, "offset": offset},
+        )
+        rows = list_result.fetchall()
+        generations = []
+        for r in rows:
+            generations.append({
+                "id": str(r[0]),
+                "user_email": r[1],
+                "product_name": r[2],
+                "original_price": r[3],
+                "discounted_price": r[4],
+                "char_count": r[5],
+                "model_used": r[6],
+                "rating": r[7],
+                "rating_comment": r[8],
+                "rating_good_tags": json.loads(r[9]) if r[9] else None,
+                "rating_bad_tags": json.loads(r[10]) if r[10] else None,
+                "rated_at": r[11].isoformat() if r[11] else None,
+                "created_at": r[12].isoformat() if r[12] else None,
+            })
+
+        return {
+            "total": total,
+            "stats": stats,
+            "generations": generations,
+        }
+    except Exception as e:
+        logger.exception(f"Admin list script generations failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/admin/generations/{gen_id}")
+async def admin_get_script_generation(
+    gen_id: str,
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Admin endpoint: get full details of a script generation."""
+    expected_key = f"{os.getenv('ADMIN_ID', 'aither')}:{os.getenv('ADMIN_PASS', 'hub')}"
+    if x_admin_key != expected_key:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    try:
+        result = await db.execute(
+            text("""
+                SELECT id, user_email, product_name, product_description,
+                       original_price, discounted_price, benefits,
+                       target_audience, tone, language, duration_minutes,
+                       generated_script, char_count, model_used,
+                       patterns_used, product_analysis,
+                       rating, rating_comment, rating_good_tags, rating_bad_tags,
+                       rated_at, created_at
+                FROM script_generations
+                WHERE id = :id
+            """),
+            {"id": gen_id},
+        )
+        r = result.fetchone()
+        if not r:
+            raise HTTPException(status_code=404, detail="Script generation not found")
+
+        return {
+            "id": str(r[0]),
+            "user_email": r[1],
+            "product_name": r[2],
+            "product_description": r[3],
+            "original_price": r[4],
+            "discounted_price": r[5],
+            "benefits": r[6],
+            "target_audience": r[7],
+            "tone": r[8],
+            "language": r[9],
+            "duration_minutes": r[10],
+            "generated_script": r[11],
+            "char_count": r[12],
+            "model_used": r[13],
+            "patterns_used": json.loads(r[14]) if r[14] else None,
+            "product_analysis": json.loads(r[15]) if r[15] else None,
+            "rating": r[16],
+            "rating_comment": r[17],
+            "rating_good_tags": json.loads(r[18]) if r[18] else None,
+            "rating_bad_tags": json.loads(r[19]) if r[19] else None,
+            "rated_at": r[20].isoformat() if r[20] else None,
+            "created_at": r[21].isoformat() if r[21] else None,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Admin get script generation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ──────────────────────────────────────────────

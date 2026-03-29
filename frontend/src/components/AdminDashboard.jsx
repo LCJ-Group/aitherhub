@@ -7,6 +7,7 @@ import AdminSystemErrors from "./admin/AdminSystemErrors";
 import AdminBugReports from "./admin/AdminBugReports";
 import AdminWorkLogs from "./admin/AdminWorkLogs";
 import AdminLessons from "./admin/AdminLessons";
+import AdminScriptGenerations from "./admin/AdminScriptGenerations";
 
 const ADMIN_ID = "aither";
 const ADMIN_PASS = "hub";
@@ -335,6 +336,16 @@ export default function AdminDashboard() {
           >
             🧠 Lessons
           </button>
+          <button
+            onClick={() => setActiveTab("script-generations")}
+            className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+              activeTab === "script-generations"
+                ? "bg-white text-orange-600 shadow-sm"
+                : "text-gray-500 hover:text-gray-700"
+            }`}
+          >
+            📝 台本学習
+          </button>
         </div>
 
         {activeTab === "dashboard" && (
@@ -419,6 +430,9 @@ export default function AdminDashboard() {
         )}
         {activeTab === "lessons" && (
           <AdminLessons adminKey={`${ADMIN_ID}:${ADMIN_PASS}`} />
+        )}
+        {activeTab === "script-generations" && (
+          <AdminScriptGenerations adminKey={`${ADMIN_ID}:${ADMIN_PASS}`} />
         )}
       </div>
     </div>

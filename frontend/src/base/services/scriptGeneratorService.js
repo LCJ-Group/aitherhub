@@ -66,6 +66,24 @@ class ScriptGeneratorService extends BaseApiService {
   }
 
   /**
+   * Rate a generated script.
+   * @param {string} scriptId - Script generation ID
+   * @param {Object} params
+   * @param {number} params.rating - Star rating 1-5
+   * @param {string} [params.comment] - Free-form comment
+   * @param {string[]} [params.good_tags] - Good point tags
+   * @param {string[]} [params.bad_tags] - Bad point tags
+   * @returns {Promise<Object>} { status, script_id, rating }
+   */
+  async rateScript(scriptId, params) {
+    const response = await this.client.post(
+      `/api/v1/script-generator/${scriptId}/rate`,
+      params
+    );
+    return response.data;
+  }
+
+  /**
    * Upload a product image to Azure Blob Storage.
    * @param {File} file - Image file to upload
    * @returns {Promise<string>} blob_url - The public URL of the uploaded image

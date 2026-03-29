@@ -19,6 +19,10 @@ import {
   Plus,
   Gift,
   Tag,
+  Star,
+  ThumbsUp,
+  ThumbsDown,
+  Send,
 } from "lucide-react";
 import scriptGeneratorService from "../base/services/scriptGeneratorService";
 
@@ -52,6 +56,15 @@ export default function ScriptGeneratorPage() {
   const [generatedScript, setGeneratedScript] = useState(null);
   const [error, setError] = useState(null);
   const [copied, setCopied] = useState(false);
+
+  // Rating state
+  const [ratingValue, setRatingValue] = useState(0);
+  const [ratingHover, setRatingHover] = useState(0);
+  const [ratingComment, setRatingComment] = useState("");
+  const [ratingGoodTags, setRatingGoodTags] = useState([]);
+  const [ratingBadTags, setRatingBadTags] = useState([]);
+  const [isSubmittingRating, setIsSubmittingRating] = useState(false);
+  const [ratingSubmitted, setRatingSubmitted] = useState(false);
 
   // Winning patterns preview
   const [patterns, setPatterns] = useState(null);
@@ -146,6 +159,12 @@ export default function ScriptGeneratorPage() {
     setIsGenerating(true);
     setError(null);
     setGeneratedScript(null);
+    setRatingValue(0);
+    setRatingHover(0);
+    setRatingComment("");
+    setRatingGoodTags([]);
+    setRatingBadTags([]);
+    setRatingSubmitted(false);
 
     // Upload all images first
     let imageUrls = [];
@@ -200,6 +219,39 @@ export default function ScriptGeneratorPage() {
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }, [generatedScript]);
+
+  // ── Submit Rating ──
+  const GOOD_TAG_OPTIONS = [
+    "構成が良い", "CTA効果的", "自然な話し方", "商品説明が的確",
+    "時間配分が良い", "視聴者交流が良い", "特典の訴求が良い"
+  ];
+  const BAD_TAG_OPTIONS = [
+    "内容が薄い", "不自然な表現", "CTA弱い", "商品説明不足",
+    "長すぎる", "短すぎる", "構成が悪い", "特典の訴求が弱い"
+  ];
+
+  const toggleTag = (tag, list, setter) => {
+    setter(prev => prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag]);
+  };
+
+  const handleSubmitRating = async () => {
+    if (!generatedScript?.script_id || ratingValue === 0) return;
+    setIsSubmittingRating(true);
+    try {
+      await scriptGeneratorService.rateScript(generatedScript.script_id, {
+        rating: ratingValue,
+        comment: ratingComment.trim() || undefined,
+        good_tags: ratingGoodTags.length > 0 ? ratingGoodTags : undefined,
+        bad_tags: ratingBadTags.length > 0 ? ratingBadTags : undefined,
+      });
+      setRatingSubmitted(true);
+    } catch (e) {
+      console.error("Rating submission failed:", e);
+      alert("評価の送信に失敗しました。もう一度お試しください。");
+    } finally {
+      setIsSubmittingRating(false);
+    }
+  };
 
   // ── Render formatted script (separate lines/dialogue/direction) ──
   const renderFormattedScript = (scriptText) => {
@@ -721,6 +773,142 @@ export default function ScriptGeneratorPage() {
                   </div>
                 )}
               </div>
+
+              {/* ── Rating Section ── */}
+              {generatedScript.script_id && (
+                <div className="bg-white rounded-xl border border-gray-200 overflow-hidden mt-4">
+                  <div className="px-4 py-3 border-b border-gray-100">
+                    <div className="flex items-center gap-2">
+                      <Star className="w-4 h-4 text-yellow-500" />
+                      <span className="text-sm font-semibold text-gray-800">この台本を評価</span>
+                      {ratingSubmitted && (
+                        <span className="ml-auto text-xs text-green-600 bg-green-50 px-2 py-0.5 rounded-full flex items-center gap-1">
+                          <Check className="w-3 h-3" /> 評価送信済み
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {ratingSubmitted ? (
+                    <div className="p-6 text-center">
+                      <div className="flex justify-center gap-1 mb-2">
+                        {[1,2,3,4,5].map(s => (
+                          <Star key={s} className={`w-6 h-6 ${s <= ratingValue ? 'text-yellow-400 fill-yellow-400' : 'text-gray-300'}`} />
+                        ))}
+                      </div>
+                      <p className="text-sm text-gray-600">ご評価ありがとうございます！AIの学習に活用されます。</p>
+                    </div>
+                  ) : (
+                    <div className="p-4 space-y-4">
+                      {/* Star Rating */}
+                      <div className="flex flex-col items-center gap-2">
+                        <div className="flex gap-1">
+                          {[1,2,3,4,5].map(s => (
+                            <button
+                              key={s}
+                              onClick={() => setRatingValue(s)}
+                              onMouseEnter={() => setRatingHover(s)}
+                              onMouseLeave={() => setRatingHover(0)}
+                              className="p-0.5 transition-transform hover:scale-110"
+                            >
+                              <Star className={`w-7 h-7 transition-colors ${
+                                s <= (ratingHover || ratingValue)
+                                  ? 'text-yellow-400 fill-yellow-400'
+                                  : 'text-gray-300 hover:text-yellow-200'
+                              }`} />
+                            </button>
+                          ))}
+                        </div>
+                        <span className="text-xs text-gray-500">
+                          {ratingValue === 0 ? '★をクリックして評価' :
+                           ratingValue === 1 ? '★ もう少し...' :
+                           ratingValue === 2 ? '★★ いまいち' :
+                           ratingValue === 3 ? '★★★ まあまあ' :
+                           ratingValue === 4 ? '★★★★ 良い！' :
+                           '★★★★★ 最高！'}
+                        </span>
+                      </div>
+
+                      {/* Good Tags */}
+                      {ratingValue >= 3 && (
+                        <div>
+                          <h5 className="text-xs font-medium text-gray-600 mb-1.5 flex items-center gap-1">
+                            <ThumbsUp className="w-3 h-3 text-green-500" /> 良かった点
+                          </h5>
+                          <div className="flex flex-wrap gap-1.5">
+                            {GOOD_TAG_OPTIONS.map(tag => (
+                              <button
+                                key={tag}
+                                onClick={() => toggleTag(tag, ratingGoodTags, setRatingGoodTags)}
+                                className={`px-2.5 py-1 rounded-full text-xs transition-colors ${
+                                  ratingGoodTags.includes(tag)
+                                    ? 'bg-green-100 text-green-700 border border-green-300'
+                                    : 'bg-gray-100 text-gray-600 hover:bg-green-50 border border-transparent'
+                                }`}
+                              >
+                                {tag}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Bad Tags */}
+                      {ratingValue > 0 && ratingValue <= 3 && (
+                        <div>
+                          <h5 className="text-xs font-medium text-gray-600 mb-1.5 flex items-center gap-1">
+                            <ThumbsDown className="w-3 h-3 text-red-500" /> 改善してほしい点
+                          </h5>
+                          <div className="flex flex-wrap gap-1.5">
+                            {BAD_TAG_OPTIONS.map(tag => (
+                              <button
+                                key={tag}
+                                onClick={() => toggleTag(tag, ratingBadTags, setRatingBadTags)}
+                                className={`px-2.5 py-1 rounded-full text-xs transition-colors ${
+                                  ratingBadTags.includes(tag)
+                                    ? 'bg-red-100 text-red-700 border border-red-300'
+                                    : 'bg-gray-100 text-gray-600 hover:bg-red-50 border border-transparent'
+                                }`}
+                              >
+                                {tag}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Comment */}
+                      {ratingValue > 0 && (
+                        <div>
+                          <textarea
+                            value={ratingComment}
+                            onChange={(e) => setRatingComment(e.target.value)}
+                            placeholder="コメント（任意）"
+                            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm resize-none focus:outline-none focus:ring-2 focus:ring-orange-300 focus:border-orange-300"
+                            rows={2}
+                          />
+                        </div>
+                      )}
+
+                      {/* Submit */}
+                      {ratingValue > 0 && (
+                        <button
+                          onClick={handleSubmitRating}
+                          disabled={isSubmittingRating}
+                          className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-gradient-to-r from-orange-500 to-red-500 text-white rounded-lg text-sm font-medium hover:from-orange-600 hover:to-red-600 transition-all disabled:opacity-50"
+                        >
+                          {isSubmittingRating ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <Send className="w-4 h-4" />
+                          )}
+                          評価を送信
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             ) : (
               /* Empty State */
               <div className="bg-white rounded-xl border border-gray-200 p-8 text-center">
