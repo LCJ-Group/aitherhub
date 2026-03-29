@@ -96,7 +96,7 @@ class RunPodProvider(GPUProvider):
 
     def __init__(self):
         self.api_key = os.getenv("RUNPOD_API_KEY", "") or "rpa_4YVI" + "WUNRIGH5SBN8AGW" + "403MFUIXFIAPBM4BVR5M312hgot"
-        self.endpoint_id = os.getenv("RUNPOD_ENDPOINT_ID", "") or "na9x7oolihdb2l"
+        self.endpoint_id = os.getenv("RUNPOD_ENDPOINT_ID", "") or "fajlhdhg2nbo0b"
         self._base_url = f"https://api.runpod.ai/v2/{self.endpoint_id}"
 
     @property

@@ -78,20 +78,39 @@ jobs:
           NEW_IMAGE="ghcr.io/lcj-group/aitherhub-gpu-worker:${SHA_SHORT}"
           echo "Deploying image: ${NEW_IMAGE}"
 
-          # Update RunPod template to use the new GHCR image
-          RESPONSE=$(curl -s -X POST "https://api.runpod.io/graphql?api_key=${RUNPOD_API_KEY}" \
+          # Update RunPod template via REST API (PATCH)
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X PATCH \
+            "https://rest.runpod.io/v1/templates/${RUNPOD_TEMPLATE_ID}" \
+            -H "Authorization: Bearer ${RUNPOD_API_KEY}" \
             -H "Content-Type: application/json" \
             -d "{
-              \"query\": \"mutation { saveTemplate(input: { id: \\\"${RUNPOD_TEMPLATE_ID}\\\", imageName: \\\"${NEW_IMAGE}\\\", containerRegistryAuthId: \\\"${RUNPOD_REGISTRY_AUTH_ID}\\\" }) { id imageName } }\"
+              \"imageName\": \"${NEW_IMAGE}\",
+              \"containerRegistryAuthId\": \"${RUNPOD_REGISTRY_AUTH_ID}\"
             }")
 
-          echo "RunPod API response: ${RESPONSE}"
+          HTTP_CODE=$(echo "${RESPONSE}" | tail -1)
+          BODY=$(echo "${RESPONSE}" | sed '$d')
 
-          # Verify the update
-          if echo "${RESPONSE}" | grep -q "errors"; then
-            echo "ERROR: Failed to update RunPod template"
-            echo "${RESPONSE}" | python3 -m json.tool 2>/dev/null || echo "${RESPONSE}"
-            exit 1
+          echo "HTTP Status: ${HTTP_CODE}"
+          echo "Response: ${BODY}"
+
+          if [ "${HTTP_CODE}" -ge 400 ]; then
+            echo "ERROR: REST API failed (HTTP ${HTTP_CODE}). Falling back to GraphQL..."
+
+            # Fallback: GraphQL mutation
+            RESPONSE=$(curl -s -X POST "https://api.runpod.io/graphql?api_key=${RUNPOD_API_KEY}" \
+              -H "Content-Type: application/json" \
+              -d "{
+                \"query\": \"mutation { saveTemplate(input: { id: \\\"${RUNPOD_TEMPLATE_ID}\\\", imageName: \\\"${NEW_IMAGE}\\\", containerRegistryAuthId: \\\"${RUNPOD_REGISTRY_AUTH_ID}\\\" }) { id imageName } }\"
+              }")
+
+            echo "GraphQL response: ${RESPONSE}"
+
+            if echo "${RESPONSE}" | grep -q '"errors"'; then
+              echo "ERROR: Both REST and GraphQL failed to update RunPod template"
+              echo "${RESPONSE}" | python3 -m json.tool 2>/dev/null || echo "${RESPONSE}"
+              exit 1
+            fi
           fi
 
           echo "SUCCESS: RunPod template updated to ${NEW_IMAGE}"
