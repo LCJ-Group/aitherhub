@@ -46,8 +46,12 @@ class ScriptGenerateRequest(BaseModel):
     """Request body for standalone script generation."""
     product_name: str = Field(..., min_length=1, max_length=200, description="Product name (required)")
     product_image_url: Optional[str] = Field(None, description="Product image URL (optional, for AI analysis)")
+    product_image_urls: Optional[List[str]] = Field(None, description="Multiple product image URLs (optional, max 10)")
     product_description: Optional[str] = Field(None, max_length=2000, description="Product description")
-    product_price: Optional[str] = Field(None, max_length=100, description="Product price (e.g. ¥3,980)")
+    product_price: Optional[str] = Field(None, max_length=200, description="Product price (combined string)")
+    original_price: Optional[str] = Field(None, max_length=100, description="Original/retail price (e.g. ¥5,980)")
+    discounted_price: Optional[str] = Field(None, max_length=100, description="Discounted/stream-special price (e.g. ¥3,980)")
+    benefits: Optional[str] = Field(None, max_length=1000, description="Special benefits/tokuten for the stream")
     target_audience: Optional[str] = Field(None, max_length=500, description="Target audience description")
     tone: str = Field("professional_friendly", description="Script tone: professional_friendly, energetic, calm")
     language: str = Field("ja", description="Output language: ja, zh, en")
@@ -120,11 +124,23 @@ async def generate_standalone_script(
         except Exception:
             pass
 
-    # Step 3: Analyze product image (if provided)
+    # Step 3: Analyze product images (supports multiple)
     product_analysis = None
-    if body.product_image_url:
+    images_analyzed_count = 0
+    all_image_urls = []
+    if body.product_image_urls:
+        all_image_urls = body.product_image_urls[:10]  # max 10
+    elif body.product_image_url:
+        all_image_urls = [body.product_image_url]
+
+    if all_image_urls:
         try:
-            product_analysis = await _analyze_product_image(body.product_image_url)
+            if len(all_image_urls) == 1:
+                product_analysis = await _analyze_product_image(all_image_urls[0])
+                images_analyzed_count = 1 if product_analysis else 0
+            else:
+                product_analysis = await _analyze_multiple_product_images(all_image_urls)
+                images_analyzed_count = len(all_image_urls)
         except Exception as e:
             logger.warning(f"Product image analysis failed: {e}")
 
@@ -133,6 +149,9 @@ async def generate_standalone_script(
         product_name=body.product_name,
         product_description=body.product_description,
         product_price=body.product_price,
+        original_price=body.original_price,
+        discounted_price=body.discounted_price,
+        benefits=body.benefits,
         target_audience=body.target_audience,
         product_analysis=product_analysis,
         cross_patterns=cross_patterns,
@@ -332,6 +351,7 @@ async def generate_standalone_script(
             "feedback_winning_patterns": len(feedback_knowledge.get("winning_patterns", [])) if feedback_knowledge else 0,
             "feedback_losing_patterns": len(feedback_knowledge.get("losing_patterns", [])) if feedback_knowledge else 0,
             "product_image_analyzed": bool(product_analysis),
+            "images_analyzed_count": images_analyzed_count,
         },
         data_insights={
             "cta_phrases": cross_patterns.get("cta_phrases", [])[:5] if cross_patterns else [],
@@ -528,6 +548,68 @@ JSONのみを出力してください。"""
         return None
 
 
+async def _analyze_multiple_product_images(image_urls: List[str]) -> Optional[Dict[str, Any]]:
+    """
+    Analyze multiple product images using Azure OpenAI Vision API.
+    Sends all images in a single request for comprehensive analysis.
+    """
+    import openai
+
+    azure_key = os.getenv("AZURE_OPENAI_KEY", "")
+    azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
+    vision_model = os.getenv("VISION_MODEL", "gpt-4o")
+    vision_api_version = os.getenv("VISION_API_VERSION", "2024-06-01")
+
+    if not azure_key or not azure_endpoint:
+        return None
+
+    prompt = f"""以下の{len(image_urls)}枚の商品画像を総合的に分析して、以下の情報をJSON形式で返してください：
+{{
+  "product_type": "商品の種類（例：シャンプー、美容液、サプリメント）",
+  "visual_features": ["全画像から読み取れる目立つ視覚的特徴のリスト"],
+  "colors": ["主要な色"],
+  "packaging": "パッケージの特徴",
+  "selling_points": ["全画像から読み取れるセールスポイント"],
+  "suggested_demo": "ライブコマースでのデモ方法の提案",
+  "image_descriptions": ["各画像の簡単な説明"]
+}}
+JSONのみを出力してください。"""
+
+    try:
+        client = openai.AzureOpenAI(
+            api_key=azure_key,
+            azure_endpoint=azure_endpoint,
+            api_version=vision_api_version,
+        )
+
+        # Build content array with text + all images
+        content = [{"type": "text", "text": prompt}]
+        for url in image_urls[:10]:  # max 10 images
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": url, "detail": "high"},
+            })
+
+        response = client.chat.completions.create(
+            model=vision_model,
+            messages=[{"role": "user", "content": content}],
+            max_tokens=1500,
+            temperature=0.3,
+        )
+        result_content = response.choices[0].message.content
+        json_match = re.search(r"\{[\s\S]*\}", result_content)
+        if json_match:
+            return json.loads(json_match.group())
+        return {"raw_analysis": result_content}
+    except Exception as e:
+        logger.warning(f"Multiple product image analysis failed: {e}")
+        # Fallback: analyze just the first image
+        try:
+            return await _analyze_product_image(image_urls[0])
+        except Exception:
+            return None
+
+
 # ──────────────────────────────────────────────
 # Internal: Prompt Builder (v2 with feedback knowledge + format)
 # ──────────────────────────────────────────────
@@ -536,14 +618,17 @@ def _build_standalone_prompt(
     product_name: str,
     product_description: Optional[str],
     product_price: Optional[str],
-    target_audience: Optional[str],
-    product_analysis: Optional[Dict],
-    cross_patterns: Optional[Dict],
-    feedback_knowledge: Optional[Dict],
-    tone: str,
-    language: str,
-    duration_minutes: int,
-    additional_instructions: Optional[str],
+    original_price: Optional[str] = None,
+    discounted_price: Optional[str] = None,
+    benefits: Optional[str] = None,
+    target_audience: Optional[str] = None,
+    product_analysis: Optional[Dict] = None,
+    cross_patterns: Optional[Dict] = None,
+    feedback_knowledge: Optional[Dict] = None,
+    tone: str = "professional_friendly",
+    language: str = "ja",
+    duration_minutes: int = 10,
+    additional_instructions: Optional[str] = None,
 ) -> str:
     """Build a prompt for standalone script generation with real data + feedback knowledge."""
 
@@ -569,12 +654,28 @@ def _build_standalone_prompt(
 
     # Product info section
     product_section = f"## 商品情報\n- 商品名: {product_name}\n"
-    if product_price:
+
+    # Price handling: prefer separate original/discounted, fallback to combined
+    if original_price and discounted_price:
+        product_section += f"- 通常販売価格: {original_price}\n"
+        product_section += f"- 配信限定割引価格: {discounted_price}\n"
+        product_section += "- 【重要】台本内で通常価格→割引価格の比較を効果的に演出してください。お得感を強調するCTAを入れてください。\n"
+    elif discounted_price:
+        product_section += f"- 配信特別価格: {discounted_price}\n"
+    elif original_price:
+        product_section += f"- 販売価格: {original_price}\n"
+    elif product_price:
         product_section += f"- 価格: {product_price}\n"
+
     if product_description:
         product_section += f"- 商品説明: {product_description}\n"
     if target_audience:
         product_section += f"- ターゲット層: {target_audience}\n"
+
+    # Benefits / Tokuten section
+    if benefits:
+        product_section += f"\n### 配信限定特典・キャンペーン\n{benefits}\n"
+        product_section += "- 【重要】特典情報は台本のCTAセクションで必ず強調してください。視聴者限定の特別感を演出してください。\n"
 
     # Product image analysis section
     image_section = ""
@@ -584,11 +685,25 @@ def _build_standalone_prompt(
             if product_analysis.get("product_type"):
                 image_section += f"- 商品タイプ: {product_analysis['product_type']}\n"
             if product_analysis.get("visual_features"):
-                image_section += f"- 視覚的特徴: {', '.join(product_analysis['visual_features'])}\n"
+                features = product_analysis['visual_features']
+                if isinstance(features, list):
+                    image_section += f"- 視覚的特徴: {', '.join(features)}\n"
+                else:
+                    image_section += f"- 視覚的特徴: {features}\n"
             if product_analysis.get("selling_points"):
-                image_section += f"- セールスポイント: {', '.join(product_analysis['selling_points'])}\n"
+                points = product_analysis['selling_points']
+                if isinstance(points, list):
+                    image_section += f"- セールスポイント: {', '.join(points)}\n"
+                else:
+                    image_section += f"- セールスポイント: {points}\n"
             if product_analysis.get("suggested_demo"):
                 image_section += f"- デモ提案: {product_analysis['suggested_demo']}\n"
+            if product_analysis.get("image_descriptions"):
+                descs = product_analysis['image_descriptions']
+                if isinstance(descs, list) and len(descs) > 1:
+                    image_section += "- 各画像の分析:\n"
+                    for i, desc in enumerate(descs, 1):
+                        image_section += f"  {i}. {desc}\n"
 
     # ── Feedback Knowledge Section (NEW - the key differentiator) ──
     feedback_section = ""

@@ -16,13 +16,16 @@ import {
   ChevronDown,
   ChevronUp,
   Zap,
+  Plus,
+  Gift,
+  Tag,
 } from "lucide-react";
 import scriptGeneratorService from "../base/services/scriptGeneratorService";
 
 /**
  * ScriptGeneratorPage - Standalone "売れる台本" tool
  *
- * Users input product info (name, image, description, price)
+ * Users input product info (name, images, description, prices, benefits)
  * and the system generates a live commerce script grounded in
  * real performance data from AitherHub's analysis database.
  */
@@ -32,18 +35,17 @@ export default function ScriptGeneratorPage() {
   // ── Form State ──
   const [productName, setProductName] = useState("");
   const [productDescription, setProductDescription] = useState("");
-  const [productPrice, setProductPrice] = useState("");
+  const [originalPrice, setOriginalPrice] = useState("");
+  const [discountedPrice, setDiscountedPrice] = useState("");
   const [targetAudience, setTargetAudience] = useState("");
+  const [benefits, setBenefits] = useState("");
   const [additionalInstructions, setAdditionalInstructions] = useState("");
   const [tone, setTone] = useState("professional_friendly");
   const [language, setLanguage] = useState("ja");
   const [durationMinutes, setDurationMinutes] = useState(10);
 
-  // Image upload
-  const [imageFile, setImageFile] = useState(null);
-  const [imagePreview, setImagePreview] = useState(null);
-  const [imageUrl, setImageUrl] = useState(null);
-  const [isUploadingImage, setIsUploadingImage] = useState(false);
+  // Multiple image upload
+  const [imageFiles, setImageFiles] = useState([]); // [{file, preview, url, uploading}]
 
   // Generation state
   const [isGenerating, setIsGenerating] = useState(false);
@@ -73,33 +75,65 @@ export default function ScriptGeneratorPage() {
     }
   };
 
-  // ── Image Upload ──
+  // ── Multiple Image Upload ──
   const handleImageSelect = (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setImageFile(file);
-    setImagePreview(URL.createObjectURL(file));
-    setImageUrl(null);
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+
+    const newImages = files.map((file) => ({
+      file,
+      preview: URL.createObjectURL(file),
+      url: null,
+      uploading: false,
+    }));
+
+    setImageFiles((prev) => [...prev, ...newImages].slice(0, 10)); // max 10 images
+    // Reset the input so the same file can be re-selected
+    e.target.value = "";
   };
 
-  const handleImageUpload = async () => {
-    if (!imageFile) return;
-    setIsUploadingImage(true);
-    try {
-      const blobUrl = await scriptGeneratorService.uploadProductImage(imageFile);
-      setImageUrl(blobUrl);
-    } catch (e) {
-      console.error("Image upload failed:", e);
-      setError("画像のアップロードに失敗しました");
-    } finally {
-      setIsUploadingImage(false);
+  const removeImage = (index) => {
+    setImageFiles((prev) => {
+      const updated = [...prev];
+      if (updated[index]?.preview) {
+        URL.revokeObjectURL(updated[index].preview);
+      }
+      updated.splice(index, 1);
+      return updated;
+    });
+  };
+
+  const uploadAllImages = async () => {
+    const uploaded = [];
+    for (let i = 0; i < imageFiles.length; i++) {
+      const img = imageFiles[i];
+      if (img.url) {
+        uploaded.push(img.url);
+        continue;
+      }
+      try {
+        setImageFiles((prev) => {
+          const updated = [...prev];
+          if (updated[i]) updated[i] = { ...updated[i], uploading: true };
+          return updated;
+        });
+        const blobUrl = await scriptGeneratorService.uploadProductImage(img.file);
+        uploaded.push(blobUrl);
+        setImageFiles((prev) => {
+          const updated = [...prev];
+          if (updated[i]) updated[i] = { ...updated[i], url: blobUrl, uploading: false };
+          return updated;
+        });
+      } catch (e) {
+        console.warn(`Image upload failed for image ${i}:`, e);
+        setImageFiles((prev) => {
+          const updated = [...prev];
+          if (updated[i]) updated[i] = { ...updated[i], uploading: false };
+          return updated;
+        });
+      }
     }
-  };
-
-  const removeImage = () => {
-    setImageFile(null);
-    setImagePreview(null);
-    setImageUrl(null);
+    return uploaded;
   };
 
   // ── Generate Script ──
@@ -113,23 +147,36 @@ export default function ScriptGeneratorPage() {
     setError(null);
     setGeneratedScript(null);
 
-    // Upload image first if selected but not yet uploaded
-    let finalImageUrl = imageUrl;
-    if (imageFile && !imageUrl) {
+    // Upload all images first
+    let imageUrls = [];
+    if (imageFiles.length > 0) {
       try {
-        finalImageUrl = await scriptGeneratorService.uploadProductImage(imageFile);
-        setImageUrl(finalImageUrl);
+        imageUrls = await uploadAllImages();
       } catch (e) {
-        console.warn("Image upload failed, continuing without image:", e);
+        console.warn("Some image uploads failed, continuing:", e);
       }
+    }
+
+    // Build price string
+    let priceStr = "";
+    if (originalPrice.trim() && discountedPrice.trim()) {
+      priceStr = `通常価格: ${originalPrice.trim()} → 配信特別価格: ${discountedPrice.trim()}`;
+    } else if (discountedPrice.trim()) {
+      priceStr = discountedPrice.trim();
+    } else if (originalPrice.trim()) {
+      priceStr = originalPrice.trim();
     }
 
     try {
       const result = await scriptGeneratorService.generateScript({
         product_name: productName.trim(),
-        product_image_url: finalImageUrl || undefined,
+        product_image_url: imageUrls[0] || undefined,
+        product_image_urls: imageUrls.length > 0 ? imageUrls : undefined,
         product_description: productDescription.trim() || undefined,
-        product_price: productPrice.trim() || undefined,
+        product_price: priceStr || undefined,
+        original_price: originalPrice.trim() || undefined,
+        discounted_price: discountedPrice.trim() || undefined,
+        benefits: benefits.trim() || undefined,
         target_audience: targetAudience.trim() || undefined,
         tone,
         language,
@@ -173,7 +220,6 @@ export default function ScriptGeneratorPage() {
 
       // Dialogue: 🎤 ...
       if (trimmed.startsWith("\uD83C\uDFA4") || trimmed.startsWith("🎤")) {
-        // Extract quoted text if present
         const quoteMatch = trimmed.match(/[「「](.+?)[」」]/);
         return (
           <div key={idx} className="flex items-start gap-2 ml-2 my-1 px-3 py-2 bg-blue-50 border-l-3 border-blue-400 rounded-r-lg">
@@ -266,38 +312,72 @@ export default function ScriptGeneratorPage() {
               />
             </div>
 
-            {/* Product Image */}
+            {/* Product Images (Multiple) */}
             <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
               <label className="block text-sm font-semibold text-gray-800">
-                商品写真 <span className="text-gray-400 font-normal">(任意)</span>
+                商品写真 <span className="text-gray-400 font-normal">(任意・複数可)</span>
               </label>
-              <p className="text-xs text-gray-500">AIが商品の特徴を読み取り、台本に反映します</p>
-              {imagePreview ? (
-                <div className="relative">
-                  <img
-                    src={imagePreview}
-                    alt="Product"
-                    className="w-full h-40 object-contain rounded-lg bg-gray-50 border border-gray-200"
-                  />
-                  <button
-                    onClick={removeImage}
-                    className="absolute top-2 right-2 p-1 bg-white rounded-full shadow-md hover:bg-gray-100"
-                  >
-                    <X className="w-4 h-4 text-gray-600" />
-                  </button>
-                  {imageUrl && (
-                    <div className="absolute bottom-2 left-2 bg-green-500 text-white text-xs px-2 py-0.5 rounded-full flex items-center gap-1">
-                      <Check className="w-3 h-3" /> アップロード済み
+              <p className="text-xs text-gray-500">AIが商品の特徴を読み取り、台本に反映します（最大10枚）</p>
+
+              {/* Image Grid */}
+              <div className="grid grid-cols-3 gap-2">
+                {imageFiles.map((img, index) => (
+                  <div key={index} className="relative group aspect-square">
+                    <img
+                      src={img.preview}
+                      alt={`Product ${index + 1}`}
+                      className="w-full h-full object-cover rounded-lg border border-gray-200"
+                    />
+                    {/* Remove button */}
+                    <button
+                      onClick={() => removeImage(index)}
+                      className="absolute top-1 right-1 p-0.5 bg-white rounded-full shadow-md opacity-0 group-hover:opacity-100 transition-opacity"
+                    >
+                      <X className="w-3 h-3 text-gray-600" />
+                    </button>
+                    {/* Upload status */}
+                    {img.uploading && (
+                      <div className="absolute inset-0 bg-black/30 rounded-lg flex items-center justify-center">
+                        <Loader2 className="w-5 h-5 text-white animate-spin" />
+                      </div>
+                    )}
+                    {img.url && (
+                      <div className="absolute bottom-1 left-1 bg-green-500 text-white text-[10px] px-1.5 py-0.5 rounded-full flex items-center gap-0.5">
+                        <Check className="w-2.5 h-2.5" />
+                      </div>
+                    )}
+                    {/* Image number */}
+                    <div className="absolute top-1 left-1 bg-black/50 text-white text-[10px] px-1.5 py-0.5 rounded-full">
+                      {index + 1}
                     </div>
-                  )}
-                </div>
-              ) : (
-                <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-orange-400 hover:bg-orange-50 transition-colors">
-                  <ImageIcon className="w-8 h-8 text-gray-400 mb-1" />
+                  </div>
+                ))}
+
+                {/* Add image button */}
+                {imageFiles.length < 10 && (
+                  <label className="aspect-square flex flex-col items-center justify-center border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-orange-400 hover:bg-orange-50 transition-colors">
+                    <Plus className="w-6 h-6 text-gray-400 mb-0.5" />
+                    <span className="text-[10px] text-gray-400">追加</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      onChange={handleImageSelect}
+                      className="hidden"
+                    />
+                  </label>
+                )}
+              </div>
+
+              {imageFiles.length === 0 && (
+                <label className="flex flex-col items-center justify-center w-full h-28 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-orange-400 hover:bg-orange-50 transition-colors">
+                  <ImageIcon className="w-7 h-7 text-gray-400 mb-1" />
                   <span className="text-xs text-gray-500">クリックして画像を選択</span>
+                  <span className="text-[10px] text-gray-400 mt-0.5">複数選択可</span>
                   <input
                     type="file"
                     accept="image/*"
+                    multiple
                     onChange={handleImageSelect}
                     className="hidden"
                   />
@@ -305,17 +385,50 @@ export default function ScriptGeneratorPage() {
               )}
             </div>
 
-            {/* Product Details */}
+            {/* Product Details - Price Split */}
             <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
               <label className="block text-sm font-semibold text-gray-800">商品詳細</label>
               <div className="space-y-2">
-                <input
-                  type="text"
-                  value={productPrice}
-                  onChange={(e) => setProductPrice(e.target.value)}
-                  placeholder="価格（例: ¥3,980）"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent"
-                />
+                {/* Price fields - side by side */}
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-xs text-gray-500 mb-1 block flex items-center gap-1">
+                      <Tag className="w-3 h-3" /> 販売価格
+                    </label>
+                    <input
+                      type="text"
+                      value={originalPrice}
+                      onChange={(e) => setOriginalPrice(e.target.value)}
+                      placeholder="例: ¥5,980"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-500 mb-1 block flex items-center gap-1">
+                      <Zap className="w-3 h-3 text-red-500" /> 割引後価格
+                    </label>
+                    <input
+                      type="text"
+                      value={discountedPrice}
+                      onChange={(e) => setDiscountedPrice(e.target.value)}
+                      placeholder="例: ¥3,980"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent"
+                    />
+                  </div>
+                </div>
+
+                {/* Show discount badge if both prices are filled */}
+                {originalPrice.trim() && discountedPrice.trim() && (
+                  <div className="flex items-center gap-1.5 text-xs">
+                    <span className="bg-red-100 text-red-600 px-2 py-0.5 rounded-full font-medium">
+                      配信限定価格
+                    </span>
+                    <span className="text-gray-400 line-through">{originalPrice}</span>
+                    <span className="text-gray-600">→</span>
+                    <span className="text-red-600 font-bold">{discountedPrice}</span>
+                  </div>
+                )}
+
                 <textarea
                   value={productDescription}
                   onChange={(e) => setProductDescription(e.target.value)}
@@ -331,6 +444,22 @@ export default function ScriptGeneratorPage() {
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent"
                 />
               </div>
+            </div>
+
+            {/* Benefits / Tokuten */}
+            <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
+              <label className="block text-sm font-semibold text-gray-800 flex items-center gap-1.5">
+                <Gift className="w-4 h-4 text-orange-500" />
+                特典 <span className="text-gray-400 font-normal">(任意)</span>
+              </label>
+              <p className="text-xs text-gray-500">配信限定の特典・おまけ・キャンペーン情報</p>
+              <textarea
+                value={benefits}
+                onChange={(e) => setBenefits(e.target.value)}
+                placeholder="例: 配信限定20%OFF、2個セットで送料無料、先着100名にサンプルプレゼント"
+                rows={2}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent resize-none"
+              />
             </div>
 
             {/* Settings */}
@@ -559,7 +688,7 @@ export default function ScriptGeneratorPage() {
                     {generatedScript.patterns_used?.product_image_analyzed && (
                       <span className="flex items-center gap-1">
                         <ImageIcon className="w-3 h-3 text-purple-500" />
-                        商品画像分析済み
+                        商品画像{generatedScript.patterns_used.images_analyzed_count || 1}枚分析済み
                       </span>
                     )}
                     {generatedScript.patterns_used?.feedback_knowledge_used && (
