@@ -77,16 +77,27 @@ jobs:
         run: |
           NEW_IMAGE="ghcr.io/lcj-group/aitherhub-gpu-worker:${SHA_SHORT}"
           echo "Deploying image: ${NEW_IMAGE}"
+          echo "Template ID: ${RUNPOD_TEMPLATE_ID}"
+
+          # Validate required env vars
+          if [ -z "${RUNPOD_TEMPLATE_ID}" ]; then
+            echo "ERROR: RUNPOD_TEMPLATE_ID is empty. Check GitHub Secrets."
+            exit 1
+          fi
+          if [ -z "${RUNPOD_API_KEY}" ]; then
+            echo "ERROR: RUNPOD_API_KEY is empty. Check GitHub Secrets."
+            exit 1
+          fi
 
           # Update RunPod template via REST API (PATCH)
-          RESPONSE=$(curl -s -w "\n%{http_code}" -X PATCH \
-            "https://rest.runpod.io/v1/templates/${RUNPOD_TEMPLATE_ID}" \
+          TEMPLATE_URL="https://rest.runpod.io/v1/templates/${RUNPOD_TEMPLATE_ID}"
+          echo "REST API URL: ${TEMPLATE_URL}"
+
+          RESPONSE=$(curl -s -w "\n%{http_code}" --max-time 30 -X PATCH \
+            "${TEMPLATE_URL}" \
             -H "Authorization: Bearer ${RUNPOD_API_KEY}" \
             -H "Content-Type: application/json" \
-            -d "{
-              \"imageName\": \"${NEW_IMAGE}\",
-              \"containerRegistryAuthId\": \"${RUNPOD_REGISTRY_AUTH_ID}\"
-            }")
+            -d "{\"imageName\": \"${NEW_IMAGE}\", \"containerRegistryAuthId\": \"${RUNPOD_REGISTRY_AUTH_ID}\"}")
 
           HTTP_CODE=$(echo "${RESPONSE}" | tail -1)
           BODY=$(echo "${RESPONSE}" | sed '$d')
@@ -94,23 +105,10 @@ jobs:
           echo "HTTP Status: ${HTTP_CODE}"
           echo "Response: ${BODY}"
 
-          if [ "${HTTP_CODE}" -ge 400 ]; then
-            echo "ERROR: REST API failed (HTTP ${HTTP_CODE}). Falling back to GraphQL..."
-
-            # Fallback: GraphQL mutation
-            RESPONSE=$(curl -s -X POST "https://api.runpod.io/graphql?api_key=${RUNPOD_API_KEY}" \
-              -H "Content-Type: application/json" \
-              -d "{
-                \"query\": \"mutation { saveTemplate(input: { id: \\\"${RUNPOD_TEMPLATE_ID}\\\", imageName: \\\"${NEW_IMAGE}\\\", containerRegistryAuthId: \\\"${RUNPOD_REGISTRY_AUTH_ID}\\\" }) { id imageName } }\"
-              }")
-
-            echo "GraphQL response: ${RESPONSE}"
-
-            if echo "${RESPONSE}" | grep -q '"errors"'; then
-              echo "ERROR: Both REST and GraphQL failed to update RunPod template"
-              echo "${RESPONSE}" | python3 -m json.tool 2>/dev/null || echo "${RESPONSE}"
-              exit 1
-            fi
+          if [ "${HTTP_CODE}" -ge 200 ] && [ "${HTTP_CODE}" -lt 300 ]; then
+            echo "SUCCESS: RunPod template updated to ${NEW_IMAGE}"
+          else
+            echo "ERROR: REST API failed (HTTP ${HTTP_CODE})"
+            echo "Full response: ${BODY}"
+            exit 1
           fi
-
-          echo "SUCCESS: RunPod template updated to ${NEW_IMAGE}"
