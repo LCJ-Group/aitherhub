@@ -72,7 +72,6 @@ jobs:
         env:
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
           RUNPOD_TEMPLATE_ID: ${{ secrets.RUNPOD_TEMPLATE_ID }}
-          RUNPOD_REGISTRY_AUTH_ID: ${{ secrets.RUNPOD_REGISTRY_AUTH_ID }}
           SHA_SHORT: ${{ needs.build-and-push.outputs.sha_short }}
         run: |
           NEW_IMAGE="ghcr.io/lcj-group/aitherhub-gpu-worker:${SHA_SHORT}"
@@ -90,6 +89,7 @@ jobs:
           fi
 
           # Update RunPod template via REST API (PATCH)
+          # GHCR image is public, no containerRegistryAuthId needed
           TEMPLATE_URL="https://rest.runpod.io/v1/templates/${RUNPOD_TEMPLATE_ID}"
           echo "REST API URL: ${TEMPLATE_URL}"
 
@@ -97,7 +97,7 @@ jobs:
             "${TEMPLATE_URL}" \
             -H "Authorization: Bearer ${RUNPOD_API_KEY}" \
             -H "Content-Type: application/json" \
-            -d "{\"imageName\": \"${NEW_IMAGE}\", \"containerRegistryAuthId\": \"${RUNPOD_REGISTRY_AUTH_ID}\"}")
+            -d "{\"imageName\": \"${NEW_IMAGE}\"}")
 
           HTTP_CODE=$(echo "${RESPONSE}" | tail -1)
           BODY=$(echo "${RESPONSE}" | sed '$d')
