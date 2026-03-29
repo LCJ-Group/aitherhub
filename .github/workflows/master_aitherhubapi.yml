@@ -68,14 +68,14 @@ jobs:
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_8E4F3767CE0647AEAA62C4C721F843FE }}
 
       - name: Deploy via Azure CLI (zip deploy)
-        timeout-minutes: 10
+        timeout-minutes: 15
         run: |
           cd backend
           zip -r ../deploy.zip . -x '.git/*' '__pycache__/*' '*.pyc' 'antenv/*'
           cd ..
           az webapp deploy --resource-group rg-vdp-kyogoku --name aitherhubAPI \
-            --src-path deploy.zip --type zip --async true --clean true --restart true
-          echo "Deployment initiated."
+            --src-path deploy.zip --type zip --async false --clean true --restart true
+          echo "Deployment completed successfully."
 
   verify_deploy:
     needs: build_and_deploy
