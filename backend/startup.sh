@@ -44,4 +44,4 @@ else
 fi
 
 echo "[startup] Starting gunicorn..."
-gunicorn -k uvicorn.workers.UvicornWorker app.main:app --workers 1 --threads 1 --timeout 600 --graceful-timeout 30 --bind 0.0.0.0:8000 --access-logfile - --error-logfile -
+gunicorn -k uvicorn.workers.UvicornWorker app.main:app --workers 2 --threads 1 --timeout 600 --graceful-timeout 30 --bind 0.0.0.0:8000 --access-logfile - --error-logfile - --keep-alive 120
