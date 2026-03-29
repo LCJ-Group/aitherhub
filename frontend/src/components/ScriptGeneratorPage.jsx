@@ -685,6 +685,7 @@ export default function ScriptGeneratorPage() {
 
             {/* Generated Script Output */}
             {generatedScript ? (
+              <>
               <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
                 {/* Script Header */}
                 <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
@@ -909,6 +910,7 @@ export default function ScriptGeneratorPage() {
                   )}
                 </div>
               )}
+              </>
             ) : (
               /* Empty State */
               <div className="bg-white rounded-xl border border-gray-200 p-8 text-center">
