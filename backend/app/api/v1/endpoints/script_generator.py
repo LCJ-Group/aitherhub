@@ -238,6 +238,64 @@ async def generate_standalone_script(
     if script is None:
         raise HTTPException(status_code=500, detail=f"All LLM strategies failed: {'; '.join(errors)}")
 
+    # Check char count and extend if too short
+    target_chars = body.duration_minutes * 250
+    min_chars = int(target_chars * 0.85)
+    if len(script) < min_chars and len(script) > 200:
+        logger.info(f"Script too short ({len(script)}/{min_chars} chars), requesting continuation")
+        remaining = min_chars - len(script)
+        extend_messages = [
+            {"role": "system", "content": messages[0]["content"]},
+            {"role": "user", "content": prompt},
+            {"role": "assistant", "content": script},
+            {"role": "user", "content": (
+                f"台本が短すぎます（{len(script)}文字）。目標は{min_chars}文字以上です。\n"
+                f"あと{remaining}文字以上、台本の続きを生成してください。\n"
+                "フォーマットルール（⏱🎤📋）を守って、セクションの続きまたは新しいセクションを追加してください。\n"
+                "説明を加えず、台本の続きだけを出力してください。"
+            )},
+        ]
+        try:
+            if azure_key and azure_endpoint:
+                client_ext = openai.AzureOpenAI(
+                    api_key=azure_key,
+                    azure_endpoint=azure_endpoint,
+                    api_version=os.getenv("GPT5_API_VERSION", "2025-04-01-preview"),
+                )
+                input_ext = [{"role": m["role"], "content": m["content"]} for m in extend_messages]
+                resp_ext = client_ext.responses.create(
+                    model=azure_model,
+                    input=input_ext,
+                    max_output_tokens=4096,
+                )
+                ext_text = ""
+                if hasattr(resp_ext, "output_text") and resp_ext.output_text:
+                    ext_text = resp_ext.output_text.strip()
+                elif hasattr(resp_ext, "output") and resp_ext.output:
+                    for item in resp_ext.output:
+                        if hasattr(item, "content"):
+                            for part in item.content:
+                                if hasattr(part, "text"):
+                                    ext_text += part.text
+                    ext_text = ext_text.strip()
+                if ext_text:
+                    script = script + "\n" + ext_text
+                    logger.info(f"Extended script to {len(script)} chars")
+            elif openai_key:
+                client_ext2 = openai.AsyncOpenAI()
+                resp_ext2 = await client_ext2.chat.completions.create(
+                    model="gpt-4.1-mini",
+                    messages=extend_messages,
+                    max_tokens=4096,
+                    temperature=0.7,
+                )
+                ext_text = resp_ext2.choices[0].message.content.strip()
+                if ext_text:
+                    script = script + "\n" + ext_text
+                    logger.info(f"Extended script to {len(script)} chars")
+        except Exception as e:
+            logger.warning(f"Script extension failed: {e}")
+
     # Post-process: clean up markdown but preserve our format markers (🎤📋⏱)
     script = re.sub(r'\*\*', '', script)
     script = re.sub(r'\*', '', script)

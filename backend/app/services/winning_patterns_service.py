@@ -297,14 +297,25 @@ async def aggregate_patterns_across_videos(
     if video_ids:
         vids = video_ids
     else:
-        vid_sql = text("""
-            SELECT id FROM videos
-            WHERE status = 'DONE'
-            AND (:uid IS NULL OR user_id = :uid)
-            ORDER BY created_at DESC
-            LIMIT :lim
-        """)
-        vid_result = await db.execute(vid_sql, {"uid": user_id, "lim": limit_videos})
+        # Separate SQL for user_id=None vs specific user to avoid
+        # asyncpg AmbiguousParameterError on "$1 IS NULL OR user_id = $1"
+        if user_id is not None:
+            vid_sql = text("""
+                SELECT id FROM videos
+                WHERE status = 'DONE'
+                AND user_id = :uid
+                ORDER BY created_at DESC
+                LIMIT :lim
+            """)
+            vid_result = await db.execute(vid_sql, {"uid": user_id, "lim": limit_videos})
+        else:
+            vid_sql = text("""
+                SELECT id FROM videos
+                WHERE status = 'DONE'
+                ORDER BY created_at DESC
+                LIMIT :lim
+            """)
+            vid_result = await db.execute(vid_sql, {"lim": limit_videos})
         vids = [str(r.id) for r in vid_result.fetchall()]
 
     if not vids:
@@ -447,13 +458,20 @@ async def _extract_top_techniques(
     placeholders = ", ".join([f":vid_{i}" for i in range(len(video_ids))])
     params = {f"vid_{i}": vid for i, vid in enumerate(video_ids)}
 
+    # Relaxed filter: include phases with gmv/cta_score OR high user_rating
+    # This ensures we get results even when recalc-csv-metrics hasn't been run
     sql = text(f"""
         SELECT vp.sales_psychology_tags, COUNT(*) as cnt
         FROM video_phases vp
         WHERE vp.video_id IN ({placeholders})
           AND vp.sales_psychology_tags IS NOT NULL
           AND CHAR_LENGTH(vp.sales_psychology_tags) > 0
-          AND (COALESCE(vp.gmv, 0) > 0 OR COALESCE(vp.cta_score, 0) > 0.5)
+          AND (
+            COALESCE(vp.gmv, 0) > 0
+            OR COALESCE(vp.cta_score, 0) > 0.5
+            OR vp.user_rating >= 4
+            OR vp.delta_view > 0
+          )
         GROUP BY vp.sales_psychology_tags
         ORDER BY cnt DESC
         LIMIT 20
