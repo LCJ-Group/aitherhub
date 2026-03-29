@@ -27,7 +27,7 @@ class ScriptGeneratorService extends BaseApiService {
    * @returns {Promise<Object>} { script, char_count, estimated_duration_minutes, patterns_used, data_insights, product_analysis, model }
    */
   async generateScript(params) {
-    const token = TokenManager.getAccessToken();
+    const token = TokenManager.getToken();
     const response = await this.axiosInstance.post(
       '/api/v1/script-generator/generate',
       params,
@@ -47,7 +47,7 @@ class ScriptGeneratorService extends BaseApiService {
    * @returns {Promise<Object>} { videos_analyzed, cta_phrases, duration_insights, top_techniques }
    */
   async getWinningPatterns(limitVideos = 50) {
-    const token = TokenManager.getAccessToken();
+    const token = TokenManager.getToken();
     const response = await this.axiosInstance.get(
       `/api/v1/script-generator/patterns?limit_videos=${limitVideos}`,
       {
@@ -64,7 +64,7 @@ class ScriptGeneratorService extends BaseApiService {
    * @returns {Promise<Object>} { upload_url, blob_url, expiry }
    */
   async getImageUploadUrl() {
-    const token = TokenManager.getAccessToken();
+    const token = TokenManager.getToken();
     const response = await this.axiosInstance.post(
       '/api/v1/script-generator/upload-image',
       {},
