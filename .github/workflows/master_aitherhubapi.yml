@@ -74,7 +74,7 @@ jobs:
           zip -r ../deploy.zip . -x '.git/*' '__pycache__/*' '*.pyc' 'antenv/*'
           cd ..
           az webapp deploy --resource-group rg-vdp-kyogoku --name aitherhubAPI \
-            --src-path deploy.zip --type zip --async false --clean true --restart true
+            --src-path deploy.zip --type zip --async true --clean true --restart true
           echo "Deployment completed successfully."
 
   verify_deploy:
@@ -82,7 +82,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Wait for deployment propagation
-        run: sleep 180
+        run: sleep 600
 
       - name: Verify API is responding
         run: |
