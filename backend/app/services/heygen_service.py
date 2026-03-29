@@ -223,7 +223,11 @@ class HeyGenService:
             )
             resp.raise_for_status()
             data = resp.json()
-        return data.get("data", {}).get("talking_photos", [])
+        # data["data"] is a list directly (not {"talking_photos": [...]})
+        result = data.get("data", [])
+        if isinstance(result, list):
+            return result
+        return result.get("talking_photos", [])
 
     # ──────────────────────────────────────────
     # Video Generation
