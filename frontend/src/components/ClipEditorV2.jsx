@@ -255,6 +255,10 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
   const tlTrimEnd = isClipVideo ? trimEnd - origStart : trimEnd;
   const tlOrigStart = isClipVideo ? 0 : origStart;
   const tlOrigEnd = isClipVideo ? origEnd - origStart : origEnd;
+  // Timeline denominator: for clip videos, phase may be longer than clip_url duration
+  // (e.g., phase=157s but clip video=112s after previous trim).
+  // Use the larger of video duration and phase duration so everything fits.
+  const tlDuration = isClipVideo ? Math.max(duration, origEnd - origStart) : duration;
   const videoUrl = useMemo(() => {
     return clip?.clip_url || videoData?.video_url || clip?.video_url || null;
   }, [videoData, clip]);
@@ -799,24 +803,24 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
     (e) => {
       if (!timelineRef.current || !duration) return;
       const rect = timelineRef.current.getBoundingClientRect();
-      seek(Math.max(0, Math.min(duration, ((e.clientX - rect.left) / rect.width) * duration)));
+      seek(Math.max(0, Math.min(duration, ((e.clientX - rect.left) / rect.width) * tlDuration)));
     },
-    [duration, seek]
+    [duration, tlDuration, seek]
   );
 
   // ─── Trim Drag ─────────────────────────────────────────────────
   const onTrimDrag = useCallback(
     (e) => {
-      if (!dragging || !timelineRef.current || !duration) return;
+      if (!dragging || !timelineRef.current || !tlDuration) return;
       const rect = timelineRef.current.getBoundingClientRect();
-      const localT = Math.max(0, Math.min(duration, ((e.clientX - rect.left) / rect.width) * duration));
+      const localT = Math.max(0, Math.min(tlDuration, ((e.clientX - rect.left) / rect.width) * tlDuration));
       // Convert local timeline position to absolute time for trimStart/trimEnd
       const offset = isClipVideo ? origStart : 0;
       const t = localT + offset;
       if (dragging === "s" && t < trimEnd - 1) setTrimStart(Math.round(t * 10) / 10);
       if (dragging === "e" && t > trimStart + 1) setTrimEnd(Math.round(t * 10) / 10);
     },
-    [dragging, duration, trimStart, trimEnd, isClipVideo, origStart]
+    [dragging, tlDuration, trimStart, trimEnd, isClipVideo, origStart]
   );
 
   const onTrimEnd = useCallback(() => setDragging(null), []);
@@ -2317,9 +2321,14 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
         >
           {/* Heatmap */}
           {(segments.length > 0 ? segments : timelineData?.phases || []).map((seg, i) => {
-            const st = seg.start_sec ?? seg.time_start ?? 0;
-            const en = seg.end_sec ?? seg.time_end ?? 0;
+            let st = seg.start_sec ?? seg.time_start ?? 0;
+            let en = seg.end_sec ?? seg.time_end ?? 0;
             if (!duration) return null;
+            // Convert absolute timestamps to local for clip videos
+            if (isClipVideo && st >= origStart) {
+              st = st - origStart;
+              en = en - origStart;
+            }
             const sc = seg.viral_score ?? seg.hook_score ?? 0;
             return (
               <div
@@ -2328,8 +2337,8 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                   position: "absolute",
                   top: 0,
                   bottom: 0,
-                  left: `${(st / duration) * 100}%`,
-                  width: `${((en - st) / duration) * 100}%`,
+                  left: `${(st / tlDuration) * 100}%`,
+                  width: `${((en - st) / tlDuration) * 100}%`,
                   backgroundColor: scoreColor(sc, 0.6),
                   borderRight: `1px solid ${C.bg}`,
                 }}
@@ -2345,8 +2354,8 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                 position: "absolute",
                 top: 0,
                 bottom: 0,
-                left: `${(tlTrimStart / duration) * 100}%`,
-                width: `${((tlTrimEnd - tlTrimStart) / duration) * 100}%`,
+                left: `${(tlTrimStart / tlDuration) * 100}%`,
+                width: `${((tlTrimEnd - tlTrimStart) / tlDuration) * 100}%`,
                 backgroundColor: "rgba(255,107,53,0.2)",
                 border: `2px solid ${C.accent}`,
                 borderRadius: 3,
@@ -2363,14 +2372,14 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                   e.stopPropagation();
                   setDragging("s");
                 }}
-                style={handleStyle((tlTrimStart / duration) * 100)}
+                style={handleStyle((tlTrimStart / tlDuration) * 100)}
               />
               <div
                 onMouseDown={(e) => {
                   e.stopPropagation();
                   setDragging("e");
                 }}
-                style={handleStyle((tlTrimEnd / duration) * 100)}
+                style={handleStyle((tlTrimEnd / tlDuration) * 100)}
               />
             </>
           )}
@@ -2379,13 +2388,14 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
           {timelineData?.markers?.map((m, i) => {
             if (!duration) return null;
             const mi = MARKERS[m.type] || MARKERS.sales;
+            const mLocal = isClipVideo && m.time_start >= origStart ? m.time_start - origStart : m.time_start;
             return (
               <div
                 key={`m${i}`}
                 style={{
                   position: "absolute",
                   top: -2,
-                  left: `${(m.time_start / duration) * 100}%`,
+                  left: `${(mLocal / tlDuration) * 100}%`,
                   transform: "translateX(-6px)",
                   fontSize: 11,
                   zIndex: 3,
@@ -2394,7 +2404,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                 }}
                 onClick={(e) => {
                   e.stopPropagation();
-                  seek(m.time_start);
+                  seek(mLocal);
                 }}
                 title={m.label || mi.label}
               >
@@ -2410,7 +2420,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                 position: "absolute",
                 top: 0,
                 bottom: 0,
-                left: `${(currentTime / duration) * 100}%`,
+                left: `${(currentTime / tlDuration) * 100}%`,
                 width: 2,
                 backgroundColor: "#fff",
                 zIndex: 4,
