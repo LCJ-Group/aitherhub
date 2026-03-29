@@ -242,6 +242,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
   const [disabledSegments, setDisabledSegments] = useState(new Set()); // Set of segment indices
   const [hoveredSegIdx, setHoveredSegIdx] = useState(null);
   const [timelineCursorPos, setTimelineCursorPos] = useState(null); // mouse X position on timeline
+  const mouseTimeRef = useRef(null); // mouse time position on timeline (seconds)
 
   const clipDur = trimEnd - trimStart;
 
@@ -714,16 +715,26 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
       ctx.stroke();
     }
 
-    // Draw cursor position
+    // Draw cursor position (timelineCursorPos is a ratio 0-1)
     if (timelineCursorPos !== null) {
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+      const cursorPx = timelineCursorPos * W;
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
       ctx.lineWidth = 1;
-      ctx.setLineDash([3, 3]);
+      ctx.setLineDash([4, 4]);
       ctx.beginPath();
-      ctx.moveTo(timelineCursorPos, 0);
-      ctx.lineTo(timelineCursorPos, H);
+      ctx.moveTo(cursorPx, 0);
+      ctx.lineTo(cursorPx, H);
       ctx.stroke();
       ctx.setLineDash([]);
+      // Draw time label at cursor
+      if (mouseTimeRef.current != null) {
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+        ctx.font = '10px sans-serif';
+        const label = fmt(mouseTimeRef.current);
+        const tw = ctx.measureText(label).width;
+        const lx = Math.min(cursorPx + 4, W - tw - 4);
+        ctx.fillText(label, lx, 10);
+      }
     }
   }, [waveformData, duration, tlDuration, silentRegions, splitPoints, disabledSegments, currentTime, timelineCursorPos]);
 
@@ -760,15 +771,16 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
         return;
       }
 
-      // W = split at current position
+      // W = split at mouse position (if hovering) or current playhead position
       if (e.key === 'w' || e.key === 'W') {
         e.preventDefault();
-        if (!duration || currentTime <= 0 || currentTime >= duration) return;
+        const splitTime = mouseTimeRef.current != null ? mouseTimeRef.current : currentTime;
+        if (!duration || splitTime <= 0 || splitTime >= duration) return;
         // Don't add duplicate split points (within 0.5s)
-        const isDuplicate = splitPoints.some(sp => Math.abs(sp - currentTime) < 0.5);
+        const isDuplicate = splitPoints.some(sp => Math.abs(sp - splitTime) < 0.5);
         if (isDuplicate) return;
-        setSplitPoints(prev => [...prev, Math.round(currentTime * 10) / 10].sort((a, b) => a - b));
-        console.log(`[Split] Added split at ${currentTime.toFixed(1)}s`);
+        setSplitPoints(prev => [...prev, Math.round(splitTime * 10) / 10].sort((a, b) => a - b));
+        console.log(`[Split] Added split at ${splitTime.toFixed(1)}s (${mouseTimeRef.current != null ? 'mouse' : 'playhead'})`);
         return;
       }
 
@@ -833,11 +845,17 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
     const container = waveformContainerRef.current;
     if (!container) return;
     const rect = container.getBoundingClientRect();
-    setTimelineCursorPos(e.clientX - rect.left);
-  }, []);
+    const xPx = e.clientX - rect.left;
+    const ratio = xPx / rect.width;
+    setTimelineCursorPos(ratio); // store as ratio (0-1) for both bars
+    // Calculate time from mouse position
+    const effDur = tlDuration || duration || 1;
+    mouseTimeRef.current = Math.max(0, Math.min(duration || 0, ratio * effDur));
+  }, [duration, tlDuration]);
 
   const onWaveformMouseLeave = useCallback(() => {
     setTimelineCursorPos(null);
+    mouseTimeRef.current = null;
   }, []);
 
   // ─── Timeline ──────────────────────────────────────────────────
@@ -2402,6 +2420,18 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
         <div
           ref={timelineRef}
           onClick={onTLClick}
+          onMouseMove={(e) => {
+            const rect = timelineRef.current?.getBoundingClientRect();
+            if (!rect) return;
+            const xPx = e.clientX - rect.left;
+            const effDur = tlDuration || duration || 1;
+            mouseTimeRef.current = Math.max(0, Math.min(duration || 0, (xPx / rect.width) * effDur));
+            setTimelineCursorPos(xPx / rect.width); // store as ratio for both bars
+          }}
+          onMouseLeave={() => {
+            mouseTimeRef.current = null;
+            setTimelineCursorPos(null);
+          }}
           style={{
             position: "relative",
             height: 32,
@@ -2522,6 +2552,21 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
               }}
             />
           )}
+          {/* Mouse hover cursor line on timeline bar */}
+          {timelineCursorPos !== null && (
+            <div
+              style={{
+                position: 'absolute',
+                top: 0,
+                bottom: 0,
+                left: `${timelineCursorPos * 100}%`,
+                width: 1,
+                borderLeft: '1px dashed rgba(255,255,255,0.5)',
+                zIndex: 5,
+                pointerEvents: 'none',
+              }}
+            />
+          )}
         </div>
 
         {/* ═══ WAVEFORM + SPLIT UI ═══ */}
@@ -2570,13 +2615,28 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                 width: 3,
                 backgroundColor: '#FFE135',
                 cursor: 'pointer',
-                zIndex: 5,
+                zIndex: 8,
                 transform: 'translateX(-1.5px)',
               }}
               title={`分割点 ${fmt(sp)} (クリックで削除)`}
             />
           ))}
           {/* Segment labels */}
+          {/* Mouse hover cursor line on waveform (HTML overlay for visibility above segments) */}
+          {timelineCursorPos !== null && (
+            <div
+              style={{
+                position: 'absolute',
+                top: 0,
+                bottom: 0,
+                left: `${timelineCursorPos * 100}%`,
+                width: 1,
+                borderLeft: '1px dashed rgba(255,255,255,0.5)',
+                zIndex: 15,
+                pointerEvents: 'none',
+              }}
+            />
+          )}
           {splitSegments.map((seg) => (
             <div
               key={`seg${seg.index}`}
@@ -2601,7 +2661,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                     ? 'rgba(99, 102, 241, 0.4)'
                     : 'rgba(99, 102, 241, 0.15)',
                 cursor: 'pointer',
-                zIndex: 4,
+                zIndex: 10,
                 borderRight: '1px solid rgba(255,255,255,0.1)',
                 transition: 'background-color 0.15s ease',
                 userSelect: 'none',
@@ -2666,7 +2726,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
         }}>
           {[
             { key: 'Space', label: '再生/停止', color: C.green },
-            { key: 'W', label: '分割', color: '#FFE135' },
+            { key: 'W', label: 'カーソル位置で分割', color: '#FFE135' },
             { key: '←→', label: '±5秒', color: C.blue },
           ].map(({ key, label, color }) => (
             <span key={key} style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>

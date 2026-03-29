@@ -37,6 +37,109 @@ function isPublicAuthEndpoint(url) {
   return PUBLIC_AUTH_ENDPOINTS.some(ep => u.includes(ep));
 }
 
+/**
+ * In-memory + sessionStorage cache for GET requests.
+ * Uses stale-while-revalidate strategy: returns cached data immediately,
+ * then revalidates in the background.
+ */
+const API_CACHE = {
+  _mem: new Map(),
+  _TTL: 5 * 60 * 1000, // 5 minutes default TTL
+  _STALE_TTL: 30 * 60 * 1000, // 30 minutes stale TTL (still usable while revalidating)
+
+  _key(url) {
+    return `api_cache:${url}`;
+  },
+
+  get(url) {
+    const key = this._key(url);
+    // Try memory first
+    const mem = this._mem.get(key);
+    if (mem) return mem;
+    // Try sessionStorage
+    try {
+      const raw = sessionStorage.getItem(key);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        this._mem.set(key, parsed); // promote to memory
+        return parsed;
+      }
+    } catch (e) { /* ignore */ }
+    return null;
+  },
+
+  set(url, data) {
+    const key = this._key(url);
+    const entry = { data, ts: Date.now() };
+    this._mem.set(key, entry);
+    try {
+      sessionStorage.setItem(key, JSON.stringify(entry));
+    } catch (e) {
+      // sessionStorage full – evict oldest entries
+      this._evict();
+      try { sessionStorage.setItem(key, JSON.stringify(entry)); } catch (e2) { /* give up */ }
+    }
+  },
+
+  isFresh(url) {
+    const entry = this.get(url);
+    return entry && (Date.now() - entry.ts) < this._TTL;
+  },
+
+  isStale(url) {
+    const entry = this.get(url);
+    return entry && (Date.now() - entry.ts) >= this._TTL && (Date.now() - entry.ts) < this._STALE_TTL;
+  },
+
+  invalidate(urlPattern) {
+    // Invalidate all cache entries matching a pattern
+    const keysToDelete = [];
+    this._mem.forEach((_, key) => {
+      if (key.includes(urlPattern)) keysToDelete.push(key);
+    });
+    keysToDelete.forEach(k => {
+      this._mem.delete(k);
+      try { sessionStorage.removeItem(k); } catch (e) { /* ignore */ }
+    });
+  },
+
+  _evict() {
+    // Remove oldest 20% of entries from sessionStorage
+    try {
+      const entries = [];
+      for (let i = 0; i < sessionStorage.length; i++) {
+        const key = sessionStorage.key(i);
+        if (key?.startsWith('api_cache:')) {
+          try {
+            const val = JSON.parse(sessionStorage.getItem(key));
+            entries.push({ key, ts: val.ts || 0 });
+          } catch (e) { entries.push({ key, ts: 0 }); }
+        }
+      }
+      entries.sort((a, b) => a.ts - b.ts);
+      const removeCount = Math.max(1, Math.floor(entries.length * 0.2));
+      for (let i = 0; i < removeCount; i++) {
+        sessionStorage.removeItem(entries[i].key);
+        this._mem.delete(entries[i].key.replace('api_cache:', ''));
+      }
+    } catch (e) { /* ignore */ }
+  },
+};
+
+// Endpoints that should NOT be cached (mutations, auth, real-time data)
+const NO_CACHE_PATTERNS = [
+  '/auth/',
+  '/upload',
+  '/process',
+  '/generate',
+  '/export',
+];
+
+function shouldCache(url) {
+  if (!url) return false;
+  return !NO_CACHE_PATTERNS.some(p => url.includes(p));
+}
+
 export default class BaseApiService {
   constructor(baseURL) {
     this.client = axios.create({
@@ -227,26 +330,56 @@ export default class BaseApiService {
 
   async post(url, data, config = {}) {
     const res = await this.client.post(url, data, config);
+    // Invalidate related GET caches on mutation
+    const basePath = url.split('?')[0];
+    API_CACHE.invalidate(basePath.split('/').slice(0, -1).join('/'));
     return res.data;
   }
 
   async get(url, config = {}) {
+    const fullUrl = url;
+    const useCache = shouldCache(fullUrl) && !config.noCache;
+
+    if (useCache) {
+      const cached = API_CACHE.get(fullUrl);
+      if (cached) {
+        if (API_CACHE.isFresh(fullUrl)) {
+          // Fresh cache – return immediately, no network request
+          return cached.data;
+        }
+        if (API_CACHE.isStale(fullUrl)) {
+          // Stale cache – return immediately, revalidate in background
+          this.client.get(url, config).then(res => {
+            API_CACHE.set(fullUrl, res.data);
+          }).catch(() => { /* background revalidation failed, keep stale */ });
+          return cached.data;
+        }
+      }
+    }
+
+    // No cache or expired – fetch from network
     const res = await this.client.get(url, config);
+    if (useCache) {
+      API_CACHE.set(fullUrl, res.data);
+    }
     return res.data;
   }
 
   async delete(url, config = {}) {
     const res = await this.client.delete(url, config);
+    API_CACHE.invalidate(url.split('?')[0]);
     return res.data;
   }
 
   async put(url, data, config = {}) {
     const res = await this.client.put(url, data, config);
+    API_CACHE.invalidate(url.split('?')[0]);
     return res.data;
   }
 
   async patch(url, data, config = {}) {
     const res = await this.client.patch(url, data, config);
+    API_CACHE.invalidate(url.split('?')[0]);
     return res.data;
   }
 }
