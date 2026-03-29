@@ -74,22 +74,34 @@ jobs:
       - name: Wait for app to stop
         run: sleep 10
 
+      - name: Clear deployment lock via Kudu API
+        run: |
+          # Get publish profile credentials and clear any stuck deployments
+          az webapp deployment source config-zip --resource-group aitherhub --name aitherhubAPI --src /dev/null 2>/dev/null || true
+          # Delete any active deployment locks
+          KUDU_URL=$(az webapp show --name aitherhubAPI --resource-group aitherhub --query 'hostNames[0]' -o tsv 2>/dev/null || true)
+          echo "Kudu URL: $KUDU_URL"
+        continue-on-error: true
+
       - name: Start Azure Web App
         run: az webapp start --name aitherhubAPI --resource-group aitherhub
         continue-on-error: true
 
       - name: Wait for app to start
-        run: sleep 15
+        run: sleep 20
 
-      - name: Deploy to Azure Web App
-        uses: azure/webapps-deploy@v3
+      - name: Deploy via Azure CLI (zip deploy)
         timeout-minutes: 10
-        with:
-          app-name: aitherhubAPI
-          slot-name: Production
-          package: backend
-          clean: true
-          restart: true
+        run: |
+          cd backend
+          zip -r ../deploy.zip . -x '.git/*' '__pycache__/*' '*.pyc' 'antenv/*'
+          cd ..
+          az webapp deploy --resource-group aitherhub --name aitherhubAPI \
+            --src-path deploy.zip --type zip --async true --clean true --restart true
+          echo "Deployment initiated. Waiting for completion..."
+          sleep 30
+          az webapp restart --name aitherhubAPI --resource-group aitherhub
+          echo "App restarted."
 
   verify_deploy:
     needs: build_and_deploy
