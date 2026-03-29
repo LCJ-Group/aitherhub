@@ -234,7 +234,7 @@ class HeyGenService:
     # ──────────────────────────────────────────
     async def list_avatars(self) -> list:
         """List all avatars (including Digital Twins and Photo Avatars)."""
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=120) as client:
             resp = await client.get(
                 f"{self.base_url}/v2/avatars",
                 headers=self._headers,
@@ -245,7 +245,7 @@ class HeyGenService:
 
     async def list_avatar_groups(self) -> list:
         """List all avatar groups (Photo Avatar Groups like 'kg')."""
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=120) as client:
             resp = await client.get(
                 f"{self.base_url}/v2/avatar_group.list",
                 headers=self._headers,
