@@ -220,6 +220,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
   const [subtitleStyle, setSubtitleStyle] = useState('box');
   const [subtitlePos, setSubtitlePos] = useState({ x: 50, y: 85 }); // percentage
   const [isDraggingSub, setIsDraggingSub] = useState(false);
+  const [subtitleFontSize, setSubtitleFontSize] = useState(0); // 0 = use preset default
   const subtitleContainerRef = useRef(null);
   const videoContainerRef = useRef(null);
 
@@ -638,11 +639,13 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
     const samples = waveformData.length;
     const barW = W / samples;
 
+    const effDuration = tlDuration || duration;
+
     // Draw silent region backgrounds
     ctx.fillStyle = 'rgba(239, 68, 68, 0.12)';
     for (const sr of silentRegions) {
-      const x1 = (sr.start / duration) * W;
-      const x2 = (sr.end / duration) * W;
+      const x1 = (sr.start / effDuration) * W;
+      const x2 = (sr.end / effDuration) * W;
       ctx.fillRect(x1, 0, x2 - x1, H);
     }
 
@@ -651,20 +654,22 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
       const allPoints = [0, ...splitPoints, duration];
       for (let i = 0; i < allPoints.length - 1; i++) {
         if (disabledSegments.has(i)) {
-          const x1 = (allPoints[i] / duration) * W;
-          const x2 = (allPoints[i + 1] / duration) * W;
+          const x1 = (allPoints[i] / effDuration) * W;
+          const x2 = (allPoints[i + 1] / effDuration) * W;
           ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
           ctx.fillRect(x1, 0, x2 - x1, H);
         }
       }
     }
 
-    // Draw waveform bars
+    // Draw waveform bars - scale to match actual audio portion within effDuration
+    const audioRatio = duration / effDuration; // portion of timeline that has audio
+    const audioSamples = Math.ceil(samples * audioRatio);
     for (let i = 0; i < samples; i++) {
-      const amp = waveformData[i];
-      const x = i * barW;
+      const amp = i < audioSamples ? waveformData[Math.min(i, waveformData.length - 1)] : 0;
+      const x = (i / samples) * W;
       const barH = Math.max(1, amp * H * 0.9);
-      const timeSec = (i / samples) * duration;
+      const timeSec = (i / samples) * effDuration;
 
       // Check if this sample is in a silent region
       const isSilent = silentRegions.some(sr => timeSec >= sr.start && timeSec <= sr.end);
@@ -694,7 +699,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
     ctx.strokeStyle = '#FFE135';
     ctx.lineWidth = 2;
     for (const sp of splitPoints) {
-      const x = (sp / duration) * W;
+      const x = (sp / (tlDuration || duration)) * W;
       ctx.beginPath();
       ctx.moveTo(x, 0);
       ctx.lineTo(x, H);
@@ -703,7 +708,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
 
     // Draw playhead
     if (currentTime >= 0) {
-      const px = (currentTime / duration) * W;
+      const px = (currentTime / (tlDuration || duration)) * W;
       ctx.strokeStyle = '#fff';
       ctx.lineWidth = 1.5;
       ctx.beginPath();
@@ -723,7 +728,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
       ctx.stroke();
       ctx.setLineDash([]);
     }
-  }, [waveformData, duration, silentRegions, splitPoints, disabledSegments, currentTime, timelineCursorPos]);
+  }, [waveformData, duration, tlDuration, silentRegions, splitPoints, disabledSegments, currentTime, timelineCursorPos]);
 
   // ─── Split segments helper ────────────────────────────────────
   const splitSegments = useMemo(() => {
@@ -737,11 +742,28 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
     }));
   }, [splitPoints, duration, disabledSegments]);
 
-  // ─── Keyboard shortcut: W to split ────────────────────────────
+  // ─── Keyboard shortcuts ────────────────────────────────────────
   useEffect(() => {
     const handleKeyDown = (e) => {
       // Don't trigger if user is typing in an input/textarea
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+      // Space = play/pause
+      if (e.key === ' ' || e.code === 'Space') {
+        e.preventDefault();
+        if (videoRef.current) {
+          if (videoRef.current.paused) {
+            videoRef.current.play();
+            setIsPlaying(true);
+          } else {
+            videoRef.current.pause();
+            setIsPlaying(false);
+          }
+        }
+        return;
+      }
+
+      // W = split at current position
       if (e.key === 'w' || e.key === 'W') {
         e.preventDefault();
         if (!duration || currentTime <= 0 || currentTime >= duration) return;
@@ -750,8 +772,30 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
         if (isDuplicate) return;
         setSplitPoints(prev => [...prev, Math.round(currentTime * 10) / 10].sort((a, b) => a - b));
         console.log(`[Split] Added split at ${currentTime.toFixed(1)}s`);
+        return;
       }
-      // Delete/Backspace to remove last split point
+
+      // Left/Right arrow = seek ±5s
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        if (videoRef.current) {
+          const t = Math.max(0, videoRef.current.currentTime - 5);
+          videoRef.current.currentTime = t;
+          setCurrentTime(t);
+        }
+        return;
+      }
+      if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        if (videoRef.current) {
+          const t = Math.min(duration || 0, videoRef.current.currentTime + 5);
+          videoRef.current.currentTime = t;
+          setCurrentTime(t);
+        }
+        return;
+      }
+
+      // Ctrl+Backspace = remove last split point
       if (e.key === 'Backspace' && e.ctrlKey) {
         e.preventDefault();
         setSplitPoints(prev => prev.slice(0, -1));
@@ -783,9 +827,10 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
     const container = waveformContainerRef.current;
     if (!container || !duration) return;
     const rect = container.getBoundingClientRect();
-    const t = Math.max(0, Math.min(duration, ((e.clientX - rect.left) / rect.width) * duration));
+    const effDur = tlDuration || duration;
+    const t = Math.max(0, Math.min(duration, ((e.clientX - rect.left) / rect.width) * effDur));
     seek(t);
-  }, [duration, seek]);
+  }, [duration, tlDuration, seek]);
 
   const onWaveformMouseMove = useCallback((e) => {
     const container = waveformContainerRef.current;
@@ -1516,6 +1561,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                     style={{
                       display: "inline-block",
                       ...presetText,
+                      ...(subtitleFontSize > 0 ? { fontSize: subtitleFontSize } : {}),
                       ...(currentCaption.emphasis && subtitleStyle !== 'pop' ? {
                         color: C.yellow,
                         fontWeight: 800,
@@ -1898,6 +1944,56 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                 <p style={{ color: C.textDim, fontSize: 9, margin: '0 0 14px', textAlign: 'center' }}>
                   プレビュー上の字幕をドラッグして位置を調整できます
                 </p>
+
+                {/* ═══ フォントサイズ ═══ */}
+                <SectionTitle>フォントサイズ</SectionTitle>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+                  <span style={{ color: C.textDim, fontSize: 10, minWidth: 16 }}>A</span>
+                  <input
+                    type="range"
+                    min={10}
+                    max={48}
+                    step={1}
+                    value={subtitleFontSize || (SUBTITLE_PRESETS[subtitleStyle]?.text?.fontSize || 16)}
+                    onChange={(e) => setSubtitleFontSize(parseInt(e.target.value))}
+                    style={{
+                      flex: 1,
+                      height: 4,
+                      accentColor: C.accent,
+                      cursor: 'pointer',
+                    }}
+                  />
+                  <span style={{ color: C.textDim, fontSize: 14, fontWeight: 700, minWidth: 16 }}>A</span>
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    backgroundColor: C.bg,
+                    borderRadius: 6,
+                    border: `1px solid ${C.border}`,
+                    padding: '4px 8px',
+                    minWidth: 48,
+                    justifyContent: 'center',
+                  }}>
+                    <span style={{ color: C.text, fontSize: 12, fontWeight: 600 }}>
+                      {subtitleFontSize || (SUBTITLE_PRESETS[subtitleStyle]?.text?.fontSize || 16)}
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => setSubtitleFontSize(0)}
+                    style={{
+                      padding: '4px 8px',
+                      border: `1px solid ${C.border}`,
+                      borderRadius: 6,
+                      backgroundColor: subtitleFontSize === 0 ? C.accent + '22' : C.surfaceLight,
+                      color: subtitleFontSize === 0 ? C.accent : C.textMuted,
+                      fontSize: 10,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    リセット
+                  </button>
+                </div>
 
                 {/* ═══ 字幕フィードバック ═══ */}
                 <SectionTitle>字幕フィードバック</SectionTitle>
@@ -2473,11 +2569,11 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                 position: 'absolute',
                 top: 0,
                 bottom: 0,
-                left: `${(sp / (duration || 1)) * 100}%`,
+                left: `${(sp / (tlDuration || duration || 1)) * 100}%`,
                 width: 3,
                 backgroundColor: '#FFE135',
                 cursor: 'pointer',
-                zIndex: 3,
+                zIndex: 5,
                 transform: 'translateX(-1.5px)',
               }}
               title={`分割点 ${fmt(sp)} (クリックで削除)`}
@@ -2493,9 +2589,9 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
               style={{
                 position: 'absolute',
                 bottom: 0,
-                left: `${(seg.start / (duration || 1)) * 100}%`,
-                width: `${((seg.end - seg.start) / (duration || 1)) * 100}%`,
-                height: 14,
+                left: `${(seg.start / (tlDuration || duration || 1)) * 100}%`,
+                width: `${((seg.end - seg.start) / (tlDuration || duration || 1)) * 100}%`,
+                height: 18,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -2508,6 +2604,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                     ? 'rgba(99, 102, 241, 0.4)'
                     : 'rgba(99, 102, 241, 0.15)',
                 cursor: 'pointer',
+                zIndex: 4,
                 borderRight: '1px solid rgba(255,255,255,0.1)',
                 transition: 'background-color 0.15s ease',
                 userSelect: 'none',
@@ -2564,14 +2661,33 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
         <div style={{
           display: 'flex',
           alignItems: 'center',
-          gap: 12,
+          gap: 6,
           marginBottom: 4,
           fontSize: 10,
           color: C.textDim,
+          flexWrap: 'wrap',
         }}>
-          <span><kbd style={{ padding: '1px 5px', backgroundColor: C.surfaceLight, borderRadius: 3, border: `1px solid ${C.border}`, fontSize: 10, fontWeight: 700, color: '#FFE135' }}>W</kbd> 分割</span>
-          <span>セグメントクリックで削除/復元</span>
-          <span>黄色線クリックで分割点削除</span>
+          {[
+            { key: 'Space', label: '再生/停止', color: C.green },
+            { key: 'W', label: '分割', color: '#FFE135' },
+            { key: '←→', label: '±5秒', color: C.blue },
+          ].map(({ key, label, color }) => (
+            <span key={key} style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+              <kbd style={{
+                padding: '1px 6px',
+                backgroundColor: C.surfaceLight,
+                borderRadius: 4,
+                border: `1px solid ${C.border}`,
+                fontSize: 10,
+                fontWeight: 700,
+                color: color,
+                fontFamily: 'monospace',
+              }}>{key}</kbd>
+              <span>{label}</span>
+            </span>
+          ))}
+          <span style={{ color: C.textMuted }}>セグメントクリックで削除/復元</span>
+          <span style={{ color: C.textMuted }}>黄色線クリックで分割点削除</span>
           {silentRegions.length > 0 && (
             <span style={{ color: C.red }}>赤 = 無音区間 ({silentRegions.length}箇所)</span>
           )}
