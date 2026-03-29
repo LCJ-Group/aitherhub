@@ -311,6 +311,57 @@ async def ensure_tables_exist():
     except Exception as e:
         logger.warning(f"Failed to ensure bug_reports/work_logs tables on startup: {e}")
 
+    # ── GPU Jobs table: persistent job queue for GPU processing ──
+    try:
+        from app.core.db import engine
+        from sqlalchemy import text as _text
+
+        async with asyncio.timeout(30):
+          async with engine.begin() as conn:
+            await conn.execute(_text("""
+                CREATE TABLE IF NOT EXISTS gpu_jobs (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    action VARCHAR(100) NOT NULL,
+                    status VARCHAR(50) NOT NULL DEFAULT 'pending',
+                    provider VARCHAR(50) NOT NULL DEFAULT 'runpod',
+                    provider_job_id VARCHAR(200),
+                    input_data JSONB,
+                    output_data JSONB,
+                    error_message TEXT,
+                    retry_count INTEGER DEFAULT 0,
+                    max_retries INTEGER DEFAULT 3,
+                    submitted_at TIMESTAMPTZ,
+                    started_at TIMESTAMPTZ,
+                    completed_at TIMESTAMPTZ,
+                    duration_seconds REAL,
+                    caller_type VARCHAR(100),
+                    caller_id VARCHAR(200),
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """))
+            await conn.execute(_text("""
+                CREATE INDEX IF NOT EXISTS ix_gpu_jobs_status_created
+                ON gpu_jobs (status, created_at)
+            """))
+            await conn.execute(_text("""
+                CREATE INDEX IF NOT EXISTS ix_gpu_jobs_provider_status
+                ON gpu_jobs (provider, status)
+            """))
+            await conn.execute(_text("""
+                CREATE INDEX IF NOT EXISTS ix_gpu_jobs_provider_job_id
+                ON gpu_jobs (provider_job_id)
+            """))
+            await conn.execute(_text("""
+                CREATE INDEX IF NOT EXISTS ix_gpu_jobs_action
+                ON gpu_jobs (action)
+            """))
+        logger.info("gpu_jobs table verified/created")
+    except asyncio.TimeoutError:
+        logger.warning("Timeout (30s) while ensuring gpu_jobs table on startup")
+    except Exception as e:
+        logger.warning(f"Failed to ensure gpu_jobs table on startup: {e}")
+
     # ── Feedback Loop tables: clip_feedback extensions, sales_confirmation, clip_edit_log ──
     try:
         async with asyncio.timeout(60):

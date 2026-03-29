@@ -307,13 +307,15 @@ def handle_musetalk(job_input: Dict[str, Any]) -> Dict[str, Any]:
 
         engine = _musetalk_engine
 
-        # Step 3: Generate lip-sync video
+        # Step 3: Prepare avatar from portrait image/video
+        if not engine.prepare_avatar(portrait_path):
+            raise RuntimeError("Avatar preparation failed — could not detect face in portrait")
+
+        # Step 4: Generate lip-sync video
         output_path = os.path.join(job_dir, f"output_{job_id}.mp4")
-        success = engine.generate_from_audio(
+        success = engine.generate_test_video(
             audio_path=audio_path,
             output_path=output_path,
-            source_path=portrait_path,
-            fps=job_input.get("output_fps", 25),
         )
 
         if not success or not os.path.exists(output_path):

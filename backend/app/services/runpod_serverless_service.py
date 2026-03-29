@@ -3,20 +3,24 @@ RunPod Serverless Service for AitherHub
 ========================================
 
 Unified client for calling RunPod Serverless endpoints.
-Replaces the old Pod-based approach (runpod_discovery_service.py + direct HTTP).
+Now backed by GPUProviderManager for automatic multi-provider failover.
 
 Architecture:
-  AitherHub Backend → RunPod Serverless API → GPU Worker (auto-scaled)
+  AitherHub Backend → RunPodServerlessService (backward-compatible API)
+                    → GPUProviderManager → [RunPod | Modal | Replicate]
 
-How it works:
-  1. POST /run   → Submit a job (async)
-  2. GET /status  → Poll for completion
-  3. POST /runsync → Submit and wait (sync, up to 120s)
+The RunPodServerlessService class is preserved for backward compatibility.
+All existing callers (musetalk_service, face_swap_service, etc.) continue
+to work without changes. Internally, jobs are routed through the
+GPUProviderManager which handles failover and can persist jobs to DB.
 
 Environment variables:
   RUNPOD_API_KEY              — RunPod API key (required)
   RUNPOD_ENDPOINT_ID          — Serverless endpoint ID (required)
   RUNPOD_SERVERLESS_TIMEOUT   — Max wait time for sync calls (default: 300)
+  MODAL_TOKEN_ID              — Modal token (optional, for failover)
+  MODAL_TOKEN_SECRET          — Modal secret (optional, for failover)
+  REPLICATE_API_TOKEN         — Replicate token (optional, for failover)
 """
 from __future__ import annotations
 
@@ -41,6 +45,9 @@ RUNPOD_SERVERLESS_TIMEOUT = int(os.getenv("RUNPOD_SERVERLESS_TIMEOUT", "300"))
 POLL_INITIAL_INTERVAL = 1.0
 POLL_MAX_INTERVAL = 5.0
 POLL_BACKOFF_FACTOR = 1.5
+
+# Feature flag: use multi-provider manager
+USE_MULTI_PROVIDER = os.getenv("GPU_MULTI_PROVIDER", "false").lower() in ("true", "1", "yes")
 
 
 # ── Exceptions ───────────────────────────────────────────────────────────────
@@ -80,7 +87,10 @@ class RunPodJobError(RunPodServerlessError):
 
 class RunPodServerlessService:
     """
-    Client for RunPod Serverless API.
+    Client for RunPod Serverless API with multi-provider failover support.
+
+    When GPU_MULTI_PROVIDER=true, jobs are routed through GPUProviderManager
+    which automatically fails over to Modal/Replicate if RunPod is unavailable.
 
     Usage:
         service = RunPodServerlessService()
@@ -100,6 +110,16 @@ class RunPodServerlessService:
         self.api_key = api_key or RUNPOD_API_KEY
         self.endpoint_id = endpoint_id or RUNPOD_ENDPOINT_ID
         self._base_url = f"{RUNPOD_API_BASE}/{self.endpoint_id}"
+
+        # Initialize multi-provider manager if enabled
+        self._provider_manager = None
+        if USE_MULTI_PROVIDER:
+            try:
+                from app.services.gpu_provider import get_gpu_provider_manager
+                self._provider_manager = get_gpu_provider_manager()
+                logger.info("Multi-provider GPU manager enabled")
+            except Exception as e:
+                logger.warning(f"Failed to init GPU provider manager: {e}")
 
         if not self.api_key:
             logger.warning("RUNPOD_API_KEY not set — Serverless features disabled")
@@ -123,12 +143,31 @@ class RunPodServerlessService:
         """
         Submit an async job to the serverless endpoint.
 
+        If multi-provider is enabled, routes through GPUProviderManager
+        for automatic failover.
+
         Args:
             input_data: Job input payload (will be wrapped in {"input": ...})
 
         Returns:
             dict with 'id' (job ID) and 'status'
         """
+        # Try multi-provider manager first
+        if self._provider_manager:
+            try:
+                from app.services.gpu_provider import GPUProviderUnavailableError
+                result = await self._provider_manager.submit_job(input_data)
+                return {
+                    "id": result["provider_job_id"],
+                    "status": "IN_QUEUE",
+                    "_provider": result["provider"],
+                }
+            except GPUProviderUnavailableError:
+                logger.warning("All providers unavailable, falling back to direct RunPod")
+            except Exception as e:
+                logger.warning(f"Provider manager error: {e}, falling back to direct RunPod")
+
+        # Direct RunPod call (original behavior)
         if not self.is_configured:
             raise RunPodConnectionError("RunPod Serverless not configured")
 
@@ -441,19 +480,32 @@ class RunPodServerlessService:
     async def health_check(self) -> Dict[str, Any]:
         """
         Quick health check of the serverless endpoint.
+        Includes multi-provider status when enabled.
         """
+        result = {}
+
+        # Multi-provider health check
+        if self._provider_manager:
+            try:
+                result["providers"] = await self._provider_manager.health_check_all()
+            except Exception as e:
+                result["providers_error"] = str(e)
+
         if not self.is_configured:
             return {
                 "status": "not_configured",
                 "error": "RUNPOD_API_KEY or RUNPOD_ENDPOINT_ID not set",
+                **result,
             }
 
         try:
-            result = await self.run_job(action="health", timeout=30)
+            job_result = await self.run_job(action="health", timeout=30)
             return {
                 "status": "ok",
                 "mode": "serverless",
+                "multi_provider": USE_MULTI_PROVIDER,
                 "endpoint_id": self.endpoint_id,
+                **job_result,
                 **result,
             }
         except RunPodTimeoutError:
@@ -461,14 +513,18 @@ class RunPodServerlessService:
                 "status": "cold_start",
                 "message": "Worker is starting up (cold start). Try again in 30-60 seconds.",
                 "mode": "serverless",
+                "multi_provider": USE_MULTI_PROVIDER,
                 "endpoint_id": self.endpoint_id,
+                **result,
             }
         except Exception as e:
             return {
                 "status": "error",
                 "error": str(e),
                 "mode": "serverless",
+                "multi_provider": USE_MULTI_PROVIDER,
                 "endpoint_id": self.endpoint_id,
+                **result,
             }
 
 

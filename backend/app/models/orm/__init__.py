@@ -20,6 +20,7 @@ from .feedback import Feedback
 from .live_session import LiveSession
 from .live_analysis_job import LiveAnalysisJob
 from .persona import Persona, PersonaVideoTag, PersonaTrainingLog
+from .gpu_job import GpuJob
 from .extension_events import (
     ExtSession,
     RawEvent,
