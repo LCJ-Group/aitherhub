@@ -72,6 +72,10 @@ jobs:
         timeout-minutes: 10
         with:
           app-name: aitherhubAPI
+          slot-name: Production
+          package: backend
+          clean: true
+          restart: true
 
   verify_deploy:
     needs: build_and_deploy
