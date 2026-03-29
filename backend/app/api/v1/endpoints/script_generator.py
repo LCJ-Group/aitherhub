@@ -94,8 +94,10 @@ async def generate_standalone_script(
     cross_patterns = None
     try:
         cross_patterns = await aggregate_patterns_across_videos(db, limit_videos=50)
+        logger.info(f"Cross-video patterns: {cross_patterns.get('videos_analyzed', 0)} videos, "
+                     f"{len(cross_patterns.get('cta_phrases', []))} CTA patterns")
     except Exception as e:
-        logger.warning(f"Cross-video aggregation failed: {e}")
+        logger.warning(f"Cross-video aggregation failed: {e}", exc_info=True)
         try:
             await db.rollback()
         except Exception:
@@ -105,8 +107,13 @@ async def generate_standalone_script(
     feedback_knowledge = None
     try:
         feedback_knowledge = await extract_feedback_knowledge(db, top_limit=15, bottom_limit=10)
+        if feedback_knowledge:
+            stats = feedback_knowledge.get('stats', {})
+            logger.info(f"Feedback knowledge: {stats.get('total_rated', 0)} rated, "
+                         f"{len(feedback_knowledge.get('winning_patterns', []))} winning, "
+                         f"{len(feedback_knowledge.get('losing_patterns', []))} losing")
     except Exception as e:
-        logger.warning(f"Feedback knowledge extraction failed: {e}")
+        logger.warning(f"Feedback knowledge extraction failed: {e}", exc_info=True)
         try:
             await db.rollback()
         except Exception:
@@ -145,13 +152,22 @@ async def generate_standalone_script(
                 "You write scripts based on REAL sales data from actual livestreams, not guesses. "
                 "Every CTA, every product description timing, every engagement hook "
                 "is backed by actual performance metrics.\n\n"
-                "CRITICAL FORMAT RULES:\n"
-                "- 🎤 marks dialogue lines (what the liver actually says out loud)\n"
-                "- 📋 marks stage directions (actions, timing cues, demo instructions)\n"
-                "- ⏱ marks section headers with time estimates\n"
-                "- NEVER mix dialogue and stage directions in the same line\n"
-                "- Dialogue must sound natural and conversational, as if spoken live\n"
-                "- Stage directions must be concise action instructions in parentheses"
+                "## MANDATORY OUTPUT FORMAT (MUST FOLLOW EXACTLY)\n\n"
+                "Every single line of your output MUST start with one of these 3 markers:\n\n"
+                "⏱ — Section header with time range. Example:\n"
+                "⏱ オープニング [0:00 - 1:30]\n\n"
+                "🎤 — Dialogue line (what the liver says out loud). Example:\n"
+                '🎤「こんばんは！今日も来てくれてありがとうございます！」\n\n'
+                "📋 — Stage direction (action/timing cue). Example:\n"
+                "📋（カメラに向かって笑顔で手を振る）\n\n"
+                "RULES:\n"
+                "1. EVERY line must begin with ⏱, 🎤, or 📋. No exceptions. No plain text lines.\n"
+                "2. NEVER mix dialogue and stage directions on the same line.\n"
+                "3. Dialogue (🎤) must sound natural and conversational.\n"
+                "4. Stage directions (📋) must be concise actions in （）parentheses.\n"
+                "5. Generate the FULL requested length. Do NOT cut short.\n"
+                "6. Do NOT use markdown headers (#), bold (**), or any other formatting.\n"
+                "7. Output ONLY the script. No explanations, no meta-commentary."
             ),
         },
         {"role": "user", "content": prompt},
@@ -221,12 +237,20 @@ async def generate_standalone_script(
     if script is None:
         raise HTTPException(status_code=500, detail=f"All LLM strategies failed: {'; '.join(errors)}")
 
-    # Post-process: clean up markdown but preserve our format markers
+    # Post-process: clean up markdown but preserve our format markers (🎤📋⏱)
     script = re.sub(r'\*\*', '', script)
     script = re.sub(r'\*', '', script)
-    script = re.sub(r'#{1,6}\s*', '', script)
+    # Remove markdown headers but NOT lines starting with our markers
+    script = re.sub(r'^#{1,6}\s*', '', script, flags=re.MULTILINE)
     script = re.sub(r'\n{3,}', '\n\n', script)
+    # Remove code block markers if LLM wrapped output in ```
+    script = re.sub(r'^```[a-z]*\s*$', '', script, flags=re.MULTILINE)
     script = script.strip()
+
+    # If LLM ignored format markers, add a note in logs
+    has_markers = '🎤' in script or '📋' in script or '⏱' in script
+    if not has_markers:
+        logger.warning("LLM output missing format markers (🎤📋⏱) - model may have ignored format instructions")
 
     char_count = len(script)
     estimated_duration = round(char_count / 250, 1)
@@ -546,17 +570,22 @@ def _build_standalone_prompt(
 🎤「あ、〇〇さん、いつもありがとう！」
 ```
 
-## 生成条件
-- 目標文字数: {min_chars}〜{max_chars}文字（約{duration_minutes}分の配信）
-- セリフは「」で囲む
+## 生成条件（厳守）
+- 目標文字数: {min_chars}〜{max_chars}文字（約{duration_minutes}分の配信）。この文字数に必ず到達すること。短すぎる台本は不可。
+- すべてのセリフ行は🎤で始め、「」で囲む
+- すべての演出指示行は📋で始め、（）で囲む
+- すべてのセクション見出し行は⏱で始める
 - 各セクションに目安時間を入れる
 - 実績データのパターンを自然に反映する（「データによると」などとは言わない）
 - フィードバックの高評価パターンを積極的に取り入れ、低評価パターンは避ける
+- プレーンテキスト行（マーカーなし）は絶対に出力しない
 """
 
     if additional_instructions:
         prompt += f"\n## 追加指示\n{additional_instructions}\n"
 
-    prompt += "\n上記のフォーマットルールに従って、台本を生成してください。フォーマット例と同じ形式で、🎤と📋を必ず使ってください。"
+    prompt += ("\n重要: 上記のフォーマットルールに従って台本を生成してください。"
+              "\n全ての行は必ず⏱または🎤または📋のいずれかで始めてください。"
+              f"\n文字数は{min_chars}文字以上必須です。")
 
     return prompt
