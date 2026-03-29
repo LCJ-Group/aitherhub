@@ -1,11 +1,15 @@
 import BaseApiService from '../api/BaseApiService';
-import TokenManager from '../utils/tokenManager';
 
 /**
  * Script Generator Tool Service
  *
  * Standalone "売れる台本" tool — generates live commerce scripts
  * based on real performance data from AitherHub's analysis database.
+ *
+ * Extends BaseApiService which automatically handles:
+ * - Bearer token injection via request interceptor
+ * - Token refresh on 401/403
+ * - Auto-logout on refresh failure
  */
 class ScriptGeneratorService extends BaseApiService {
   constructor() {
@@ -27,14 +31,10 @@ class ScriptGeneratorService extends BaseApiService {
    * @returns {Promise<Object>} { script, char_count, estimated_duration_minutes, patterns_used, data_insights, product_analysis, model }
    */
   async generateScript(params) {
-    const token = TokenManager.getToken();
-    const response = await this.axiosInstance.post(
+    const response = await this.client.post(
       '/api/v1/script-generator/generate',
       params,
       {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
         timeout: 120000, // 2 min timeout for LLM generation
       }
     );
@@ -47,14 +47,8 @@ class ScriptGeneratorService extends BaseApiService {
    * @returns {Promise<Object>} { videos_analyzed, cta_phrases, duration_insights, top_techniques }
    */
   async getWinningPatterns(limitVideos = 50) {
-    const token = TokenManager.getToken();
-    const response = await this.axiosInstance.get(
-      `/api/v1/script-generator/patterns?limit_videos=${limitVideos}`,
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      }
+    const response = await this.client.get(
+      `/api/v1/script-generator/patterns?limit_videos=${limitVideos}`
     );
     return response.data;
   }
@@ -64,15 +58,9 @@ class ScriptGeneratorService extends BaseApiService {
    * @returns {Promise<Object>} { upload_url, blob_url, expiry }
    */
   async getImageUploadUrl() {
-    const token = TokenManager.getToken();
-    const response = await this.axiosInstance.post(
+    const response = await this.client.post(
       '/api/v1/script-generator/upload-image',
-      {},
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      }
+      {}
     );
     return response.data;
   }
