@@ -484,7 +484,11 @@ class HeyGenService:
                 resp.raise_for_status()
                 data = resp.json()
 
-            photos = data.get("data", {}).get("talking_photos", [])
+            raw = data.get("data", [])
+            if isinstance(raw, list):
+                photos = raw
+            else:
+                photos = raw.get("talking_photos", []) if isinstance(raw, dict) else []
             return {
                 "status": "ok",
                 "api_key_set": bool(self.api_key),
