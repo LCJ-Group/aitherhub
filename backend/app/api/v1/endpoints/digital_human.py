@@ -1135,11 +1135,12 @@ async def musetalk_generate(
 )
 async def musetalk_status(
     job_id: str,
+    runpod_job_id: Optional[str] = None,
     _auth: bool = Depends(verify_admin_key),
 ):
     try:
         service = get_musetalk_service()
-        result = await service.get_status(job_id)
+        result = await service.get_status(job_id, runpod_job_id=runpod_job_id)
 
         return MuseTalkStatusResponse(
             success=True,
@@ -1705,12 +1706,13 @@ async def imtalker_generate_from_text(
 )
 async def imtalker_status(
     job_id: str,
+    runpod_job_id: Optional[str] = None,
     _auth: bool = Depends(verify_admin_key),
 ):
     """IMTalker shares the same job tracking system as MuseTalk on the GPU Worker."""
     try:
         service = get_musetalk_service()
-        result = await service.get_status(job_id)
+        result = await service.imtalker_status(job_id, runpod_job_id=runpod_job_id)
         return MuseTalkStatusResponse(
             success=True,
             job_id=job_id,
@@ -2212,7 +2214,10 @@ async def get_session_queue(
 ):
     session = get_session(session_id)
     if not session:
-        return {"success": False, "error": f"Session {session_id} not found"}
+        raise HTTPException(
+            status_code=404,
+            detail={"success": False, "error": f"Session {session_id} not found"},
+        )
 
     # Update queue item statuses from GPU Worker
     service = get_musetalk_service()
@@ -2761,77 +2766,86 @@ async def autopilot_next(
         if not script_text:
             script_text = f"この{product_name}は本当に素晴らしい商品です！"
 
-        # Generate TTS (WAV for GPU Worker lip-sync)
+        # Generate TTS audio — two formats in parallel:
+        # 1. MP3 for immediate browser playback (fast response)
+        # 2. PCM→WAV for GPU Worker lip-sync (background task)
+        import asyncio as _asyncio
         el_service = get_elevenlabs_service()
         voice_id = req.voice_id or session.get("voice_id")
-        pcm_audio = await el_service.text_to_speech(
+        audio_id = f"script-{int(time.time())}"
+
+        # Parallel TTS: MP3 + PCM
+        mp3_task = el_service.text_to_speech(
+            text=script_text,
+            voice_id=voice_id,
+            output_format="mp3_44100_128",
+            language_code=req.language,
+        )
+        pcm_task = el_service.text_to_speech(
             text=script_text,
             voice_id=voice_id,
             output_format="pcm_16000",
             language_code=req.language,
         )
+        mp3_audio, pcm_audio = await _asyncio.gather(mp3_task, pcm_task)
+
         wav_audio = _pcm_to_wav(pcm_audio, sample_rate=16000)
         tts_duration_ms = len(pcm_audio) / (16000 * 2) * 1000
 
-        # Upload WAV audio to blob (needed for GPU Worker)
-        audio_id = f"script-{int(time.time())}"
-        wav_blob_url = await _upload_audio_to_blob(wav_audio, audio_id)
-        wav_audio_url = _ensure_sas_url(wav_blob_url)
+        # Upload both in parallel
+        wav_upload = _upload_audio_to_blob(wav_audio, audio_id)
+        mp3_upload = _upload_mp3_to_blob(mp3_audio, audio_id)
+        wav_blob_url, mp3_blob_url = await _asyncio.gather(wav_upload, mp3_upload)
 
-        # Convert WAV to MP3 locally for fallback audio playback
-        # (avoids a second TTS API call, saving 3-5 seconds)
-        import subprocess
-        import tempfile
-        try:
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as wav_tmp:
-                wav_tmp.write(wav_audio)
-                wav_tmp_path = wav_tmp.name
-            mp3_tmp_path = wav_tmp_path.replace(".wav", ".mp3")
-            proc = subprocess.run(
-                ["ffmpeg", "-y", "-i", wav_tmp_path, "-codec:a", "libmp3lame",
-                 "-b:a", "128k", "-ar", "44100", mp3_tmp_path],
-                capture_output=True, timeout=15,
-            )
-            if proc.returncode == 0 and os.path.exists(mp3_tmp_path):
-                with open(mp3_tmp_path, "rb") as f:
-                    mp3_audio = f.read()
-            else:
-                # Fallback: use WAV as MP3 (browser can play WAV too)
-                logger.warning("[AutoPilot] FFmpeg WAV→MP3 conversion failed, using WAV")
-                mp3_audio = wav_audio
-            # Clean up temp files
-            for p in [wav_tmp_path, mp3_tmp_path]:
-                if os.path.exists(p):
-                    os.remove(p)
-        except Exception as conv_err:
-            logger.warning(f"[AutoPilot] WAV→MP3 conversion error: {conv_err}, using WAV")
-            mp3_audio = wav_audio
-        mp3_blob_url = await _upload_mp3_to_blob(mp3_audio, audio_id)
+        wav_audio_url = _ensure_sas_url(wav_blob_url)
         mp3_audio_url = _ensure_sas_url(mp3_blob_url)
 
-        # Generate lip-synced video via GPU Worker
+        # ── Async Lip-Sync Video Generation ──────────────────────────
+        # Instead of blocking for 30-180s waiting for GPU Worker,
+        # we return TTS audio immediately and generate lip-sync video
+        # in the background. The video is cached in the session and
+        # returned with the NEXT autopilot/next call.
         portrait_url = session.get("portrait_url", "")
         lipsync_engine = session.get("engine", "musetalk")
-        video_url = None
-        video_job_id = None
 
+        # Check if a previously generated lip-sync video is ready
+        cached_video_url = autopilot.pop("_cached_video_url", None)
+        if cached_video_url:
+            logger.info(f"[AutoPilot] Using cached lip-sync video: {cached_video_url[:80]}...")
+
+        # Start background lip-sync generation for THIS segment
         if portrait_url:
+            portrait_type = session.get("portrait_type", "image")
             logger.info(
-                f"[AutoPilot] Generating lip-sync video: "
+                f"[AutoPilot] Starting background lip-sync: "
                 f"engine={lipsync_engine}, portrait={portrait_url[:60]}..."
             )
-            portrait_type = session.get("portrait_type", "image")
-            video_url = await _generate_lipsync_video(
-                portrait_url=portrait_url,
-                audio_url=wav_audio_url,
-                engine=lipsync_engine,
-                portrait_type=portrait_type,
-                max_wait_sec=180,
+
+            async def _bg_lipsync(sess, ap, p_url, a_url, eng, p_type):
+                """Background task: generate lip-sync video and cache in session."""
+                try:
+                    video_url = await _generate_lipsync_video(
+                        portrait_url=p_url,
+                        audio_url=a_url,
+                        engine=eng,
+                        portrait_type=p_type,
+                        max_wait_sec=180,
+                    )
+                    if video_url:
+                        ap["_cached_video_url"] = video_url
+                        logger.info(f"[AutoPilot BG] Lip-sync video ready: {video_url[:80]}...")
+                    else:
+                        logger.warning("[AutoPilot BG] Lip-sync video generation failed")
+                except Exception as bg_err:
+                    logger.error(f"[AutoPilot BG] Lip-sync error: {bg_err}")
+
+            import asyncio
+            asyncio.create_task(
+                _bg_lipsync(
+                    session, autopilot, portrait_url, wav_audio_url,
+                    lipsync_engine, portrait_type,
+                )
             )
-            if video_url:
-                logger.info(f"[AutoPilot] Lip-sync video ready: {video_url[:80]}...")
-            else:
-                logger.warning("[AutoPilot] Lip-sync video generation failed, falling back to audio-only")
 
         # Update autopilot state
         autopilot["state"] = next_state
@@ -2855,7 +2869,7 @@ async def autopilot_next(
             product_name=product_name,
             product_index=next_product_index,
             next_state=next_state,
-            video_url=video_url,
+            video_url=cached_video_url,  # Use previously cached video (None on first call)
         )
 
     except ElevenLabsError as e:

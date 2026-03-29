@@ -235,7 +235,16 @@ class MuseTalkService:
         """
         Get the status of a MuseTalk generation job.
         """
-        if self._use_serverless and runpod_job_id:
+        if self._use_serverless:
+            if not runpod_job_id:
+                # Serverless mode but no runpod_job_id — cannot check status
+                logger.warning(f"Serverless mode but no runpod_job_id for job {job_id}")
+                return {
+                    "job_id": job_id,
+                    "status": "error",
+                    "error": "No runpod_job_id available for serverless status check",
+                    "mode": "serverless",
+                }
             result = await self._serverless.get_status(runpod_job_id)
             status = result.get("status", "UNKNOWN")
 
@@ -329,7 +338,16 @@ class MuseTalkService:
 
     async def imtalker_status(self, job_id: str, runpod_job_id: Optional[str] = None) -> Dict[str, Any]:
         """Get IMTalker job status."""
-        if self._use_serverless and runpod_job_id:
+        if self._use_serverless:
+            if not runpod_job_id:
+                logger.warning(f"Serverless mode but no runpod_job_id for IMTalker job {job_id}")
+                return {
+                    "job_id": job_id,
+                    "status": "error",
+                    "error": "No runpod_job_id available for serverless status check",
+                    "mode": "serverless",
+                    "engine": "imtalker",
+                }
             result = await self._serverless.get_status(runpod_job_id)
             status = result.get("status", "UNKNOWN")
             status_map = {
@@ -407,6 +425,15 @@ class MuseTalkService:
 
     async def liveportrait_status(self, job_id: str, runpod_job_id: Optional[str] = None) -> Dict[str, Any]:
         """Get LivePortrait job status."""
+        if self._use_serverless and not runpod_job_id:
+            logger.warning(f"Serverless mode but no runpod_job_id for LivePortrait job {job_id}")
+            return {
+                "job_id": job_id,
+                "status": "error",
+                "error": "No runpod_job_id available for serverless status check",
+                "mode": "serverless",
+                "engine": "liveportrait",
+            }
         if self._use_serverless and runpod_job_id:
             result = await self._serverless.get_status(runpod_job_id)
             status = result.get("status", "UNKNOWN")

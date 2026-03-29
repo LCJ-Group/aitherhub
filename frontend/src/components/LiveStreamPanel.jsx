@@ -143,17 +143,34 @@ const LiveStreamPanel = forwardRef(function LiveStreamPanel({
   }, []);
 
   // ── Poll queue status ──
+  // ── Session recovery counter (avoid infinite retry loops) ──
+  const sessionRecoveryRef = useRef(0);
+
   useEffect(() => {
     if (!sessionId) return;
+    // Reset recovery counter when sessionId changes
+    sessionRecoveryRef.current = 0;
     const pollQueue = async () => {
       try {
         const res = await aiLiveCreatorService.getSessionQueue(sessionId);
         if (res.success && res.queue) {
           setVideoQueue(res.queue);
           onQueueUpdate?.(res.queue);
+          sessionRecoveryRef.current = 0; // Reset on success
+        } else if (res.error && res.error.includes('not found')) {
+          // Session was lost (server restart) — auto-recover
+          console.warn('[LiveStreamPanel] Session lost, attempting recovery...');
+          handleSessionRecovery();
         }
       } catch (err) {
-        console.error("Queue poll error:", err);
+        const status = err?.response?.status;
+        const errMsg = err?.response?.data?.error || err?.message || '';
+        if (status === 404 || errMsg.includes('not found')) {
+          console.warn('[LiveStreamPanel] Session not found (404), attempting recovery...');
+          handleSessionRecovery();
+        } else {
+          console.error("Queue poll error:", err);
+        }
       }
     };
     pollQueue();
@@ -162,6 +179,67 @@ const LiveStreamPanel = forwardRef(function LiveStreamPanel({
       if (queuePollRef.current) clearInterval(queuePollRef.current);
     };
   }, [sessionId]);
+
+  // ── Auto-recover lost session ──
+  const handleSessionRecovery = async () => {
+    if (sessionRecoveryRef.current >= 2) {
+      // Already tried recovery twice — stop polling and reset
+      console.error('[LiveStreamPanel] Session recovery failed after 2 attempts, resetting session.');
+      if (queuePollRef.current) clearInterval(queuePollRef.current);
+      setSessionId(null);
+      showToast('error', 'Session expired. Please start a new session.');
+      return;
+    }
+    sessionRecoveryRef.current++;
+    
+    if (!portraitUrl) {
+      // Can't auto-recover without portrait — just reset
+      if (queuePollRef.current) clearInterval(queuePollRef.current);
+      setSessionId(null);
+      showToast('error', 'Session expired. Please start a new session.');
+      return;
+    }
+
+    showToast('info', 'Session expired, auto-recovering...');
+    try {
+      const res = await aiLiveCreatorService.createLiveSession({
+        portrait_url: portraitUrl,
+        portrait_type: portraitType || "image",
+        engine: engine || "imtalker",
+        voice_id: voiceId,
+        language: language || "ja",
+        products: products.map((p) => ({
+          name: p.name,
+          description: p.description,
+          price: p.price,
+          features: p.features ? (typeof p.features === 'string' ? p.features.split(",").map((f) => f.trim()) : p.features) : [],
+          // Preserve TikTok enhanced data
+          image_url: p.image_url,
+          selling_points: p.selling_points,
+          achievements: p.achievements,
+          reviews_summary: p.reviews_summary,
+          sold_info: p.sold_info,
+          target_audience: p.target_audience,
+          talk_hooks: p.talk_hooks,
+          variants: p.variants,
+        })),
+      });
+      if (res.success) {
+        setSessionId(res.session_id);
+        showToast('success', `Session recovered: ${res.session_id}`);
+        console.log('[LiveStreamPanel] Session auto-recovered:', res.session_id);
+      } else {
+        if (queuePollRef.current) clearInterval(queuePollRef.current);
+        setSessionId(null);
+        showToast('error', 'Session recovery failed. Please start a new session.');
+      }
+    } catch (err) {
+      console.error('[LiveStreamPanel] Session recovery error:', err);
+      if (queuePollRef.current) clearInterval(queuePollRef.current);
+      setSessionId(null);
+      showToast('error', 'Session recovery failed. Please start a new session.');
+    }
+  };
 
   // ══════════════════════════════════════════════
   // Session Management
