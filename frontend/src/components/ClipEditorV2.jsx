@@ -261,9 +261,36 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
   // (e.g., phase=157s but clip video=112s after previous trim).
   // Use the larger of video duration and phase duration so everything fits.
   const tlDuration = isClipVideo ? Math.max(duration, origEnd - origStart) : duration;
-  const videoUrl = useMemo(() => {
+  const rawVideoUrl = useMemo(() => {
     return clip?.clip_url || videoData?.video_url || clip?.video_url || null;
   }, [videoData, clip]);
+
+  // If clip_url has no SAS token, fetch a fresh one from the backend
+  const [videoUrl, setVideoUrl] = useState(null);
+  useEffect(() => {
+    if (!rawVideoUrl) { setVideoUrl(null); return; }
+    // Check if URL already has SAS token
+    if (rawVideoUrl.includes('sig=') || rawVideoUrl.includes('sv=')) {
+      setVideoUrl(rawVideoUrl);
+      return;
+    }
+    // No SAS token - fetch fresh URL from backend
+    let cancelled = false;
+    (async () => {
+      try {
+        const freshRes = await VideoService.getClipStatus(videoId, clip?.phase_index);
+        if (!cancelled && freshRes?.clip_url) {
+          setVideoUrl(freshRes.clip_url);
+        } else if (!cancelled) {
+          setVideoUrl(rawVideoUrl); // fallback
+        }
+      } catch (e) {
+        console.warn('[ClipEditor] Failed to fetch fresh SAS URL:', e);
+        if (!cancelled) setVideoUrl(rawVideoUrl);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [rawVideoUrl, videoId, clip?.phase_index]);
 
   // ─── Time offset logic ────────────────────────────────────────
   // When playing clip_url: video currentTime is 0-based (clip local time)
@@ -2552,6 +2579,25 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
               }}
             />
           )}
+          {/* Split point lines on timeline bar (matching waveform) */}
+          {splitPoints.map((sp, i) => (
+            <div
+              key={`tlsp${i}`}
+              onClick={(e) => { e.stopPropagation(); removeSplitPoint(sp); }}
+              style={{
+                position: 'absolute',
+                top: 0,
+                bottom: 0,
+                left: `${(sp / (tlDuration || duration || 1)) * 100}%`,
+                width: 3,
+                backgroundColor: '#FFE135',
+                cursor: 'pointer',
+                zIndex: 6,
+                transform: 'translateX(-1.5px)',
+              }}
+              title={`分割点 ${fmt(sp)} (クリックで削除)`}
+            />
+          ))}
           {/* Mouse hover cursor line on timeline bar */}
           {timelineCursorPos !== null && (
             <div
@@ -2643,26 +2689,37 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
               onClick={(e) => { e.stopPropagation(); toggleSegment(seg.index); }}
               onMouseEnter={() => setHoveredSegIdx(seg.index)}
               onMouseLeave={() => setHoveredSegIdx(null)}
+              onMouseMove={(e) => {
+                // Propagate mouse position for cursor line
+                const container = waveformContainerRef.current;
+                if (!container) return;
+                const rect = container.getBoundingClientRect();
+                const ratio = (e.clientX - rect.left) / rect.width;
+                const effDur = tlDuration || duration || 1;
+                mouseTimeRef.current = Math.max(0, Math.min(duration || 0, ratio * effDur));
+                setTimelineCursorPos(Math.max(0, Math.min(1, ratio)));
+              }}
               style={{
                 position: 'absolute',
-                bottom: 0,
+                top: 0,
                 left: `${(seg.start / (tlDuration || duration || 1)) * 100}%`,
                 width: `${((seg.end - seg.start) / (tlDuration || duration || 1)) * 100}%`,
-                height: 18,
+                height: '100%',
                 display: 'flex',
-                alignItems: 'center',
+                alignItems: 'flex-end',
                 justifyContent: 'center',
+                paddingBottom: 2,
                 fontSize: 9,
                 fontWeight: 600,
                 color: seg.enabled ? '#fff' : '#888',
                 backgroundColor: !seg.enabled
-                  ? 'rgba(239, 68, 68, 0.3)'
+                  ? 'rgba(239, 68, 68, 0.25)'
                   : hoveredSegIdx === seg.index
-                    ? 'rgba(99, 102, 241, 0.4)'
-                    : 'rgba(99, 102, 241, 0.15)',
+                    ? 'rgba(99, 102, 241, 0.3)'
+                    : 'transparent',
                 cursor: 'pointer',
                 zIndex: 10,
-                borderRight: '1px solid rgba(255,255,255,0.1)',
+                borderRight: '1px solid rgba(255,255,255,0.08)',
                 transition: 'background-color 0.15s ease',
                 userSelect: 'none',
                 overflow: 'hidden',
