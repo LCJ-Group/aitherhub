@@ -37,7 +37,7 @@ import os
 import time
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Header, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Header, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
@@ -3528,3 +3528,251 @@ async def heygen_list_talking_photos(
         return {"success": False, "error": str(e)}
     except Exception as e:
         return {"success": False, "error": f"Internal error: {str(e)}"}
+
+
+# ──────────────────────────────────────────────
+# 44. HeyGen List Avatars (Digital Twins + Photo Avatars)
+# ──────────────────────────────────────────────
+
+@router.get(
+    "/heygen/avatars",
+    summary="List all HeyGen avatars (Digital Twins, Photo Avatars)",
+    description=(
+        "List all avatars available in the HeyGen account, "
+        "including Digital Twins and Photo Avatars. "
+        "Use the avatar_id from the response to generate videos."
+    ),
+)
+async def heygen_list_avatars(
+    _auth: bool = Depends(verify_admin_key),
+):
+    heygen = get_heygen_service()
+    if not heygen.api_key:
+        return {"success": False, "error": "HEYGEN_API_KEY not configured."}
+
+    try:
+        avatars = await heygen.list_avatars()
+        return {
+            "success": True,
+            "avatars": avatars,
+            "total": len(avatars),
+        }
+    except HeyGenError as e:
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        return {"success": False, "error": f"Internal error: {str(e)}"}
+
+
+# ──────────────────────────────────────────────
+# 45. HeyGen List Avatar Groups (Photo Avatar Groups)
+# ──────────────────────────────────────────────
+
+@router.get(
+    "/heygen/avatar-groups",
+    summary="List all HeyGen avatar groups (Photo Avatar Groups)",
+    description=(
+        "List all avatar groups in the HeyGen account. "
+        "Photo Avatar Groups (like 'kg') contain multiple looks. "
+        "Use the avatar_id from a group's avatars to generate videos."
+    ),
+)
+async def heygen_list_avatar_groups(
+    _auth: bool = Depends(verify_admin_key),
+):
+    heygen = get_heygen_service()
+    if not heygen.api_key:
+        return {"success": False, "error": "HEYGEN_API_KEY not configured."}
+
+    try:
+        groups = await heygen.list_avatar_groups()
+        return {
+            "success": True,
+            "avatar_groups": groups,
+            "total": len(groups),
+        }
+    except HeyGenError as e:
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        return {"success": False, "error": f"Internal error: {str(e)}"}
+
+
+# ──────────────────────────────────────────────
+# 46. HeyGen Generate from Text with Avatar (Digital Twin)
+# ──────────────────────────────────────────────
+
+@router.post(
+    "/heygen/generate-from-text-avatar",
+    response_model=HeyGenGenerateFromTextResponse,
+    summary="Generate video from text using a Digital Twin avatar",
+    description=(
+        "Complete pipeline: Text → ElevenLabs TTS (MP3 audio) → "
+        "HeyGen Studio Video API (avatar animation). "
+        "Use avatar_id from /heygen/avatars or /heygen/avatar-groups. "
+        "This uses character.type='avatar' for Digital Twin quality."
+    ),
+)
+async def heygen_generate_from_text_avatar(
+    avatar_id: str = Body(..., description="HeyGen avatar_id (from /heygen/avatars)"),
+    text: str = Body(..., description="Text to speak"),
+    voice_id: str = Body(default=None, description="ElevenLabs voice ID"),
+    language_code: str = Body(default="ja", description="Language code for TTS"),
+    dimension_width: int = Body(default=720, description="Video width"),
+    dimension_height: int = Body(default=1280, description="Video height"),
+    title: str = Body(default=None, description="Video title"),
+    wait_for_completion: bool = Body(default=True, description="Wait for video to complete"),
+    max_wait_sec: int = Body(default=300, description="Max wait time in seconds"),
+    _auth: bool = Depends(verify_admin_key),
+):
+    import uuid
+
+    heygen = get_heygen_service()
+    if not heygen.api_key:
+        return HeyGenGenerateFromTextResponse(
+            success=False,
+            error="HEYGEN_API_KEY not configured.",
+            engine="heygen-avatar",
+        )
+
+    try:
+        # ── Step 1: Generate TTS audio (MP3) via ElevenLabs ──
+        el_service = get_elevenlabs_service()
+        logger.info(f"[HeyGen Avatar Pipeline] Generating TTS for text ({len(text)} chars)...")
+
+        mp3_audio = await el_service.text_to_speech(
+            text=text,
+            voice_id=voice_id,
+            output_format="mp3_44100_128",
+            language_code=language_code,
+        )
+
+        tts_duration_ms = len(mp3_audio) / 16.0
+        logger.info(
+            f"[HeyGen Avatar Pipeline] TTS generated: {len(mp3_audio)} bytes, "
+            f"~{tts_duration_ms:.0f}ms"
+        )
+
+        # ── Step 2: Upload MP3 to Azure Blob ──
+        audio_id = f"heygen-avatar-tts-{uuid.uuid4().hex[:10]}"
+        audio_blob_url = await _upload_mp3_to_blob(mp3_audio, audio_id)
+        audio_sas_url = _ensure_sas_url(audio_blob_url)
+        logger.info(f"[HeyGen Avatar Pipeline] Audio uploaded: {audio_blob_url[:60]}...")
+
+        # ── Step 3: Generate video via HeyGen API (avatar mode) ──
+        video_title = title or f"AitherHub-Avatar-{uuid.uuid4().hex[:8]}"
+        dimension = {"width": dimension_width, "height": dimension_height}
+
+        video_id = await heygen.generate_video_with_avatar(
+            avatar_id=avatar_id,
+            audio_url=audio_sas_url,
+            dimension=dimension,
+            title=video_title,
+        )
+
+        logger.info(f"[HeyGen Avatar Pipeline] Video generation started: {video_id}")
+
+        # ── Step 4: Optionally wait for completion ──
+        if not wait_for_completion:
+            return HeyGenGenerateFromTextResponse(
+                success=True,
+                video_id=video_id,
+                status="processing",
+                tts_duration_ms=tts_duration_ms,
+                audio_url=audio_sas_url,
+                engine="heygen-avatar",
+            )
+
+        # Poll for completion
+        import asyncio
+        elapsed = 0
+        poll_interval = 5
+        while elapsed < max_wait_sec:
+            await asyncio.sleep(poll_interval)
+            elapsed += poll_interval
+
+            status_data = await heygen.get_video_status(video_id)
+            current_status = status_data.get("status", "unknown")
+
+            logger.info(
+                f"[HeyGen Avatar Pipeline] Video {video_id}: status={current_status}, "
+                f"elapsed={elapsed}s"
+            )
+
+            if current_status == "completed":
+                video_url = status_data.get("video_url")
+                duration = status_data.get("duration")
+
+                # Re-upload to Azure Blob for persistence
+                final_url = video_url
+                try:
+                    import httpx as _httpx
+                    async with _httpx.AsyncClient(timeout=120) as client:
+                        dl_resp = await client.get(video_url)
+                        dl_resp.raise_for_status()
+                        video_bytes = dl_resp.content
+
+                    blob_job_id = f"heygen-avatar-{uuid.uuid4().hex[:10]}"
+                    blob_url = await _upload_video_to_blob(video_bytes, blob_job_id)
+                    final_url = _ensure_sas_url(blob_url)
+                    logger.info(
+                        f"[HeyGen Avatar Pipeline] Video re-uploaded to Azure: "
+                        f"{final_url[:60]}..."
+                    )
+                except Exception as dl_err:
+                    logger.warning(
+                        f"[HeyGen Avatar Pipeline] Failed to re-upload: {dl_err}"
+                    )
+
+                return HeyGenGenerateFromTextResponse(
+                    success=True,
+                    video_id=video_id,
+                    video_url=final_url,
+                    status="completed",
+                    tts_duration_ms=tts_duration_ms,
+                    audio_url=audio_sas_url,
+                    duration_sec=duration,
+                    engine="heygen-avatar",
+                )
+
+            elif current_status == "failed":
+                error_msg = status_data.get("error", "Unknown error")
+                return HeyGenGenerateFromTextResponse(
+                    success=False,
+                    video_id=video_id,
+                    status="failed",
+                    tts_duration_ms=tts_duration_ms,
+                    audio_url=audio_sas_url,
+                    error=f"HeyGen avatar video failed: {error_msg}",
+                    engine="heygen-avatar",
+                )
+
+        return HeyGenGenerateFromTextResponse(
+            success=True,
+            video_id=video_id,
+            status="processing",
+            tts_duration_ms=tts_duration_ms,
+            audio_url=audio_sas_url,
+            error=f"Video still processing after {max_wait_sec}s. Poll /heygen/status/{video_id}.",
+            engine="heygen-avatar",
+        )
+
+    except HeyGenError as e:
+        logger.error(f"[HeyGen Avatar Pipeline] HeyGen error: {e}")
+        return HeyGenGenerateFromTextResponse(
+            success=False,
+            error=f"HeyGen error: {str(e)}",
+            engine="heygen-avatar",
+        )
+    except ElevenLabsError as e:
+        logger.error(f"[HeyGen Avatar Pipeline] TTS error: {e}")
+        return HeyGenGenerateFromTextResponse(
+            success=False,
+            error=f"TTS error: {str(e)}",
+            engine="heygen-avatar",
+        )
+    except Exception as e:
+        logger.exception(f"[HeyGen Avatar Pipeline] Unexpected error: {e}")
+        return HeyGenGenerateFromTextResponse(
+            success=False,
+            error=f"Internal error: {str(e)}",
+            engine="heygen-avatar",
+        )

@@ -230,8 +230,89 @@ class HeyGenService:
         return result.get("talking_photos", [])
 
     # ──────────────────────────────────────────
+    # Avatar List (Digital Twin / Photo Avatar)
+    # ──────────────────────────────────────────
+    async def list_avatars(self) -> list:
+        """List all avatars (including Digital Twins and Photo Avatars)."""
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                f"{self.base_url}/v2/avatars",
+                headers=self._headers,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        return data.get("data", {}).get("avatars", [])
+
+    async def list_avatar_groups(self) -> list:
+        """List all avatar groups (Photo Avatar Groups like 'kg')."""
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                f"{self.base_url}/v2/avatar_group.list",
+                headers=self._headers,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        return data.get("data", {}).get("avatar_group_list", [])
+
+    # ──────────────────────────────────────────
     # Video Generation
     # ──────────────────────────────────────────
+    async def generate_video_with_avatar(
+        self,
+        avatar_id: str,
+        audio_url: str,
+        dimension: Optional[Dict[str, int]] = None,
+        title: str = "AutoPilot Video",
+    ) -> str:
+        """
+        Generate a video using an avatar (Digital Twin) and audio source.
+
+        Uses character.type = "avatar" instead of "talking_photo".
+        """
+        if not dimension:
+            dimension = {"width": 720, "height": 1280}
+
+        payload = {
+            "title": title,
+            "video_inputs": [
+                {
+                    "character": {
+                        "type": "avatar",
+                        "avatar_id": avatar_id,
+                    },
+                    "voice": {
+                        "type": "audio",
+                        "audio_url": audio_url,
+                    },
+                }
+            ],
+            "dimension": dimension,
+        }
+
+        logger.info(
+            f"[HeyGen] Generating avatar video: avatar={avatar_id}, "
+            f"audio={audio_url[:60]}..."
+        )
+
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                f"{self.base_url}/v2/video/generate",
+                headers=self._headers,
+                json=payload,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+        if data.get("error"):
+            raise HeyGenError(f"Video generation failed: {data['error']}")
+
+        video_id = data.get("data", {}).get("video_id", "")
+        if not video_id:
+            raise HeyGenError(f"No video_id in response: {data}")
+
+        logger.info(f"[HeyGen] Avatar video generation started: {video_id}")
+        return video_id
+
     async def generate_video(
         self,
         talking_photo_id: str,
