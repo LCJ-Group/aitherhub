@@ -2416,16 +2416,22 @@ async def _generate_lipsync_video(
                     max_wait_sec=max_wait_sec,
                 )
 
-            # Ensure audio URL has SAS token for HeyGen to access
+            # Ensure audio URL is publicly accessible
+            # HeyGen needs to download the audio, so SAS token is required for Azure Blob
             audio_sas = _ensure_sas_url(audio_url)
 
             # Get or create talking_photo_id
             if not talking_photo_id:
                 portrait_sas = _ensure_sas_url(portrait_url)
-                talking_photo_id = await heygen.create_photo_avatar(
-                    image_url=portrait_sas,
-                    name=f"AitherHub-{uuid.uuid4().hex[:6]}",
-                )
+                # Use upload_talking_photo for images, upload_talking_photo_from_video for videos
+                if portrait_type == "video":
+                    talking_photo_id = await heygen.upload_talking_photo_from_video(
+                        video_url=portrait_sas,
+                    )
+                else:
+                    talking_photo_id = await heygen.upload_talking_photo(
+                        image_url=portrait_sas,
+                    )
 
             if not talking_photo_id:
                 logger.error("[AutoPilot LipSync] Failed to create HeyGen photo avatar")
@@ -2435,7 +2441,7 @@ async def _generate_lipsync_video(
             video_url = await heygen.generate_and_wait(
                 talking_photo_id=talking_photo_id,
                 audio_url=audio_sas,
-                dimension={"width": 1080, "height": 1920},
+                dimension={"width": 720, "height": 1280},
                 title=f"AutoPilot-{uuid.uuid4().hex[:8]}",
                 max_wait_sec=max_wait_sec,
                 poll_interval=5,
