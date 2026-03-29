@@ -637,8 +637,6 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
     ctx.clearRect(0, 0, W, H);
 
     const samples = waveformData.length;
-    const barW = W / samples;
-
     const effDuration = tlDuration || duration;
 
     // Draw silent region backgrounds
@@ -662,14 +660,13 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
       }
     }
 
-    // Draw waveform bars - scale to match actual audio portion within effDuration
-    const audioRatio = duration / effDuration; // portion of timeline that has audio
-    const audioSamples = Math.ceil(samples * audioRatio);
+    // Draw waveform bars - position each bar based on its actual time mapped to tlDuration
     for (let i = 0; i < samples; i++) {
-      const amp = i < audioSamples ? waveformData[Math.min(i, waveformData.length - 1)] : 0;
-      const x = (i / samples) * W;
+      const amp = waveformData[Math.min(i, waveformData.length - 1)] || 0;
+      const timeSec = (i / samples) * duration; // actual time this sample represents
+      const x = (timeSec / effDuration) * W;     // position on timeline (tlDuration-based)
+      const barW2 = Math.max(1, (duration / effDuration) * W / samples);
       const barH = Math.max(1, amp * H * 0.9);
-      const timeSec = (i / samples) * effDuration;
 
       // Check if this sample is in a silent region
       const isSilent = silentRegions.some(sr => timeSec >= sr.start && timeSec <= sr.end);
@@ -692,7 +689,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
       } else {
         ctx.fillStyle = amp > 0.6 ? 'rgba(16, 185, 129, 0.8)' : amp > 0.3 ? 'rgba(99, 102, 241, 0.7)' : 'rgba(136, 136, 170, 0.5)';
       }
-      ctx.fillRect(x, H - barH, barW - 0.5, barH);
+      ctx.fillRect(x, H - barH, barW2 - 0.5, barH);
     }
 
     // Draw split point lines
