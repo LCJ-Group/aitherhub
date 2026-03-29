@@ -23,6 +23,10 @@ import {
   ThumbsUp,
   ThumbsDown,
   Send,
+  History,
+  ChevronRight,
+  Calendar,
+  Eye,
 } from "lucide-react";
 import scriptGeneratorService from "../base/services/scriptGeneratorService";
 
@@ -71,9 +75,17 @@ export default function ScriptGeneratorPage() {
   const [patternsLoading, setPatternsLoading] = useState(false);
   const [showPatterns, setShowPatterns] = useState(false);
 
-  // ── Load winning patterns on mount ──
+  // Generation history
+  const [historyList, setHistoryList] = useState([]);
+  const [historyTotal, setHistoryTotal] = useState(0);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [historyDetailLoading, setHistoryDetailLoading] = useState(null); // script_id being loaded
+
+  // ── Load winning patterns + history on mount ──
   useEffect(() => {
     loadPatterns();
+    loadHistory();
   }, []);
 
   const loadPatterns = async () => {
@@ -85,6 +97,65 @@ export default function ScriptGeneratorPage() {
       console.warn("Failed to load winning patterns:", e);
     } finally {
       setPatternsLoading(false);
+    }
+  };
+
+  const loadHistory = async () => {
+    setHistoryLoading(true);
+    try {
+      const data = await scriptGeneratorService.getHistory(20, 0);
+      setHistoryList(data.generations || []);
+      setHistoryTotal(data.total || 0);
+    } catch (e) {
+      console.warn("Failed to load history:", e);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const loadHistoryDetail = async (scriptId) => {
+    setHistoryDetailLoading(scriptId);
+    try {
+      const detail = await scriptGeneratorService.getHistoryDetail(scriptId);
+      // Set the detail as the current generated script
+      setGeneratedScript({
+        script: detail.generated_script,
+        char_count: detail.char_count,
+        estimated_duration_minutes: detail.duration_minutes,
+        model: detail.model_used,
+        script_id: detail.id,
+        patterns_used: detail.patterns_used,
+        product_analysis: detail.product_analysis,
+      });
+      // Also populate the form fields
+      setProductName(detail.product_name || "");
+      setProductDescription(detail.product_description || "");
+      setOriginalPrice(detail.original_price || "");
+      setDiscountedPrice(detail.discounted_price || "");
+      setTargetAudience(detail.target_audience || "");
+      setBenefits(detail.benefits || "");
+      if (detail.tone) setTone(detail.tone);
+      if (detail.language) setLanguage(detail.language);
+      if (detail.duration_minutes) setDurationMinutes(detail.duration_minutes);
+      // Set rating if exists
+      if (detail.rating) {
+        setRatingValue(detail.rating);
+        setRatingComment(detail.rating_comment || "");
+        setRatingGoodTags(detail.rating_good_tags || []);
+        setRatingBadTags(detail.rating_bad_tags || []);
+        setRatingSubmitted(true);
+      } else {
+        setRatingValue(0);
+        setRatingComment("");
+        setRatingGoodTags([]);
+        setRatingBadTags([]);
+        setRatingSubmitted(false);
+      }
+    } catch (e) {
+      console.error("Failed to load history detail:", e);
+      alert("履歴の読み込みに失敗しました");
+    } finally {
+      setHistoryDetailLoading(null);
     }
   };
 
@@ -203,6 +274,8 @@ export default function ScriptGeneratorPage() {
         additional_instructions: additionalInstructions.trim() || undefined,
       });
       setGeneratedScript(result);
+      // Refresh history after generation
+      loadHistory();
     } catch (e) {
       console.error("Script generation failed:", e);
       const msg = e?.response?.data?.detail || e.message || "台本の生成に失敗しました";
@@ -609,6 +682,84 @@ export default function ScriptGeneratorPage() {
 
           {/* ── Right: Output & Patterns ── */}
           <div className="lg:col-span-3 space-y-4">
+
+            {/* Generation History */}
+            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+              <button
+                onClick={() => setShowHistory(!showHistory)}
+                className="w-full px-4 py-3 flex items-center justify-between hover:bg-gray-50 transition-colors"
+              >
+                <div className="flex items-center gap-2">
+                  <History className="w-4 h-4 text-indigo-500" />
+                  <span className="text-sm font-semibold text-gray-800">生成履歴</span>
+                  {historyTotal > 0 && (
+                    <span className="text-xs text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded-full">
+                      {historyTotal}件
+                    </span>
+                  )}
+                  {historyLoading && <Loader2 className="w-3 h-3 animate-spin text-gray-400" />}
+                </div>
+                {showHistory ? (
+                  <ChevronUp className="w-4 h-4 text-gray-400" />
+                ) : (
+                  <ChevronDown className="w-4 h-4 text-gray-400" />
+                )}
+              </button>
+              {showHistory && (
+                <div className="border-t border-gray-100">
+                  {historyList.length === 0 ? (
+                    <div className="px-4 py-6 text-center text-sm text-gray-400">
+                      まだ生成履歴がありません
+                    </div>
+                  ) : (
+                    <div className="divide-y divide-gray-100 max-h-[320px] overflow-y-auto">
+                      {historyList.map((item) => (
+                        <button
+                          key={item.id}
+                          onClick={() => loadHistoryDetail(item.id)}
+                          disabled={historyDetailLoading === item.id}
+                          className="w-full px-4 py-3 flex items-center gap-3 hover:bg-gray-50 transition-colors text-left group"
+                        >
+                          {/* Product icon */}
+                          <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-indigo-100 to-purple-100 flex items-center justify-center flex-shrink-0">
+                            <FileText className="w-4 h-4 text-indigo-500" />
+                          </div>
+                          {/* Info */}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-medium text-gray-800 truncate">
+                                {item.product_name}
+                              </span>
+                              {item.rating && (
+                                <span className="flex items-center gap-0.5 text-xs">
+                                  <Star className="w-3 h-3 text-yellow-400 fill-yellow-400" />
+                                  <span className="text-yellow-600">{item.rating}</span>
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2 mt-0.5">
+                              <span className="text-xs text-gray-400 flex items-center gap-1">
+                                <Calendar className="w-3 h-3" />
+                                {new Date(item.created_at).toLocaleDateString('ja-JP', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                              </span>
+                              <span className="text-xs text-gray-400">
+                                {item.char_count}文字 / {item.duration_minutes}分
+                              </span>
+                            </div>
+                          </div>
+                          {/* Arrow / Loading */}
+                          {historyDetailLoading === item.id ? (
+                            <Loader2 className="w-4 h-4 animate-spin text-indigo-400 flex-shrink-0" />
+                          ) : (
+                            <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-indigo-400 transition-colors flex-shrink-0" />
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
 
             {/* Winning Patterns Preview */}
             <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">

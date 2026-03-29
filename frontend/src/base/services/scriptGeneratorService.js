@@ -88,6 +88,31 @@ class ScriptGeneratorService extends BaseApiService {
    * @param {File} file - Image file to upload
    * @returns {Promise<string>} blob_url - The public URL of the uploaded image
    */
+  /**
+   * Get the current user's script generation history.
+   * @param {number} [limit=20] - Max items to return
+   * @param {number} [offset=0] - Pagination offset
+   * @returns {Promise<Object>} { total, user_email, generations[] }
+   */
+  async getHistory(limit = 20, offset = 0) {
+    const response = await this.client.get(
+      `/api/v1/script-generator/history?limit=${limit}&offset=${offset}`
+    );
+    return response.data;
+  }
+
+  /**
+   * Get full details of a specific past generation.
+   * @param {string} scriptId - Script generation ID
+   * @returns {Promise<Object>} Full script generation details
+   */
+  async getHistoryDetail(scriptId) {
+    const response = await this.client.get(
+      `/api/v1/script-generator/history/${scriptId}`
+    );
+    return response.data;
+  }
+
   async uploadProductImage(file) {
     // Step 1: Get SAS upload URL
     const { upload_url, blob_url } = await this.getImageUploadUrl();

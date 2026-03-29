@@ -496,6 +496,135 @@ async def get_image_upload_url(
 
 
 # ──────────────────────────────────────────────
+# GET /script-generator/history (user's own generations)
+# ──────────────────────────────────────────────
+
+@router.get("/history")
+async def get_user_history(
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+):
+    """
+    Get the current user's script generation history.
+    Returns a list of past generations with summary info (no full script text).
+    """
+    user_email = current_user.get("email", "anonymous")
+
+    try:
+        # Count total for this user
+        count_result = await db.execute(
+            text("SELECT COUNT(*) FROM script_generations WHERE user_email = :email"),
+            {"email": user_email},
+        )
+        total = count_result.scalar() or 0
+
+        # Get list (summary only - no full script text)
+        list_result = await db.execute(
+            text("""
+                SELECT id, product_name, original_price, discounted_price,
+                       benefits, char_count, model_used, rating,
+                       rating_good_tags, created_at, tone, language, duration_minutes
+                FROM script_generations
+                WHERE user_email = :email
+                ORDER BY created_at DESC
+                LIMIT :limit OFFSET :offset
+            """),
+            {"email": user_email, "limit": limit, "offset": offset},
+        )
+        rows = list_result.fetchall()
+        generations = []
+        for r in rows:
+            generations.append({
+                "id": str(r[0]),
+                "product_name": r[1],
+                "original_price": r[2],
+                "discounted_price": r[3],
+                "benefits": r[4],
+                "char_count": r[5],
+                "model_used": r[6],
+                "rating": r[7],
+                "rating_good_tags": json.loads(r[8]) if isinstance(r[8], str) else r[8],
+                "created_at": r[9].isoformat() if r[9] else None,
+                "tone": r[10],
+                "language": r[11],
+                "duration_minutes": r[12],
+            })
+
+        return {
+            "total": total,
+            "user_email": user_email,
+            "generations": generations,
+        }
+    except Exception as e:
+        logger.exception(f"User history fetch failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/history/{script_id}")
+async def get_user_history_detail(
+    script_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Get full details of a specific script generation (user's own only).
+    Includes the full script text, product analysis, and patterns used.
+    """
+    user_email = current_user.get("email", "anonymous")
+
+    try:
+        result = await db.execute(
+            text("""
+                SELECT id, user_email, product_name, product_description,
+                       original_price, discounted_price, benefits,
+                       target_audience, tone, language, duration_minutes,
+                       generated_script, char_count, model_used,
+                       patterns_used, product_analysis,
+                       rating, rating_comment, rating_good_tags, rating_bad_tags,
+                       rated_at, created_at
+                FROM script_generations
+                WHERE id = :id AND user_email = :email
+            """),
+            {"id": script_id, "email": user_email},
+        )
+        r = result.fetchone()
+        if not r:
+            raise HTTPException(status_code=404, detail="Script not found")
+
+        return {
+            "id": str(r[0]),
+            "user_email": r[1],
+            "product_name": r[2],
+            "product_description": r[3],
+            "original_price": r[4],
+            "discounted_price": r[5],
+            "benefits": r[6],
+            "target_audience": r[7],
+            "tone": r[8],
+            "language": r[9],
+            "duration_minutes": r[10],
+            "generated_script": r[11],
+            "char_count": r[12],
+            "model_used": r[13],
+            "patterns_used": json.loads(r[14]) if isinstance(r[14], str) else r[14],
+            "product_analysis": json.loads(r[15]) if isinstance(r[15], str) else r[15],
+            "rating": r[16],
+            "rating_comment": r[17],
+            "rating_good_tags": json.loads(r[18]) if isinstance(r[18], str) else r[18],
+            "rating_bad_tags": json.loads(r[19]) if isinstance(r[19], str) else r[19],
+            "rated_at": r[20].isoformat() if r[20] else None,
+            "created_at": r[21].isoformat() if r[21] else None,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"User history detail fetch failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ──────────────────────────────────────────────
 # GET /script-generator/debug-patterns (admin only)
 # ──────────────────────────────────────────────
 
