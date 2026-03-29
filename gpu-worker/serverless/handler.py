@@ -266,6 +266,11 @@ def handle_musetalk(job_input: Dict[str, Any]) -> Dict[str, Any]:
 
         portrait_path = download_file(portrait_url, os.path.join(job_dir, f"portrait{p_ext}"))
 
+        # Step 1b: Pre-process video portrait (BUILD 50)
+        # Convert high-fps/high-res videos to 25fps and max 720p for MuseTalk compatibility
+        if p_ext == ".mp4":
+            portrait_path = _preprocess_portrait_video(portrait_path, job_dir)
+
         # Determine audio extension
         a_url_lower = audio_url.split("?")[0].lower()
         a_ext = ".wav" if a_url_lower.endswith(".wav") else ".mp3"
@@ -338,12 +343,90 @@ def handle_musetalk(job_input: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     except Exception as e:
-        logger.error(f"MuseTalk error: {e}")
+        logger.error(f"MuseTalk error: {e}", exc_info=True)
         return {"status": "error", "error": str(e), "job_id": job_id}
 
     finally:
         if os.path.isdir(job_dir):
             shutil.rmtree(job_dir, ignore_errors=True)
+
+
+def _preprocess_portrait_video(video_path: str, job_dir: str) -> str:
+    """
+    BUILD 50: Pre-process portrait video for MuseTalk.
+    - Limit to 25fps (MuseTalk target fps)
+    - Limit resolution to 720p max dimension
+    - Re-encode to H.264 for compatibility
+    """
+    import subprocess as sp
+
+    try:
+        # Probe video info
+        probe_cmd = [
+            "ffprobe", "-v", "quiet", "-print_format", "json",
+            "-show_streams", video_path
+        ]
+        probe_result = sp.run(probe_cmd, capture_output=True, text=True, timeout=30)
+        import json as _json
+        probe_data = _json.loads(probe_result.stdout)
+
+        width = height = fps = 0
+        for stream in probe_data.get("streams", []):
+            if stream.get("codec_type") == "video":
+                width = int(stream.get("width", 0))
+                height = int(stream.get("height", 0))
+                fps_str = stream.get("r_frame_rate", "25/1")
+                num, den = fps_str.split("/")
+                fps = int(num) / max(int(den), 1)
+                break
+
+        needs_process = False
+        vf_filters = []
+
+        # Check if resize needed (max 720p)
+        MAX_DIM = 720
+        if max(width, height) > MAX_DIM:
+            if width > height:
+                vf_filters.append(f"scale={MAX_DIM}:-2")
+            else:
+                vf_filters.append(f"scale=-2:{MAX_DIM}")
+            needs_process = True
+            logger.info(f"[preprocess] Resize: {width}x{height} -> max {MAX_DIM}p")
+
+        # Check if fps reduction needed
+        if fps > 30:
+            vf_filters.append("fps=25")
+            needs_process = True
+            logger.info(f"[preprocess] FPS: {fps} -> 25")
+
+        if not needs_process:
+            logger.info(f"[preprocess] Video OK: {width}x{height} @ {fps}fps, no preprocessing needed")
+            return video_path
+
+        output_path = os.path.join(job_dir, "portrait_processed.mp4")
+        vf_str = ",".join(vf_filters)
+        cmd = [
+            "ffmpeg", "-y", "-i", video_path,
+            "-vf", vf_str,
+            "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+            "-c:a", "copy",
+            "-movflags", "+faststart",
+            output_path
+        ]
+        logger.info(f"[preprocess] Running: {' '.join(cmd)}")
+        result = sp.run(cmd, capture_output=True, text=True, timeout=120)
+
+        if result.returncode != 0:
+            logger.warning(f"[preprocess] ffmpeg failed: {result.stderr[:300]}")
+            return video_path  # fallback to original
+
+        new_size = os.path.getsize(output_path)
+        logger.info(f"[preprocess] Done: {output_path} ({new_size / 1024 / 1024:.1f} MB)")
+        return output_path
+
+    except Exception as e:
+        logger.warning(f"[preprocess] Error: {e}, using original video")
+        return video_path
 
 
 def handle_facefusion_video(job_input: Dict[str, Any]) -> Dict[str, Any]:

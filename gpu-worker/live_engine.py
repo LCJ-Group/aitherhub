@@ -174,10 +174,15 @@ class MuseTalkEngine:
         finally:
             os.chdir(original_cwd)
 
-    def prepare_avatar(self, video_path: str) -> bool:
+    def prepare_avatar(self, video_path: str, max_frames: int = 150) -> bool:
         """
         Pre-process the base video: extract frames, detect faces, compute latents and masks.
         Follows the exact same flow as MuseTalk's Avatar.prepare_material().
+
+        Improvements (BUILD 50):
+        - Subsample frames to max_frames to avoid OOM on long/high-fps videos
+        - Resize large frames (>720p) before face detection for reliability
+        - Better error logging at each step
         """
         if not self.models_loaded:
             self.load_models()
@@ -200,22 +205,57 @@ class MuseTalkEngine:
             for f in glob.glob(os.path.join(full_imgs_path, "*.png")):
                 os.remove(f)
 
-            # Extract frames from video
+            # Extract frames from video — subsample to max_frames
             cap = cv2.VideoCapture(video_path)
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            src_fps = cap.get(cv2.CAP_PROP_FPS) or 25
+            src_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            src_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            logger.info(f"Source video: {src_w}x{src_h}, {src_fps}fps, {total_frames} total frames")
+
+            # Calculate step to subsample
+            step = max(1, total_frames // max_frames)
+            target_count = min(total_frames, max_frames)
+            logger.info(f"Subsampling: step={step}, target ~{target_count} frames (max_frames={max_frames})")
+
+            # Determine if resize is needed (limit to 720p equivalent)
+            MAX_DIM = 720
+            scale = 1.0
+            if max(src_w, src_h) > MAX_DIM:
+                scale = MAX_DIM / max(src_w, src_h)
+                new_w = int(src_w * scale)
+                new_h = int(src_h * scale)
+                # Ensure even dimensions
+                new_w = new_w if new_w % 2 == 0 else new_w + 1
+                new_h = new_h if new_h % 2 == 0 else new_h + 1
+                logger.info(f"Resizing frames: {src_w}x{src_h} -> {new_w}x{new_h} (scale={scale:.3f})")
+            else:
+                new_w, new_h = src_w, src_h
+
             count = 0
+            frame_idx = 0
             while True:
                 ret, frame = cap.read()
                 if not ret:
                     break
-                cv2.imwrite(os.path.join(full_imgs_path, f"{count:08d}.png"), frame)
-                count += 1
+                if frame_idx % step == 0:
+                    if scale < 1.0:
+                        frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
+                    cv2.imwrite(os.path.join(full_imgs_path, f"{count:08d}.png"), frame)
+                    count += 1
+                frame_idx += 1
             cap.release()
 
             if count == 0:
                 logger.error("No frames extracted from video!")
                 return False
 
-            logger.info(f"Extracted {count} frames from video")
+            logger.info(f"Extracted {count} frames from video (subsampled from {total_frames})")
+
+            # Store resize info for later use in generate_test_video
+            self._avatar_scale = scale
+            self._avatar_orig_size = (src_w, src_h)
+            self._avatar_proc_size = (new_w, new_h)
 
             # Step 2: Get sorted image list (same as MuseTalk)
             input_img_list = sorted(
@@ -224,15 +264,22 @@ class MuseTalkEngine:
             )
 
             # Step 3: Detect face landmarks and bounding boxes
-            logger.info("Extracting landmarks...")
-            coord_list, frame_list = get_landmark_and_bbox(input_img_list, self.config.bbox_shift)
+            logger.info(f"Extracting landmarks from {len(input_img_list)} images...")
+            try:
+                coord_list, frame_list = get_landmark_and_bbox(input_img_list, self.config.bbox_shift)
+                logger.info(f"Landmark detection complete: {len(coord_list)} coords, {len(frame_list)} frames")
+            except Exception as lm_err:
+                logger.error(f"Landmark detection failed: {lm_err}", exc_info=True)
+                raise RuntimeError(f"Face landmark detection failed: {lm_err}")
 
             # Step 4: Compute VAE latents for each face crop
             input_latent_list = []
             coord_placeholder = (0.0, 0.0, 0.0, 0.0)
+            skipped_frames = 0
 
             for idx, (bbox, frame) in enumerate(zip(coord_list, frame_list)):
                 if bbox == coord_placeholder:
+                    skipped_frames += 1
                     continue
                 x1, y1, x2, y2 = bbox
                 if self.config.version == "v15":
@@ -244,6 +291,12 @@ class MuseTalkEngine:
                 resized_crop_frame = cv2.resize(crop_frame, (256, 256), interpolation=cv2.INTER_LANCZOS4)
                 latents = self.vae.get_latents_for_unet(resized_crop_frame)
                 input_latent_list.append(latents)
+
+            logger.info(f"VAE latents computed: {len(input_latent_list)} faces found, {skipped_frames} frames skipped (no face)")
+
+            if len(input_latent_list) == 0:
+                logger.error("No faces detected in any frame! Cannot prepare avatar.")
+                return False
 
             # Step 5: Create forward-backward loop for seamless looping
             self.frame_list_cycle = frame_list + frame_list[::-1]
