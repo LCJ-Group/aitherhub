@@ -154,6 +154,69 @@ export default function ScriptGeneratorPage() {
     setTimeout(() => setCopied(false), 2000);
   }, [generatedScript]);
 
+  // ── Render formatted script (separate lines/dialogue/direction) ──
+  const renderFormattedScript = (scriptText) => {
+    if (!scriptText) return null;
+    const lines = scriptText.split("\n");
+    return lines.map((line, idx) => {
+      const trimmed = line.trim();
+      if (!trimmed) return <div key={idx} className="h-2" />;
+
+      // Section header: ⏱ ...
+      if (trimmed.startsWith("\u23F1") || trimmed.match(/^[\u{23F0}-\u{23FF}\u{1F550}-\u{1F567}]/u)) {
+        return (
+          <div key={idx} className="mt-5 mb-2 px-3 py-2 bg-gradient-to-r from-orange-50 to-amber-50 border-l-4 border-orange-400 rounded-r-lg">
+            <span className="text-sm font-bold text-orange-800">{trimmed}</span>
+          </div>
+        );
+      }
+
+      // Dialogue: 🎤 ...
+      if (trimmed.startsWith("\uD83C\uDFA4") || trimmed.startsWith("🎤")) {
+        // Extract quoted text if present
+        const quoteMatch = trimmed.match(/[「「](.+?)[」」]/);
+        return (
+          <div key={idx} className="flex items-start gap-2 ml-2 my-1 px-3 py-2 bg-blue-50 border-l-3 border-blue-400 rounded-r-lg">
+            <span className="text-lg flex-shrink-0 mt-0.5">🎤</span>
+            <div className="text-sm text-gray-800">
+              {quoteMatch ? (
+                <span className="font-medium">「{quoteMatch[1]}」</span>
+              ) : (
+                <span>{trimmed.replace(/^🎤\s*/, "")}</span>
+              )}
+            </div>
+          </div>
+        );
+      }
+
+      // Stage direction: 📋 ...
+      if (trimmed.startsWith("\uD83D\uDCCB") || trimmed.startsWith("📋")) {
+        return (
+          <div key={idx} className="flex items-start gap-2 ml-2 my-1 px-3 py-1.5 bg-gray-50 rounded-lg border border-dashed border-gray-300">
+            <span className="text-lg flex-shrink-0">📋</span>
+            <span className="text-xs text-gray-500 italic">{trimmed.replace(/^📋\s*/, "")}</span>
+          </div>
+        );
+      }
+
+      // Section markers like 【...】
+      if (trimmed.startsWith("【") || trimmed.match(/^##\s/)) {
+        return (
+          <div key={idx} className="mt-5 mb-2 px-3 py-2 bg-gradient-to-r from-orange-50 to-amber-50 border-l-4 border-orange-400 rounded-r-lg">
+            <span className="text-sm font-bold text-orange-800">{trimmed}</span>
+          </div>
+        );
+      }
+
+      // Default text
+      return (
+        <div key={idx} className="text-sm text-gray-700 ml-2 my-0.5 leading-relaxed">
+          {trimmed}
+        </div>
+      );
+    });
+  };
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
@@ -471,10 +534,10 @@ export default function ScriptGeneratorPage() {
                   </div>
                 </div>
 
-                {/* Script Content */}
+                {/* Script Content - Formatted */}
                 <div className="p-4">
-                  <div className="whitespace-pre-wrap text-sm text-gray-800 leading-relaxed font-[system-ui] max-h-[600px] overflow-y-auto">
-                    {generatedScript.script}
+                  <div className="max-h-[600px] overflow-y-auto space-y-0">
+                    {renderFormattedScript(generatedScript.script)}
                   </div>
                 </div>
 
@@ -497,6 +560,12 @@ export default function ScriptGeneratorPage() {
                       <span className="flex items-center gap-1">
                         <ImageIcon className="w-3 h-3 text-purple-500" />
                         商品画像分析済み
+                      </span>
+                    )}
+                    {generatedScript.patterns_used?.feedback_knowledge_used && (
+                      <span className="flex items-center gap-1">
+                        <Zap className="w-3 h-3 text-yellow-500" />
+                        フィードバックknowledge反映済み
                       </span>
                     )}
                     <span className="text-gray-400">model: {generatedScript.model}</span>

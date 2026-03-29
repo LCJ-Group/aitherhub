@@ -8,6 +8,9 @@ Unlike the video-specific script generator, this tool does NOT require a video I
 Users provide product info (name, image, price, etc.) and the system generates
 a script grounded in cross-video winning patterns from all analyzed livestreams.
 
+v2: Added feedback knowledge integration + script format with clear
+    separation of dialogue (セリフ) and stage directions (ト書き).
+
 Endpoints:
   POST /script-generator/generate   — Generate a script from product info
   GET  /script-generator/patterns    — Get aggregated winning patterns (preview)
@@ -77,13 +80,17 @@ async def generate_standalone_script(
 
     This is the standalone "売れる台本" tool. It:
     1. Aggregates winning patterns from ALL analyzed livestreams
-    2. Optionally analyzes the product image with Vision AI
-    3. Generates a script grounded in real sales data
+    2. Extracts feedback knowledge (star-rated phase evaluations)
+    3. Optionally analyzes the product image with Vision AI
+    4. Generates a script with clear dialogue/stage-direction separation
     """
     import openai
 
     # Step 1: Aggregate cross-video winning patterns
-    from app.services.winning_patterns_service import aggregate_patterns_across_videos
+    from app.services.winning_patterns_service import (
+        aggregate_patterns_across_videos,
+        extract_feedback_knowledge,
+    )
     cross_patterns = None
     try:
         cross_patterns = await aggregate_patterns_across_videos(db, limit_videos=50)
@@ -94,7 +101,18 @@ async def generate_standalone_script(
         except Exception:
             pass
 
-    # Step 2: Analyze product image (if provided)
+    # Step 2: Extract feedback knowledge (star ratings)
+    feedback_knowledge = None
+    try:
+        feedback_knowledge = await extract_feedback_knowledge(db, top_limit=15, bottom_limit=10)
+    except Exception as e:
+        logger.warning(f"Feedback knowledge extraction failed: {e}")
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+
+    # Step 3: Analyze product image (if provided)
     product_analysis = None
     if body.product_image_url:
         try:
@@ -102,7 +120,7 @@ async def generate_standalone_script(
         except Exception as e:
             logger.warning(f"Product image analysis failed: {e}")
 
-    # Step 3: Build prompt
+    # Step 4: Build prompt
     prompt = _build_standalone_prompt(
         product_name=body.product_name,
         product_description=body.product_description,
@@ -110,21 +128,30 @@ async def generate_standalone_script(
         target_audience=body.target_audience,
         product_analysis=product_analysis,
         cross_patterns=cross_patterns,
+        feedback_knowledge=feedback_knowledge,
         tone=body.tone,
         language=body.language,
         duration_minutes=body.duration_minutes,
         additional_instructions=body.additional_instructions,
     )
 
-    # Step 4: Generate with LLM (same pattern as live_session_service)
+    # Step 5: Generate with LLM (same pattern as live_session_service)
     messages = [
         {
             "role": "system",
             "content": (
-                "You are an elite live commerce script writer. "
+                "You are an elite live commerce script writer with deep expertise in "
+                "Japanese live commerce (ライブコマース). "
                 "You write scripts based on REAL sales data from actual livestreams, not guesses. "
                 "Every CTA, every product description timing, every engagement hook "
-                "is backed by actual performance metrics."
+                "is backed by actual performance metrics.\n\n"
+                "CRITICAL FORMAT RULES:\n"
+                "- 🎤 marks dialogue lines (what the liver actually says out loud)\n"
+                "- 📋 marks stage directions (actions, timing cues, demo instructions)\n"
+                "- ⏱ marks section headers with time estimates\n"
+                "- NEVER mix dialogue and stage directions in the same line\n"
+                "- Dialogue must sound natural and conversational, as if spoken live\n"
+                "- Stage directions must be concise action instructions in parentheses"
             ),
         },
         {"role": "user", "content": prompt},
@@ -194,16 +221,20 @@ async def generate_standalone_script(
     if script is None:
         raise HTTPException(status_code=500, detail=f"All LLM strategies failed: {'; '.join(errors)}")
 
-    # Post-process: remove markdown formatting
+    # Post-process: clean up markdown but preserve our format markers
     script = re.sub(r'\*\*', '', script)
     script = re.sub(r'\*', '', script)
-    script = re.sub(r'【[^】]*】', '', script)
     script = re.sub(r'#{1,6}\s*', '', script)
     script = re.sub(r'\n{3,}', '\n\n', script)
     script = script.strip()
 
     char_count = len(script)
     estimated_duration = round(char_count / 250, 1)
+
+    # Build patterns_used info
+    feedback_stats = {}
+    if feedback_knowledge:
+        feedback_stats = feedback_knowledge.get("stats", {})
 
     return ScriptGenerateResponse(
         script=script,
@@ -213,6 +244,10 @@ async def generate_standalone_script(
             "cross_video_patterns": bool(cross_patterns),
             "videos_in_cross_analysis": cross_patterns.get("videos_analyzed", 0) if cross_patterns else 0,
             "cta_patterns_found": len(cross_patterns.get("cta_phrases", [])) if cross_patterns else 0,
+            "feedback_knowledge_used": bool(feedback_knowledge),
+            "feedback_total_rated": feedback_stats.get("total_rated", 0),
+            "feedback_winning_patterns": len(feedback_knowledge.get("winning_patterns", [])) if feedback_knowledge else 0,
+            "feedback_losing_patterns": len(feedback_knowledge.get("losing_patterns", [])) if feedback_knowledge else 0,
             "product_image_analyzed": bool(product_analysis),
         },
         data_insights={
@@ -239,15 +274,23 @@ async def get_winning_patterns_preview(
     Get aggregated winning patterns from all analyzed livestreams.
     This is a preview endpoint so the UI can show patterns before generation.
     """
-    from app.services.winning_patterns_service import aggregate_patterns_across_videos
+    from app.services.winning_patterns_service import (
+        aggregate_patterns_across_videos,
+        extract_feedback_knowledge,
+    )
 
     try:
         patterns = await aggregate_patterns_across_videos(db, limit_videos=limit_videos)
+        feedback = await extract_feedback_knowledge(db, top_limit=10, bottom_limit=5)
         return {
             "videos_analyzed": patterns.get("videos_analyzed", 0),
             "cta_phrases": patterns.get("cta_phrases", [])[:10],
             "duration_insights": patterns.get("product_durations", [])[:10],
             "top_techniques": patterns.get("top_techniques", [])[:10],
+            "feedback_stats": feedback.get("stats", {}),
+            "winning_patterns_preview": [
+                p["description"][:150] for p in feedback.get("winning_patterns", [])[:5]
+            ],
         }
     except Exception as e:
         logger.exception(f"Winning patterns preview failed: {e}")
@@ -349,7 +392,7 @@ JSONのみを出力してください。"""
 
 
 # ──────────────────────────────────────────────
-# Internal: Prompt Builder
+# Internal: Prompt Builder (v2 with feedback knowledge + format)
 # ──────────────────────────────────────────────
 
 def _build_standalone_prompt(
@@ -359,12 +402,13 @@ def _build_standalone_prompt(
     target_audience: Optional[str],
     product_analysis: Optional[Dict],
     cross_patterns: Optional[Dict],
+    feedback_knowledge: Optional[Dict],
     tone: str,
     language: str,
     duration_minutes: int,
     additional_instructions: Optional[str],
 ) -> str:
-    """Build a prompt for standalone script generation with real data."""
+    """Build a prompt for standalone script generation with real data + feedback knowledge."""
 
     target_chars = duration_minutes * 250
     min_chars = int(target_chars * 0.85)
@@ -409,70 +453,110 @@ def _build_standalone_prompt(
             if product_analysis.get("suggested_demo"):
                 image_section += f"- デモ提案: {product_analysis['suggested_demo']}\n"
 
-    # Cross-video patterns section (the key differentiator)
-    cross_section = ""
-    if cross_patterns and cross_patterns.get("videos_analyzed", 0) > 0:
-        cross_section = f"\n## 実績データ: {cross_patterns['videos_analyzed']}本の配信から抽出した勝ちパターン\n"
-        cross_section += "以下は実際のライブコマース配信データから抽出された、売上に効果的なパターンです。\n\n"
+    # ── Feedback Knowledge Section (NEW - the key differentiator) ──
+    feedback_section = ""
+    if feedback_knowledge:
+        winning = feedback_knowledge.get("winning_patterns", [])
+        losing = feedback_knowledge.get("losing_patterns", [])
+        stats = feedback_knowledge.get("stats", {})
 
-        # CTA patterns
+        if winning or losing:
+            total_rated = stats.get('total_rated', 0)
+            feedback_section = f"\n## 実績フィードバックデータ（{total_rated}件の評価済みフェーズから抽出）\n"
+
+            if winning:
+                feedback_section += "\n### 高評価パターン（星4-5: 売れる配信の特徴）\n"
+                feedback_section += "以下は実際のライブコマース配信で高評価を受けたフェーズの分析です。これらのパターンを台本に積極的に反映してください。\n"
+                for i, w in enumerate(winning[:10], 1):
+                    feedback_section += f"\n{i}. [星{w['rating']}] {w['description']}\n"
+                    if w.get('tags'):
+                        feedback_section += f"   タグ: {w['tags']}\n"
+
+            if losing:
+                feedback_section += "\n### 低評価パターン（星1-2: 避けるべき配信の特徴）\n"
+                feedback_section += "以下のパターンは視聴者の離脱や売上低下を招くため、台本では避けてください。\n"
+                for i, l in enumerate(losing[:7], 1):
+                    feedback_section += f"\n{i}. [星{l['rating']}] {l['description']}\n"
+
+    # Cross-video patterns section
+    patterns_section = ""
+    if cross_patterns:
+        patterns_section = "\n## 過去の配信実績データ\n"
+        patterns_section += f"分析済み動画数: {cross_patterns.get('videos_analyzed', 0)}本\n"
+
         cta_phrases = cross_patterns.get("cta_phrases", [])
         if cta_phrases:
-            cross_section += "### 売れたCTAパターン（実績データ）\n"
-            for cp in cta_phrases[:7]:
-                cross_section += (
-                    f"- {cp['pattern']}: {cp['occurrence_count']}回出現, "
-                    f"注文相関={cp['order_correlation']}回\n"
-                )
+            patterns_section += "\n### 売れたCTAパターン:\n"
+            for c in cta_phrases[:8]:
+                patterns_section += f"- {c['pattern']}: {c['occurrence_count']}回出現, 注文相関{c['order_correlation']}回\n"
+                if c.get("example_talks"):
+                    example = c['example_talks'][0][:80]
+                    patterns_section += f"  例: {example}\n"
 
-        # Duration insights
-        duration_insights = cross_patterns.get("product_durations", [])
-        if duration_insights:
-            cross_section += "\n### 商品説明の最適時間（実績データ）\n"
-            for di in duration_insights[:5]:
-                cross_section += f"- {di.get('category', '')}: {di.get('value', '')}\n"
+        durations = cross_patterns.get("product_durations", [])
+        if durations:
+            patterns_section += "\n### 商品説明の最適時間:\n"
+            for d in durations[:5]:
+                patterns_section += f"- {d['category']}: {d['value']}\n"
 
-        # Top techniques
         techniques = cross_patterns.get("top_techniques", [])
         if techniques:
-            cross_section += "\n### 効果的な販売テクニック（実績データ）\n"
-            for tech in techniques[:5]:
-                cross_section += f"- {tech['technique']}: {tech['frequency']}回使用\n"
+            patterns_section += "\n### 売れる販売心理テクニック:\n"
+            for t in techniques[:7]:
+                patterns_section += f"- {t['technique']} (出現{t['frequency']}回)\n"
 
-    # Additional instructions
-    extra = ""
-    if additional_instructions:
-        extra = f"\n## 追加指示\n{additional_instructions}\n"
+    # Build final prompt
+    prompt = f"""# ライブコマース台本生成リクエスト
 
-    prompt = f"""{lang_instruction}
+{lang_instruction}
 {tone_instruction}
-
-あなたはライブコマースの台本作成のプロフェッショナルです。
-以下の商品情報と【実際の配信実績データ】を基に、売れる台本を生成してください。
-
-重要: この台本は一般的なAIの推測ではなく、実際のライブコマース配信データに基づいています。
-データが示す「売れたCTAパターン」「効果的だった商品説明時間」「売上に繋がった販売テクニック」を忠実に反映してください。
 
 {product_section}
 {image_section}
-{cross_section}
-{extra}
-## 台本の構成ガイド
-- 目標時間: 約{duration_minutes}分（{min_chars}〜{max_chars}文字）
-- オープニング（挨拶・今日の目玉商品の予告）
-- 商品紹介（特徴・使い方・ビフォーアフター）
-- 実績データで効果が確認されたCTAパターンを自然に組み込む
-- 視聴者とのインタラクション（コメント促進・質問への対応）
-- クロージング（限定感・購入促進・次回予告）
+{feedback_section}
+{patterns_section}
 
-## 台本生成ルール
-1. 実績データに基づく構成にすること（データがない部分は一般的なベストプラクティスで補完）
-2. CTAフレーズは実績データで効果が確認されたものを優先的に使用
-3. 商品説明時間は実績データの「売れた商品」の説明時間を参考に配分
-4. 自然な話し言葉で、そのまま読み上げられるテキストのみ出力
-5. 【タグ】や**太字**等の記号は使わない
-6. 台本以外の説明文やメモは出力しない
+## 台本フォーマット指示（必ず守ること）
 
-台本のみを出力してください。"""
+台本は以下のフォーマットで生成してください。ライバーが配信中に見ながら使える実用的な台本です。
+
+### フォーマットルール:
+1. 各セクションは「⏱ セクション名 [MM:SS - MM:SS]」で始める
+2. ライバーが実際に声に出して話すセリフは「🎤」で始める
+3. 演出指示・アクション・タイミング指示は「📋」で始め、（）で囲む
+4. セリフとト書きは絶対に混ぜない。別の行にする
+5. セリフは自然な口語で、実際にライブで話すように書く
+6. ト書きは簡潔な指示文で書く
+
+### 台本の構成（必須セクション）:
+1. オープニング（挨拶・雰囲気作り）
+2. 商品紹介（特徴・メリット・使い方）
+3. デモ・実演（実際に見せる）
+4. 視聴者との交流（コメント対応・質問回答）
+5. CTA（購入促進・限定感）
+6. クロージング（まとめ・次回予告）
+
+### フォーマット例:
+```
+⏱ オープニング [0:00 - 1:00]
+📋（カメラに向かって笑顔で手を振る。商品はまだ見せない）
+🎤「こんばんは！今日も来てくれてありがとうございます！」
+🎤「今日は、私が本当にハマってる商品を紹介しますよ」
+📋（コメント欄を見て、視聴者の名前を呼ぶ）
+🎤「あ、〇〇さん、いつもありがとう！」
+```
+
+## 生成条件
+- 目標文字数: {min_chars}〜{max_chars}文字（約{duration_minutes}分の配信）
+- セリフは「」で囲む
+- 各セクションに目安時間を入れる
+- 実績データのパターンを自然に反映する（「データによると」などとは言わない）
+- フィードバックの高評価パターンを積極的に取り入れ、低評価パターンは避ける
+"""
+
+    if additional_instructions:
+        prompt += f"\n## 追加指示\n{additional_instructions}\n"
+
+    prompt += "\n上記のフォーマットルールに従って、台本を生成してください。フォーマット例と同じ形式で、🎤と📋を必ず使ってください。"
 
     return prompt

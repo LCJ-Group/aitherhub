@@ -494,7 +494,115 @@ async def _extract_top_techniques(
 
 
 # ──────────────────────────────────────────────
-# 5. Generate Data-Driven Script
+# 5. Feedback Knowledge Extraction
+# ──────────────────────────────────────────────
+
+async def extract_feedback_knowledge(
+    db: AsyncSession,
+    top_limit: int = 15,
+    bottom_limit: int = 10,
+) -> Dict[str, Any]:
+    """
+    Extract knowledge from user feedback (star ratings + phase descriptions).
+
+    This is the key differentiator: real human-rated feedback on what works
+    and what doesn't in live commerce. 792+ rated phases with detailed
+    AI-generated descriptions of selling techniques.
+
+    Returns:
+      - winning_patterns: descriptions from 4-5 star phases (what works)
+      - losing_patterns: descriptions from 1-2 star phases (what to avoid)
+      - summary stats
+    """
+    # Get high-rated phases (4-5 stars) — these are proven winning patterns
+    high_sql = text("""
+        SELECT
+            vp.user_rating,
+            vp.phase_description,
+            vp.user_comment,
+            vp.time_start,
+            vp.time_end,
+            (vp.time_end - vp.time_start) AS duration_sec,
+            vp.gmv,
+            vp.cta_score,
+            vp.sales_psychology_tags
+        FROM video_phases vp
+        WHERE vp.user_rating >= 4
+          AND vp.phase_description IS NOT NULL
+          AND CHAR_LENGTH(vp.phase_description) > 50
+        ORDER BY vp.user_rating DESC, COALESCE(vp.gmv, 0) DESC
+        LIMIT :lim
+    """)
+    high_result = await db.execute(high_sql, {"lim": top_limit})
+    high_rows = high_result.fetchall()
+
+    winning_patterns = []
+    for r in high_rows:
+        winning_patterns.append({
+            "rating": r.user_rating,
+            "description": (r.phase_description or "")[:300],
+            "comment": (r.user_comment or "")[:200],
+            "duration_sec": round(r.duration_sec or 0, 1),
+            "gmv": r.gmv,
+            "cta_score": r.cta_score,
+            "tags": r.sales_psychology_tags,
+        })
+
+    # Get low-rated phases (1-2 stars) — patterns to avoid
+    low_sql = text("""
+        SELECT
+            vp.user_rating,
+            vp.phase_description,
+            vp.user_comment,
+            vp.time_start,
+            vp.time_end,
+            (vp.time_end - vp.time_start) AS duration_sec
+        FROM video_phases vp
+        WHERE vp.user_rating <= 2
+          AND vp.phase_description IS NOT NULL
+          AND CHAR_LENGTH(vp.phase_description) > 50
+        ORDER BY vp.user_rating ASC
+        LIMIT :lim
+    """)
+    low_result = await db.execute(low_sql, {"lim": bottom_limit})
+    low_rows = low_result.fetchall()
+
+    losing_patterns = []
+    for r in low_rows:
+        losing_patterns.append({
+            "rating": r.user_rating,
+            "description": (r.phase_description or "")[:300],
+            "comment": (r.user_comment or "")[:200],
+            "duration_sec": round(r.duration_sec or 0, 1),
+        })
+
+    # Summary stats
+    stats_sql = text("""
+        SELECT
+            COUNT(*) as total,
+            SUM(CASE WHEN user_rating >= 4 THEN 1 ELSE 0 END) as high_count,
+            SUM(CASE WHEN user_rating <= 2 THEN 1 ELSE 0 END) as low_count,
+            AVG(user_rating) as avg_rating
+        FROM video_phases
+        WHERE user_rating IS NOT NULL
+    """)
+    stats_result = await db.execute(stats_sql)
+    stats = stats_result.mappings().first()
+
+    return {
+        "winning_patterns": winning_patterns,
+        "losing_patterns": losing_patterns,
+        "stats": {
+            "total_rated": int(stats["total"] or 0),
+            "high_rated_count": int(stats["high_count"] or 0),
+            "low_rated_count": int(stats["low_count"] or 0),
+            "average_rating": round(float(stats["avg_rating"] or 0), 2),
+        },
+    }
+
+
+# ──────────────────────────────────────────────
+# 6. Generate Data-Driven Script
 # ──────────────────────────────────────────────
 
 async def generate_data_driven_script(
