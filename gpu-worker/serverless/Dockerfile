@@ -168,6 +168,9 @@ RUN cd /app && \
     cd facefusion && \
     pip install --no-cache-dir -r requirements.txt 2>/dev/null || true
 
+# ── CRITICAL: Re-pin numpy after FaceFusion (which may upgrade to numpy 2.x) ──
+RUN pip install --no-cache-dir --force-reinstall "numpy==1.26.4"
+
 # Download essential FaceFusion models (small enough to bake in)
 RUN mkdir -p /app/facefusion/.assets/models && \
     cd /app/facefusion/.assets/models && \
@@ -266,6 +269,10 @@ ENV RUNPOD_VOLUME_PATH=/runpod-volume
 ENV PYTHONPATH=/app:/app/MuseTalk:/app/IMTalker:/app/IMTalker/generator:/workspace
 # Extend cold start timeout (model loading can take time on first request)
 ENV RUNPOD_INIT_TIMEOUT=600
+
+# ── FINAL numpy pin (ensure no package has overridden it) ────────────────────
+RUN pip install --no-cache-dir --force-reinstall "numpy==1.26.4" && \
+    python3 -c "import numpy; print(f'Final numpy version: {numpy.__version__}'); assert numpy.__version__ == '1.26.4', f'Expected 1.26.4, got {numpy.__version__}'"
 
 # ── Entrypoint ───────────────────────────────────────────────────────────────
 CMD ["/bin/bash", "-c", "/app/setup.sh && python3 -u /app/handler.py"]

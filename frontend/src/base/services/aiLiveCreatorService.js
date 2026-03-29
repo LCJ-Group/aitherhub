@@ -115,32 +115,29 @@ class AiLiveCreatorService {
   // ── File upload ─────────────────────────────────────────
 
   async uploadFile(file, type, onProgress) {
-    const fileId = `ai-live-creator-${type}-${Date.now()}`;
-    const sasRes = await axios.post(
-      `${this.baseURL}/api/v1/admin/generate-upload-sas`,
+    // Upload via backend proxy to avoid CORS / timeout issues with Azure Blob
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("file_type", type);
+
+    const res = await axios.post(
+      `${this.baseURL}/api/v1/digital-human/upload-file`,
+      formData,
       {
-        email: "ai-live-creator@aitherhub.com",
-        video_id: fileId,
-        filename: file.name,
-      },
-      { headers: this._headers() }
+        headers: {
+          ...this._headers(),
+          "Content-Type": "multipart/form-data",
+        },
+        timeout: 300000, // 5 minutes for large files
+        onUploadProgress: (e) => {
+          if (onProgress && e.total) {
+            onProgress(Math.round((e.loaded / e.total) * 100));
+          }
+        },
+      }
     );
 
-    const { upload_url, blob_url } = sasRes.data;
-
-    await axios.put(upload_url, file, {
-      headers: {
-        "x-ms-blob-type": "BlockBlob",
-        "Content-Type": file.type || "application/octet-stream",
-      },
-      onUploadProgress: (e) => {
-        if (onProgress && e.total) {
-          onProgress(Math.round((e.loaded / e.total) * 100));
-        }
-      },
-    });
-
-    return blob_url;
+    return res.data.blob_url;
   }
 
   // ══════════════════════════════════════════════════════════

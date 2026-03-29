@@ -37,7 +37,7 @@ import os
 import time
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Header, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
@@ -2995,3 +2995,63 @@ async def debug_gpt_test(_auth: bool = Depends(verify_admin_key)):
 
 
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# File Upload Proxy — Avoids browser CORS / timeout issues with Azure Blob
+# ══════════════════════════════════════════════════════════════════════════════
+
+@router.post("/upload-file")
+async def upload_file_proxy(
+    file: UploadFile = File(...),
+    file_type: str = Form("portrait"),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """
+    Upload a file through the backend to Azure Blob Storage.
+    This avoids CORS and timeout issues with direct browser-to-blob uploads.
+    Accepts multipart/form-data with a 'file' field.
+    Returns { success, blob_url }.
+    """
+    from app.services.storage_service import generate_upload_sas
+
+    expected_key = os.getenv("ADMIN_API_KEY", "aither:hub")
+    if x_admin_key != expected_key:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    try:
+        file_id = f"ai-live-creator-{file_type}-{int(time.time())}"
+        filename = file.filename or f"{file_type}.mp4"
+
+        vid, upload_url, blob_url, expiry = await generate_upload_sas(
+            email="ai-live-creator@aitherhub.com",
+            video_id=file_id,
+            filename=filename,
+        )
+
+        # Read file content
+        content = await file.read()
+
+        # Upload to Azure Blob via httpx (server-to-server, no CORS issues)
+        import httpx
+        async with httpx.AsyncClient(timeout=300) as client:
+            resp = await client.put(
+                upload_url,
+                content=content,
+                headers={
+                    "x-ms-blob-type": "BlockBlob",
+                    "Content-Type": file.content_type or "application/octet-stream",
+                },
+            )
+            resp.raise_for_status()
+
+        logger.info(f"[upload-file] Uploaded {filename} ({len(content)} bytes) → {blob_url}")
+
+        return {
+            "success": True,
+            "blob_url": blob_url,
+            "file_size": len(content),
+        }
+
+    except Exception as e:
+        logger.error(f"[upload-file] Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
