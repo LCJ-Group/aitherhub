@@ -2637,7 +2637,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
               ref={waveformCanvasRef}
               width={1000}
               height={96}
-              style={{ width: '100%', height: '100%' }}
+              style={{ width: '100%', height: '100%', position: 'absolute', top: 0, left: 0, zIndex: 1, pointerEvents: 'none' }}
             />
           ) : (
             <div style={{
@@ -2661,7 +2661,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                 width: 3,
                 backgroundColor: '#FFE135',
                 cursor: 'pointer',
-                zIndex: 8,
+                zIndex: 25,
                 transform: 'translateX(-1.5px)',
               }}
               title={`分割点 ${fmt(sp)} (クリックで削除)`}
@@ -2678,7 +2678,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                 left: `${timelineCursorPos * 100}%`,
                 width: 1,
                 borderLeft: '1px dashed rgba(255,255,255,0.5)',
-                zIndex: 15,
+                zIndex: 30,
                 pointerEvents: 'none',
               }}
             />
@@ -2718,7 +2718,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                     ? 'rgba(99, 102, 241, 0.3)'
                     : 'transparent',
                 cursor: 'pointer',
-                zIndex: 10,
+                zIndex: 20,
                 borderRight: '1px solid rgba(255,255,255,0.08)',
                 transition: 'background-color 0.15s ease',
                 userSelect: 'none',

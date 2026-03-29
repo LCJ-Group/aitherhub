@@ -1018,6 +1018,26 @@ export default function MainContent({
     };
   }, []);
 
+  // ─── Video data cache helpers ──────────────────────────────────
+  const VIDEO_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+  const getVideoCache = (videoId) => {
+    try {
+      const raw = sessionStorage.getItem(`aitherhub_video_${videoId}`);
+      if (!raw) return null;
+      const cached = JSON.parse(raw);
+      if (Date.now() - cached.ts > VIDEO_CACHE_TTL) {
+        sessionStorage.removeItem(`aitherhub_video_${videoId}`);
+        return null;
+      }
+      return cached.data;
+    } catch { return null; }
+  };
+  const setVideoCache = (videoId, data) => {
+    try {
+      sessionStorage.setItem(`aitherhub_video_${videoId}`, JSON.stringify({ ts: Date.now(), data }));
+    } catch { /* quota exceeded — ignore */ }
+  };
+
   // Fetch video details when uploadedVideoId OR selectedVideoId changes
   useEffect(() => {
     const videoId = selectedVideoId || uploadedVideoId;
@@ -1051,6 +1071,24 @@ export default function MainContent({
     }
     lastRequestedVideoIdRef.current = videoId;
 
+    // ─── Try cache first for instant display ──────────────────
+    const cached = getVideoCache(videoId);
+    if (cached) {
+      console.log('[MainContent] Using cached video data for:', videoId);
+      setVideoData(normalizeVideoData(cached, videoId));
+      setLoadingVideo(false);
+      setVideoLoadError(null);
+      // Background refresh: fetch fresh data silently
+      const bgController = new AbortController();
+      VideoService.getVideoById(videoId, { signal: bgController.signal }).then((response) => {
+        if (lastRequestedVideoIdRef.current !== videoId) return;
+        const data = response || {};
+        setVideoCache(videoId, data);
+        setVideoData(normalizeVideoData(data, videoId));
+      }).catch(() => { /* silent */ });
+      return;
+    }
+
     const currentRequestId = ++videoRequestIdRef.current;
     const controller = new AbortController();
     videoAbortControllerRef.current = controller;
@@ -1074,6 +1112,7 @@ export default function MainContent({
         const response = await VideoService.getVideoById(videoId, { signal: controller.signal });
         if (currentRequestId !== videoRequestIdRef.current) return;
         const data = response || {};
+        setVideoCache(videoId, data); // Cache the response
         setVideoData(normalizeVideoData(data, videoId));
         setVideoLoadError(null);
       } catch (err) {
@@ -1143,6 +1182,7 @@ export default function MainContent({
       const response = await VideoService.getVideoById(videoId, { signal: controller.signal });
       if (currentRequestId !== videoRequestIdRef.current) return;
       const data = response || {};
+      setVideoCache(videoId, data); // Update cache after processing
       setVideoData(normalizeVideoData(data, videoId));
     } catch (err) {
       if (controller.signal.aborted) return;
@@ -1280,7 +1320,9 @@ export default function MainContent({
                       }, 20000);
                       VideoService.getVideoById(videoId, { signal: ctrl.signal }).then((response) => {
                         if (reqId !== videoRequestIdRef.current) return;
-                        setVideoData(normalizeVideoData(response || {}, videoId));
+                        const data = response || {};
+                        setVideoCache(videoId, data);
+                        setVideoData(normalizeVideoData(data, videoId));
                         setVideoLoadError(null);
                       }).catch((err) => {
                         if (ctrl.signal.aborted || reqId !== videoRequestIdRef.current) return;
