@@ -392,22 +392,22 @@ class HeyGenService:
     # Health Check
     # ──────────────────────────────────────────
     async def health_check(self) -> Dict[str, Any]:
-        """Check HeyGen API connectivity and quota."""
+        """Check HeyGen API connectivity via talking_photos list."""
         try:
             async with httpx.AsyncClient(timeout=15) as client:
+                # Use talking_photos endpoint as connectivity check
                 resp = await client.get(
-                    f"{self.base_url}/v1/user/remaining_quota",
+                    f"{self.base_url}/v1/talking_photo.list",
                     headers=self._headers,
                 )
                 resp.raise_for_status()
                 data = resp.json()
 
-            quota = data.get("data", {})
+            photos = data.get("data", {}).get("talking_photos", [])
             return {
                 "status": "ok",
                 "api_key_set": bool(self.api_key),
-                "remaining_credits": quota.get("remaining_credits"),
-                "remaining_quota": quota,
+                "talking_photos_count": len(photos),
             }
         except Exception as e:
             return {
