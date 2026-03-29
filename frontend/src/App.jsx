@@ -7,6 +7,7 @@ import AutoVideoPage from './components/AutoVideoPage'
 import DigitalHumanPage from './components/DigitalHumanPage'
 import AiLiveCreatorPage from './components/AiLiveCreatorPage'
 import PersonaPage from './components/PersonaPage'
+import ScriptGeneratorPage from './components/ScriptGeneratorPage'
 import PrivacyPolicy from './components/PrivacyPolicy'
 import { Toaster } from "./components/ui/toaster";
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
@@ -26,6 +27,7 @@ function App() {
         <Route path="/digital-human" element={<DigitalHumanPage />} />
         <Route path="/ai-live-creator" element={<AiLiveCreatorPage />} />
         <Route path="/personas" element={<PersonaPage />} />
+        <Route path="/script-generator" element={<ScriptGeneratorPage />} />
       </Routes>
       <Toaster />
     </BrowserRouter>
