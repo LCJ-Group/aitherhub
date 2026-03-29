@@ -57,6 +57,15 @@ class AiLiveCreatorService {
     return res.data;
   }
 
+  async generatePremiumHeyGenAvatar(params) {
+    const res = await axios.post(
+      `${this.baseURL}/api/v1/digital-human/heygen/generate-from-text-avatar`,
+      params,
+      { headers: this._headers(), timeout: 360000 }
+    );
+    return res.data;
+  }
+
   async generatePremium(params) {
     const res = await axios.post(
       `${this.baseURL}/api/v1/digital-human/imtalker/generate`,

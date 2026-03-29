@@ -359,7 +359,7 @@ export default function AiLiveCreatorPage() {
 
   // ── Generate (Text Mode) ──
   const handleGenerateFromText = async () => {
-    if (!portraitUrl) { setError("肖像画をアップロードしてください"); return; }
+    if (!portraitUrl && engine !== "heygen") { setError("肖像画をアップロードしてください"); return; }
     if (!scriptText.trim()) { setError("テキストを入力してください"); return; }
 
     setIsSubmitting(true);
@@ -370,9 +370,10 @@ export default function AiLiveCreatorPage() {
     try {
       let result;
       if (engine === "heygen") {
-        result = await aiLiveCreatorService.generatePremiumHeyGen({
-          portrait_url: portraitUrl,
-          portrait_type: portraitType,
+        // Use Digital Twin avatar mode (no portrait upload needed)
+        const avatarId = "c3c4cd11ae1341a6a83cfb9d7ea478cbid";
+        result = await aiLiveCreatorService.generatePremiumHeyGenAvatar({
+          avatar_id: avatarId,
           text: scriptText.trim(),
           voice_id: selectedVoiceId || undefined,
           language_code: languageCode,
