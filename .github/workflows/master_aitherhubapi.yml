@@ -67,41 +67,15 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_AE01A735F8B046C49C5F169706AC5842 }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_8E4F3767CE0647AEAA62C4C721F843FE }}
 
-      - name: Stop Azure Web App (clear deployment lock)
-        run: az webapp stop --name aitherhubAPI --resource-group aitherhub
-        continue-on-error: true
-
-      - name: Wait for app to stop
-        run: sleep 10
-
-      - name: Clear deployment lock via Kudu API
-        run: |
-          # Get publish profile credentials and clear any stuck deployments
-          az webapp deployment source config-zip --resource-group aitherhub --name aitherhubAPI --src /dev/null 2>/dev/null || true
-          # Delete any active deployment locks
-          KUDU_URL=$(az webapp show --name aitherhubAPI --resource-group aitherhub --query 'hostNames[0]' -o tsv 2>/dev/null || true)
-          echo "Kudu URL: $KUDU_URL"
-        continue-on-error: true
-
-      - name: Start Azure Web App
-        run: az webapp start --name aitherhubAPI --resource-group aitherhub
-        continue-on-error: true
-
-      - name: Wait for app to start
-        run: sleep 20
-
       - name: Deploy via Azure CLI (zip deploy)
         timeout-minutes: 10
         run: |
           cd backend
           zip -r ../deploy.zip . -x '.git/*' '__pycache__/*' '*.pyc' 'antenv/*'
           cd ..
-          az webapp deploy --resource-group aitherhub --name aitherhubAPI \
+          az webapp deploy --resource-group rg-vdp-kyogoku --name aitherhubAPI \
             --src-path deploy.zip --type zip --async true --clean true --restart true
-          echo "Deployment initiated. Waiting for completion..."
-          sleep 30
-          az webapp restart --name aitherhubAPI --resource-group aitherhub
-          echo "App restarted."
+          echo "Deployment initiated."
 
   verify_deploy:
     needs: build_and_deploy
