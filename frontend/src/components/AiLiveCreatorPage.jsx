@@ -52,7 +52,7 @@ export default function AiLiveCreatorPage() {
   const [viewMode, setViewMode] = useState("studio"); // "studio" | "setup"
 
   // ── Engine Mode ──
-  const [engine, setEngine] = useState("imtalker"); // "musetalk" | "imtalker"
+  const [engine, setEngine] = useState("heygen"); // "musetalk" | "imtalker" | "heygen"
 
   // ── Input Mode ──
   const [inputMode, setInputMode] = useState("text"); // "text" | "audio"
@@ -369,7 +369,19 @@ export default function AiLiveCreatorPage() {
 
     try {
       let result;
-      if (engine === "imtalker") {
+      if (engine === "heygen") {
+        result = await aiLiveCreatorService.generatePremiumHeyGen({
+          portrait_url: portraitUrl,
+          portrait_type: portraitType,
+          text: scriptText.trim(),
+          voice_id: selectedVoiceId || undefined,
+          language_code: languageCode,
+          dimension_width: 720,
+          dimension_height: 1280,
+          wait_for_completion: true,
+          max_wait_sec: 300,
+        });
+      } else if (engine === "imtalker") {
         result = await aiLiveCreatorService.generatePremiumFromText({
           portrait_url: portraitUrl,
           portrait_type: portraitType,
@@ -400,15 +412,21 @@ export default function AiLiveCreatorPage() {
         return;
       }
 
-      setCurrentJobId(result.job_id);
+      // HeyGen returns video_id instead of job_id
+      const jobId = result.job_id || result.video_id;
+      setCurrentJobId(jobId);
       setCurrentEngine(engine);
-      setJobStatus({ status: result.status || "queued", progress: 0 });
+      setJobStatus({
+        status: result.status || "queued",
+        progress: result.status === "completed" ? 100 : 0,
+        video_url: result.video_url,
+      });
       if (result.tts_duration_ms) {
         setTtsInfo({ duration_ms: result.tts_duration_ms, audio_url: result.audio_url });
       }
 
       const newJob = {
-        job_id: result.job_id,
+        job_id: jobId,
         status: "queued",
         progress: 0,
         created_at: new Date().toISOString(),
@@ -690,20 +708,20 @@ export default function AiLiveCreatorPage() {
 
                 {/* Engine Selector (compact) */}
                 <div className="bg-gray-800/50 rounded-xl border border-gray-700/30 p-3">
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid grid-cols-3 gap-2">
                     <button
-                      onClick={() => setEngine("musetalk")}
+                      onClick={() => setEngine("heygen")}
                       className={`p-2.5 rounded-lg border transition-all text-left ${
-                        engine === "musetalk"
-                          ? "border-blue-500/50 bg-blue-500/10"
+                        engine === "heygen"
+                          ? "border-amber-500/50 bg-amber-500/10"
                           : "border-gray-700/30 hover:border-gray-600"
                       }`}
                     >
                       <div className="flex items-center gap-1.5 mb-1">
-                        <Zap className={`w-3.5 h-3.5 ${engine === "musetalk" ? "text-blue-400" : "text-gray-500"}`} />
-                        <span className={`text-[11px] font-bold ${engine === "musetalk" ? "text-blue-300" : "text-gray-400"}`}>Standard</span>
+                        <Crown className={`w-3.5 h-3.5 ${engine === "heygen" ? "text-amber-400" : "text-gray-500"}`} />
+                        <span className={`text-[10px] font-bold ${engine === "heygen" ? "text-amber-300" : "text-gray-400"}`}>HeyGen</span>
                       </div>
-                      <p className="text-[9px] text-gray-500">リップシンク・高速</p>
+                      <p className="text-[8px] text-gray-500">Arcads級</p>
                     </button>
                     <button
                       onClick={() => setEngine("imtalker")}
@@ -714,10 +732,24 @@ export default function AiLiveCreatorPage() {
                       }`}
                     >
                       <div className="flex items-center gap-1.5 mb-1">
-                        <Crown className={`w-3.5 h-3.5 ${engine === "imtalker" ? "text-purple-400" : "text-gray-500"}`} />
-                        <span className={`text-[11px] font-bold ${engine === "imtalker" ? "text-purple-300" : "text-gray-400"}`}>Premium</span>
+                        <Sparkles className={`w-3.5 h-3.5 ${engine === "imtalker" ? "text-purple-400" : "text-gray-500"}`} />
+                        <span className={`text-[10px] font-bold ${engine === "imtalker" ? "text-purple-300" : "text-gray-400"}`}>Premium</span>
                       </div>
-                      <p className="text-[9px] text-gray-500">フル表情・高品質</p>
+                      <p className="text-[8px] text-gray-500">フル表情</p>
+                    </button>
+                    <button
+                      onClick={() => setEngine("musetalk")}
+                      className={`p-2.5 rounded-lg border transition-all text-left ${
+                        engine === "musetalk"
+                          ? "border-blue-500/50 bg-blue-500/10"
+                          : "border-gray-700/30 hover:border-gray-600"
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <Zap className={`w-3.5 h-3.5 ${engine === "musetalk" ? "text-blue-400" : "text-gray-500"}`} />
+                        <span className={`text-[10px] font-bold ${engine === "musetalk" ? "text-blue-300" : "text-gray-400"}`}>Standard</span>
+                      </div>
+                      <p className="text-[8px] text-gray-500">リップシンク</p>
                     </button>
                   </div>
                 </div>
@@ -898,20 +930,24 @@ export default function AiLiveCreatorPage() {
                   disabled={!isReady || isSubmitting || isProcessing}
                   className={`w-full py-2.5 px-4 rounded-lg font-medium text-xs flex items-center justify-center gap-2 transition-all ${
                     isReady && !isSubmitting && !isProcessing
-                      ? engine === "imtalker"
-                        ? "bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white shadow-lg shadow-purple-500/20"
-                        : "bg-blue-600 hover:bg-blue-700 text-white shadow-lg shadow-blue-500/20"
+                      ? engine === "heygen"
+                        ? "bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 text-white shadow-lg shadow-amber-500/20"
+                        : engine === "imtalker"
+                          ? "bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white shadow-lg shadow-purple-500/20"
+                          : "bg-blue-600 hover:bg-blue-700 text-white shadow-lg shadow-blue-500/20"
                       : "bg-gray-700/50 text-gray-500 cursor-not-allowed"
                   }`}
                 >
                   {isSubmitting ? (
-                    <><Loader2 className="w-3.5 h-3.5 animate-spin" />Submitting...</>
+                    <><Loader2 className="w-3.5 h-3.5 animate-spin" />Generating...</>
                   ) : isProcessing ? (
                     <><Loader2 className="w-3.5 h-3.5 animate-spin" />Processing...</>
+                  ) : engine === "heygen" ? (
+                    <><Crown className="w-3.5 h-3.5" />Generate with HeyGen</>
                   ) : engine === "imtalker" ? (
-                    <><Crown className="w-3.5 h-3.5" />Generate Premium</>
+                    <><Sparkles className="w-3.5 h-3.5" />Generate Premium</>
                   ) : (
-                    <><Sparkles className="w-3.5 h-3.5" />Generate Video</>
+                    <><Zap className="w-3.5 h-3.5" />Generate Video</>
                   )}
                 </button>
 
@@ -938,7 +974,27 @@ export default function AiLiveCreatorPage() {
                       </div>
                     )}
                     {jobStatus.error && <p className="text-[10px] text-red-400 bg-red-900/20 p-2 rounded">{jobStatus.error}</p>}
-                    {jobStatus.status === "completed" && (
+                    {jobStatus.status === "completed" && jobStatus.video_url && (
+                      <div className="mb-2">
+                        <video
+                          src={jobStatus.video_url}
+                          controls
+                          className="w-full rounded-lg bg-black"
+                          style={{ maxHeight: "200px" }}
+                        />
+                      </div>
+                    )}
+                    {jobStatus.status === "completed" && jobStatus.video_url && (
+                      <a
+                        href={jobStatus.video_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="w-full py-1.5 bg-green-600/20 hover:bg-green-600/30 text-green-400 rounded-lg text-[11px] font-medium flex items-center justify-center gap-1.5 transition-colors border border-green-600/30 mb-1"
+                      >
+                        <Download className="w-3.5 h-3.5" /> Open Video
+                      </a>
+                    )}
+                    {jobStatus.status === "completed" && !jobStatus.video_url && (
                       <button onClick={() => handleDownload(currentJobId, currentEngine)}
                         className="w-full py-1.5 bg-green-600/20 hover:bg-green-600/30 text-green-400 rounded-lg text-[11px] font-medium flex items-center justify-center gap-1.5 transition-colors border border-green-600/30">
                         <Download className="w-3.5 h-3.5" /> Download
@@ -1012,7 +1068,48 @@ export default function AiLiveCreatorPage() {
               {/* Engine Selector */}
               <div className="bg-white rounded-xl border border-gray-200 p-4">
                 <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Animation Engine</h2>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-3 gap-3">
+                  <button
+                    onClick={() => setEngine("heygen")}
+                    className={`relative p-4 rounded-xl border-2 transition-all text-left ${
+                      engine === "heygen"
+                        ? "border-amber-500 bg-amber-50/50 shadow-sm"
+                        : "border-gray-200 hover:border-gray-300 hover:bg-gray-50"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 mb-2">
+                      <Crown className={`w-5 h-5 ${engine === "heygen" ? "text-amber-600" : "text-gray-400"}`} />
+                      <span className={`text-sm font-bold ${engine === "heygen" ? "text-amber-700" : "text-gray-700"}`}>HeyGen</span>
+                      <span className="text-[9px] bg-gradient-to-r from-amber-500 to-orange-500 text-white px-1.5 py-0.5 rounded-full font-medium">BEST</span>
+                    </div>
+                    <p className="text-[11px] text-gray-500 leading-relaxed">Arcads級の高品質。クラウドレンダリング。GPU不要。</p>
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      <span className="text-[9px] bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded-full">Cloud</span>
+                      <span className="text-[9px] bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded-full">Arcads-level</span>
+                      <span className="text-[9px] bg-green-100 text-green-600 px-1.5 py-0.5 rounded-full">No GPU</span>
+                    </div>
+                    {engine === "heygen" && <div className="absolute top-2 right-2"><CheckCircle className="w-5 h-5 text-amber-500" /></div>}
+                  </button>
+                  <button
+                    onClick={() => setEngine("imtalker")}
+                    className={`relative p-4 rounded-xl border-2 transition-all text-left ${
+                      engine === "imtalker"
+                        ? "border-purple-500 bg-purple-50/50 shadow-sm"
+                        : "border-gray-200 hover:border-gray-300 hover:bg-gray-50"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 mb-2">
+                      <Sparkles className={`w-5 h-5 ${engine === "imtalker" ? "text-purple-600" : "text-gray-400"}`} />
+                      <span className={`text-sm font-bold ${engine === "imtalker" ? "text-purple-700" : "text-gray-700"}`}>Premium</span>
+                    </div>
+                    <p className="text-[11px] text-gray-500 leading-relaxed">フル表情アニメーション。頭の動き・まばたき・表情変化。</p>
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      <span className="text-[9px] bg-purple-100 text-purple-600 px-1.5 py-0.5 rounded-full">Head motion</span>
+                      <span className="text-[9px] bg-purple-100 text-purple-600 px-1.5 py-0.5 rounded-full">Expressions</span>
+                      <span className="text-[9px] bg-purple-100 text-purple-600 px-1.5 py-0.5 rounded-full">Lip-sync</span>
+                    </div>
+                    {engine === "imtalker" && <div className="absolute top-2 right-2"><CheckCircle className="w-5 h-5 text-purple-500" /></div>}
+                  </button>
                   <button
                     onClick={() => setEngine("musetalk")}
                     className={`relative p-4 rounded-xl border-2 transition-all text-left ${
@@ -1031,28 +1128,6 @@ export default function AiLiveCreatorPage() {
                       <span className="text-[9px] bg-green-100 text-green-600 px-1.5 py-0.5 rounded-full">Fast</span>
                     </div>
                     {engine === "musetalk" && <div className="absolute top-2 right-2"><CheckCircle className="w-5 h-5 text-blue-500" /></div>}
-                  </button>
-                  <button
-                    onClick={() => setEngine("imtalker")}
-                    className={`relative p-4 rounded-xl border-2 transition-all text-left ${
-                      engine === "imtalker"
-                        ? "border-purple-500 bg-purple-50/50 shadow-sm"
-                        : "border-gray-200 hover:border-gray-300 hover:bg-gray-50"
-                    }`}
-                  >
-                    <div className="flex items-center gap-2 mb-2">
-                      <Crown className={`w-5 h-5 ${engine === "imtalker" ? "text-purple-600" : "text-gray-400"}`} />
-                      <span className={`text-sm font-bold ${engine === "imtalker" ? "text-purple-700" : "text-gray-700"}`}>Premium</span>
-                      <span className="text-[9px] bg-gradient-to-r from-purple-500 to-pink-500 text-white px-1.5 py-0.5 rounded-full font-medium">NEW</span>
-                    </div>
-                    <p className="text-[11px] text-gray-500 leading-relaxed">フル表情アニメーション。頭の動き・まばたき・表情変化。</p>
-                    <div className="mt-2 flex flex-wrap gap-1">
-                      <span className="text-[9px] bg-purple-100 text-purple-600 px-1.5 py-0.5 rounded-full">Head motion</span>
-                      <span className="text-[9px] bg-purple-100 text-purple-600 px-1.5 py-0.5 rounded-full">Expressions</span>
-                      <span className="text-[9px] bg-purple-100 text-purple-600 px-1.5 py-0.5 rounded-full">Blinks</span>
-                      <span className="text-[9px] bg-purple-100 text-purple-600 px-1.5 py-0.5 rounded-full">Lip-sync</span>
-                    </div>
-                    {engine === "imtalker" && <div className="absolute top-2 right-2"><CheckCircle className="w-5 h-5 text-purple-500" /></div>}
                   </button>
                 </div>
               </div>
@@ -1379,20 +1454,24 @@ export default function AiLiveCreatorPage() {
                   disabled={!isReady || isSubmitting || isProcessing}
                   className={`w-full py-3 px-4 rounded-lg font-medium text-sm flex items-center justify-center gap-2 transition-all ${
                     isReady && !isSubmitting && !isProcessing
-                      ? engine === "imtalker"
-                        ? "bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white shadow-md hover:shadow-lg"
-                        : "bg-blue-600 hover:bg-blue-700 text-white shadow-md hover:shadow-lg"
+                      ? engine === "heygen"
+                        ? "bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 text-white shadow-md hover:shadow-lg"
+                        : engine === "imtalker"
+                          ? "bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white shadow-md hover:shadow-lg"
+                          : "bg-blue-600 hover:bg-blue-700 text-white shadow-md hover:shadow-lg"
                       : "bg-gray-100 text-gray-400 cursor-not-allowed"
                   }`}
                 >
                   {isSubmitting ? (
-                    <><Loader2 className="w-4 h-4 animate-spin" />Submitting...</>
+                    <><Loader2 className="w-4 h-4 animate-spin" />Generating...</>
                   ) : isProcessing ? (
                     <><Loader2 className="w-4 h-4 animate-spin" />Processing...</>
+                  ) : engine === "heygen" ? (
+                    <><Crown className="w-4 h-4" />Generate with HeyGen</>
                   ) : engine === "imtalker" ? (
-                    <><Crown className="w-4 h-4" />Generate Premium Video</>
+                    <><Sparkles className="w-4 h-4" />Generate Premium Video</>
                   ) : (
-                    <><Sparkles className="w-4 h-4" />Generate Video</>
+                    <><Zap className="w-4 h-4" />Generate Video</>
                   )}
                 </button>
 

@@ -48,6 +48,15 @@ class AiLiveCreatorService {
 
   // ── Premium (IMTalker) ─────────────────────────────────
 
+  async generatePremiumHeyGen(params) {
+    const res = await axios.post(
+      `${this.baseURL}/api/v1/digital-human/heygen/generate-from-text`,
+      params,
+      { headers: this._headers(), timeout: 360000 }
+    );
+    return res.data;
+  }
+
   async generatePremium(params) {
     const res = await axios.post(
       `${this.baseURL}/api/v1/digital-human/imtalker/generate`,
@@ -69,6 +78,13 @@ class AiLiveCreatorService {
   // ── Shared: Status / Download / Health ──────────────────
 
   async getStatus(jobId, engine = "musetalk") {
+    if (engine === "heygen") {
+      const res = await axios.get(
+        `${this.baseURL}/api/v1/digital-human/heygen/status/${jobId}`,
+        { headers: this._headers() }
+      );
+      return res.data;
+    }
     const prefix = engine === "imtalker" ? "imtalker" : "musetalk";
     const res = await axios.get(
       `${this.baseURL}/api/v1/digital-human/${prefix}/status/${jobId}`,
@@ -97,6 +113,22 @@ class AiLiveCreatorService {
   async healthCheck() {
     const res = await axios.get(
       `${this.baseURL}/api/v1/digital-human/musetalk/health`,
+      { headers: this._headers() }
+    );
+    return res.data;
+  }
+
+  async heygenHealthCheck() {
+    const res = await axios.get(
+      `${this.baseURL}/api/v1/digital-human/heygen/health`,
+      { headers: this._headers() }
+    );
+    return res.data;
+  }
+
+  async heygenListTalkingPhotos() {
+    const res = await axios.get(
+      `${this.baseURL}/api/v1/digital-human/heygen/talking-photos`,
       { headers: this._headers() }
     );
     return res.data;

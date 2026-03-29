@@ -984,6 +984,14 @@ async def full_health_check(
         except Exception as e:
             mode_b_health = {"status": "error", "error": str(e)}
 
+        # HeyGen health
+        heygen_health = {}
+        try:
+            heygen = get_heygen_service()
+            heygen_health = await heygen.health_check()
+        except Exception as e:
+            heygen_health = {"status": "error", "error": str(e)}
+
         # Determine overall status
         a_ok = mode_a_health.get("status") == "ok"
         b_ok = mode_b_health.get("status") in ("ok", "not_configured")
@@ -1002,6 +1010,7 @@ async def full_health_check(
             overall_status=overall,
             mode_a=mode_a_health,
             mode_b=mode_b_health,
+            heygen=heygen_health,
             capabilities={
                 "mode_a_digital_human": True,
                 "mode_a_voice_cloning": True,
@@ -1009,6 +1018,8 @@ async def full_health_check(
                 "mode_b_face_swap": bool(mode_b_health.get("status") == "ok"),
                 "mode_b_realtime_stream": bool(mode_b_health.get("status") == "ok"),
                 "mode_b_face_enhancer": True,
+                "heygen_video_generation": bool(heygen_health.get("status") == "ok"),
+                "heygen_api_key_set": bool(heygen_health.get("api_key_set")),
             },
         )
 
@@ -3151,3 +3162,369 @@ async def upload_file_proxy(
     except Exception as e:
         logger.error(f"[upload-file] Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+
+# ══════════════════════════════════════════════
+# MODE F: HEYGEN VIDEO GENERATION (Arcads-level)
+# ══════════════════════════════════════════════
+#
+# HeyGen Studio Video API integration.
+# Pipeline: Text → ElevenLabs TTS (MP3) → HeyGen (talking photo + audio) → Video
+#
+# This provides Arcads-level quality video generation without GPU infrastructure.
+# HeyGen handles all rendering in the cloud.
+#
+# Architecture:
+#   Text ──▶ ElevenLabs TTS (MP3) ──▶ Upload to Azure Blob ──▶ HeyGen API ──▶ Video URL
+#                                                                  ▲
+#                                                     Portrait Image Upload
+# ══════════════════════════════════════════════
+
+from app.schemas.digital_human_schema import (
+    HeyGenGenerateFromTextRequest,
+    HeyGenGenerateFromTextResponse,
+    HeyGenVideoStatusResponse,
+    HeyGenHealthResponse,
+)
+
+# ──────────────────────────────────────────────
+# 40. HeyGen Generate from Text (TTS + HeyGen Video)
+# ──────────────────────────────────────────────
+
+@router.post(
+    "/heygen/generate-from-text",
+    response_model=HeyGenGenerateFromTextResponse,
+    summary="Generate Arcads-level video from text (ElevenLabs TTS + HeyGen)",
+    description=(
+        "Complete pipeline: Text → ElevenLabs TTS (MP3 audio) → "
+        "HeyGen Studio Video API (talking photo animation). "
+        "Provide a portrait image URL and text. The AI generates speech, "
+        "then HeyGen creates a high-quality lip-synced video. "
+        "Set wait_for_completion=false to get the video_id immediately "
+        "and poll /heygen/status/{video_id} separately."
+    ),
+)
+async def heygen_generate_from_text(
+    req: HeyGenGenerateFromTextRequest,
+    _auth: bool = Depends(verify_admin_key),
+):
+    import uuid
+
+    heygen = get_heygen_service()
+    if not heygen.api_key:
+        return HeyGenGenerateFromTextResponse(
+            success=False,
+            error="HEYGEN_API_KEY not configured. Set the environment variable.",
+            engine="heygen",
+        )
+
+    try:
+        # ── Step 1: Generate TTS audio (MP3) via ElevenLabs ──
+        el_service = get_elevenlabs_service()
+        logger.info(f"[HeyGen Pipeline] Generating TTS for text ({len(req.text)} chars)...")
+
+        mp3_audio = await el_service.text_to_speech(
+            text=req.text,
+            voice_id=req.voice_id,
+            output_format="mp3_44100_128",
+            language_code=req.language_code,
+        )
+
+        # Calculate approximate duration (128kbps = 16 bytes/ms)
+        tts_duration_ms = len(mp3_audio) / 16.0
+        logger.info(
+            f"[HeyGen Pipeline] TTS generated: {len(mp3_audio)} bytes, "
+            f"~{tts_duration_ms:.0f}ms"
+        )
+
+        # ── Step 2: Upload MP3 to Azure Blob (HeyGen needs public URL) ──
+        audio_id = f"heygen-tts-{uuid.uuid4().hex[:10]}"
+        audio_blob_url = await _upload_mp3_to_blob(mp3_audio, audio_id)
+        audio_sas_url = _ensure_sas_url(audio_blob_url)
+        logger.info(f"[HeyGen Pipeline] Audio uploaded: {audio_blob_url[:60]}...")
+
+        # ── Step 3: Upload portrait to HeyGen (or reuse talking_photo_id) ──
+        talking_photo_id = req.talking_photo_id
+        if not talking_photo_id:
+            portrait_sas = _ensure_sas_url(req.portrait_url)
+            logger.info(f"[HeyGen Pipeline] Uploading portrait to HeyGen...")
+
+            if req.portrait_type == "video":
+                talking_photo_id = await heygen.upload_talking_photo_from_video(
+                    video_url=portrait_sas,
+                )
+            else:
+                talking_photo_id = await heygen.upload_talking_photo(
+                    image_url=portrait_sas,
+                )
+
+        if not talking_photo_id:
+            return HeyGenGenerateFromTextResponse(
+                success=False,
+                error="Failed to create HeyGen talking photo from portrait.",
+                engine="heygen",
+                audio_url=audio_sas_url,
+                tts_duration_ms=tts_duration_ms,
+            )
+
+        logger.info(f"[HeyGen Pipeline] Talking photo ID: {talking_photo_id}")
+
+        # ── Step 4: Generate video via HeyGen API ──
+        title = req.title or f"AitherHub-{uuid.uuid4().hex[:8]}"
+        dimension = {"width": req.dimension_width, "height": req.dimension_height}
+
+        video_id = await heygen.generate_video(
+            talking_photo_id=talking_photo_id,
+            audio_url=audio_sas_url,
+            dimension=dimension,
+            title=title,
+        )
+
+        logger.info(f"[HeyGen Pipeline] Video generation started: {video_id}")
+
+        # ── Step 5: Optionally wait for completion ──
+        if not req.wait_for_completion:
+            return HeyGenGenerateFromTextResponse(
+                success=True,
+                video_id=video_id,
+                status="processing",
+                talking_photo_id=talking_photo_id,
+                tts_duration_ms=tts_duration_ms,
+                audio_url=audio_sas_url,
+                engine="heygen",
+            )
+
+        # Poll for completion
+        import asyncio
+        elapsed = 0
+        poll_interval = 5
+        while elapsed < req.max_wait_sec:
+            await asyncio.sleep(poll_interval)
+            elapsed += poll_interval
+
+            status_data = await heygen.get_video_status(video_id)
+            current_status = status_data.get("status", "unknown")
+
+            logger.info(
+                f"[HeyGen Pipeline] Video {video_id}: status={current_status}, "
+                f"elapsed={elapsed}s"
+            )
+
+            if current_status == "completed":
+                video_url = status_data.get("video_url")
+                duration = status_data.get("duration")
+
+                # Re-upload to Azure Blob for persistence (HeyGen URLs expire)
+                final_url = video_url
+                try:
+                    import httpx as _httpx
+                    async with _httpx.AsyncClient(timeout=120) as client:
+                        dl_resp = await client.get(video_url)
+                        dl_resp.raise_for_status()
+                        video_bytes = dl_resp.content
+
+                    blob_job_id = f"heygen-{uuid.uuid4().hex[:10]}"
+                    blob_url = await _upload_video_to_blob(video_bytes, blob_job_id)
+                    final_url = _ensure_sas_url(blob_url)
+                    logger.info(
+                        f"[HeyGen Pipeline] Video re-uploaded to Azure: "
+                        f"{final_url[:60]}... ({len(video_bytes)} bytes)"
+                    )
+                except Exception as dl_err:
+                    logger.warning(
+                        f"[HeyGen Pipeline] Failed to re-upload to Azure: {dl_err}. "
+                        f"Returning HeyGen URL directly."
+                    )
+
+                return HeyGenGenerateFromTextResponse(
+                    success=True,
+                    video_id=video_id,
+                    video_url=final_url,
+                    status="completed",
+                    talking_photo_id=talking_photo_id,
+                    tts_duration_ms=tts_duration_ms,
+                    audio_url=audio_sas_url,
+                    duration_sec=duration,
+                    engine="heygen",
+                )
+
+            elif current_status == "failed":
+                error_msg = status_data.get("error", "Unknown error")
+                return HeyGenGenerateFromTextResponse(
+                    success=False,
+                    video_id=video_id,
+                    status="failed",
+                    talking_photo_id=talking_photo_id,
+                    tts_duration_ms=tts_duration_ms,
+                    audio_url=audio_sas_url,
+                    error=f"HeyGen video generation failed: {error_msg}",
+                    engine="heygen",
+                )
+
+        # Timeout — return video_id for manual polling
+        return HeyGenGenerateFromTextResponse(
+            success=True,
+            video_id=video_id,
+            status="processing",
+            talking_photo_id=talking_photo_id,
+            tts_duration_ms=tts_duration_ms,
+            audio_url=audio_sas_url,
+            error=f"Video still processing after {req.max_wait_sec}s. Poll /heygen/status/{video_id} for updates.",
+            engine="heygen",
+        )
+
+    except HeyGenError as e:
+        logger.error(f"[HeyGen Pipeline] HeyGen error: {e}")
+        return HeyGenGenerateFromTextResponse(
+            success=False,
+            error=f"HeyGen error: {str(e)}",
+            engine="heygen",
+        )
+    except ElevenLabsError as e:
+        logger.error(f"[HeyGen Pipeline] TTS error: {e}")
+        return HeyGenGenerateFromTextResponse(
+            success=False,
+            error=f"TTS error: {str(e)}",
+            engine="heygen",
+        )
+    except Exception as e:
+        logger.exception(f"[HeyGen Pipeline] Unexpected error: {e}")
+        return HeyGenGenerateFromTextResponse(
+            success=False,
+            error=f"Internal error: {str(e)}",
+            engine="heygen",
+        )
+
+
+# ──────────────────────────────────────────────
+# 41. HeyGen Video Status
+# ──────────────────────────────────────────────
+
+@router.get(
+    "/heygen/status/{video_id}",
+    response_model=HeyGenVideoStatusResponse,
+    summary="Check HeyGen video generation status",
+    description=(
+        "Poll the status of a HeyGen video generation job. "
+        "Status values: pending → processing → completed / failed."
+    ),
+)
+async def heygen_video_status(
+    video_id: str,
+    _auth: bool = Depends(verify_admin_key),
+):
+    heygen = get_heygen_service()
+    if not heygen.api_key:
+        return HeyGenVideoStatusResponse(
+            success=False,
+            video_id=video_id,
+            error="HEYGEN_API_KEY not configured.",
+        )
+
+    try:
+        status_data = await heygen.get_video_status(video_id)
+        return HeyGenVideoStatusResponse(
+            success=True,
+            video_id=video_id,
+            status=status_data.get("status"),
+            video_url=status_data.get("video_url"),
+            duration=status_data.get("duration"),
+            error=status_data.get("error"),
+        )
+    except HeyGenError as e:
+        return HeyGenVideoStatusResponse(
+            success=False,
+            video_id=video_id,
+            error=str(e),
+        )
+    except Exception as e:
+        return HeyGenVideoStatusResponse(
+            success=False,
+            video_id=video_id,
+            error=f"Internal error: {str(e)}",
+        )
+
+
+# ──────────────────────────────────────────────
+# 42. HeyGen Health Check
+# ──────────────────────────────────────────────
+
+@router.get(
+    "/heygen/health",
+    response_model=HeyGenHealthResponse,
+    summary="Check HeyGen API connectivity and quota",
+    description=(
+        "Verify that the HeyGen API key is valid, check remaining credits, "
+        "and list available talking photos."
+    ),
+)
+async def heygen_health_check(
+    _auth: bool = Depends(verify_admin_key),
+):
+    heygen = get_heygen_service()
+
+    if not heygen.api_key:
+        return HeyGenHealthResponse(
+            success=True,
+            status="not_configured",
+            api_key_set=False,
+            error="HEYGEN_API_KEY not set.",
+        )
+
+    try:
+        # Check quota
+        health_data = await heygen.health_check()
+
+        # Count talking photos
+        talking_photos_count = None
+        try:
+            photos = await heygen.list_talking_photos()
+            talking_photos_count = len(photos)
+        except Exception:
+            pass
+
+        return HeyGenHealthResponse(
+            success=True,
+            status=health_data.get("status", "unknown"),
+            api_key_set=health_data.get("api_key_set", False),
+            remaining_credits=health_data.get("remaining_credits"),
+            remaining_quota=health_data.get("remaining_quota"),
+            talking_photos_count=talking_photos_count,
+        )
+    except Exception as e:
+        return HeyGenHealthResponse(
+            success=True,
+            status="error",
+            api_key_set=bool(heygen.api_key),
+            error=str(e),
+        )
+
+
+# ──────────────────────────────────────────────
+# 43. HeyGen List Talking Photos
+# ──────────────────────────────────────────────
+
+@router.get(
+    "/heygen/talking-photos",
+    summary="List all HeyGen talking photos",
+    description="List all talking photo avatars available in the HeyGen account.",
+)
+async def heygen_list_talking_photos(
+    _auth: bool = Depends(verify_admin_key),
+):
+    heygen = get_heygen_service()
+    if not heygen.api_key:
+        return {"success": False, "error": "HEYGEN_API_KEY not configured."}
+
+    try:
+        photos = await heygen.list_talking_photos()
+        return {
+            "success": True,
+            "talking_photos": photos,
+            "total": len(photos),
+        }
+    except HeyGenError as e:
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        return {"success": False, "error": f"Internal error: {str(e)}"}

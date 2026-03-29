@@ -441,6 +441,9 @@ class FullHealthResponse(BaseModel):
     mode_b: Optional[Dict[str, Any]] = Field(
         None, description="Mode B health (FaceFusion GPU Worker)"
     )
+    heygen: Optional[Dict[str, Any]] = Field(
+        None, description="HeyGen API health (Arcads-level video generation)"
+    )
     capabilities: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
 
@@ -1003,3 +1006,92 @@ class AutoPilotNextResponse(BaseModel):
     video_job_id: Optional[str] = Field(None, description="GPU Worker job ID for lip-sync video")
     error: Optional[str] = None
 
+
+
+# ══════════════════════════════════════════════
+# HeyGen Video Generation (Arcads-level quality)
+# ══════════════════════════════════════════════
+
+
+class HeyGenGenerateFromTextRequest(BaseModel):
+    """Request to generate a digital human video via HeyGen.
+    Pipeline: Text → ElevenLabs TTS (MP3) → HeyGen Studio Video API → Video URL."""
+    portrait_url: str = Field(
+        ...,
+        description="URL of the portrait image (JPEG/PNG). Will be uploaded to HeyGen as a talking photo."
+    )
+    portrait_type: str = Field(
+        "image",
+        description="Type of portrait: 'image' (static photo) or 'video' (first frame extracted)."
+    )
+    text: str = Field(
+        ..., min_length=1, max_length=5000,
+        description="Text to convert to speech. The portrait will animate to this text."
+    )
+    voice_id: Optional[str] = Field(
+        None,
+        description="ElevenLabs voice ID. If not provided, uses the default configured voice."
+    )
+    language_code: Optional[str] = Field(
+        "ja",
+        description="Language code for TTS (e.g., 'ja' for Japanese, 'en' for English, 'zh' for Chinese)."
+    )
+    dimension_width: int = Field(
+        720, ge=360, le=1920,
+        description="Output video width in pixels."
+    )
+    dimension_height: int = Field(
+        1280, ge=640, le=1920,
+        description="Output video height in pixels."
+    )
+    title: Optional[str] = Field(
+        None,
+        description="Video title. Auto-generated if not provided."
+    )
+    talking_photo_id: Optional[str] = Field(
+        None,
+        description="Reuse an existing HeyGen talking_photo_id. Skips portrait upload if provided."
+    )
+    wait_for_completion: bool = Field(
+        True,
+        description="If true, poll until video is ready (up to max_wait_sec). If false, return video_id immediately."
+    )
+    max_wait_sec: int = Field(
+        300, ge=30, le=600,
+        description="Maximum seconds to wait for video completion (only if wait_for_completion=true)."
+    )
+
+
+class HeyGenGenerateFromTextResponse(BaseModel):
+    """Response from HeyGen video generation."""
+    success: bool
+    video_id: Optional[str] = Field(None, description="HeyGen video ID for status polling.")
+    video_url: Optional[str] = Field(None, description="Final video URL (if wait_for_completion=true and completed).")
+    status: Optional[str] = Field(None, description="Video status: pending / processing / completed / failed.")
+    talking_photo_id: Optional[str] = Field(None, description="HeyGen talking photo ID (reusable for future requests).")
+    tts_duration_ms: Optional[float] = Field(None, description="Duration of the generated TTS audio in milliseconds.")
+    audio_url: Optional[str] = Field(None, description="URL of the generated TTS audio (MP3).")
+    duration_sec: Optional[float] = Field(None, description="Video duration in seconds (if completed).")
+    engine: str = Field("heygen", description="Engine used for generation.")
+    error: Optional[str] = None
+
+
+class HeyGenVideoStatusResponse(BaseModel):
+    """Response for HeyGen video status check."""
+    success: bool
+    video_id: str
+    status: Optional[str] = Field(None, description="Video status: pending / processing / completed / failed.")
+    video_url: Optional[str] = Field(None, description="Video URL (when completed).")
+    duration: Optional[float] = Field(None, description="Video duration in seconds.")
+    error: Optional[str] = None
+
+
+class HeyGenHealthResponse(BaseModel):
+    """Response for HeyGen health check."""
+    success: bool
+    status: str = Field("unknown", description="ok / error / not_configured")
+    api_key_set: bool = False
+    remaining_credits: Optional[float] = None
+    remaining_quota: Optional[Dict[str, Any]] = None
+    talking_photos_count: Optional[int] = None
+    error: Optional[str] = None
