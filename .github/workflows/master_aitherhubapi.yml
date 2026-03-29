@@ -67,6 +67,20 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_AE01A735F8B046C49C5F169706AC5842 }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_8E4F3767CE0647AEAA62C4C721F843FE }}
 
+      - name: Stop Azure Web App (clear deployment lock)
+        run: az webapp stop --name aitherhubAPI --resource-group aitherhub
+        continue-on-error: true
+
+      - name: Wait for app to stop
+        run: sleep 10
+
+      - name: Start Azure Web App
+        run: az webapp start --name aitherhubAPI --resource-group aitherhub
+        continue-on-error: true
+
+      - name: Wait for app to start
+        run: sleep 15
+
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         timeout-minutes: 10
