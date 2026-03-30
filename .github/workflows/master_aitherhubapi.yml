@@ -47,19 +47,6 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Create venv and install dependencies
-        working-directory: backend
-        run: |
-          python -m venv antenv
-          source antenv/bin/activate
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
       - name: Login to Azure
         uses: azure/login@v2
         with:
@@ -67,11 +54,35 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_AE01A735F8B046C49C5F169706AC5842 }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_8E4F3767CE0647AEAA62C4C721F843FE }}
 
+      - name: Update version environment variables
+        run: |
+          COMMIT_SHA="${{ github.sha }}"
+          SHORT_SHA="${COMMIT_SHA:0:7}"
+          BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          echo "Setting version info: commit=$SHORT_SHA, build_time=$BUILD_TIME"
+          az webapp config appsettings set \
+            --resource-group rg-vdp-kyogoku \
+            --name aitherhubAPI \
+            --settings \
+              GIT_COMMIT_SHA="$SHORT_SHA" \
+              GIT_BRANCH="${{ github.ref_name }}" \
+              BUILD_TIME="$BUILD_TIME" \
+              DEPLOY_TIME="$BUILD_TIME" \
+            --output none
+
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         with:
           app-name: aitherhubAPI
           package: backend
+
+      - name: Force restart app
+        run: |
+          echo "Restarting app to pick up new code..."
+          az webapp restart \
+            --resource-group rg-vdp-kyogoku \
+            --name aitherhubAPI
+          echo "App restart triggered."
 
       - name: Logout from Azure
         if: always()
@@ -81,15 +92,17 @@ jobs:
     needs: build_and_deploy
     runs-on: ubuntu-latest
     steps:
-      - name: Wait for app restart
-        run: sleep 120
+      - name: Wait for app restart and Oryx build
+        run: |
+          echo "Waiting 5 minutes for Oryx build and app startup..."
+          sleep 300
 
       - name: Verify API is responding
         run: |
           API_URL="https://aitherhubapi-cpcjcnezbgf5f7e2.japaneast-01.azurewebsites.net"
           echo "Checking aitherhubAPI health at $API_URL ..."
           SUCCESS=false
-          for i in 1 2 3 4 5 6 7 8 9 10; do
+          for i in $(seq 1 20); do
             HTTP_CODE=$(curl -s -o /tmp/response.json -w "%{http_code}" \
               --connect-timeout 10 --max-time 30 \
               "$API_URL/" 2>/dev/null || echo "000")
@@ -107,8 +120,8 @@ jobs:
 
           if [ "$SUCCESS" != "true" ]; then
             echo ""
-            echo "::error::DEPLOY VERIFICATION FAILED — API did not return 200 after 10 attempts"
-            echo "The server may have crashed on startup. Check Azure App Service logs."
+            echo "::error::DEPLOY VERIFICATION FAILED — API did not return 200 after 20 attempts"
+            echo "The server may still be building. Check Azure App Service logs."
             exit 1
           fi
 
