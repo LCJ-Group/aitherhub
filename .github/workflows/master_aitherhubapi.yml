@@ -47,10 +47,37 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python 3.10
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+
+      - name: Build antenv virtual environment
+        working-directory: backend
+        run: |
+          echo "Creating antenv virtual environment with Python 3.10..."
+          python -m venv antenv
+          source antenv/bin/activate
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          echo "antenv size:"
+          du -sh antenv
+          echo "Python version in antenv: $(python --version)"
+          deactivate
+
+      - name: Create deploy zip (code + antenv)
+        run: |
+          cd backend
+          # Clean up unnecessary files
+          find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+          find . -name "*.pyc" -delete 2>/dev/null || true
+          rm -rf .pytest_cache
+          echo "Backend size (with antenv):"
+          du -sh .
+          # Create zip
+          zip -r ../deploy.zip . -x ".pytest_cache/*" -x "__pycache__/*" -x "*.pyc"
+          cd ..
+          ls -lh deploy.zip
 
       - name: Login to Azure
         uses: azure/login@v2
@@ -78,22 +105,9 @@ jobs:
               WEBSITES_CONTAINER_START_TIME_LIMIT="1800" \
             --output none
 
-      - name: Create deploy zip (code only, no antenv)
-        run: |
-          cd backend
-          rm -rf antenv __pycache__ .pytest_cache
-          find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
-          find . -name "*.pyc" -delete 2>/dev/null || true
-          echo "Backend size:"
-          du -sh .
-          cd ..
-          cd backend && zip -r ../deploy.zip . -x "antenv/*" -x "__pycache__/*" -x "*.pyc" -x ".pytest_cache/*"
-          cd ..
-          ls -lh deploy.zip
-
       - name: Deploy zip to Azure Web App
         run: |
-          echo "Deploying zip package (no Oryx build)..."
+          echo "Deploying zip package (antenv included, no Oryx build needed)..."
           az webapp deploy \
             --resource-group rg-vdp-kyogoku \
             --name aitherhubAPI \
@@ -104,11 +118,11 @@ jobs:
 
       - name: Restart app
         run: |
-          echo "Restarting app..."
+          echo "Restarting app to pick up new code..."
           az webapp restart \
             --resource-group rg-vdp-kyogoku \
             --name aitherhubAPI
-          echo "App restart triggered. startup.sh will pip install requirements."
+          echo "App restart triggered. antenv is pre-built, startup will be fast."
 
       - name: Logout from Azure
         if: always()
@@ -117,19 +131,19 @@ jobs:
   verify_deploy:
     needs: build_and_deploy
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 15
     steps:
-      - name: Wait for app startup and pip install
+      - name: Wait for app startup
         run: |
-          echo "Waiting 5 minutes for startup.sh pip install and app boot..."
-          sleep 300
+          echo "Waiting 2 minutes for app startup (antenv pre-built, no pip install needed)..."
+          sleep 120
 
       - name: Verify API is responding
         run: |
           API_URL="https://aitherhubapi-cpcjcnezbgf5f7e2.japaneast-01.azurewebsites.net"
           echo "Checking aitherhubAPI health at $API_URL ..."
           SUCCESS=false
-          for i in $(seq 1 30); do
+          for i in $(seq 1 20); do
             HTTP_CODE=$(curl -s -o /tmp/response.json -w "%{http_code}" \
               --connect-timeout 10 --max-time 30 \
               "$API_URL/" 2>/dev/null || echo "000")
@@ -147,7 +161,7 @@ jobs:
 
           if [ "$SUCCESS" != "true" ]; then
             echo ""
-            echo "::warning::API did not return 200 after 30 attempts."
+            echo "::warning::API did not return 200 after 20 attempts."
             echo "Check Azure App Service logs for startup progress."
           fi
 
