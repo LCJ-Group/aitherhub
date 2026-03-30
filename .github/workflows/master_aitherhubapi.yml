@@ -108,7 +108,19 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_AE01A735F8B046C49C5F169706AC5842 }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_8E4F3767CE0647AEAA62C4C721F843FE }}
 
-      - name: Deploy to Azure Web App
+      - name: Disable Oryx build before deploy
+        run: |
+          az webapp config appsettings set \
+            --resource-group rg-vdp-kyogoku \
+            --name aitherhubAPI \
+            --settings \
+              SCM_DO_BUILD_DURING_DEPLOYMENT="false" \
+              ENABLE_ORYX_BUILD="false" \
+            --output none
+          echo "Oryx build disabled. Waiting 10s for settings to propagate..."
+          sleep 10
+
+      - name: Deploy to Azure Web App (Oryx disabled)
         uses: azure/webapps-deploy@v3
         with:
           app-name: 'aitherhubAPI'
@@ -127,8 +139,6 @@ jobs:
               GIT_BRANCH="${{ github.ref_name }}" \
               BUILD_TIME="$BUILD_TIME" \
               DEPLOY_TIME="$BUILD_TIME" \
-              SCM_DO_BUILD_DURING_DEPLOYMENT="false" \
-              ENABLE_ORYX_BUILD="false" \
               WEBSITES_CONTAINER_START_TIME_LIMIT="1800" \
             --output none
 
