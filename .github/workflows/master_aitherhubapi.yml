@@ -52,6 +52,14 @@ jobs:
         with:
           python-version: '3.10'
 
+      - name: Create venv and install dependencies
+        working-directory: backend
+        run: |
+          python -m venv antenv
+          source antenv/bin/activate
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
       - name: Login to Azure
         uses: azure/login@v2
         with:
@@ -65,12 +73,6 @@ jobs:
           SHORT_SHA="${COMMIT_SHA:0:7}"
           BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           echo "Setting version info: commit=$SHORT_SHA, build_time=$BUILD_TIME"
-          # Ensure Python 3.10 runtime and Oryx build enabled
-          az webapp config set \
-            --resource-group rg-vdp-kyogoku \
-            --name aitherhubAPI \
-            --linux-fx-version "PYTHON|3.10" \
-            --output none
           az webapp config appsettings set \
             --resource-group rg-vdp-kyogoku \
             --name aitherhubAPI \
@@ -80,28 +82,14 @@ jobs:
               BUILD_TIME="$BUILD_TIME" \
               DEPLOY_TIME="$BUILD_TIME" \
               SCM_DO_BUILD_DURING_DEPLOYMENT="true" \
-              ENABLE_ORYX_BUILD="true" \
               WEBSITES_CONTAINER_START_TIME_LIMIT="1800" \
             --output none
-
-      - name: Create deployment package
-        working-directory: backend
-        run: |
-          # Create a zip excluding venv, __pycache__, .git etc
-          zip -r ../deploy.zip . \
-            -x "antenv/*" \
-            -x "__pycache__/*" \
-            -x "*/__pycache__/*" \
-            -x "*.pyc" \
-            -x ".git/*" \
-            -x ".env"
-          echo "Package size: $(du -h ../deploy.zip | cut -f1)"
 
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         with:
           app-name: aitherhubAPI
-          package: deploy.zip
+          package: backend
 
       - name: Force restart app
         run: |
@@ -118,12 +106,12 @@ jobs:
   verify_deploy:
     needs: build_and_deploy
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
-      - name: Wait for app startup
+      - name: Wait for Oryx build and app startup
         run: |
-          echo "Waiting 3 minutes for app startup..."
-          sleep 180
+          echo "Waiting 10 minutes for Oryx build and app startup..."
+          sleep 600
 
       - name: Verify API is responding
         run: |
@@ -148,8 +136,8 @@ jobs:
 
           if [ "$SUCCESS" != "true" ]; then
             echo ""
-            echo "::warning::API did not return 200 after 20 attempts."
-            echo "Check Azure App Service logs for details."
+            echo "::warning::API did not return 200 after 20 attempts. Oryx may still be building."
+            echo "Check Azure App Service logs for build progress."
           fi
 
       - name: Check version endpoint
