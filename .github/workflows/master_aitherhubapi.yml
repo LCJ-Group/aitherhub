@@ -42,6 +42,8 @@ jobs:
     permissions:
       id-token: write
       contents: read
+    outputs:
+      deploy_attempted: ${{ steps.deploy.outcome }}
 
     steps:
       - name: Checkout source
@@ -55,32 +57,24 @@ jobs:
       - name: Build antenv virtual environment
         working-directory: backend
         run: |
-          echo "Creating antenv virtual environment with Python 3.10..."
           python -m venv antenv
           source antenv/bin/activate
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          echo "antenv size:"
-          du -sh antenv
-          echo "Python version in antenv: $(python --version)"
           deactivate
+          echo "antenv size: $(du -sh antenv | cut -f1)"
 
       - name: Create deploy zip (code + antenv)
         run: |
           cd backend
-          # Clean up unnecessary files to reduce zip size
           find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
           find . -name "*.pyc" -delete 2>/dev/null || true
           rm -rf .pytest_cache
-          # Remove pip cache from antenv to reduce size
           rm -rf antenv/lib/python3.10/site-packages/pip 2>/dev/null || true
           rm -rf antenv/lib/python3.10/site-packages/setuptools 2>/dev/null || true
-          echo "Backend size (with antenv):"
-          du -sh .
-          # Create zip
-          zip -r ../deploy.zip . -x ".pytest_cache/*" -x "*.pyc"
+          zip -r ../deploy.zip . -x ".pytest_cache/*" -x "*.pyc" -x "__pycache__/*"
           cd ..
-          ls -lh deploy.zip
+          echo "deploy.zip size: $(ls -lh deploy.zip | awk '{print $5}')"
 
       - name: Login to Azure
         uses: azure/login@v2
@@ -94,7 +88,6 @@ jobs:
           COMMIT_SHA="${{ github.sha }}"
           SHORT_SHA="${COMMIT_SHA:0:7}"
           BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          echo "Setting version info: commit=$SHORT_SHA, build_time=$BUILD_TIME"
           az webapp config appsettings set \
             --resource-group rg-vdp-kyogoku \
             --name aitherhubAPI \
@@ -108,25 +101,50 @@ jobs:
               WEBSITES_CONTAINER_START_TIME_LIMIT="1800" \
             --output none
 
-      - name: Deploy zip to Azure (async)
+      - name: Deploy zip to Azure via Kudu API
+        id: deploy
+        continue-on-error: true
         run: |
-          echo "Deploying via az webapp deploy --async true..."
+          echo "Deploying via Kudu ZipDeploy REST API..."
           echo "Zip size: $(ls -lh deploy.zip | awk '{print $5}')"
-          echo "Zip is handed to Kudu which extracts in background."
-          az webapp deploy \
+
+          # Get publish credentials
+          CREDS=$(az webapp deployment list-publishing-credentials \
             --resource-group rg-vdp-kyogoku \
             --name aitherhubAPI \
-            --src-path deploy.zip \
-            --type zip \
-            --async true
-          echo "Zip handed to Kudu successfully."
+            --query "{username:publishingUserName, password:publishingPassword}" \
+            --output json)
+          USERNAME=$(echo "$CREDS" | python3 -c "import sys,json; print(json.load(sys.stdin)['username'])")
+          PASSWORD=$(echo "$CREDS" | python3 -c "import sys,json; print(json.load(sys.stdin)['password'])")
 
-      - name: Restart app
-        run: |
-          echo "Restarting app after deploy..."
-          az webapp restart \
-            --resource-group rg-vdp-kyogoku \
-            --name aitherhubAPI
+          KUDU_URL="https://aitherhubapi-cpcjcnezbgf5f7e2.scm.japaneast-01.azurewebsites.net"
+
+          # Upload zip via Kudu ZipDeploy API (async=1 to avoid timeout)
+          echo "Uploading to Kudu ZipDeploy API (async mode)..."
+          HTTP_CODE=$(curl -s -o /tmp/deploy_response.txt -w "%{http_code}" \
+            --connect-timeout 30 \
+            --max-time 600 \
+            -X POST \
+            -u "$USERNAME:$PASSWORD" \
+            -H "Content-Type: application/zip" \
+            --data-binary @deploy.zip \
+            "$KUDU_URL/api/zipdeploy?isAsync=true")
+
+          echo "Kudu response: HTTP $HTTP_CODE"
+          cat /tmp/deploy_response.txt 2>/dev/null || true
+          echo ""
+
+          if [ "$HTTP_CODE" = "202" ] || [ "$HTTP_CODE" = "200" ]; then
+            echo "Zip accepted by Kudu (HTTP $HTTP_CODE). Build runs in background."
+          elif [ "$HTTP_CODE" = "502" ] || [ "$HTTP_CODE" = "504" ]; then
+            echo "::warning::Kudu returned HTTP $HTTP_CODE (gateway timeout)."
+            echo "This is expected for large zips. Kudu processes in background."
+            echo "verify_deploy will confirm when the new code is live."
+          else
+            echo "::error::Unexpected HTTP $HTTP_CODE from Kudu."
+            cat /tmp/deploy_response.txt 2>/dev/null || true
+            exit 1
+          fi
 
       - name: Logout from Azure
         if: always()
@@ -134,6 +152,7 @@ jobs:
 
   verify_deploy:
     needs: build_and_deploy
+    if: always() && needs.build_and_deploy.result != 'cancelled'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -144,8 +163,9 @@ jobs:
           API_URL="https://aitherhubapi-cpcjcnezbgf5f7e2.japaneast-01.azurewebsites.net"
           SHORT_SHA="${EXPECTED_COMMIT:0:7}"
           echo "Expected commit: $SHORT_SHA"
-          echo "Waiting for Kudu to finish extracting zip and app to start..."
-          echo "This may take 10-15 minutes."
+          echo "Deploy step outcome: ${{ needs.build_and_deploy.outputs.deploy_attempted }}"
+          echo "Waiting for Kudu to finish building and app to start..."
+          echo "This may take 10-15 minutes for large zips."
           echo ""
 
           VERIFIED=false
@@ -180,6 +200,7 @@ jobs:
             echo ""
             echo "::warning::Deploy verification timed out after $((MAX_ATTEMPTS * INTERVAL))s."
             echo "The deploy may still be in progress. Check /version manually."
+            exit 1
           fi
 
       - name: Final health check
