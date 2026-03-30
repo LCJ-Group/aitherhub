@@ -79,6 +79,7 @@ jobs:
             --name aitherhubAPI \
             --linux-fx-version "PYTHON|3.10" \
             --output none
+          # Disable Oryx build on Azure side - we build locally in GitHub Actions
           az webapp config appsettings set \
             --resource-group rg-vdp-kyogoku \
             --name aitherhubAPI \
@@ -87,7 +88,8 @@ jobs:
               GIT_BRANCH="${{ github.ref_name }}" \
               BUILD_TIME="$BUILD_TIME" \
               DEPLOY_TIME="$BUILD_TIME" \
-              SCM_DO_BUILD_DURING_DEPLOYMENT="true" \
+              SCM_DO_BUILD_DURING_DEPLOYMENT="false" \
+              ENABLE_ORYX_BUILD="false" \
               WEBSITES_CONTAINER_START_TIME_LIMIT="1800" \
               PYTHON_VERSION="3.10" \
             --output none
@@ -113,12 +115,12 @@ jobs:
   verify_deploy:
     needs: build_and_deploy
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 15
     steps:
-      - name: Wait for Oryx build and app startup
+      - name: Wait for app startup
         run: |
-          echo "Waiting 10 minutes for Oryx build and app startup..."
-          sleep 600
+          echo "Waiting 3 minutes for app startup..."
+          sleep 180
 
       - name: Verify API is responding
         run: |
@@ -143,8 +145,8 @@ jobs:
 
           if [ "$SUCCESS" != "true" ]; then
             echo ""
-            echo "::warning::API did not return 200 after 20 attempts. Oryx may still be building."
-            echo "Check Azure App Service logs for build progress."
+            echo "::warning::API did not return 200 after 20 attempts."
+            echo "Check Azure App Service logs for details."
           fi
 
       - name: Check version endpoint
