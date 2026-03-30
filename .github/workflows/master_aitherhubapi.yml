@@ -38,7 +38,7 @@ jobs:
   build_and_deploy:
     needs: pre_deploy_check
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
     permissions:
       id-token: write
       contents: read
@@ -47,79 +47,22 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.10
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-
-      - name: Build antenv and create deploy package
+      - name: Create lightweight deploy package (no antenv)
         run: |
           cd backend
 
-          # Clean up
+          # Clean up build artifacts
           find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
           find . -name "*.pyc" -delete 2>/dev/null || true
           rm -rf .pytest_cache antenv .venv
 
-          # Create antenv with pip install (no cache, minimal size)
-          python -m venv antenv
-          source antenv/bin/activate
-          pip install --no-cache-dir --no-compile -r requirements.txt
-          # Also install gunicorn explicitly
-          pip install --no-cache-dir --no-compile gunicorn
-          deactivate
-
-          # Fix pyvenv.cfg to work on Azure App Service
-          # Azure uses /opt/python/3.10.x/bin but we don't know exact version
-          # Solution: rewrite pyvenv.cfg to use /usr/bin (system Python fallback)
-          # and also create a symlink-based activation that works anywhere
-          echo "[build] Original pyvenv.cfg:"
-          cat antenv/pyvenv.cfg
-          
-          # Rewrite pyvenv.cfg to be portable
-          # Azure App Service has Python at /opt/python/3.10.*/bin
-          # We'll set include-system-site-packages = true as fallback
-          cat > antenv/pyvenv.cfg << 'PYVENV'
-          home = /opt/python/latest/bin
-          include-system-site-packages = true
-          version = 3.10
-          PYVENV
-          # Remove leading spaces
-          sed -i 's/^          //' antenv/pyvenv.cfg
-          
-          echo "[build] Fixed pyvenv.cfg:"
-          cat antenv/pyvenv.cfg
-
-          # Fix shebangs in antenv/bin/ scripts to use /usr/bin/env python
-          # GH Actions installs Python at /opt/hostedtoolcache/... which doesn't exist on Azure
-          for script in antenv/bin/*; do
-            if [ -f "$script" ] && head -1 "$script" | grep -q "^#!.*python"; then
-              sed -i '1s|^#!.*python[0-9.]*|#!/usr/bin/env python|' "$script"
-            fi
-          done
-          echo "[build] Fixed shebangs in antenv/bin/"
-          head -1 antenv/bin/gunicorn 2>/dev/null || echo "no gunicorn script"
-
-          # Strip antenv to reduce size
-          find antenv -name "*.pyc" -delete 2>/dev/null || true
-          find antenv -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
-          find antenv -name "*.dist-info" -type d -exec rm -rf {} + 2>/dev/null || true
-          find antenv -name "tests" -type d -exec rm -rf {} + 2>/dev/null || true
-          find antenv -name "test" -type d -exec rm -rf {} + 2>/dev/null || true
-          # Remove pip from antenv (not needed at runtime)
-          rm -rf antenv/lib/python3.10/site-packages/pip 2>/dev/null || true
-          rm -rf antenv/lib/python3.10/site-packages/pip-* 2>/dev/null || true
-          rm -rf antenv/lib/python3.10/site-packages/setuptools 2>/dev/null || true
-          rm -rf antenv/lib/python3.10/site-packages/setuptools-* 2>/dev/null || true
-
-          echo "antenv size after strip: $(du -sh antenv | cut -f1)"
-
-          # Create zip with code + antenv
+          # Create small zip with just the code (no antenv)
           zip -r ../deploy.zip . \
             -x ".pytest_cache/*" \
             -x "*.pyc" \
             -x "__pycache__/*" \
-            -x ".venv/*"
+            -x ".venv/*" \
+            -x "antenv/*"
 
           cd ..
           echo "deploy.zip size: $(ls -lh deploy.zip | awk '{print $5}')"
@@ -149,28 +92,14 @@ jobs:
               WEBSITES_CONTAINER_START_TIME_LIMIT="1800" \
             --output none
 
-      - name: Deploy zip to Azure (Oryx disabled, antenv pre-built)
-        continue-on-error: true
-        id: deploy_step
-        run: |
-          echo "Deploying with Oryx DISABLED. antenv is pre-built in zip."
-          az webapp deploy \
-            --resource-group rg-vdp-kyogoku \
-            --name aitherhubAPI \
-            --src-path deploy.zip \
-            --type zip \
-            --async true \
-            --timeout 120 \
-            2>&1 || echo "::warning::Deploy command returned non-zero"
+      - name: Deploy to Azure Web App
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: 'aitherhubAPI'
+          package: deploy.zip
 
-      - name: Wait for Kudu to accept the zip
+      - name: Restart app
         run: |
-          echo "Waiting 30s for Kudu to start processing..."
-          sleep 30
-
-      - name: Restart app to pick up new code
-        run: |
-          echo "Restarting app..."
           az webapp restart \
             --resource-group rg-vdp-kyogoku \
             --name aitherhubAPI \
@@ -186,13 +115,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - name: Wait for app startup
+      - name: Wait for app startup (pip install + gunicorn)
         env:
           EXPECTED_COMMIT: ${{ github.sha }}
         run: |
           API_URL="https://aitherhubapi-cpcjcnezbgf5f7e2.japaneast-01.azurewebsites.net"
           SHORT_SHA="${EXPECTED_COMMIT:0:7}"
           echo "Expected commit: $SHORT_SHA"
+          echo "startup.sh will pip install requirements (no pre-built antenv)"
+          echo "This may take 5-10 minutes on first deploy..."
           echo ""
 
           VERIFIED=false
@@ -217,7 +148,7 @@ jobs:
                 echo "  (waiting for $SHORT_SHA, currently $CURRENT_COMMIT)"
               fi
             else
-              echo "Attempt $i/$MAX_ATTEMPTS: API not responding yet"
+              echo "Attempt $i/$MAX_ATTEMPTS: API not responding (pip install or app starting)"
             fi
 
             sleep $INTERVAL
@@ -240,6 +171,3 @@ jobs:
           echo ""
           echo "=== Auto-video health ==="
           curl -sf --max-time 15 "$API_URL/api/v1/auto-video/health" 2>/dev/null || echo "No response"
-          echo ""
-          echo "=== Digital Human health ==="
-          curl -sf --max-time 15 "$API_URL/api/v1/digital-human/health" 2>/dev/null || echo "No response"

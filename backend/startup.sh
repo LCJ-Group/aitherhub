@@ -4,6 +4,13 @@
 export LANG=C
 export LC_ALL=C
 
+echo "[startup] ========================================"
+echo "[startup] AitherHub API startup"
+echo "[startup] ========================================"
+echo "[startup] Python: $(python --version 2>&1)"
+echo "[startup] Working dir: $(pwd)"
+echo "[startup] Date: $(date -u)"
+
 # ── Install ffmpeg & CJK fonts in BACKGROUND ──
 install_deps_background() {
     if ! command -v ffmpeg &> /dev/null; then
@@ -30,48 +37,57 @@ install_deps_background() {
 install_deps_background &
 
 # ── Set up Python environment ──
-# The antenv is pre-built in GitHub Actions and included in the deploy zip.
-# IMPORTANT: antenv/bin/ scripts have shebangs pointing to GH Actions Python path
-# which doesn't exist on Azure. We MUST use PYTHONPATH + python -m gunicorn instead.
+# Strategy: Try to use existing antenv, otherwise pip install into antenv
+ANTENV_FOUND=false
 
-echo "[startup] Setting up Python environment..."
-echo "[startup] System Python: $(which python 2>/dev/null || echo 'not found')"
-echo "[startup] Python version: $(python --version 2>/dev/null || echo 'unknown')"
-
-PACKAGES_FOUND=false
-
-for VENV_PATH in "antenv" "/home/site/wwwroot/antenv" "/antenv" "/home/antenv"; do
-    SITE_PACKAGES=$(find "$VENV_PATH/lib" -name "site-packages" -type d 2>/dev/null | head -1)
-    if [ -n "$SITE_PACKAGES" ]; then
-        echo "[startup] Found site-packages at: $SITE_PACKAGES"
-        export PYTHONPATH="$SITE_PACKAGES:${PYTHONPATH:-}"
-        echo "[startup] PYTHONPATH=$PYTHONPATH"
-
-        # Verify import works
-        if python -c "import fastapi; print(f'fastapi {fastapi.__version__}')" 2>/dev/null; then
-            echo "[startup] Package imports verified successfully"
-            PACKAGES_FOUND=true
+for VENV_PATH in "antenv" "/home/site/wwwroot/antenv"; do
+    if [ -d "$VENV_PATH/lib" ]; then
+        SITE_PACKAGES=$(find "$VENV_PATH/lib" -name "site-packages" -type d 2>/dev/null | head -1)
+        if [ -n "$SITE_PACKAGES" ] && python -c "import sys; sys.path.insert(0,'$SITE_PACKAGES'); import fastapi" 2>/dev/null; then
+            echo "[startup] Found working antenv at $VENV_PATH"
+            export PYTHONPATH="$SITE_PACKAGES:${PYTHONPATH:-}"
+            ANTENV_FOUND=true
             break
-        else
-            echo "[startup] Import failed with this path, trying next..."
-            unset PYTHONPATH
         fi
     fi
 done
 
-if [ "$PACKAGES_FOUND" = "false" ]; then
-    echo "[startup] WARNING: No pre-built packages found"
-    echo "[startup] Falling back to pip install..."
-    pip install --no-cache-dir -r requirements.txt 2>&1 | tail -10
+if [ "$ANTENV_FOUND" = "false" ]; then
+    echo "[startup] No working antenv found. Running pip install..."
+    echo "[startup] This will take a few minutes on first deploy..."
+
+    # Install into a venv so packages are isolated
+    if [ ! -d "antenv" ]; then
+        python -m venv antenv
+    fi
+
+    # Activate and install
+    source antenv/bin/activate
+    pip install --no-cache-dir -r requirements.txt 2>&1 | tail -20
+    pip install --no-cache-dir gunicorn 2>&1 | tail -5
+
+    echo "[startup] pip install complete"
+
+    # Use the venv's gunicorn directly
+    echo "[startup] Starting gunicorn from antenv..."
+    exec gunicorn -k uvicorn.workers.UvicornWorker app.main:app \
+        --workers 2 \
+        --threads 1 \
+        --timeout 600 \
+        --graceful-timeout 30 \
+        --bind 0.0.0.0:8000 \
+        --access-logfile - \
+        --error-logfile - \
+        --keep-alive 120
 fi
 
-echo "[startup] Final Python check:"
-echo "[startup]   python: $(which python)"
-echo "[startup]   PYTHONPATH: ${PYTHONPATH:-not set}"
-python -c "import fastapi, uvicorn, gunicorn; print(f'  fastapi={fastapi.__version__}, uvicorn={uvicorn.__version__}')" 2>&1 || echo "[startup] WARNING: Some imports failed"
+# If antenv was found, use python -m gunicorn with PYTHONPATH
+echo "[startup] PYTHONPATH=$PYTHONPATH"
+echo "[startup] Verifying imports..."
+python -c "import fastapi, uvicorn, gunicorn; print(f'[startup] fastapi={fastapi.__version__}, uvicorn={uvicorn.__version__}')" 2>&1
 
 echo "[startup] Starting gunicorn via python -m..."
-python -m gunicorn -k uvicorn.workers.UvicornWorker app.main:app \
+exec python -m gunicorn -k uvicorn.workers.UvicornWorker app.main:app \
     --workers 2 \
     --threads 1 \
     --timeout 600 \
