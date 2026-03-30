@@ -68,14 +68,17 @@ jobs:
       - name: Create deploy zip (code + antenv)
         run: |
           cd backend
-          # Clean up unnecessary files
+          # Clean up unnecessary files to reduce zip size
           find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
           find . -name "*.pyc" -delete 2>/dev/null || true
           rm -rf .pytest_cache
+          # Remove pip cache from antenv to reduce size
+          rm -rf antenv/lib/python3.10/site-packages/pip 2>/dev/null || true
+          rm -rf antenv/lib/python3.10/site-packages/setuptools 2>/dev/null || true
           echo "Backend size (with antenv):"
           du -sh .
           # Create zip
-          zip -r ../deploy.zip . -x ".pytest_cache/*" -x "__pycache__/*" -x "*.pyc"
+          zip -r ../deploy.zip . -x ".pytest_cache/*" -x "*.pyc"
           cd ..
           ls -lh deploy.zip
 
@@ -105,16 +108,16 @@ jobs:
               WEBSITES_CONTAINER_START_TIME_LIMIT="1800" \
             --output none
 
-      - name: Deploy zip to Azure Web App
+      - name: Deploy zip via Kudu ZipDeploy
         run: |
-          echo "Deploying zip package (antenv included, no Oryx build needed)..."
-          az webapp deploy \
+          echo "Deploying via Kudu ZipDeploy (SCM_DO_BUILD=false, no Oryx build)..."
+          echo "Zip size: $(ls -lh deploy.zip | awk '{print $5}')"
+          az webapp deployment source config-zip \
             --resource-group rg-vdp-kyogoku \
             --name aitherhubAPI \
-            --src-path deploy.zip \
-            --type zip \
-            --async true
-          echo "Zip deploy initiated."
+            --src deploy.zip \
+            --timeout 600
+          echo "Kudu ZipDeploy completed."
 
       - name: Restart app
         run: |
