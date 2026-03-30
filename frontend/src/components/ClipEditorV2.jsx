@@ -778,6 +778,16 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
     }));
   }, [splitPoints, duration, disabledSegments]);
 
+  // ─── Toggle segment enabled/disabled ──────────────────────────
+  const toggleSegment = useCallback((segIdx) => {
+    setDisabledSegments(prev => {
+      const next = new Set(prev);
+      if (next.has(segIdx)) next.delete(segIdx);
+      else next.add(segIdx);
+      return next;
+    });
+  }, []);
+
   // ─── Keyboard shortcuts ────────────────────────────────────────
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -848,16 +858,6 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [duration, currentTime, splitPoints, selectedSegIdx, toggleSegment]);
-
-  // ─── Toggle segment enabled/disabled ──────────────────────────
-  const toggleSegment = useCallback((segIdx) => {
-    setDisabledSegments(prev => {
-      const next = new Set(prev);
-      if (next.has(segIdx)) next.delete(segIdx);
-      else next.add(segIdx);
-      return next;
-    });
-  }, []);
 
   // ─── Remove a split point ─────────────────────────────────────
   const removeSplitPoint = useCallback((splitTime) => {
