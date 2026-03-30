@@ -108,24 +108,25 @@ jobs:
               WEBSITES_CONTAINER_START_TIME_LIMIT="1800" \
             --output none
 
-      - name: Deploy zip via Kudu ZipDeploy
+      - name: Deploy zip to Azure (async)
         run: |
-          echo "Deploying via Kudu ZipDeploy (SCM_DO_BUILD=false, no Oryx build)..."
+          echo "Deploying via az webapp deploy --async true..."
           echo "Zip size: $(ls -lh deploy.zip | awk '{print $5}')"
-          az webapp deployment source config-zip \
+          echo "Zip is handed to Kudu which extracts in background."
+          az webapp deploy \
             --resource-group rg-vdp-kyogoku \
             --name aitherhubAPI \
-            --src deploy.zip \
-            --timeout 600
-          echo "Kudu ZipDeploy completed."
+            --src-path deploy.zip \
+            --type zip \
+            --async true
+          echo "Zip handed to Kudu successfully."
 
       - name: Restart app
         run: |
-          echo "Restarting app to pick up new code..."
+          echo "Restarting app after deploy..."
           az webapp restart \
             --resource-group rg-vdp-kyogoku \
             --name aitherhubAPI
-          echo "App restart triggered. antenv is pre-built, startup will be fast."
 
       - name: Logout from Azure
         if: always()
@@ -134,60 +135,65 @@ jobs:
   verify_deploy:
     needs: build_and_deploy
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
-      - name: Wait for app startup
-        run: |
-          echo "Waiting 2 minutes for app startup (antenv pre-built, no pip install needed)..."
-          sleep 120
-
-      - name: Verify API is responding
+      - name: Wait for Kudu build and app startup
+        env:
+          EXPECTED_COMMIT: ${{ github.sha }}
         run: |
           API_URL="https://aitherhubapi-cpcjcnezbgf5f7e2.japaneast-01.azurewebsites.net"
-          echo "Checking aitherhubAPI health at $API_URL ..."
-          SUCCESS=false
-          for i in $(seq 1 20); do
-            HTTP_CODE=$(curl -s -o /tmp/response.json -w "%{http_code}" \
-              --connect-timeout 10 --max-time 30 \
-              "$API_URL/" 2>/dev/null || echo "000")
-            BODY=$(cat /tmp/response.json 2>/dev/null || echo "")
-            echo "Attempt $i: HTTP $HTTP_CODE"
+          SHORT_SHA="${EXPECTED_COMMIT:0:7}"
+          echo "Expected commit: $SHORT_SHA"
+          echo "Waiting for Kudu to finish extracting zip and app to start..."
+          echo "This may take 10-15 minutes."
+          echo ""
 
-            if [ "$HTTP_CODE" = "200" ]; then
-              SUCCESS=true
-              echo "API is healthy! Response: $BODY"
-              break
+          VERIFIED=false
+          MAX_ATTEMPTS=40
+          INTERVAL=30
+
+          for i in $(seq 1 $MAX_ATTEMPTS); do
+            RESPONSE=$(curl -sf --connect-timeout 10 --max-time 15 "$API_URL/version" 2>/dev/null || echo "")
+
+            if [ -n "$RESPONSE" ]; then
+              CURRENT_COMMIT=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('commit',''))" 2>/dev/null || echo "")
+              UPTIME=$(echo "$RESPONSE" | python3 -c "import sys,json; print(f'{json.load(sys.stdin).get(\"uptime_seconds\",0):.0f}')" 2>/dev/null || echo "?")
+
+              echo "Attempt $i/$MAX_ATTEMPTS: commit=$CURRENT_COMMIT, uptime=${UPTIME}s"
+
+              if [ "$CURRENT_COMMIT" = "$SHORT_SHA" ]; then
+                echo ""
+                echo "Deploy verified: commit $SHORT_SHA is live."
+                VERIFIED=true
+                break
+              else
+                echo "  (waiting for $SHORT_SHA, currently $CURRENT_COMMIT)"
+              fi
+            else
+              echo "Attempt $i/$MAX_ATTEMPTS: API not responding (building or restarting)"
             fi
-            echo "Waiting 30s before retry..."
-            sleep 30
+
+            sleep $INTERVAL
           done
 
-          if [ "$SUCCESS" != "true" ]; then
+          if [ "$VERIFIED" != "true" ]; then
             echo ""
-            echo "::warning::API did not return 200 after 20 attempts."
-            echo "Check Azure App Service logs for startup progress."
+            echo "::warning::Deploy verification timed out after $((MAX_ATTEMPTS * INTERVAL))s."
+            echo "The deploy may still be in progress. Check /version manually."
           fi
 
-      - name: Check version endpoint
+      - name: Final health check
         if: always()
         run: |
           API_URL="https://aitherhubapi-cpcjcnezbgf5f7e2.japaneast-01.azurewebsites.net"
-          RESPONSE=$(curl -sf --connect-timeout 10 --max-time 15 \
-            "$API_URL/version" 2>/dev/null || echo "{}")
-          echo "Version info: $RESPONSE"
-          echo "$RESPONSE" | python3 -c "
-          import sys, json
-          data = json.load(sys.stdin)
-          commit = data.get('commit', 'unknown')
-          uptime = data.get('uptime_seconds', -1)
-          print(f'Deployed commit: {commit}')
-          print(f'Uptime: {uptime}s')
-          " 2>/dev/null || echo "Could not parse version response"
-
-      - name: Check auto-video health
-        if: always()
-        run: |
-          API_URL="https://aitherhubapi-cpcjcnezbgf5f7e2.japaneast-01.azurewebsites.net"
-          RESPONSE=$(curl -sf --connect-timeout 10 --max-time 15 \
-            "$API_URL/api/v1/auto-video/health" 2>/dev/null || echo "{}")
-          echo "Auto-video health: $RESPONSE"
+          echo "=== Version ==="
+          curl -sf --max-time 15 "$API_URL/version" 2>/dev/null || echo "No response"
+          echo ""
+          echo "=== Root ==="
+          curl -sf --max-time 15 "$API_URL/" 2>/dev/null || echo "No response"
+          echo ""
+          echo "=== Auto-video health ==="
+          curl -sf --max-time 15 "$API_URL/api/v1/auto-video/health" 2>/dev/null || echo "No response"
+          echo ""
+          echo "=== Digital Human health ==="
+          curl -sf --max-time 15 "$API_URL/api/v1/digital-human/health" 2>/dev/null || echo "No response"
