@@ -89,6 +89,7 @@ jobs:
               DEPLOY_TIME="$BUILD_TIME" \
               SCM_DO_BUILD_DURING_DEPLOYMENT="true" \
               WEBSITES_CONTAINER_START_TIME_LIMIT="1800" \
+              PYTHON_VERSION="3.10" \
             --output none
 
       - name: Deploy to Azure Web App
