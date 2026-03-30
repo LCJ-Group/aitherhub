@@ -449,6 +449,18 @@ export default function LivePreviewPlayer({
     };
   }, [sessionId, speakText]);
 
+  // Expose playVideo function for Quick Generate integration
+  useEffect(() => {
+    window.__aitherhub_playVideo = (videoUrl, text, scriptType) => {
+      if (videoUrl) {
+        playLipSyncVideo(videoUrl, text || "", scriptType || "generated");
+      }
+    };
+    return () => {
+      delete window.__aitherhub_playVideo;
+    };
+  }, [playLipSyncVideo]);
+
   // ══════════════════════════════════════════════
   // Simulated Live Stats
   // ══════════════════════════════════════════════
@@ -634,7 +646,7 @@ export default function LivePreviewPlayer({
               <>
                 <Loader2 className="w-3.5 h-3.5 text-cyan-400 animate-spin" />
                 <span className="text-[10px] text-cyan-300">
-                  {lipSyncPlaying ? "Loading video..." : (engine === "heygen" ? "Generating avatar video..." : "Generating speech...")}
+                  {lipSyncPlaying ? "Loading video..." : "Generating speech..."}
                 </span>
               </>
             ) : (
@@ -685,7 +697,7 @@ export default function LivePreviewPlayer({
           <div className="flex items-center gap-2">
             <div
               className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold ${
-                autoPilotActive || isPlaying
+                autoPilotActive || isPlaying || avatarPreviewUrl
                   ? "bg-red-500 text-white"
                   : "bg-gray-600/80 text-gray-300"
               }`}
@@ -695,7 +707,7 @@ export default function LivePreviewPlayer({
                   autoPilotActive || isPlaying ? "bg-white animate-pulse" : "bg-gray-400"
                 }`}
               />
-              {autoPilotActive ? "LIVE" : isPlaying ? "PREVIEW" : "OFFLINE"}
+              {autoPilotActive ? "LIVE" : (isPlaying || avatarPreviewUrl) ? "PREVIEW" : "OFFLINE"}
             </div>
             <div className="flex items-center gap-1 bg-black/40 px-2 py-1 rounded-full">
               <Eye className="w-3 h-3 text-white/70" />

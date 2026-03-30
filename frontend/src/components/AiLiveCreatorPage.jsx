@@ -165,6 +165,10 @@ export default function AiLiveCreatorPage() {
           clearInterval(pollRef.current);
           pollRef.current = null;
           updateJobHistory(currentJobId, status);
+          // Auto-play completed video in LivePreviewPlayer
+          if (status.status === "completed" && status.video_url && window.__aitherhub_playVideo) {
+            window.__aitherhub_playVideo(status.video_url, scriptText?.substring(0, 200), "generated");
+          }
         }
       } catch (err) {
         console.error("Poll error:", err);
@@ -457,6 +461,10 @@ export default function AiLiveCreatorPage() {
       });
       if (result.tts_duration_ms) {
         setTtsInfo({ duration_ms: result.tts_duration_ms, audio_url: result.audio_url });
+      }
+      // Auto-play in LivePreviewPlayer if video is already completed
+      if (result.status === "completed" && result.video_url && window.__aitherhub_playVideo) {
+        window.__aitherhub_playVideo(result.video_url, scriptText?.substring(0, 200), "generated");
       }
 
       const newJob = {
