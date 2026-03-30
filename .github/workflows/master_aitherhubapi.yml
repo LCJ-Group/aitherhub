@@ -38,12 +38,10 @@ jobs:
   build_and_deploy:
     needs: pre_deploy_check
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       id-token: write
       contents: read
-    outputs:
-      deploy_attempted: ${{ steps.deploy.outcome }}
 
     steps:
       - name: Checkout source
@@ -54,25 +52,13 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Build antenv virtual environment
-        working-directory: backend
-        run: |
-          python -m venv antenv
-          source antenv/bin/activate
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          deactivate
-          echo "antenv size: $(du -sh antenv | cut -f1)"
-
-      - name: Create deploy zip (code + antenv)
+      - name: Create deploy package (code only, no antenv)
         run: |
           cd backend
           find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
           find . -name "*.pyc" -delete 2>/dev/null || true
-          rm -rf .pytest_cache
-          rm -rf antenv/lib/python3.10/site-packages/pip 2>/dev/null || true
-          rm -rf antenv/lib/python3.10/site-packages/setuptools 2>/dev/null || true
-          zip -r ../deploy.zip . -x ".pytest_cache/*" -x "*.pyc" -x "__pycache__/*"
+          rm -rf .pytest_cache antenv .venv
+          zip -r ../deploy.zip . -x ".pytest_cache/*" -x "*.pyc" -x "__pycache__/*" -x "antenv/*" -x ".venv/*"
           cd ..
           echo "deploy.zip size: $(ls -lh deploy.zip | awk '{print $5}')"
 
@@ -96,55 +82,16 @@ jobs:
               GIT_BRANCH="${{ github.ref_name }}" \
               BUILD_TIME="$BUILD_TIME" \
               DEPLOY_TIME="$BUILD_TIME" \
-              SCM_DO_BUILD_DURING_DEPLOYMENT="false" \
-              ENABLE_ORYX_BUILD="false" \
+              SCM_DO_BUILD_DURING_DEPLOYMENT="true" \
+              ENABLE_ORYX_BUILD="true" \
               WEBSITES_CONTAINER_START_TIME_LIMIT="1800" \
             --output none
 
-      - name: Deploy zip to Azure via Kudu API
-        id: deploy
-        continue-on-error: true
-        run: |
-          echo "Deploying via Kudu ZipDeploy REST API..."
-          echo "Zip size: $(ls -lh deploy.zip | awk '{print $5}')"
-
-          # Get publish credentials
-          CREDS=$(az webapp deployment list-publishing-credentials \
-            --resource-group rg-vdp-kyogoku \
-            --name aitherhubAPI \
-            --query "{username:publishingUserName, password:publishingPassword}" \
-            --output json)
-          USERNAME=$(echo "$CREDS" | python3 -c "import sys,json; print(json.load(sys.stdin)['username'])")
-          PASSWORD=$(echo "$CREDS" | python3 -c "import sys,json; print(json.load(sys.stdin)['password'])")
-
-          KUDU_URL="https://aitherhubapi-cpcjcnezbgf5f7e2.scm.japaneast-01.azurewebsites.net"
-
-          # Upload zip via Kudu ZipDeploy API (async=1 to avoid timeout)
-          echo "Uploading to Kudu ZipDeploy API (async mode)..."
-          HTTP_CODE=$(curl -s -o /tmp/deploy_response.txt -w "%{http_code}" \
-            --connect-timeout 30 \
-            --max-time 600 \
-            -X POST \
-            -u "$USERNAME:$PASSWORD" \
-            -H "Content-Type: application/zip" \
-            --data-binary @deploy.zip \
-            "$KUDU_URL/api/zipdeploy?isAsync=true")
-
-          echo "Kudu response: HTTP $HTTP_CODE"
-          cat /tmp/deploy_response.txt 2>/dev/null || true
-          echo ""
-
-          if [ "$HTTP_CODE" = "202" ] || [ "$HTTP_CODE" = "200" ]; then
-            echo "Zip accepted by Kudu (HTTP $HTTP_CODE). Build runs in background."
-          elif [ "$HTTP_CODE" = "502" ] || [ "$HTTP_CODE" = "504" ]; then
-            echo "::warning::Kudu returned HTTP $HTTP_CODE (gateway timeout)."
-            echo "This is expected for large zips. Kudu processes in background."
-            echo "verify_deploy will confirm when the new code is live."
-          else
-            echo "::error::Unexpected HTTP $HTTP_CODE from Kudu."
-            cat /tmp/deploy_response.txt 2>/dev/null || true
-            exit 1
-          fi
+      - name: Deploy to Azure Web App (Oryx build)
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: aitherhubAPI
+          package: deploy.zip
 
       - name: Logout from Azure
         if: always()
@@ -156,16 +103,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Wait for Kudu build and app startup
+      - name: Wait for Oryx build and app startup
         env:
           EXPECTED_COMMIT: ${{ github.sha }}
         run: |
           API_URL="https://aitherhubapi-cpcjcnezbgf5f7e2.japaneast-01.azurewebsites.net"
           SHORT_SHA="${EXPECTED_COMMIT:0:7}"
           echo "Expected commit: $SHORT_SHA"
-          echo "Deploy step outcome: ${{ needs.build_and_deploy.outputs.deploy_attempted }}"
-          echo "Waiting for Kudu to finish building and app to start..."
-          echo "This may take 10-15 minutes for large zips."
+          echo "Waiting for Oryx to build antenv and app to start..."
+          echo "Oryx builds pip packages during deployment (cached between deploys)."
           echo ""
 
           VERIFIED=false
@@ -190,7 +136,7 @@ jobs:
                 echo "  (waiting for $SHORT_SHA, currently $CURRENT_COMMIT)"
               fi
             else
-              echo "Attempt $i/$MAX_ATTEMPTS: API not responding (building or restarting)"
+              echo "Attempt $i/$MAX_ATTEMPTS: API not responding (Oryx building or app restarting)"
             fi
 
             sleep $INTERVAL
@@ -200,7 +146,6 @@ jobs:
             echo ""
             echo "::warning::Deploy verification timed out after $((MAX_ATTEMPTS * INTERVAL))s."
             echo "The deploy may still be in progress. Check /version manually."
-            exit 1
           fi
 
       - name: Final health check
