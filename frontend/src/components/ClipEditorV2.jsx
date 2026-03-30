@@ -241,6 +241,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
   const [splitPoints, setSplitPoints] = useState([]); // [seconds] sorted
   const [disabledSegments, setDisabledSegments] = useState(new Set()); // Set of segment indices
   const [hoveredSegIdx, setHoveredSegIdx] = useState(null);
+  const [selectedSegIdx, setSelectedSegIdx] = useState(null);
   const [timelineCursorPos, setTimelineCursorPos] = useState(null); // mouse X position on timeline
   const mouseTimeRef = useRef(null); // mouse time position on timeline (seconds)
 
@@ -831,16 +832,22 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
         return;
       }
 
-      // Ctrl+Backspace = remove last split point
-      if (e.key === 'Backspace' && e.ctrlKey) {
+      // Delete/Backspace = toggle selected segment
+      if (e.key === 'Delete' || e.key === 'Backspace') {
         e.preventDefault();
-        setSplitPoints(prev => prev.slice(0, -1));
-        setDisabledSegments(new Set());
+        if (e.ctrlKey) {
+          // Ctrl+Backspace = remove last split point
+          setSplitPoints(prev => prev.slice(0, -1));
+          setDisabledSegments(new Set());
+        } else if (selectedSegIdx !== null) {
+          // Delete selected segment
+          toggleSegment(selectedSegIdx);
+        }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [duration, currentTime, splitPoints]);
+  }, [duration, currentTime, splitPoints, selectedSegIdx, toggleSegment]);
 
   // ─── Toggle segment enabled/disabled ──────────────────────────
   const toggleSegment = useCallback((segIdx) => {
@@ -2463,10 +2470,10 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
             position: "relative",
             height: 32,
             backgroundColor: C.bg,
-            borderRadius: 5,
+            borderRadius: '5px 5px 0 0',
             overflow: "hidden",
             cursor: "pointer",
-            marginBottom: 5,
+            marginBottom: 0,
           }}
         >
           {/* Heatmap */}
@@ -2625,11 +2632,14 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
             position: 'relative',
             height: 48,
             backgroundColor: C.bg,
-            borderRadius: 4,
+            borderRadius: '0 0 4px 4px',
             overflow: 'hidden',
             cursor: 'pointer',
             marginBottom: 4,
-            border: `1px solid ${C.border}`,
+            borderLeft: `1px solid ${C.border}`,
+            borderRight: `1px solid ${C.border}`,
+            borderBottom: `1px solid ${C.border}`,
+            borderTop: 'none',
           }}
         >
           {waveformData ? (
@@ -2686,7 +2696,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
           {splitSegments.map((seg) => (
             <div
               key={`seg${seg.index}`}
-              onClick={(e) => { e.stopPropagation(); toggleSegment(seg.index); }}
+              onClick={(e) => { e.stopPropagation(); toggleSegment(seg.index); setSelectedSegIdx(seg.index); }}
               onMouseEnter={() => setHoveredSegIdx(seg.index)}
               onMouseLeave={() => setHoveredSegIdx(null)}
               onMouseMove={(e) => {
@@ -2714,11 +2724,15 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                 color: seg.enabled ? '#fff' : '#888',
                 backgroundColor: !seg.enabled
                   ? 'rgba(239, 68, 68, 0.25)'
-                  : hoveredSegIdx === seg.index
-                    ? 'rgba(99, 102, 241, 0.3)'
-                    : 'transparent',
+                  : selectedSegIdx === seg.index
+                    ? 'rgba(99, 102, 241, 0.45)'
+                    : hoveredSegIdx === seg.index
+                      ? 'rgba(99, 102, 241, 0.3)'
+                      : 'transparent',
+                outline: selectedSegIdx === seg.index ? '2px solid rgba(99, 102, 241, 0.7)' : 'none',
+                outlineOffset: -2,
                 cursor: 'pointer',
-                zIndex: 20,
+                zIndex: selectedSegIdx === seg.index ? 22 : 20,
                 borderRight: '1px solid rgba(255,255,255,0.08)',
                 transition: 'background-color 0.15s ease',
                 userSelect: 'none',
@@ -2754,8 +2768,28 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
               </span>
             )}
             <div style={{ flex: 1 }} />
+            {selectedSegIdx !== null && splitSegments.length > 0 && (
+              <button
+                onClick={() => {
+                  toggleSegment(selectedSegIdx);
+                }}
+                style={{
+                  padding: '2px 8px',
+                  border: `1px solid ${splitSegments[selectedSegIdx]?.enabled ? C.red : C.green}`,
+                  borderRadius: 4,
+                  backgroundColor: splitSegments[selectedSegIdx]?.enabled ? 'rgba(239,68,68,0.15)' : 'rgba(16,185,129,0.15)',
+                  color: splitSegments[selectedSegIdx]?.enabled ? C.red : C.green,
+                  fontSize: 10,
+                  cursor: 'pointer',
+                  fontWeight: 600,
+                  marginRight: 4,
+                }}
+              >
+                {splitSegments[selectedSegIdx]?.enabled ? '🗑 削除' : '↩ 復元'}
+              </button>
+            )}
             <button
-              onClick={() => { setSplitPoints([]); setDisabledSegments(new Set()); }}
+              onClick={() => { setSplitPoints([]); setDisabledSegments(new Set()); setSelectedSegIdx(null); }}
               style={{
                 padding: '2px 8px',
                 border: `1px solid ${C.border}`,
@@ -2784,6 +2818,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
           {[
             { key: 'Space', label: '再生/停止', color: C.green },
             { key: 'W', label: 'カーソル位置で分割', color: '#FFE135' },
+            { key: 'Del', label: '選択セグメント削除', color: C.red },
             { key: '←→', label: '±5秒', color: C.blue },
           ].map(({ key, label, color }) => (
             <span key={key} style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
