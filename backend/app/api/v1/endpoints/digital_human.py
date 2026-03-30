@@ -2969,63 +2969,81 @@ async def autopilot_next(
             mp3_blob_url = await _upload_mp3_to_blob(mp3_audio, audio_id)
             mp3_audio_url = _ensure_sas_url(mp3_blob_url)
 
-        # ── Async Lip-Sync Video Generation ──────────────────────────
-        # Instead of blocking for 30-180s waiting for GPU Worker,
-        # we return TTS audio immediately and generate lip-sync video
-        # in the background. The video is cached in the session and
-        # returned with the NEXT autopilot/next call.
+        # ── Lip-Sync Video Generation ──────────────────────────────────
+        # HeyGen avatar mode: generate synchronously (wait for video)
+        # Other modes: generate in background, return cached from previous call
         portrait_url = session.get("portrait_url", "")
         lipsync_engine = session.get("engine", "heygen")
         avatar_id = session.get("avatar_id", "")
 
-        # Check if a previously generated lip-sync video is ready
-        cached_video_url = autopilot.pop("_cached_video_url", None)
-        if cached_video_url:
-            logger.info(f"[AutoPilot] Using cached lip-sync video: {cached_video_url[:80]}...")
+        sync_video_url = None  # Will be set if we wait synchronously
 
-        # Start background lip-sync generation for THIS segment
-        # For HeyGen avatar mode: use avatar_id directly (no portrait needed)
-        # For other modes: use portrait_url
-        should_generate_lipsync = portrait_url or (lipsync_engine == "heygen" and avatar_id)
-        if should_generate_lipsync:
-            portrait_type = session.get("portrait_type", "image")
+        if lipsync_engine == "heygen" and avatar_id:
+            # ── HeyGen Digital Twin: SYNCHRONOUS generation ──────────────
+            # HeyGen API typically takes 15-60s. We wait so the frontend
+            # always gets a video_url and can play the lip-synced avatar.
             logger.info(
-                f"[AutoPilot] Starting background lip-sync: "
-                f"engine={lipsync_engine}, avatar_id={avatar_id or 'N/A'}, "
-                f"portrait={portrait_url[:60] if portrait_url else 'N/A'}..."
+                f"[AutoPilot HeyGen Sync] Generating lip-sync video: "
+                f"avatar_id={avatar_id}, audio={mp3_audio_url[:60]}..."
             )
-
-            # Get cached talking_photo_id to avoid re-creating avatar each time
-            cached_talking_photo_id = autopilot.get("_heygen_talking_photo_id", "")
-
-            async def _bg_lipsync(sess, ap, p_url, a_url, eng, p_type, tp_id, av_id):
-                """Background task: generate lip-sync video and cache in session."""
-                try:
-                    video_url = await _generate_lipsync_video(
-                        portrait_url=p_url,
-                        audio_url=a_url,
-                        engine=eng,
-                        portrait_type=p_type,
-                        max_wait_sec=300,
-                        talking_photo_id=tp_id,
-                        avatar_id=av_id,
-                    )
-                    if video_url:
-                        ap["_cached_video_url"] = video_url
-                        logger.info(f"[AutoPilot BG] Lip-sync video ready: {video_url[:80]}...")
-                    else:
-                        logger.warning("[AutoPilot BG] Lip-sync video generation failed")
-                except Exception as bg_err:
-                    logger.error(f"[AutoPilot BG] Lip-sync error: {bg_err}")
-
-            import asyncio
-            asyncio.create_task(
-                _bg_lipsync(
-                    session, autopilot, portrait_url, mp3_audio_url,
-                    lipsync_engine, portrait_type, cached_talking_photo_id,
-                    avatar_id,
+            try:
+                sync_video_url = await _generate_lipsync_video(
+                    portrait_url="",
+                    audio_url=mp3_audio_url,
+                    engine="heygen",
+                    portrait_type="image",
+                    max_wait_sec=180,
+                    talking_photo_id="",
+                    avatar_id=avatar_id,
                 )
-            )
+                if sync_video_url:
+                    logger.info(f"[AutoPilot HeyGen Sync] Video ready: {sync_video_url[:80]}...")
+                else:
+                    logger.warning("[AutoPilot HeyGen Sync] Video generation returned None")
+            except Exception as sync_err:
+                logger.error(f"[AutoPilot HeyGen Sync] Error: {sync_err}")
+                sync_video_url = None
+        else:
+            # ── MuseTalk/IMTalker: ASYNC background generation ──────────
+            # Check if a previously generated lip-sync video is ready
+            cached_video_url = autopilot.pop("_cached_video_url", None)
+            if cached_video_url:
+                logger.info(f"[AutoPilot] Using cached lip-sync video: {cached_video_url[:80]}...")
+                sync_video_url = cached_video_url
+
+            should_generate_lipsync = portrait_url
+            if should_generate_lipsync:
+                portrait_type = session.get("portrait_type", "image")
+                cached_talking_photo_id = autopilot.get("_heygen_talking_photo_id", "")
+
+                async def _bg_lipsync(sess, ap, p_url, a_url, eng, p_type, tp_id, av_id):
+                    """Background task: generate lip-sync video and cache in session."""
+                    try:
+                        video_url = await _generate_lipsync_video(
+                            portrait_url=p_url,
+                            audio_url=a_url,
+                            engine=eng,
+                            portrait_type=p_type,
+                            max_wait_sec=300,
+                            talking_photo_id=tp_id,
+                            avatar_id=av_id,
+                        )
+                        if video_url:
+                            ap["_cached_video_url"] = video_url
+                            logger.info(f"[AutoPilot BG] Lip-sync video ready: {video_url[:80]}...")
+                        else:
+                            logger.warning("[AutoPilot BG] Lip-sync video generation failed")
+                    except Exception as bg_err:
+                        logger.error(f"[AutoPilot BG] Lip-sync error: {bg_err}")
+
+                import asyncio
+                asyncio.create_task(
+                    _bg_lipsync(
+                        session, autopilot, portrait_url, mp3_audio_url,
+                        lipsync_engine, portrait_type, cached_talking_photo_id,
+                        "",
+                    )
+                )
 
         # Update autopilot state
         autopilot["state"] = next_state
@@ -3049,7 +3067,7 @@ async def autopilot_next(
             product_name=product_name,
             product_index=next_product_index,
             next_state=next_state,
-            video_url=cached_video_url,  # Use previously cached video (None on first call)
+            video_url=sync_video_url,  # HeyGen: always has video, others: cached from prev call
         )
 
     except ElevenLabsError as e:

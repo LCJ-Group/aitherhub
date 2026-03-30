@@ -44,6 +44,7 @@ export default function LivePreviewPlayer({
   sessionId,
   engine,
   portraitVideoUrl,
+  avatarPreviewUrl,
   videoQueue = [],
   commentHistory = [],
   products = [],
@@ -378,9 +379,13 @@ export default function LivePreviewPlayer({
   // Start/stop autopilot
   useEffect(() => {
     if (autoPilotActive && sessionId && !isSpeaking && !audioLoading) {
-      // Start video loop
+      // Start video loop (if portrait video available)
       if (loopVideoRef.current && portraitVideoUrl) {
         loopVideoRef.current.play().catch(() => {});
+        setIsPlaying(true);
+      }
+      // For HeyGen avatar mode: mark as playing even without video loop
+      if (avatarPreviewUrl && !portraitVideoUrl) {
         setIsPlaying(true);
       }
       // Request first segment
@@ -555,6 +560,29 @@ export default function LivePreviewPlayer({
             console.error("Video loop error:", e);
           }}
         />
+      ) : avatarPreviewUrl ? (
+        /* ── HeyGen Avatar Preview (static image background) ── */
+        <div
+          className="absolute inset-0 bg-black"
+          style={{
+            opacity: lipSyncPlaying ? 0 : 1,
+            transition: "opacity 0.3s ease",
+          }}
+        >
+          <img
+            src={avatarPreviewUrl}
+            alt="Digital Twin Avatar"
+            className="w-full h-full object-cover"
+          />
+          {/* Generating overlay when autopilot is active and loading */}
+          {autoPilotActive && audioLoading && (
+            <div className="absolute inset-0 bg-black/40 flex flex-col items-center justify-center">
+              <Loader2 className="w-10 h-10 text-amber-400 animate-spin mb-3" />
+              <p className="text-amber-300 text-sm font-medium">Generating lip-sync video...</p>
+              <p className="text-gray-400 text-[10px] mt-1">HeyGen Digital Twin is speaking</p>
+            </div>
+          )}
+        </div>
       ) : (
         /* ── Idle / Waiting Screen ── */
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-gray-900 via-gray-800 to-black">
@@ -568,11 +596,13 @@ export default function LivePreviewPlayer({
           </div>
           <h3 className="text-white text-lg font-bold mb-1">AI Live Creator</h3>
           <p className="text-gray-400 text-xs mb-4">
-            Upload a portrait video to start
+            {engine === "heygen" ? "Select a Digital Twin avatar" : "Upload a portrait video to start"}
           </p>
           <p className="text-gray-500 text-[11px] leading-relaxed text-center px-8">
-            Upload a 9:16 digital human video, add products, then start the AI autopilot
-            to begin your live stream.
+            {engine === "heygen"
+              ? "Select a Digital Twin avatar, add products, then start the AI autopilot to begin your live stream."
+              : "Upload a 9:16 digital human video, add products, then start the AI autopilot to begin your live stream."
+            }
           </p>
         </div>
       )}
@@ -604,7 +634,7 @@ export default function LivePreviewPlayer({
               <>
                 <Loader2 className="w-3.5 h-3.5 text-cyan-400 animate-spin" />
                 <span className="text-[10px] text-cyan-300">
-                  {lipSyncPlaying ? "Loading video..." : "Generating speech..."}
+                  {lipSyncPlaying ? "Loading video..." : (engine === "heygen" ? "Generating avatar video..." : "Generating speech...")}
                 </span>
               </>
             ) : (
@@ -880,7 +910,7 @@ export default function LivePreviewPlayer({
           <div className="flex items-center justify-between">
             {/* Play/Pause */}
             <div className="flex items-center gap-2">
-              {portraitVideoUrl && (
+              {(portraitVideoUrl || avatarPreviewUrl) && (
                 <button
                   onClick={togglePlayPause}
                   className="p-1.5 bg-white/10 hover:bg-white/20 rounded-full transition-colors"

@@ -705,6 +705,7 @@ export default function AiLiveCreatorPage() {
                 sessionId={liveSessionId}
                 engine={engine}
                 portraitVideoUrl={portraitType === "video" ? portraitPreview : null}
+                avatarPreviewUrl={engine === "heygen" && selectedAvatarId ? (heygenAvatars.find(a => a.avatar_id === selectedAvatarId)?.preview_image_url || null) : null}
                 videoQueue={previewVideoQueue}
                 commentHistory={previewCommentHistory}
                 products={previewProducts}
