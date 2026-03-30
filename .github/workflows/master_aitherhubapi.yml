@@ -52,7 +52,7 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Create venv and install dependencies (backend only)
+      - name: Create venv and install dependencies
         working-directory: backend
         run: |
           python -m venv antenv
@@ -67,29 +67,54 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_AE01A735F8B046C49C5F169706AC5842 }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_8E4F3767CE0647AEAA62C4C721F843FE }}
 
-      - name: Deploy via Azure CLI (zip deploy)
-        timeout-minutes: 30
+      - name: Disable Azure remote build
         run: |
-          cd backend
-          zip -r ../deploy.zip . -x '.git/*' '__pycache__/*' '*.pyc' 'antenv/*'
-          cd ..
-          az webapp deploy --resource-group rg-vdp-kyogoku --name aitherhubAPI \
-            --src-path deploy.zip --type zip --async true --clean true --restart true
+          az webapp config appsettings set \
+            --resource-group rg-vdp-kyogoku \
+            --name aitherhubAPI \
+            --settings SCM_DO_BUILD_DURING_DEPLOYMENT=false \
+            --output none
+          echo "Remote build disabled — Azure will skip Oryx build."
+
+      - name: Package backend with venv included
+        working-directory: backend
+        run: |
+          echo "Creating deploy package with pre-built venv..."
+          zip -r ../deploy.zip . \
+            -x '.git/*' \
+            -x '__pycache__/*' \
+            -x '*.pyc' \
+            -x 'antenv/lib/python3.11/site-packages/pip/*' \
+            -x 'antenv/lib/python3.11/site-packages/setuptools/*'
+          ls -lh ../deploy.zip
+          echo "Package created successfully."
+
+      - name: Deploy to Azure (zip deploy, no remote build)
+        timeout-minutes: 10
+        run: |
+          az webapp deploy \
+            --resource-group rg-vdp-kyogoku \
+            --name aitherhubAPI \
+            --src-path deploy.zip \
+            --type zip \
+            --async false \
+            --clean true \
+            --restart true
           echo "Deployment completed successfully."
 
   verify_deploy:
     needs: build_and_deploy
     runs-on: ubuntu-latest
     steps:
-      - name: Wait for deployment propagation
-        run: sleep 600
+      - name: Wait for app restart
+        run: sleep 120
 
       - name: Verify API is responding
         run: |
           API_URL="https://aitherhubapi-cpcjcnezbgf5f7e2.japaneast-01.azurewebsites.net"
           echo "Checking aitherhubAPI health at $API_URL ..."
           SUCCESS=false
-          for i in 1 2 3 4 5 6 7 8; do
+          for i in 1 2 3 4 5 6 7 8 9 10; do
             HTTP_CODE=$(curl -s -o /tmp/response.json -w "%{http_code}" \
               --connect-timeout 10 --max-time 30 \
               "$API_URL/" 2>/dev/null || echo "000")
@@ -107,7 +132,7 @@ jobs:
 
           if [ "$SUCCESS" != "true" ]; then
             echo ""
-            echo "::error::DEPLOY VERIFICATION FAILED — API did not return 200 after 8 attempts"
+            echo "::error::DEPLOY VERIFICATION FAILED — API did not return 200 after 10 attempts"
             echo "The server may have crashed on startup. Check Azure App Service logs."
             exit 1
           fi
