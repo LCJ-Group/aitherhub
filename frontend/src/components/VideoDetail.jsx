@@ -122,6 +122,7 @@ export default function VideoDetail({ videoData, editorParams }) {
   // Clip generation state: { [phaseIndex]: { status, clip_url, error } }
   const [clipStates, setClipStates] = useState({});
   const clipPollingRef = useRef({});
+  const [clipStatesLoaded, setClipStatesLoaded] = useState(false);
 
   // Phase rating state: { [phaseIndex]: { rating, comment, saving, saved } }
   const [phaseRatings, setPhaseRatings] = useState({});
@@ -255,11 +256,87 @@ export default function VideoDetail({ videoData, editorParams }) {
       } catch (e) {
         // ignore
       }
+      setClipStatesLoaded(true);
     })();
     return () => {
       // Cleanup polling on unmount
       Object.values(clipPollingRef.current).forEach(clearInterval);
     };
+  }, [videoData?.id]);
+
+  // ===== Auto-generate clips for all phases on video load =====
+  const autoClipTriggeredRef = useRef(false);
+  useEffect(() => {
+    if (!videoData?.id || !videoData?.reports_1?.length) return;
+    if (!clipStatesLoaded) return; // Wait for existing clip states to load
+    // Only trigger once per video load
+    if (autoClipTriggeredRef.current) return;
+    autoClipTriggeredRef.current = true;
+
+    const CONCURRENCY = 2; // Max parallel clip generations
+
+    (async () => {
+      try {
+        // Get current clipStates snapshot (already loaded)
+        const currentStates = { ...clipStates };
+
+        // Collect phases that need clip generation
+        const phasesToGenerate = [];
+        for (let i = 0; i < videoData.reports_1.length; i++) {
+          const phase = videoData.reports_1[i];
+          const phaseIndex = i; // array index is used as phaseIndex
+          const existing = currentStates[phaseIndex];
+
+          // Skip if already completed, processing, or requesting
+          if (existing?.status === 'completed' ||
+              existing?.status === 'requesting' ||
+              existing?.status === 'pending' ||
+              existing?.status === 'processing' ||
+              existing?.status === 'generating_subtitles') {
+            continue;
+          }
+
+          const timeStart = Number(phase.time_start);
+          const timeEnd = Number(phase.time_end);
+          if (isNaN(timeStart) || isNaN(timeEnd)) continue;
+
+          // Skip very short phases (< 3 seconds)
+          if (timeEnd - timeStart < 3) continue;
+
+          phasesToGenerate.push({ phaseIndex, timeStart, timeEnd });
+        }
+
+        if (phasesToGenerate.length === 0) {
+          console.log('[AutoClipGen] All clips already generated or in progress');
+          return;
+        }
+
+        console.log(`[AutoClipGen] Starting auto-generation for ${phasesToGenerate.length} phases (concurrency=${CONCURRENCY})`);
+
+        // Process in batches with concurrency limit
+        for (let i = 0; i < phasesToGenerate.length; i += CONCURRENCY) {
+          const batch = phasesToGenerate.slice(i, i + CONCURRENCY);
+          await Promise.allSettled(
+            batch.map(({ phaseIndex, timeStart, timeEnd }) =>
+              handleClipGeneration({ time_start: timeStart, time_end: timeEnd }, phaseIndex)
+            )
+          );
+          // Small delay between batches to avoid overwhelming the server
+          if (i + CONCURRENCY < phasesToGenerate.length) {
+            await new Promise(r => setTimeout(r, 1000));
+          }
+        }
+
+        console.log('[AutoClipGen] All clip generation requests dispatched');
+      } catch (err) {
+        console.warn('[AutoClipGen] Auto clip generation error:', err);
+      }
+    })();
+  }, [videoData?.id, videoData?.reports_1, clipStatesLoaded]);
+  // Reset autoClipTriggeredRef when video changes
+  useEffect(() => {
+    autoClipTriggeredRef.current = false;
+    setClipStatesLoaded(false);
   }, [videoData?.id]);
 
   const showToast = (message, type = 'success') => {
