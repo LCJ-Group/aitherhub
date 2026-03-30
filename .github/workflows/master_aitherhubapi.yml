@@ -38,7 +38,7 @@ jobs:
   build_and_deploy:
     needs: pre_deploy_check
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     permissions:
       id-token: write
       contents: read
@@ -74,7 +74,13 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_AE01A735F8B046C49C5F169706AC5842 }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_8E4F3767CE0647AEAA62C4C721F843FE }}
 
-      - name: Configure Azure App Settings
+      - name: Deploy to Azure Web App
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: 'aitherhubAPI'
+          package: deploy.zip
+
+      - name: Update app settings (after deploy to avoid SCM restart conflict)
         run: |
           COMMIT_SHA="${{ github.sha }}"
           SHORT_SHA="${COMMIT_SHA:0:7}"
@@ -87,18 +93,10 @@ jobs:
               GIT_BRANCH="${{ github.ref_name }}" \
               BUILD_TIME="$BUILD_TIME" \
               DEPLOY_TIME="$BUILD_TIME" \
-              SCM_DO_BUILD_DURING_DEPLOYMENT="false" \
-              ENABLE_ORYX_BUILD="false" \
               WEBSITES_CONTAINER_START_TIME_LIMIT="1800" \
             --output none
 
-      - name: Deploy to Azure Web App
-        uses: azure/webapps-deploy@v3
-        with:
-          app-name: 'aitherhubAPI'
-          package: deploy.zip
-
-      - name: Restart app
+      - name: Restart app to pick up new code and settings
         run: |
           az webapp restart \
             --resource-group rg-vdp-kyogoku \
@@ -122,8 +120,8 @@ jobs:
           API_URL="https://aitherhubapi-cpcjcnezbgf5f7e2.japaneast-01.azurewebsites.net"
           SHORT_SHA="${EXPECTED_COMMIT:0:7}"
           echo "Expected commit: $SHORT_SHA"
-          echo "startup.sh will pip install requirements (no pre-built antenv)"
-          echo "This may take 5-10 minutes on first deploy..."
+          echo "startup.sh will pip install requirements on first boot"
+          echo "This may take 5-10 minutes..."
           echo ""
 
           VERIFIED=false
