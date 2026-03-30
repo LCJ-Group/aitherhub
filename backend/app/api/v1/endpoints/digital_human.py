@@ -1841,7 +1841,7 @@ async def create_live_session(
 ):
     try:
         products = [p.model_dump() for p in req.products] if req.products else []
-        portrait_url = _ensure_sas_url(req.portrait_url)
+        portrait_url = _ensure_sas_url(req.portrait_url) if req.portrait_url else ""
 
         session = create_session(
             portrait_url=portrait_url,
@@ -1850,6 +1850,7 @@ async def create_live_session(
             voice_id=req.voice_id,
             language=req.language,
             products=products,
+            avatar_id=getattr(req, 'avatar_id', None),
         )
 
         return CreateLiveSessionResponse(
@@ -2393,19 +2394,21 @@ async def _upload_video_to_blob(video_bytes: bytes, job_id: str) -> str:
 
 
 async def _generate_lipsync_video(
-    portrait_url: str,
-    audio_url: str,
+    portrait_url: str = "",
+    audio_url: str = "",
     engine: str = "heygen",
     portrait_type: str = "image",
     max_wait_sec: int = 300,
     talking_photo_id: str = "",
+    avatar_id: str = "",
 ) -> Optional[str]:
     """
     Generate a lip-synced video.
 
     Engine priority:
-      1. "heygen" (default) — HeyGen Studio Video API (cloud, stable, Arcads-level)
-      2. "musetalk" / "imtalker" — RunPod GPU Worker (legacy fallback)
+      1. "heygen" with avatar_id — HeyGen Digital Twin (generate_video_with_avatar)
+      2. "heygen" with portrait_url — HeyGen Talking Photo (generate_and_wait)
+      3. "musetalk" / "imtalker" — RunPod GPU Worker (legacy fallback)
 
     Returns video URL or None on failure.
     """
@@ -2413,7 +2416,7 @@ async def _generate_lipsync_video(
     import asyncio
     import httpx
 
-    # ── HeyGen Engine (Primary) ──────────────────────────────────────
+    # ── HeyGen Engine (Primary) ──────────────────────────────────
     if engine == "heygen":
         try:
             heygen = get_heygen_service()
@@ -2428,13 +2431,77 @@ async def _generate_lipsync_video(
                 )
 
             # Ensure audio URL is publicly accessible
-            # HeyGen needs to download the audio, so SAS token is required for Azure Blob
             audio_sas = _ensure_sas_url(audio_url)
 
+            # ── Mode A: Digital Twin Avatar (avatar_id) ─────────────
+            if avatar_id:
+                logger.info(
+                    f"[AutoPilot LipSync HeyGen] Using Digital Twin avatar: {avatar_id}"
+                )
+                video_id = await heygen.generate_video_with_avatar(
+                    avatar_id=avatar_id,
+                    audio_url=audio_sas,
+                    dimension={"width": 720, "height": 1280},
+                    title=f"AutoPilot-Avatar-{uuid.uuid4().hex[:8]}",
+                )
+                if not video_id:
+                    logger.error("[AutoPilot LipSync HeyGen] Avatar video generation failed")
+                    return None
+
+                # Poll for completion
+                elapsed = 0
+                poll_interval = 5
+                while elapsed < max_wait_sec:
+                    await asyncio.sleep(poll_interval)
+                    elapsed += poll_interval
+                    status_data = await heygen.get_video_status(video_id)
+                    current_status = status_data.get("status", "unknown")
+                    logger.info(
+                        f"[AutoPilot LipSync HeyGen Avatar] {video_id}: "
+                        f"status={current_status}, elapsed={elapsed}s"
+                    )
+                    if current_status == "completed":
+                        video_url = status_data.get("video_url")
+                        if video_url:
+                            # Re-upload to Azure Blob for persistence
+                            try:
+                                async with httpx.AsyncClient(timeout=120) as client:
+                                    dl_resp = await client.get(video_url)
+                                    dl_resp.raise_for_status()
+                                    video_bytes = dl_resp.content
+                                job_id = f"heygen-avatar-{uuid.uuid4().hex[:10]}"
+                                blob_url = await _upload_video_to_blob(video_bytes, job_id)
+                                azure_url = _ensure_sas_url(blob_url)
+                                logger.info(
+                                    f"[AutoPilot LipSync HeyGen Avatar] Video ready: "
+                                    f"{azure_url[:80]}... ({len(video_bytes)} bytes)"
+                                )
+                                return azure_url
+                            except Exception as dl_err:
+                                logger.warning(
+                                    f"[AutoPilot LipSync HeyGen Avatar] Re-upload failed: {dl_err}"
+                                )
+                                return video_url
+                        return None
+                    elif current_status == "failed":
+                        logger.error(
+                            f"[AutoPilot LipSync HeyGen Avatar] Failed: "
+                            f"{status_data.get('error', 'unknown')}"
+                        )
+                        return None
+
+                logger.error(
+                    f"[AutoPilot LipSync HeyGen Avatar] Timed out after {max_wait_sec}s"
+                )
+                return None
+
+            # ── Mode B: Talking Photo (portrait_url) ───────────────
             # Get or create talking_photo_id
             if not talking_photo_id:
+                if not portrait_url:
+                    logger.error("[AutoPilot LipSync] No portrait_url and no avatar_id")
+                    return None
                 portrait_sas = _ensure_sas_url(portrait_url)
-                # Use upload_talking_photo for images, upload_talking_photo_from_video for videos
                 if portrait_type == "video":
                     talking_photo_id = await heygen.upload_talking_photo_from_video(
                         video_url=portrait_sas,
@@ -2460,7 +2527,6 @@ async def _generate_lipsync_video(
 
             if video_url:
                 # Download HeyGen video and re-upload to Azure Blob for persistence
-                # (HeyGen URLs expire after 7 days)
                 try:
                     async with httpx.AsyncClient(timeout=120) as client:
                         dl_resp = await client.get(video_url)
@@ -2910,6 +2976,7 @@ async def autopilot_next(
         # returned with the NEXT autopilot/next call.
         portrait_url = session.get("portrait_url", "")
         lipsync_engine = session.get("engine", "heygen")
+        avatar_id = session.get("avatar_id", "")
 
         # Check if a previously generated lip-sync video is ready
         cached_video_url = autopilot.pop("_cached_video_url", None)
@@ -2917,17 +2984,21 @@ async def autopilot_next(
             logger.info(f"[AutoPilot] Using cached lip-sync video: {cached_video_url[:80]}...")
 
         # Start background lip-sync generation for THIS segment
-        if portrait_url:
+        # For HeyGen avatar mode: use avatar_id directly (no portrait needed)
+        # For other modes: use portrait_url
+        should_generate_lipsync = portrait_url or (lipsync_engine == "heygen" and avatar_id)
+        if should_generate_lipsync:
             portrait_type = session.get("portrait_type", "image")
             logger.info(
                 f"[AutoPilot] Starting background lip-sync: "
-                f"engine={lipsync_engine}, portrait={portrait_url[:60]}..."
+                f"engine={lipsync_engine}, avatar_id={avatar_id or 'N/A'}, "
+                f"portrait={portrait_url[:60] if portrait_url else 'N/A'}..."
             )
 
             # Get cached talking_photo_id to avoid re-creating avatar each time
             cached_talking_photo_id = autopilot.get("_heygen_talking_photo_id", "")
 
-            async def _bg_lipsync(sess, ap, p_url, a_url, eng, p_type, tp_id):
+            async def _bg_lipsync(sess, ap, p_url, a_url, eng, p_type, tp_id, av_id):
                 """Background task: generate lip-sync video and cache in session."""
                 try:
                     video_url = await _generate_lipsync_video(
@@ -2937,6 +3008,7 @@ async def autopilot_next(
                         portrait_type=p_type,
                         max_wait_sec=300,
                         talking_photo_id=tp_id,
+                        avatar_id=av_id,
                     )
                     if video_url:
                         ap["_cached_video_url"] = video_url
@@ -2951,6 +3023,7 @@ async def autopilot_next(
                 _bg_lipsync(
                     session, autopilot, portrait_url, mp3_audio_url,
                     lipsync_engine, portrait_type, cached_talking_photo_id,
+                    avatar_id,
                 )
             )
 

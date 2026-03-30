@@ -142,12 +142,13 @@ def _new_session_id() -> str:
 # ══════════════════════════════════════════════
 
 def create_session(
-    portrait_url: str,
+    portrait_url: str = "",
     portrait_type: str = "image",
     engine: str = "imtalker",
     voice_id: Optional[str] = None,
     language: str = "ja",
     products: Optional[List[Dict[str, str]]] = None,
+    avatar_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Create a new livestream session."""
     session_id = _new_session_id()
@@ -157,6 +158,7 @@ def create_session(
         "engine": engine,
         "portrait_url": portrait_url,
         "portrait_type": portrait_type,
+        "avatar_id": avatar_id,  # HeyGen Digital Twin avatar ID
         "voice_id": voice_id,
         "language": language,
         "products": products or [],
@@ -168,7 +170,7 @@ def create_session(
         "updated_at": time.time(),
     }
     _sessions[session_id] = session
-    logger.info(f"Live session created: {session_id}, engine={engine}, products={len(products or [])}")
+    logger.info(f"Live session created: {session_id}, engine={engine}, avatar_id={avatar_id}, products={len(products or [])}")
     return session
 
 

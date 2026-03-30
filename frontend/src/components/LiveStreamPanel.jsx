@@ -53,6 +53,7 @@ const LiveStreamPanel = forwardRef(function LiveStreamPanel({
   portraitUrl,
   portraitType = "image",
   engine,
+  selectedAvatarId,
   voiceId,
   language,
   onVideoGenerated,
@@ -192,7 +193,8 @@ const LiveStreamPanel = forwardRef(function LiveStreamPanel({
     }
     sessionRecoveryRef.current++;
     
-    if (!portraitUrl) {
+    const isHeyGenRecover = engine === "heygen";
+    if (!isHeyGenRecover && !portraitUrl) {
       // Can't auto-recover without portrait — just reset
       if (queuePollRef.current) clearInterval(queuePollRef.current);
       setSessionId(null);
@@ -202,8 +204,8 @@ const LiveStreamPanel = forwardRef(function LiveStreamPanel({
 
     showToast('info', 'Session expired, auto-recovering...');
     try {
-      const res = await aiLiveCreatorService.createLiveSession({
-        portrait_url: portraitUrl,
+      const recoverParams = {
+        portrait_url: isHeyGenRecover ? (portraitUrl || "heygen-avatar") : portraitUrl,
         portrait_type: portraitType || "image",
         engine: engine || "imtalker",
         voice_id: voiceId,
@@ -223,7 +225,11 @@ const LiveStreamPanel = forwardRef(function LiveStreamPanel({
           talk_hooks: p.talk_hooks,
           variants: p.variants,
         })),
-      });
+      };
+      if (isHeyGenRecover && selectedAvatarId) {
+        recoverParams.avatar_id = selectedAvatarId;
+      }
+      const res = await aiLiveCreatorService.createLiveSession(recoverParams);
       if (res.success) {
         setSessionId(res.session_id);
         showToast('success', `Session recovered: ${res.session_id}`);
@@ -245,17 +251,23 @@ const LiveStreamPanel = forwardRef(function LiveStreamPanel({
   // Session Management
   // ══════════════════════════════════════════════
 
+  const isHeyGenMode = engine === "heygen";
+
   const handleCreateSession = async () => {
-    if (!portraitUrl) {
+    if (!isHeyGenMode && !portraitUrl) {
       showToast('error', 'Portrait is required to start a session');
+      return;
+    }
+    if (isHeyGenMode && !selectedAvatarId) {
+      showToast('error', 'Please select a Digital Twin avatar first');
       return;
     }
     setIsCreatingSession(true);
     showToast('info', 'Creating session...');
     try {
-      console.log('[LiveStreamPanel] Creating session...', { portraitUrl, engine, voiceId, language, products: products.length });
-      const res = await aiLiveCreatorService.createLiveSession({
-        portrait_url: portraitUrl,
+      console.log('[LiveStreamPanel] Creating session...', { portraitUrl, engine, selectedAvatarId, voiceId, language, products: products.length });
+      const sessionParams = {
+        portrait_url: isHeyGenMode ? (portraitUrl || "heygen-avatar") : portraitUrl,
         portrait_type: portraitType || "image",
         engine: engine || "imtalker",
         voice_id: voiceId,
@@ -266,7 +278,11 @@ const LiveStreamPanel = forwardRef(function LiveStreamPanel({
           price: p.price,
           features: p.features ? p.features.split(",").map((f) => f.trim()) : [],
         })),
-      });
+      };
+      if (isHeyGenMode && selectedAvatarId) {
+        sessionParams.avatar_id = selectedAvatarId;
+      }
+      const res = await aiLiveCreatorService.createLiveSession(sessionParams);
       console.log('[LiveStreamPanel] Create session result:', res);
       if (res.success) {
         setSessionId(res.session_id);
@@ -657,8 +673,9 @@ const LiveStreamPanel = forwardRef(function LiveStreamPanel({
         current_product: currentProduct,
         language: language || "ja",
         auto_generate_video: !!sessionId,
-        portrait_url: portraitUrl,
-        engine: engine || "musetalk", // Use fast engine for comments
+        portrait_url: isHeyGenMode ? (portraitUrl || "heygen-avatar") : portraitUrl,
+        avatar_id: isHeyGenMode ? selectedAvatarId : undefined,
+        engine: engine || "musetalk",
         voice_id: voiceId,
       });
       console.log('[LiveStreamPanel] Comment response result:', res);
@@ -763,7 +780,7 @@ const LiveStreamPanel = forwardRef(function LiveStreamPanel({
           ) : (
             <button
               onClick={handleCreateSession}
-              disabled={!portraitUrl || isCreatingSession}
+              disabled={isHeyGenMode ? (!selectedAvatarId || isCreatingSession) : (!portraitUrl || isCreatingSession)}
               className="text-[10px] bg-white/20 hover:bg-white/30 text-white px-3 py-1 rounded-full transition-colors disabled:opacity-50 flex items-center gap-1"
             >
               {isCreatingSession ? (
@@ -1411,10 +1428,13 @@ const LiveStreamPanel = forwardRef(function LiveStreamPanel({
                     {products.length > 0 ? `${products.length} product(s) ready` : 'Add at least one product'}
                   </div>
                   <div className={`flex items-center gap-2 text-[10px] ${
-                    portraitUrl ? 'text-green-600' : 'text-red-500'
+                    (isHeyGenMode ? selectedAvatarId : portraitUrl) ? 'text-green-600' : 'text-red-500'
                   }`}>
-                    {portraitUrl ? <CheckCircle className="w-3 h-3" /> : <AlertCircle className="w-3 h-3" />}
-                    {portraitUrl ? 'Portrait video ready' : 'Upload a portrait video'}
+                    {(isHeyGenMode ? selectedAvatarId : portraitUrl) ? <CheckCircle className="w-3 h-3" /> : <AlertCircle className="w-3 h-3" />}
+                    {isHeyGenMode
+                      ? (selectedAvatarId ? 'Digital Twin avatar selected' : 'Select a Digital Twin avatar')
+                      : (portraitUrl ? 'Portrait video ready' : 'Upload a portrait video')
+                    }
                   </div>
                 </div>
               )}

@@ -1149,6 +1149,7 @@ export default function AiLiveCreatorPage() {
                 portraitUrl={portraitUrl}
                 portraitType={portraitType}
                 engine={engine}
+                selectedAvatarId={selectedAvatarId}
                 voiceId={selectedVoiceId}
                 language={languageCode}
                 autoPilotActive={autoPilotActive}
@@ -1663,6 +1664,7 @@ export default function AiLiveCreatorPage() {
                 portraitUrl={portraitUrl}
                 portraitType={portraitType}
                 engine={engine}
+                selectedAvatarId={selectedAvatarId}
                 voiceId={selectedVoiceId}
                 language={languageCode}
                 autoPilotActive={autoPilotActive}

@@ -758,9 +758,9 @@ class ProductInfo(BaseModel):
 
 class CreateLiveSessionRequest(BaseModel):
     """Request to create a new AI Live Creator session."""
-    portrait_url: str = Field(
-        ...,
-        description="URL of the portrait image or driving video for the digital human."
+    portrait_url: Optional[str] = Field(
+        None,
+        description="URL of the portrait image or driving video for the digital human. Optional for HeyGen avatar mode."
     )
     portrait_type: str = Field(
         "image",
@@ -768,7 +768,11 @@ class CreateLiveSessionRequest(BaseModel):
     )
     engine: str = Field(
         "imtalker",
-        description="Engine: 'musetalk' (Standard) or 'imtalker' (Premium)"
+        description="Engine: 'musetalk' (Standard), 'imtalker' (Premium), or 'heygen' (Digital Twin)"
+    )
+    avatar_id: Optional[str] = Field(
+        None,
+        description="HeyGen Digital Twin avatar ID. Required when engine='heygen'."
     )
     voice_id: Optional[str] = Field(
         None,
