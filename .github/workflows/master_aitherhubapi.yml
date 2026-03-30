@@ -52,13 +52,37 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Create deploy package (code only, no antenv)
+      - name: Build antenv and create deploy package
         run: |
           cd backend
+
+          # Clean up
           find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
           find . -name "*.pyc" -delete 2>/dev/null || true
           rm -rf .pytest_cache antenv .venv
-          zip -r ../deploy.zip . -x ".pytest_cache/*" -x "*.pyc" -x "__pycache__/*" -x "antenv/*" -x ".venv/*"
+
+          # Create antenv with pip install (no cache, minimal size)
+          python -m venv antenv
+          source antenv/bin/activate
+          pip install --no-cache-dir --no-compile -r requirements.txt
+          deactivate
+
+          # Strip antenv to reduce size
+          find antenv -name "*.pyc" -delete 2>/dev/null || true
+          find antenv -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+          find antenv -name "*.dist-info" -type d -exec rm -rf {} + 2>/dev/null || true
+          find antenv -name "tests" -type d -exec rm -rf {} + 2>/dev/null || true
+          find antenv -name "test" -type d -exec rm -rf {} + 2>/dev/null || true
+
+          echo "antenv size after strip: $(du -sh antenv | cut -f1)"
+
+          # Create zip with code + antenv
+          zip -r ../deploy.zip . \
+            -x ".pytest_cache/*" \
+            -x "*.pyc" \
+            -x "__pycache__/*" \
+            -x ".venv/*"
+
           cd ..
           echo "deploy.zip size: $(ls -lh deploy.zip | awk '{print $5}')"
 
@@ -87,24 +111,29 @@ jobs:
               WEBSITES_CONTAINER_START_TIME_LIMIT="1800" \
             --output none
 
-      - name: Deploy zip to Azure (skip Oryx)
+      - name: Deploy zip to Azure (Oryx disabled, antenv pre-built)
         continue-on-error: true
         id: deploy_step
         run: |
-          echo "Deploying with Oryx build DISABLED (SCM_DO_BUILD=false)"
-          echo "startup.sh will pip install requirements on first boot"
+          echo "Deploying with Oryx DISABLED. antenv is pre-built in zip."
+          echo "SCM_DO_BUILD_DURING_DEPLOYMENT=false"
           az webapp deploy \
             --resource-group rg-vdp-kyogoku \
             --name aitherhubAPI \
             --src-path deploy.zip \
             --type zip \
             --async true \
-            --timeout 60 \
-            2>&1 || echo "::warning::Deploy command returned non-zero (expected with --async)"
+            --timeout 120 \
+            2>&1 || echo "::warning::Deploy command returned non-zero (expected with --async on large zip)"
+
+      - name: Wait for Kudu to accept the zip
+        run: |
+          echo "Waiting 30s for Kudu to start processing the zip..."
+          sleep 30
 
       - name: Restart app to pick up new code
         run: |
-          echo "Restarting app to ensure clean startup with new code..."
+          echo "Restarting app to ensure clean startup with pre-built antenv..."
           az webapp restart \
             --resource-group rg-vdp-kyogoku \
             --name aitherhubAPI \
@@ -120,15 +149,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - name: Wait for app startup (pip install + gunicorn)
+      - name: Wait for app startup
         env:
           EXPECTED_COMMIT: ${{ github.sha }}
         run: |
           API_URL="https://aitherhubapi-cpcjcnezbgf5f7e2.japaneast-01.azurewebsites.net"
           SHORT_SHA="${EXPECTED_COMMIT:0:7}"
           echo "Expected commit: $SHORT_SHA"
-          echo "Waiting for startup.sh to pip install and start gunicorn..."
-          echo "This may take 5-10 minutes on first deploy (pip install)."
+          echo "Waiting for Kudu zip extraction + app startup..."
+          echo "antenv is pre-built, so no pip install needed at startup."
           echo ""
 
           VERIFIED=false
@@ -153,7 +182,7 @@ jobs:
                 echo "  (waiting for $SHORT_SHA, currently $CURRENT_COMMIT)"
               fi
             else
-              echo "Attempt $i/$MAX_ATTEMPTS: API not responding (pip installing or app restarting)"
+              echo "Attempt $i/$MAX_ATTEMPTS: API not responding (Kudu extracting or app restarting)"
             fi
 
             sleep $INTERVAL
