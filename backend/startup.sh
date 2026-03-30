@@ -33,14 +33,26 @@ install_deps_background() {
 # Start background installation (won't block gunicorn startup)
 install_deps_background &
 
-# Activate the virtual environment created during deployment
-if [ -d "antenv" ]; then
-    echo "[startup] Activating antenv virtual environment..."
-    source antenv/bin/activate
-    echo "[startup] Python: $(which python) — $(python --version)"
-else
-    echo "[startup] WARNING: antenv not found, using system Python"
-    pip install -r requirements.txt 2>&1 | tail -5
+# ── Activate virtual environment ──
+# Oryx build creates antenv in various locations depending on config.
+# Check all known locations.
+VENV_ACTIVATED=false
+
+for VENV_PATH in "antenv" "/antenv" "/home/site/wwwroot/antenv" "/home/antenv"; do
+    if [ -d "$VENV_PATH" ] && [ -f "$VENV_PATH/bin/activate" ]; then
+        echo "[startup] Found venv at $VENV_PATH, activating..."
+        source "$VENV_PATH/bin/activate"
+        echo "[startup] Python: $(which python) — $(python --version)"
+        VENV_ACTIVATED=true
+        break
+    fi
+done
+
+if [ "$VENV_ACTIVATED" = "false" ]; then
+    echo "[startup] WARNING: No virtual environment found in any known location"
+    echo "[startup] Checked: antenv, /antenv, /home/site/wwwroot/antenv, /home/antenv"
+    echo "[startup] Installing requirements with system pip..."
+    pip install --no-cache-dir -r requirements.txt 2>&1 | tail -10
 fi
 
 echo "[startup] Starting gunicorn..."
