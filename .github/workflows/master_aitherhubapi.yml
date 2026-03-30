@@ -65,7 +65,30 @@ jobs:
           python -m venv antenv
           source antenv/bin/activate
           pip install --no-cache-dir --no-compile -r requirements.txt
+          # Also install gunicorn explicitly
+          pip install --no-cache-dir --no-compile gunicorn
           deactivate
+
+          # Fix pyvenv.cfg to work on Azure App Service
+          # Azure uses /opt/python/3.10.x/bin but we don't know exact version
+          # Solution: rewrite pyvenv.cfg to use /usr/bin (system Python fallback)
+          # and also create a symlink-based activation that works anywhere
+          echo "[build] Original pyvenv.cfg:"
+          cat antenv/pyvenv.cfg
+          
+          # Rewrite pyvenv.cfg to be portable
+          # Azure App Service has Python at /opt/python/3.10.*/bin
+          # We'll set include-system-site-packages = true as fallback
+          cat > antenv/pyvenv.cfg << 'PYVENV'
+          home = /opt/python/latest/bin
+          include-system-site-packages = true
+          version = 3.10
+          PYVENV
+          # Remove leading spaces
+          sed -i 's/^          //' antenv/pyvenv.cfg
+          
+          echo "[build] Fixed pyvenv.cfg:"
+          cat antenv/pyvenv.cfg
 
           # Strip antenv to reduce size
           find antenv -name "*.pyc" -delete 2>/dev/null || true
@@ -73,6 +96,11 @@ jobs:
           find antenv -name "*.dist-info" -type d -exec rm -rf {} + 2>/dev/null || true
           find antenv -name "tests" -type d -exec rm -rf {} + 2>/dev/null || true
           find antenv -name "test" -type d -exec rm -rf {} + 2>/dev/null || true
+          # Remove pip from antenv (not needed at runtime)
+          rm -rf antenv/lib/python3.10/site-packages/pip 2>/dev/null || true
+          rm -rf antenv/lib/python3.10/site-packages/pip-* 2>/dev/null || true
+          rm -rf antenv/lib/python3.10/site-packages/setuptools 2>/dev/null || true
+          rm -rf antenv/lib/python3.10/site-packages/setuptools-* 2>/dev/null || true
 
           echo "antenv size after strip: $(du -sh antenv | cut -f1)"
 
@@ -116,7 +144,6 @@ jobs:
         id: deploy_step
         run: |
           echo "Deploying with Oryx DISABLED. antenv is pre-built in zip."
-          echo "SCM_DO_BUILD_DURING_DEPLOYMENT=false"
           az webapp deploy \
             --resource-group rg-vdp-kyogoku \
             --name aitherhubAPI \
@@ -124,20 +151,20 @@ jobs:
             --type zip \
             --async true \
             --timeout 120 \
-            2>&1 || echo "::warning::Deploy command returned non-zero (expected with --async on large zip)"
+            2>&1 || echo "::warning::Deploy command returned non-zero"
 
       - name: Wait for Kudu to accept the zip
         run: |
-          echo "Waiting 30s for Kudu to start processing the zip..."
+          echo "Waiting 30s for Kudu to start processing..."
           sleep 30
 
       - name: Restart app to pick up new code
         run: |
-          echo "Restarting app to ensure clean startup with pre-built antenv..."
+          echo "Restarting app..."
           az webapp restart \
             --resource-group rg-vdp-kyogoku \
             --name aitherhubAPI \
-            2>&1 || echo "::warning::Restart command failed"
+            2>&1 || echo "::warning::Restart failed"
 
       - name: Logout from Azure
         if: always()
@@ -156,8 +183,6 @@ jobs:
           API_URL="https://aitherhubapi-cpcjcnezbgf5f7e2.japaneast-01.azurewebsites.net"
           SHORT_SHA="${EXPECTED_COMMIT:0:7}"
           echo "Expected commit: $SHORT_SHA"
-          echo "Waiting for Kudu zip extraction + app startup..."
-          echo "antenv is pre-built, so no pip install needed at startup."
           echo ""
 
           VERIFIED=false
@@ -182,7 +207,7 @@ jobs:
                 echo "  (waiting for $SHORT_SHA, currently $CURRENT_COMMIT)"
               fi
             else
-              echo "Attempt $i/$MAX_ATTEMPTS: API not responding (Kudu extracting or app restarting)"
+              echo "Attempt $i/$MAX_ATTEMPTS: API not responding yet"
             fi
 
             sleep $INTERVAL
@@ -190,8 +215,7 @@ jobs:
 
           if [ "$VERIFIED" != "true" ]; then
             echo ""
-            echo "::warning::Deploy verification timed out after $((MAX_ATTEMPTS * INTERVAL))s."
-            echo "The deploy may still be in progress. Check /version manually."
+            echo "::warning::Deploy verification timed out."
           fi
 
       - name: Final health check
