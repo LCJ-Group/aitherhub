@@ -59,7 +59,7 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_AE01A735F8B046C49C5F169706AC5842 }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_8E4F3767CE0647AEAA62C4C721F843FE }}
 
-      - name: Configure Azure App Settings for deployment
+      - name: Configure Azure App Settings
         run: |
           COMMIT_SHA="${{ github.sha }}"
           SHORT_SHA="${COMMIT_SHA:0:7}"
@@ -73,31 +73,42 @@ jobs:
               GIT_BRANCH="${{ github.ref_name }}" \
               BUILD_TIME="$BUILD_TIME" \
               DEPLOY_TIME="$BUILD_TIME" \
-              SCM_DO_BUILD_DURING_DEPLOYMENT="true" \
+              SCM_DO_BUILD_DURING_DEPLOYMENT="false" \
+              ENABLE_ORYX_BUILD="false" \
               WEBSITES_CONTAINER_START_TIME_LIMIT="1800" \
             --output none
 
-      - name: Prepare deploy package (exclude antenv)
-        working-directory: backend
+      - name: Create deploy zip (code only, no antenv)
         run: |
-          echo "Removing antenv to reduce package size..."
-          rm -rf antenv
-          echo "Backend size after cleanup:"
+          cd backend
+          rm -rf antenv __pycache__ .pytest_cache
+          find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+          find . -name "*.pyc" -delete 2>/dev/null || true
+          echo "Backend size:"
           du -sh .
+          cd ..
+          cd backend && zip -r ../deploy.zip . -x "antenv/*" -x "__pycache__/*" -x "*.pyc" -x ".pytest_cache/*"
+          cd ..
+          ls -lh deploy.zip
 
-      - name: Deploy to Azure Web App
-        uses: azure/webapps-deploy@v3
-        with:
-          app-name: aitherhubAPI
-          package: backend
-
-      - name: Force restart app
+      - name: Deploy zip to Azure Web App
         run: |
-          echo "Restarting app to pick up new code..."
+          echo "Deploying zip package (no Oryx build)..."
+          az webapp deploy \
+            --resource-group rg-vdp-kyogoku \
+            --name aitherhubAPI \
+            --src-path deploy.zip \
+            --type zip \
+            --async true
+          echo "Zip deploy initiated."
+
+      - name: Restart app
+        run: |
+          echo "Restarting app..."
           az webapp restart \
             --resource-group rg-vdp-kyogoku \
             --name aitherhubAPI
-          echo "App restart triggered."
+          echo "App restart triggered. startup.sh will pip install requirements."
 
       - name: Logout from Azure
         if: always()
@@ -108,17 +119,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - name: Wait for Oryx build and app startup
+      - name: Wait for app startup and pip install
         run: |
-          echo "Waiting 10 minutes for Oryx build and app startup..."
-          sleep 600
+          echo "Waiting 5 minutes for startup.sh pip install and app boot..."
+          sleep 300
 
       - name: Verify API is responding
         run: |
           API_URL="https://aitherhubapi-cpcjcnezbgf5f7e2.japaneast-01.azurewebsites.net"
           echo "Checking aitherhubAPI health at $API_URL ..."
           SUCCESS=false
-          for i in $(seq 1 20); do
+          for i in $(seq 1 30); do
             HTTP_CODE=$(curl -s -o /tmp/response.json -w "%{http_code}" \
               --connect-timeout 10 --max-time 30 \
               "$API_URL/" 2>/dev/null || echo "000")
@@ -136,8 +147,8 @@ jobs:
 
           if [ "$SUCCESS" != "true" ]; then
             echo ""
-            echo "::warning::API did not return 200 after 20 attempts. Oryx may still be building."
-            echo "Check Azure App Service logs for build progress."
+            echo "::warning::API did not return 200 after 30 attempts."
+            echo "Check Azure App Service logs for startup progress."
           fi
 
       - name: Check version endpoint
