@@ -38,7 +38,7 @@ jobs:
   build_and_deploy:
     needs: pre_deploy_check
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     permissions:
       id-token: write
       contents: read
@@ -47,22 +47,56 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Create lightweight deploy package (no antenv)
+      - name: Set up Python 3.10 (matching Azure runtime)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Build antenv with dependencies
+        working-directory: backend
+        run: |
+          echo "Building antenv with pip install..."
+          python -m venv antenv
+          source antenv/bin/activate
+          pip install --no-cache-dir -r requirements.txt
+          pip install --no-cache-dir gunicorn
+          deactivate
+
+          # Fix pyvenv.cfg to use Azure's Python path
+          echo "[deploy] Fixing pyvenv.cfg for Azure compatibility..."
+          sed -i 's|home = .*|home = /opt/python/latest/bin|' antenv/pyvenv.cfg
+          cat antenv/pyvenv.cfg
+
+          # Fix shebangs in bin/ scripts to use Azure's Python
+          echo "[deploy] Fixing shebangs in antenv/bin/..."
+          find antenv/bin -type f -exec grep -l "^#!.*python" {} \; | while read f; do
+            sed -i "1s|^#!.*python.*|#!/opt/python/latest/bin/python|" "$f"
+          done
+
+          # Remove unnecessary files to reduce zip size
+          echo "[deploy] Cleaning up antenv..."
+          find antenv -name "*.pyc" -delete 2>/dev/null || true
+          find antenv -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+          find antenv -name "*.dist-info" -type d -exec rm -rf {} + 2>/dev/null || true
+          find antenv -name "tests" -type d -exec rm -rf {} + 2>/dev/null || true
+          find antenv -name "test" -type d -exec rm -rf {} + 2>/dev/null || true
+          rm -rf antenv/share 2>/dev/null || true
+
+          echo "[deploy] antenv size: $(du -sh antenv | cut -f1)"
+
+      - name: Create deploy package
         run: |
           cd backend
 
-          # Clean up build artifacts
-          find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
-          find . -name "*.pyc" -delete 2>/dev/null || true
-          rm -rf .pytest_cache antenv .venv
+          # Clean up code artifacts
+          find . -name "__pycache__" -type d -not -path "./antenv/*" -exec rm -rf {} + 2>/dev/null || true
+          find . -name "*.pyc" -not -path "./antenv/*" -delete 2>/dev/null || true
+          rm -rf .pytest_cache .venv
 
-          # Create small zip with just the code (no antenv)
+          # Create zip with code + antenv
           zip -r ../deploy.zip . \
             -x ".pytest_cache/*" \
-            -x "*.pyc" \
-            -x "__pycache__/*" \
-            -x ".venv/*" \
-            -x "antenv/*"
+            -x ".venv/*"
 
           cd ..
           echo "deploy.zip size: $(ls -lh deploy.zip | awk '{print $5}')"
@@ -93,6 +127,8 @@ jobs:
               GIT_BRANCH="${{ github.ref_name }}" \
               BUILD_TIME="$BUILD_TIME" \
               DEPLOY_TIME="$BUILD_TIME" \
+              SCM_DO_BUILD_DURING_DEPLOYMENT="false" \
+              ENABLE_ORYX_BUILD="false" \
               WEBSITES_CONTAINER_START_TIME_LIMIT="1800" \
             --output none
 
@@ -113,15 +149,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - name: Wait for app startup (pip install + gunicorn)
+      - name: Wait for app startup
         env:
           EXPECTED_COMMIT: ${{ github.sha }}
         run: |
           API_URL="https://aitherhubapi-cpcjcnezbgf5f7e2.japaneast-01.azurewebsites.net"
           SHORT_SHA="${EXPECTED_COMMIT:0:7}"
           echo "Expected commit: $SHORT_SHA"
-          echo "startup.sh will pip install requirements on first boot"
-          echo "This may take 5-10 minutes..."
+          echo "Waiting for app to start with pre-built antenv..."
           echo ""
 
           VERIFIED=false
@@ -146,7 +181,7 @@ jobs:
                 echo "  (waiting for $SHORT_SHA, currently $CURRENT_COMMIT)"
               fi
             else
-              echo "Attempt $i/$MAX_ATTEMPTS: API not responding (pip install or app starting)"
+              echo "Attempt $i/$MAX_ATTEMPTS: API not responding yet"
             fi
 
             sleep $INTERVAL
