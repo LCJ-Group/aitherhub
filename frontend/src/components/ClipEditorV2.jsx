@@ -239,7 +239,8 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
   const [waveformLoading, setWaveformLoading] = useState(false);
   const [silentRegions, setSilentRegions] = useState([]); // [{start, end}] in seconds
   const [splitPoints, setSplitPoints] = useState([]); // [seconds] sorted
-  const [disabledSegments, setDisabledSegments] = useState(new Set()); // Set of segment indices
+  const [disabledSegments, setDisabledSegments] = useState(new Set()); // Set of segment indices (legacy, kept for waveform compat)
+  const [deletedRanges, setDeletedRanges] = useState([]); // [{start, end}] - CapCut-style deleted ranges
   const [hoveredSegIdx, setHoveredSegIdx] = useState(null);
   const [selectedSegIdx, setSelectedSegIdx] = useState(null);
   const [timelineCursorPos, setTimelineCursorPos] = useState(null); // mouse X position on timeline
@@ -676,7 +677,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
       ctx.fillRect(x1, 0, x2 - x1, H);
     }
 
-    // Draw disabled segments
+    // Draw disabled segments (legacy)
     if (splitPoints.length > 0) {
       const allPoints = [0, ...splitPoints, duration];
       for (let i = 0; i < allPoints.length - 1; i++) {
@@ -687,6 +688,20 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
           ctx.fillRect(x1, 0, x2 - x1, H);
         }
       }
+    }
+    // Draw deleted ranges (CapCut-style)
+    for (const dr of deletedRanges) {
+      const x1 = (dr.start / effDuration) * W;
+      const x2 = (dr.end / effDuration) * W;
+      ctx.fillStyle = 'rgba(239, 68, 68, 0.3)';
+      ctx.fillRect(x1, 0, x2 - x1, H);
+      // Draw X pattern
+      ctx.strokeStyle = 'rgba(239, 68, 68, 0.5)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x1, 0); ctx.lineTo(x2, H);
+      ctx.moveTo(x2, 0); ctx.lineTo(x1, H);
+      ctx.stroke();
     }
 
     // Draw waveform bars - position each bar based on its actual time mapped to tlDuration
@@ -699,9 +714,18 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
 
       // Check if this sample is in a silent region
       const isSilent = silentRegions.some(sr => timeSec >= sr.start && timeSec <= sr.end);
-      // Check if this sample is in a disabled segment
+      // Check if this sample is in a deleted range
       let isDisabled = false;
-      if (splitPoints.length > 0) {
+      if (deletedRanges.length > 0) {
+        for (const dr of deletedRanges) {
+          if (timeSec >= dr.start && timeSec < dr.end) {
+            isDisabled = true;
+            break;
+          }
+        }
+      }
+      // Also check legacy disabledSegments
+      if (!isDisabled && splitPoints.length > 0) {
         const allPoints = [0, ...splitPoints, duration];
         for (let si = 0; si < allPoints.length - 1; si++) {
           if (disabledSegments.has(si) && timeSec >= allPoints[si] && timeSec < allPoints[si + 1]) {
@@ -764,7 +788,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
         ctx.fillText(label, lx, 10);
       }
     }
-  }, [waveformData, duration, tlDuration, silentRegions, splitPoints, disabledSegments, currentTime, timelineCursorPos]);
+  }, [waveformData, duration, tlDuration, silentRegions, splitPoints, disabledSegments, deletedRanges, currentTime, timelineCursorPos]);
 
   // ─── Split segments helper ────────────────────────────────────
   const splitSegments = useMemo(() => {
@@ -778,15 +802,34 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
     }));
   }, [splitPoints, duration, disabledSegments]);
 
-  // ─── Toggle segment enabled/disabled ──────────────────────────
-  const toggleSegment = useCallback((segIdx) => {
-    setDisabledSegments(prev => {
-      const next = new Set(prev);
-      if (next.has(segIdx)) next.delete(segIdx);
-      else next.add(segIdx);
-      return next;
+  // ─── Delete segment (CapCut-style: completely remove from timeline) ──────
+  const deleteSegment = useCallback((segIdx) => {
+    if (segIdx === null || segIdx === undefined) return;
+    // Get current segments from splitPoints
+    const allPoints = [0, ...splitPoints.sort((a, b) => a - b), duration || 0];
+    if (segIdx < 0 || segIdx >= allPoints.length - 1) return;
+    const segStart = allPoints[segIdx];
+    const segEnd = allPoints[segIdx + 1];
+    
+    // Record deleted range for export
+    setDeletedRanges(prev => [...prev, { start: segStart, end: segEnd }]);
+    
+    // Remove the split points that bounded this segment to merge neighbors
+    setSplitPoints(prev => {
+      const sorted = [...prev].sort((a, b) => a - b);
+      // Remove split points at segStart and segEnd (but not 0 or duration which aren't in splitPoints)
+      return sorted.filter(sp => {
+        const isSegStart = Math.abs(sp - segStart) < 0.05;
+        const isSegEnd = Math.abs(sp - segEnd) < 0.05;
+        return !isSegStart && !isSegEnd;
+      });
     });
-  }, []);
+    
+    // Also update disabledSegments for waveform rendering
+    setDisabledSegments(new Set());
+    setSelectedSegIdx(null);
+    setHoveredSegIdx(null);
+  }, [splitPoints, duration]);
 
   // ─── Keyboard shortcuts ────────────────────────────────────────
   useEffect(() => {
@@ -842,27 +885,29 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
         return;
       }
 
-      // Delete/Backspace = toggle selected segment
+      // Delete/Backspace = delete selected segment (CapCut-style)
       if (e.key === 'Delete' || e.key === 'Backspace') {
         e.preventDefault();
         if (e.ctrlKey) {
           // Ctrl+Backspace = remove last split point
           setSplitPoints(prev => prev.slice(0, -1));
           setDisabledSegments(new Set());
+          setDeletedRanges([]);
         } else if (selectedSegIdx !== null) {
-          // Delete selected segment
-          toggleSegment(selectedSegIdx);
+          // Delete selected segment completely
+          deleteSegment(selectedSegIdx);
         }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [duration, currentTime, splitPoints, selectedSegIdx, toggleSegment]);
+  }, [duration, currentTime, splitPoints, selectedSegIdx, deleteSegment]);
 
   // ─── Remove a split point ─────────────────────────────────────
   const removeSplitPoint = useCallback((splitTime) => {
     setSplitPoints(prev => prev.filter(sp => Math.abs(sp - splitTime) > 0.3));
     setDisabledSegments(new Set());
+    setDeletedRanges([]);
   }, []);
 
   // ─── Waveform click to seek ───────────────────────────────────
@@ -1324,12 +1369,19 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                     position_x: subtitlePos.x,
                     position_y: subtitlePos.y,
                     time_start: clip.time_start || origStart,
-                    ...(splitPoints.length > 0 ? {
-                      split_segments: splitSegments.map(s => ({
-                        start: s.start,
-                        end: s.end,
-                        enabled: s.enabled,
-                      }))
+                    ...(splitPoints.length > 0 || deletedRanges.length > 0 ? {
+                      split_segments: [
+                        ...splitSegments.map(s => ({
+                          start: s.start,
+                          end: s.end,
+                          enabled: true,
+                        })),
+                        ...deletedRanges.map(r => ({
+                          start: r.start,
+                          end: r.end,
+                          enabled: false,
+                        })),
+                      ]
                     } : {}),
                   }, {
                     onProgress: (st, pct) => {
@@ -2696,7 +2748,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
           {splitSegments.map((seg) => (
             <div
               key={`seg${seg.index}`}
-              onClick={(e) => { e.stopPropagation(); toggleSegment(seg.index); setSelectedSegIdx(seg.index); }}
+              onClick={(e) => { e.stopPropagation(); setSelectedSegIdx(seg.index === selectedSegIdx ? null : seg.index); }}
               onMouseEnter={() => setHoveredSegIdx(seg.index)}
               onMouseLeave={() => setHoveredSegIdx(null)}
               onMouseMove={(e) => {
@@ -2721,14 +2773,12 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                 paddingBottom: 2,
                 fontSize: 9,
                 fontWeight: 600,
-                color: seg.enabled ? '#fff' : '#888',
-                backgroundColor: !seg.enabled
-                  ? 'rgba(239, 68, 68, 0.25)'
-                  : selectedSegIdx === seg.index
-                    ? 'rgba(99, 102, 241, 0.45)'
-                    : hoveredSegIdx === seg.index
-                      ? 'rgba(99, 102, 241, 0.3)'
-                      : 'transparent',
+                color: '#fff',
+                backgroundColor: selectedSegIdx === seg.index
+                  ? 'rgba(99, 102, 241, 0.45)'
+                  : hoveredSegIdx === seg.index
+                    ? 'rgba(99, 102, 241, 0.3)'
+                    : 'transparent',
                 outline: selectedSegIdx === seg.index ? '2px solid rgba(99, 102, 241, 0.7)' : 'none',
                 outlineOffset: -2,
                 cursor: 'pointer',
@@ -2737,9 +2787,9 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                 transition: 'background-color 0.15s ease',
                 userSelect: 'none',
                 overflow: 'hidden',
-                textDecoration: !seg.enabled ? 'line-through' : 'none',
+
               }}
-              title={seg.enabled ? `クリックで削除: ${fmt(seg.start)}-${fmt(seg.end)}` : `クリックで復元: ${fmt(seg.start)}-${fmt(seg.end)}`}
+              title={`クリックで選択 → Del で削除: ${fmt(seg.start)}-${fmt(seg.end)}`}
             >
               {fmt(seg.start)}-{fmt(seg.end)}
             </div>
@@ -2760,36 +2810,34 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
           }}>
             <span style={{ color: '#FFE135', fontWeight: 700 }}>✂ {splitPoints.length}分割</span>
             <span style={{ color: C.textMuted }}>
-              {splitSegments.filter(s => s.enabled).length}/{splitSegments.length}セグメント有効
+              {splitSegments.length}セグメント
             </span>
-            {disabledSegments.size > 0 && (
+            {deletedRanges.length > 0 && (
               <span style={{ color: C.red, fontWeight: 600 }}>
-                削除: {splitSegments.filter(s => !s.enabled).map(s => `${fmt(s.start)}-${fmt(s.end)}`).join(', ')}
+                {deletedRanges.length}区間削除済
               </span>
             )}
             <div style={{ flex: 1 }} />
             {selectedSegIdx !== null && splitSegments.length > 0 && (
               <button
-                onClick={() => {
-                  toggleSegment(selectedSegIdx);
-                }}
+                onClick={() => deleteSegment(selectedSegIdx)}
                 style={{
                   padding: '2px 8px',
-                  border: `1px solid ${splitSegments[selectedSegIdx]?.enabled ? C.red : C.green}`,
+                  border: `1px solid ${C.red}`,
                   borderRadius: 4,
-                  backgroundColor: splitSegments[selectedSegIdx]?.enabled ? 'rgba(239,68,68,0.15)' : 'rgba(16,185,129,0.15)',
-                  color: splitSegments[selectedSegIdx]?.enabled ? C.red : C.green,
+                  backgroundColor: 'rgba(239,68,68,0.15)',
+                  color: C.red,
                   fontSize: 10,
                   cursor: 'pointer',
                   fontWeight: 600,
                   marginRight: 4,
                 }}
               >
-                {splitSegments[selectedSegIdx]?.enabled ? '🗑 削除' : '↩ 復元'}
+                🗑 削除
               </button>
             )}
             <button
-              onClick={() => { setSplitPoints([]); setDisabledSegments(new Set()); setSelectedSegIdx(null); }}
+              onClick={() => { setSplitPoints([]); setDisabledSegments(new Set()); setDeletedRanges([]); setSelectedSegIdx(null); }}
               style={{
                 padding: '2px 8px',
                 border: `1px solid ${C.border}`,
@@ -2818,7 +2866,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
           {[
             { key: 'Space', label: '再生/停止', color: C.green },
             { key: 'W', label: 'カーソル位置で分割', color: '#FFE135' },
-            { key: 'Del', label: '選択セグメント削除', color: C.red },
+            { key: 'Del', label: '選択セグメント完全削除', color: C.red },
             { key: '←→', label: '±5秒', color: C.blue },
           ].map(({ key, label, color }) => (
             <span key={key} style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
@@ -2835,7 +2883,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
               <span>{label}</span>
             </span>
           ))}
-          <span style={{ color: C.textMuted }}>セグメントクリックで削除/復元</span>
+          <span style={{ color: C.textMuted }}>セグメントクリックで選択</span>
           <span style={{ color: C.textMuted }}>黄色線クリックで分割点削除</span>
           {silentRegions.length > 0 && (
             <span style={{ color: C.red }}>赤 = 無音区間 ({silentRegions.length}箇所)</span>
