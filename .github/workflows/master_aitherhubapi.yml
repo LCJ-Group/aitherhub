@@ -90,6 +90,16 @@ jobs:
           echo "[build] Fixed pyvenv.cfg:"
           cat antenv/pyvenv.cfg
 
+          # Fix shebangs in antenv/bin/ scripts to use /usr/bin/env python
+          # GH Actions installs Python at /opt/hostedtoolcache/... which doesn't exist on Azure
+          for script in antenv/bin/*; do
+            if [ -f "$script" ] && head -1 "$script" | grep -q "^#!.*python"; then
+              sed -i '1s|^#!.*python[0-9.]*|#!/usr/bin/env python|' "$script"
+            fi
+          done
+          echo "[build] Fixed shebangs in antenv/bin/"
+          head -1 antenv/bin/gunicorn 2>/dev/null || echo "no gunicorn script"
+
           # Strip antenv to reduce size
           find antenv -name "*.pyc" -delete 2>/dev/null || true
           find antenv -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
