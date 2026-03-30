@@ -68,7 +68,7 @@ jobs:
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_8E4F3767CE0647AEAA62C4C721F843FE }}
 
       - name: Deploy via Azure CLI (zip deploy)
-        timeout-minutes: 15
+        timeout-minutes: 30
         run: |
           cd backend
           zip -r ../deploy.zip . -x '.git/*' '__pycache__/*' '*.pyc' 'antenv/*'
