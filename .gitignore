@@ -50,4 +50,4 @@ worker/batch/output/
 CLAUDE.md
 
 # Cursor config / rules
-.cursor/
+.cursor/backend/antenv/
