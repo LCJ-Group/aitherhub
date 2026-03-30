@@ -27,6 +27,8 @@ import {
   PanelLeftOpen,
   Video,
   Film,
+  Users,
+  Grid3X3,
 } from "lucide-react";
 import aiLiveCreatorService from "../base/services/aiLiveCreatorService";
 import personaService from "../base/services/personaService";
@@ -113,6 +115,11 @@ export default function AiLiveCreatorPage() {
   const [selectedPersonaId, setSelectedPersonaId] = useState("");
   const [isGeneratingAiScript, setIsGeneratingAiScript] = useState(false);
 
+  // ── HeyGen Avatar State ──
+  const [heygenAvatars, setHeygenAvatars] = useState([]);
+  const [selectedAvatarId, setSelectedAvatarId] = useState("");
+  const [loadingAvatars, setLoadingAvatars] = useState(false);
+
   // ── AutoPilot State ──
   const [autoPilotActive, setAutoPilotActive] = useState(false);
 
@@ -139,6 +146,7 @@ export default function AiLiveCreatorPage() {
     checkHealth();
     loadVoices();
     loadPersonas();
+    loadHeygenAvatars();
     try {
       const saved = localStorage.getItem("aiLiveCreator_jobs");
       if (saved) setJobHistory(JSON.parse(saved));
@@ -213,6 +221,31 @@ export default function AiLiveCreatorPage() {
       localStorage.setItem("aiLiveCreator_jobs", JSON.stringify(updated));
       return updated;
     });
+  };
+
+  const loadHeygenAvatars = async () => {
+    setLoadingAvatars(true);
+    try {
+      const res = await aiLiveCreatorService.heygenListAvatars();
+      if (res.avatars) {
+        // Filter to show only custom avatars (kg and other user-created ones)
+        const customAvatars = res.avatars.filter(a => {
+          const name = (a.avatar_name || '').toLowerCase();
+          return name.includes('kg') || name.includes('ryu') || name.includes('okuya');
+        });
+        // If no custom found, show all
+        const displayAvatars = customAvatars.length > 0 ? customAvatars : res.avatars.slice(0, 50);
+        setHeygenAvatars(displayAvatars);
+        // Default to first kg avatar
+        const kgAvatar = displayAvatars.find(a => (a.avatar_name || '').toLowerCase().trim() === 'kg');
+        if (kgAvatar) setSelectedAvatarId(kgAvatar.avatar_id);
+        else if (displayAvatars.length > 0) setSelectedAvatarId(displayAvatars[0].avatar_id);
+      }
+    } catch (err) {
+      console.error('Failed to load HeyGen avatars:', err);
+    } finally {
+      setLoadingAvatars(false);
+    }
   };
 
   const loadPersonas = async () => {
@@ -371,9 +404,9 @@ export default function AiLiveCreatorPage() {
       let result;
       if (engine === "heygen") {
         // Use Digital Twin avatar mode (no portrait upload needed)
-        const avatarId = "c3c4cd11ae1341a6a83cfb9d7ea478cbid";
+        if (!selectedAvatarId) { setError("アバターを選択してください"); setIsSubmitting(false); return; }
         result = await aiLiveCreatorService.generatePremiumHeyGenAvatar({
-          avatar_id: avatarId,
+          avatar_id: selectedAvatarId,
           text: scriptText.trim(),
           voice_id: selectedVoiceId || undefined,
           language_code: languageCode,
@@ -576,8 +609,12 @@ export default function AiLiveCreatorPage() {
     return map[s] || s || "Unknown";
   };
 
-  const isReadyText = portraitUrl && scriptText.trim() && !isUploadingPortrait;
-  const isReadyAudio = portraitUrl && audioUrl && !isUploadingPortrait && !isUploadingAudio;
+  const isReadyText = engine === "heygen"
+    ? selectedAvatarId && scriptText.trim()
+    : portraitUrl && scriptText.trim() && !isUploadingPortrait;
+  const isReadyAudio = engine === "heygen"
+    ? selectedAvatarId && audioUrl && !isUploadingAudio
+    : portraitUrl && audioUrl && !isUploadingPortrait && !isUploadingAudio;
   const isReady = inputMode === "text" ? isReadyText : isReadyAudio;
   const isProcessing = jobStatus && ["queued", "processing", "tts_generating"].includes(jobStatus.status);
 
@@ -755,99 +792,172 @@ export default function AiLiveCreatorPage() {
                   </div>
                 </div>
 
-                {/* Portrait / Driving Video (compact) */}
-                <div className="bg-gray-800/50 rounded-xl border border-gray-700/30 p-3">
-                  <h4 className="text-[11px] font-medium text-gray-400 mb-2 flex items-center gap-1.5">
-                    {portraitType === "video" ? <Film className="w-3.5 h-3.5 text-purple-400" /> : <ImageIcon className="w-3.5 h-3.5 text-purple-400" />}
-                    Portrait
-                  </h4>
-                  {/* Photo / Video toggle */}
-                  {!portraitPreview && (
-                    <div className="flex items-center bg-gray-900/50 rounded-lg p-0.5 mb-2 border border-gray-700/30">
-                      <button
-                        onClick={() => setPortraitType("image")}
-                        className={`flex-1 px-2 py-1 rounded-md text-[10px] font-medium transition-all flex items-center justify-center gap-1 ${
-                          portraitType === "image"
-                            ? "bg-purple-600 text-white shadow-sm"
-                            : "text-gray-500 hover:text-gray-300"
-                        }`}
-                      >
-                        <ImageIcon className="w-3 h-3" /> Photo
-                      </button>
-                      <button
-                        onClick={() => setPortraitType("video")}
-                        className={`flex-1 px-2 py-1 rounded-md text-[10px] font-medium transition-all flex items-center justify-center gap-1 ${
-                          portraitType === "video"
-                            ? "bg-purple-600 text-white shadow-sm"
-                            : "text-gray-500 hover:text-gray-300"
-                        }`}
-                      >
-                        <Video className="w-3 h-3" /> Video
-                      </button>
-                    </div>
-                  )}
-                  {portraitPreview ? (
-                    <div className="relative">
-                      {portraitType === "video" ? (
-                        <video
-                          src={portraitPreview}
-                          className="w-full h-32 object-cover rounded-lg bg-gray-900/50"
-                          muted
-                          loop
-                          autoPlay
-                          playsInline
-                        />
-                      ) : (
-                        <img src={portraitPreview} alt="Portrait" className="w-full h-32 object-contain rounded-lg bg-gray-900/50" />
+                {/* Portrait / Avatar Selection */}
+                {engine === "heygen" ? (
+                  /* ── HeyGen Avatar Selection Grid ── */
+                  <div className="bg-gray-800/50 rounded-xl border border-amber-500/30 p-3">
+                    <h4 className="text-[11px] font-medium text-amber-300 mb-2 flex items-center gap-1.5">
+                      <Users className="w-3.5 h-3.5 text-amber-400" />
+                      Digital Twin Avatar
+                      {selectedAvatarId && (
+                        <span className="ml-auto text-[9px] bg-amber-500/20 text-amber-300 px-1.5 py-0.5 rounded-full">
+                          Selected
+                        </span>
                       )}
-                      {isUploadingPortrait && (
-                        <div className="absolute inset-0 bg-black/50 rounded-lg flex items-center justify-center">
-                          <div className="text-center">
-                            <Loader2 className="w-5 h-5 text-white animate-spin mx-auto mb-1" />
-                            <p className="text-[9px] text-white/80">{portraitUploadProgress}%</p>
+                    </h4>
+                    {loadingAvatars ? (
+                      <div className="flex items-center justify-center py-6">
+                        <Loader2 className="w-5 h-5 text-amber-400 animate-spin" />
+                        <span className="ml-2 text-[10px] text-gray-400">Loading avatars...</span>
+                      </div>
+                    ) : heygenAvatars.length === 0 ? (
+                      <div className="text-center py-4">
+                        <Users className="w-6 h-6 text-gray-600 mx-auto mb-1" />
+                        <p className="text-[10px] text-gray-500">No avatars available</p>
+                        <button
+                          onClick={loadHeygenAvatars}
+                          className="mt-2 text-[9px] text-amber-400 hover:text-amber-300 underline"
+                        >
+                          Retry
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-3 gap-1.5 max-h-[200px] overflow-y-auto pr-1 custom-scrollbar">
+                        {heygenAvatars.map((avatar) => (
+                          <button
+                            key={avatar.avatar_id}
+                            onClick={() => setSelectedAvatarId(avatar.avatar_id)}
+                            className={`relative rounded-lg overflow-hidden border-2 transition-all hover:scale-[1.02] ${
+                              selectedAvatarId === avatar.avatar_id
+                                ? "border-amber-400 shadow-lg shadow-amber-500/20 ring-1 ring-amber-400/50"
+                                : "border-gray-700/50 hover:border-gray-500"
+                            }`}
+                          >
+                            {avatar.preview_image_url ? (
+                              <img
+                                src={avatar.preview_image_url}
+                                alt={avatar.avatar_name || "Avatar"}
+                                className="w-full h-16 object-cover bg-gray-900"
+                                loading="lazy"
+                              />
+                            ) : (
+                              <div className="w-full h-16 bg-gray-900 flex items-center justify-center">
+                                <Users className="w-4 h-4 text-gray-600" />
+                              </div>
+                            )}
+                            {selectedAvatarId === avatar.avatar_id && (
+                              <div className="absolute top-0.5 right-0.5 bg-amber-500 rounded-full p-0.5">
+                                <CheckCircle className="w-2.5 h-2.5 text-white" />
+                              </div>
+                            )}
+                            <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent px-1 py-0.5">
+                              <p className="text-[7px] text-white/90 truncate">
+                                {avatar.avatar_name || "Look"}
+                              </p>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    <p className="text-[8px] text-gray-500 mt-1.5">
+                      {heygenAvatars.length} looks available
+                    </p>
+                  </div>
+                ) : (
+                  /* ── Standard Portrait Upload ── */
+                  <div className="bg-gray-800/50 rounded-xl border border-gray-700/30 p-3">
+                    <h4 className="text-[11px] font-medium text-gray-400 mb-2 flex items-center gap-1.5">
+                      {portraitType === "video" ? <Film className="w-3.5 h-3.5 text-purple-400" /> : <ImageIcon className="w-3.5 h-3.5 text-purple-400" />}
+                      Portrait
+                    </h4>
+                    {/* Photo / Video toggle */}
+                    {!portraitPreview && (
+                      <div className="flex items-center bg-gray-900/50 rounded-lg p-0.5 mb-2 border border-gray-700/30">
+                        <button
+                          onClick={() => setPortraitType("image")}
+                          className={`flex-1 px-2 py-1 rounded-md text-[10px] font-medium transition-all flex items-center justify-center gap-1 ${
+                            portraitType === "image"
+                              ? "bg-purple-600 text-white shadow-sm"
+                              : "text-gray-500 hover:text-gray-300"
+                          }`}
+                        >
+                          <ImageIcon className="w-3 h-3" /> Photo
+                        </button>
+                        <button
+                          onClick={() => setPortraitType("video")}
+                          className={`flex-1 px-2 py-1 rounded-md text-[10px] font-medium transition-all flex items-center justify-center gap-1 ${
+                            portraitType === "video"
+                              ? "bg-purple-600 text-white shadow-sm"
+                              : "text-gray-500 hover:text-gray-300"
+                          }`}
+                        >
+                          <Video className="w-3 h-3" /> Video
+                        </button>
+                      </div>
+                    )}
+                    {portraitPreview ? (
+                      <div className="relative">
+                        {portraitType === "video" ? (
+                          <video
+                            src={portraitPreview}
+                            className="w-full h-32 object-cover rounded-lg bg-gray-900/50"
+                            muted
+                            loop
+                            autoPlay
+                            playsInline
+                          />
+                        ) : (
+                          <img src={portraitPreview} alt="Portrait" className="w-full h-32 object-contain rounded-lg bg-gray-900/50" />
+                        )}
+                        {isUploadingPortrait && (
+                          <div className="absolute inset-0 bg-black/50 rounded-lg flex items-center justify-center">
+                            <div className="text-center">
+                              <Loader2 className="w-5 h-5 text-white animate-spin mx-auto mb-1" />
+                              <p className="text-[9px] text-white/80">{portraitUploadProgress}%</p>
+                            </div>
                           </div>
-                        </div>
-                      )}
-                      {!isUploadingPortrait && portraitUrl && (
-                        <div className="absolute top-1.5 right-1.5 bg-green-500 text-white px-1.5 py-0.5 rounded-full text-[9px] flex items-center gap-0.5">
-                          <CheckCircle className="w-2.5 h-2.5" /> OK
-                        </div>
-                      )}
-                      {portraitType === "video" && !isUploadingPortrait && portraitUrl && (
-                        <div className="absolute bottom-1.5 left-1.5 bg-purple-600/90 text-white px-1.5 py-0.5 rounded text-[9px] flex items-center gap-0.5">
-                          <Film className="w-2.5 h-2.5" /> Driving Video
-                        </div>
-                      )}
-                      <button
-                        onClick={() => { setPortraitType("image"); setPortraitFile(null); setPortraitPreview(null); setPortraitUrl(""); }}
-                        className="absolute top-1.5 left-1.5 bg-black/60 hover:bg-black/80 p-1 rounded-full transition-colors"
+                        )}
+                        {!isUploadingPortrait && portraitUrl && (
+                          <div className="absolute top-1.5 right-1.5 bg-green-500 text-white px-1.5 py-0.5 rounded-full text-[9px] flex items-center gap-0.5">
+                            <CheckCircle className="w-2.5 h-2.5" /> OK
+                          </div>
+                        )}
+                        {portraitType === "video" && !isUploadingPortrait && portraitUrl && (
+                          <div className="absolute bottom-1.5 left-1.5 bg-purple-600/90 text-white px-1.5 py-0.5 rounded text-[9px] flex items-center gap-0.5">
+                            <Film className="w-2.5 h-2.5" /> Driving Video
+                          </div>
+                        )}
+                        <button
+                          onClick={() => { setPortraitType("image"); setPortraitFile(null); setPortraitPreview(null); setPortraitUrl(""); }}
+                          className="absolute top-1.5 left-1.5 bg-black/60 hover:bg-black/80 p-1 rounded-full transition-colors"
+                        >
+                          <X className="w-3 h-3 text-white" />
+                        </button>
+                      </div>
+                    ) : (
+                      <div
+                        onClick={() => portraitType === "video" ? videoInputRef.current?.click() : portraitInputRef.current?.click()}
+                        className="border border-dashed border-gray-600 rounded-lg p-4 text-center cursor-pointer hover:border-purple-500/50 hover:bg-purple-500/5 transition-all"
                       >
-                        <X className="w-3 h-3 text-white" />
-                      </button>
-                    </div>
-                  ) : (
-                    <div
-                      onClick={() => portraitType === "video" ? videoInputRef.current?.click() : portraitInputRef.current?.click()}
-                      className="border border-dashed border-gray-600 rounded-lg p-4 text-center cursor-pointer hover:border-purple-500/50 hover:bg-purple-500/5 transition-all"
-                    >
-                      {portraitType === "video" ? (
-                        <>
-                          <Video className="w-6 h-6 text-gray-600 mx-auto mb-1" />
-                          <p className="text-[10px] text-gray-500">Upload 9:16 Video</p>
-                          <p className="text-[8px] text-gray-600 mt-0.5">MP4, MOV (max 200MB)</p>
-                        </>
-                      ) : (
-                        <>
-                          <ImageIcon className="w-6 h-6 text-gray-600 mx-auto mb-1" />
-                          <p className="text-[10px] text-gray-500">Upload Portrait</p>
-                          <p className="text-[8px] text-gray-600 mt-0.5">JPEG, PNG (max 20MB)</p>
-                        </>
-                      )}
-                    </div>
-                  )}
-                  <input ref={portraitInputRef} type="file" accept="image/jpeg,image/png,image/jpg" onChange={handlePortraitSelect} className="hidden" />
-                  <input ref={videoInputRef} type="file" accept="video/mp4,video/quicktime,video/mov" onChange={handleVideoSelect} className="hidden" />
-                </div>
+                        {portraitType === "video" ? (
+                          <>
+                            <Video className="w-6 h-6 text-gray-600 mx-auto mb-1" />
+                            <p className="text-[10px] text-gray-500">Upload 9:16 Video</p>
+                            <p className="text-[8px] text-gray-600 mt-0.5">MP4, MOV (max 200MB)</p>
+                          </>
+                        ) : (
+                          <>
+                            <ImageIcon className="w-6 h-6 text-gray-600 mx-auto mb-1" />
+                            <p className="text-[10px] text-gray-500">Upload Portrait</p>
+                            <p className="text-[8px] text-gray-600 mt-0.5">JPEG, PNG (max 20MB)</p>
+                          </>
+                        )}
+                      </div>
+                    )}
+                    <input ref={portraitInputRef} type="file" accept="image/jpeg,image/png,image/jpg" onChange={handlePortraitSelect} className="hidden" />
+                    <input ref={videoInputRef} type="file" accept="video/mp4,video/quicktime,video/mov" onChange={handleVideoSelect} className="hidden" />
+                  </div>
+                )}
 
                 {/* Text Input (compact) */}
                 <div className="bg-gray-800/50 rounded-xl border border-gray-700/30 p-3">

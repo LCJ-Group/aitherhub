@@ -143,6 +143,22 @@ class AiLiveCreatorService {
     return res.data;
   }
 
+  async heygenListAvatars() {
+    const res = await axios.get(
+      `${this.baseURL}/api/v1/digital-human/heygen/avatars`,
+      { headers: this._headers(), timeout: 120000 }
+    );
+    return res.data;
+  }
+
+  async heygenListAvatarGroups() {
+    const res = await axios.get(
+      `${this.baseURL}/api/v1/digital-human/heygen/avatar-groups`,
+      { headers: this._headers(), timeout: 120000 }
+    );
+    return res.data;
+  }
+
   // ── Voice list ──────────────────────────────────────────
 
   async listVoices() {
