@@ -416,8 +416,8 @@ export default function AiLiveCreatorPage() {
           language_code: languageCode,
           dimension_width: 720,
           dimension_height: 1280,
-          wait_for_completion: true,
-          max_wait_sec: 300,
+          wait_for_completion: false,
+          max_wait_sec: 10,
         });
       } else if (engine === "imtalker") {
         result = await aiLiveCreatorService.generatePremiumFromText({
