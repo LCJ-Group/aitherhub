@@ -146,7 +146,7 @@ class AiLiveCreatorService {
   async heygenListAvatars() {
     const res = await axios.get(
       `${this.baseURL}/api/v1/digital-human/heygen/avatars`,
-      { headers: this._headers(), timeout: 120000 }
+      { headers: this._headers(), timeout: 30000 }
     );
     return res.data;
   }

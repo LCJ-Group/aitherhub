@@ -119,6 +119,7 @@ export default function AiLiveCreatorPage() {
   const [heygenAvatars, setHeygenAvatars] = useState([]);
   const [selectedAvatarId, setSelectedAvatarId] = useState("");
   const [loadingAvatars, setLoadingAvatars] = useState(false);
+  const [avatarError, setAvatarError] = useState(null);
 
   // ── AutoPilot State ──
   const [autoPilotActive, setAutoPilotActive] = useState(false);
@@ -227,8 +228,10 @@ export default function AiLiveCreatorPage() {
     });
   };
 
-  const loadHeygenAvatars = async () => {
+  const loadHeygenAvatars = async (retryCount = 0) => {
+    const MAX_RETRIES = 3;
     setLoadingAvatars(true);
+    setAvatarError(null);
     try {
       const res = await aiLiveCreatorService.heygenListAvatars();
       if (res.avatars) {
@@ -240,13 +243,22 @@ export default function AiLiveCreatorPage() {
         // If no custom found, show all
         const displayAvatars = customAvatars.length > 0 ? customAvatars : res.avatars.slice(0, 50);
         setHeygenAvatars(displayAvatars);
+        setAvatarError(null);
         // Default to first kg avatar
         const kgAvatar = displayAvatars.find(a => (a.avatar_name || '').toLowerCase().trim() === 'kg');
         if (kgAvatar) setSelectedAvatarId(kgAvatar.avatar_id);
         else if (displayAvatars.length > 0) setSelectedAvatarId(displayAvatars[0].avatar_id);
       }
     } catch (err) {
-      console.error('Failed to load HeyGen avatars:', err);
+      console.error(`Failed to load HeyGen avatars (attempt ${retryCount + 1}/${MAX_RETRIES}):`, err);
+      if (retryCount < MAX_RETRIES - 1) {
+        // Auto-retry with increasing delay (3s, 6s, 9s)
+        const delay = (retryCount + 1) * 3000;
+        setAvatarError(`Loading... retry in ${(delay / 1000).toFixed(0)}s`);
+        await new Promise(r => setTimeout(r, delay));
+        return loadHeygenAvatars(retryCount + 1);
+      }
+      setAvatarError('Failed to load avatars. Tap to retry.');
     } finally {
       setLoadingAvatars(false);
     }
@@ -815,17 +827,32 @@ export default function AiLiveCreatorPage() {
                       )}
                     </h4>
                     {loadingAvatars ? (
-                      <div className="flex items-center justify-center py-6">
-                        <Loader2 className="w-5 h-5 text-amber-400 animate-spin" />
-                        <span className="ml-2 text-[10px] text-gray-400">Loading avatars...</span>
+                      <div className="flex flex-col items-center justify-center py-6 gap-2">
+                        <div className="flex items-center">
+                          <Loader2 className="w-5 h-5 text-amber-400 animate-spin" />
+                          <span className="ml-2 text-[10px] text-gray-400">
+                            {avatarError || 'Loading avatars...'}
+                          </span>
+                        </div>
+                      </div>
+                    ) : avatarError ? (
+                      <div className="text-center py-4">
+                        <AlertCircle className="w-6 h-6 text-red-400 mx-auto mb-1" />
+                        <p className="text-[10px] text-red-400">{avatarError}</p>
+                        <button
+                          onClick={() => loadHeygenAvatars()}
+                          className="mt-2 px-3 py-1 text-[9px] bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 rounded-lg transition-colors"
+                        >
+                          Retry
+                        </button>
                       </div>
                     ) : heygenAvatars.length === 0 ? (
                       <div className="text-center py-4">
                         <Users className="w-6 h-6 text-gray-600 mx-auto mb-1" />
                         <p className="text-[10px] text-gray-500">No avatars available</p>
                         <button
-                          onClick={loadHeygenAvatars}
-                          className="mt-2 text-[9px] text-amber-400 hover:text-amber-300 underline"
+                          onClick={() => loadHeygenAvatars()}
+                          className="mt-2 px-3 py-1 text-[9px] bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 rounded-lg transition-colors"
                         >
                           Retry
                         </button>
@@ -869,7 +896,7 @@ export default function AiLiveCreatorPage() {
                       </div>
                     )}
                     <p className="text-[8px] text-gray-500 mt-1.5">
-                      {heygenAvatars.length} looks available
+                      {loadingAvatars ? 'Loading...' : `${heygenAvatars.length} looks available`}
                     </p>
                   </div>
                 ) : (
