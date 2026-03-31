@@ -395,11 +395,16 @@ class HeyGenService:
             data = resp.json()
 
         video_data = data.get("data", {})
+        error_val = video_data.get("error")
+        if isinstance(error_val, dict):
+            error_val = error_val.get("message", str(error_val))
+        elif error_val is not None and not isinstance(error_val, str):
+            error_val = str(error_val)
         return {
             "status": video_data.get("status", "unknown"),
             "video_url": video_data.get("video_url"),
             "duration": video_data.get("duration"),
-            "error": video_data.get("error"),
+            "error": error_val,
         }
 
     # ──────────────────────────────────────────
