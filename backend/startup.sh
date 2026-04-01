@@ -37,23 +37,21 @@ install_deps_background() {
 install_deps_background &
 
 # ── Set up Python environment ──
-# The antenv is pre-built in GitHub Actions and included in the deploy zip.
-# We use PYTHONPATH + python -m gunicorn to avoid shebang path issues.
+# Dependencies are installed as flat packages in _pypackages/ (pip --target).
+# This avoids Kudu's PythonProjectOptimizer which crashes on "antenv" venv dirs.
+# We use PYTHONPATH to make them importable.
 
 echo "[startup] Setting up Python environment..."
-echo "[startup] System Python: $(which python 2>/dev/null || echo 'not found')"
-echo "[startup] Python version: $(python --version 2>/dev/null || echo 'unknown')"
 
 PACKAGES_FOUND=false
 
-for VENV_PATH in "antenv" "/home/site/wwwroot/antenv" "/antenv" "/home/antenv"; do
-    SITE_PACKAGES=$(find "$VENV_PATH/lib" -name "site-packages" -type d 2>/dev/null | head -1)
-    if [ -n "$SITE_PACKAGES" ]; then
-        echo "[startup] Found site-packages at: $SITE_PACKAGES"
-        export PYTHONPATH="$SITE_PACKAGES:${PYTHONPATH:-}"
+# Check _pypackages first (new flat install approach)
+for PKG_PATH in "_pypackages" "/home/site/wwwroot/_pypackages"; do
+    if [ -d "$PKG_PATH" ] && [ -f "$PKG_PATH/fastapi/__init__.py" ]; then
+        echo "[startup] Found _pypackages at: $PKG_PATH"
+        export PYTHONPATH="$PKG_PATH:${PYTHONPATH:-}"
         echo "[startup] PYTHONPATH=$PYTHONPATH"
 
-        # Verify import works
         if python -c "import fastapi; print(f'fastapi {fastapi.__version__}')" 2>/dev/null; then
             echo "[startup] Package imports verified successfully"
             PACKAGES_FOUND=true
@@ -65,10 +63,31 @@ for VENV_PATH in "antenv" "/home/site/wwwroot/antenv" "/antenv" "/home/antenv"; 
     fi
 done
 
+# Fallback: check antenv (legacy venv approach)
+if [ "$PACKAGES_FOUND" = "false" ]; then
+    for VENV_PATH in "antenv" "/home/site/wwwroot/antenv"; do
+        SITE_PACKAGES=$(find "$VENV_PATH/lib" -name "site-packages" -type d 2>/dev/null | head -1)
+        if [ -n "$SITE_PACKAGES" ]; then
+            echo "[startup] Found legacy antenv at: $SITE_PACKAGES"
+            export PYTHONPATH="$SITE_PACKAGES:${PYTHONPATH:-}"
+
+            if python -c "import fastapi; print(f'fastapi {fastapi.__version__}')" 2>/dev/null; then
+                echo "[startup] Package imports verified successfully (legacy antenv)"
+                PACKAGES_FOUND=true
+                break
+            else
+                unset PYTHONPATH
+            fi
+        fi
+    done
+fi
+
+# Last resort: pip install
 if [ "$PACKAGES_FOUND" = "false" ]; then
     echo "[startup] WARNING: No pre-built packages found"
-    echo "[startup] Falling back to pip install..."
+    echo "[startup] Falling back to pip install (this may take several minutes)..."
     pip install --no-cache-dir -r requirements.txt 2>&1 | tail -10
+    pip install --no-cache-dir gunicorn 2>&1 | tail -3
 fi
 
 echo "[startup] Final Python check:"
@@ -86,9 +105,3 @@ exec python -m gunicorn -k uvicorn.workers.UvicornWorker app.main:app \
     --access-logfile - \
     --error-logfile - \
     --keep-alive 120
-
-# Diagnostic: log the deploy state
-echo "[startup] Deploy diagnostics:"
-echo "[startup]   Files in /home/site/wwwroot: $(ls /home/site/wwwroot/ 2>/dev/null | wc -l)"
-echo "[startup]   antenv exists: $(test -d antenv && echo YES || echo NO)"
-echo "[startup]   antenv size: $(du -sh antenv 2>/dev/null | cut -f1 || echo N/A)"
