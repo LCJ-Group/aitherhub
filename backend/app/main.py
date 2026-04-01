@@ -43,18 +43,33 @@ class AppCreator:
         # NOTE: db provider was removed from Container in b959117.
         # The project now uses app.core.db (async sessions) directly.
 
-        # Request ID middleware (must be added before CORS)
+        # Request ID middleware (added first = runs AFTER CORS in Starlette stack)
         self.app.add_middleware(RequestIdMiddleware)
 
-        # CORS
-        if configs.BACKEND_CORS_ORIGINS:
-            self.app.add_middleware(
-                CORSMiddleware,
-                allow_origins=[str(origin) for origin in configs.BACKEND_CORS_ORIGINS],
-                allow_credentials=True,
-                allow_methods=["*"],
-                allow_headers=["*"],
-            )
+        # CORS – always enabled with hardcoded origins as fallback
+        # pydantic_settings may override BACKEND_CORS_ORIGINS from env vars,
+        # so we ensure the essential origins are always included.
+        _REQUIRED_ORIGINS = [
+            "https://www.aitherhub.com",
+            "https://aitherhub.com",
+        ]
+        _DEV_ORIGINS = [
+            "http://localhost:3000",
+            "http://localhost:5173",
+            "http://127.0.0.1:3000",
+            "http://127.0.0.1:5173",
+        ]
+        # Merge config origins with required origins (deduplicated)
+        _config_origins = [str(o) for o in configs.BACKEND_CORS_ORIGINS] if configs.BACKEND_CORS_ORIGINS else []
+        _all_origins = list(dict.fromkeys(_REQUIRED_ORIGINS + _DEV_ORIGINS + _config_origins))
+        logger.info(f"CORS origins: {_all_origins}")
+        self.app.add_middleware(
+            CORSMiddleware,
+            allow_origins=_all_origins,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
         # ── Health check endpoints ──
 
