@@ -43,12 +43,17 @@ class AppCreator:
         # NOTE: db provider was removed from Container in b959117.
         # The project now uses app.core.db (async sessions) directly.
 
-        # Request ID middleware (added first = runs AFTER CORS in Starlette stack)
-        self.app.add_middleware(RequestIdMiddleware)
+        # ── Middleware order ──
+        # Starlette add_middleware uses LIFO: last added = outermost wrapper.
+        # We want: Request → CORSMiddleware → RequestIdMiddleware → app
+        # So CORSMiddleware must be the OUTERMOST (added LAST).
+        #
+        # IMPORTANT: BaseHTTPMiddleware (used by RequestIdMiddleware) has known
+        # compatibility issues with CORSMiddleware when it wraps CORS.
+        # By adding CORS LAST, it becomes the outermost middleware and
+        # can properly handle OPTIONS preflight and add CORS headers.
 
-        # CORS – always enabled with hardcoded origins as fallback
-        # pydantic_settings may override BACKEND_CORS_ORIGINS from env vars,
-        # so we ensure the essential origins are always included.
+        # CORS origins – always enabled with hardcoded origins as fallback
         _REQUIRED_ORIGINS = [
             "https://www.aitherhub.com",
             "https://aitherhub.com",
@@ -59,10 +64,14 @@ class AppCreator:
             "http://127.0.0.1:3000",
             "http://127.0.0.1:5173",
         ]
-        # Merge config origins with required origins (deduplicated)
         _config_origins = [str(o) for o in configs.BACKEND_CORS_ORIGINS] if configs.BACKEND_CORS_ORIGINS else []
         _all_origins = list(dict.fromkeys(_REQUIRED_ORIGINS + _DEV_ORIGINS + _config_origins))
         logger.info(f"CORS origins: {_all_origins}")
+
+        # 1. Add RequestIdMiddleware FIRST (will be inner / closer to app)
+        self.app.add_middleware(RequestIdMiddleware)
+
+        # 2. Add CORSMiddleware LAST (will be outer / first to process requests)
         self.app.add_middleware(
             CORSMiddleware,
             allow_origins=_all_origins,
