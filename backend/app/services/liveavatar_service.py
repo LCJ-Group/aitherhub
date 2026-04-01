@@ -5,20 +5,23 @@ LiveAvatar Streaming Service for AitherHub
 Replaces HeyGen Streaming API (deprecated March 2026) with LiveAvatar API.
 Uses FULL Mode for text-to-speech avatar streaming via LiveKit WebRTC.
 
-Flow:
-  1. Create session token via LiveAvatar API
-  2. Frontend connects to LiveKit room using the token
-  3. Frontend sends text via LiveKit data channel → avatar speaks
-  4. Stop session when done
+Two-step session flow:
+  1. POST /v1/sessions/token  → session_id + session_token
+  2. POST /v1/sessions/start  → livekit_url + livekit_client_token
+
+Frontend connects to LiveKit room using livekit_url + livekit_client_token,
+then sends text via LiveKit data channel → avatar speaks immediately.
 
 Reference:
   https://docs.liveavatar.com/reference/create_session_token_v1_sessions_token_post
+  https://docs.liveavatar.com/reference/start_session_v1_sessions_start_post
   https://docs.liveavatar.com/docs/full-mode-events
 """
 from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -30,6 +33,13 @@ logger = logging.getLogger(__name__)
 # ──────────────────────────────────────────────
 LIVEAVATAR_API_KEY = os.getenv("LIVEAVATAR_API_KEY", "")
 LIVEAVATAR_BASE_URL = "https://api.liveavatar.com"
+
+# Default avatar: Ann Therapist (public)
+# Will be replaced with kyogokuryu custom avatar once ready
+DEFAULT_AVATAR_ID = "513fd1b7-7ef9-466d-9af2-344e51eeb833"
+
+# Default ElevenLabs voice connected to LiveAvatar
+DEFAULT_VOICE_ID = "de5574fc-009e-4a01-a881-9919ef8f5a0c"
 
 
 class LiveAvatarError(Exception):
@@ -47,7 +57,7 @@ class LiveAvatarService:
     FULL Mode:
       - Text input → Avatar speaks immediately (TTS managed by LiveAvatar)
       - No need for separate TTS integration
-      - Supports Japanese and other languages
+      - Supports Japanese and other languages via ElevenLabs voices
     """
 
     def __init__(self, api_key: str = ""):
@@ -63,9 +73,18 @@ class LiveAvatarService:
             )
 
     @property
-    def _headers(self) -> Dict[str, str]:
+    def _api_headers(self) -> Dict[str, str]:
+        """Headers for API-key-authenticated endpoints (e.g., /v1/sessions/token)."""
         return {
-            "X-API-KEY": self.api_key,
+            "X-Api-Key": self.api_key,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+
+    def _token_headers(self, session_token: str) -> Dict[str, str]:
+        """Headers for session-token-authenticated endpoints (e.g., /v1/sessions/start)."""
+        return {
+            "Authorization": f"Bearer {session_token}",
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
@@ -80,8 +99,6 @@ class LiveAvatarService:
         Returns combined list of user avatars and public avatars.
         Results are cached for 30 minutes.
         """
-        import time
-
         now = time.time()
         if self._avatars_cache and (now - self._avatars_cache_time) < self._AVATARS_CACHE_TTL:
             return self._avatars_cache
@@ -98,7 +115,7 @@ class LiveAvatarService:
                 while True:
                     resp = await client.get(
                         f"{self.base_url}/v1/avatars",
-                        headers=self._headers,
+                        headers=self._api_headers,
                         params={"page": page, "page_size": 100},
                     )
                     resp.raise_for_status()
@@ -117,7 +134,7 @@ class LiveAvatarService:
                     while True:
                         resp = await client.get(
                             f"{self.base_url}/v1/avatars/public",
-                            headers=self._headers,
+                            headers=self._api_headers,
                             params={"page": page, "page_size": 100},
                         )
                         resp.raise_for_status()
@@ -144,83 +161,113 @@ class LiveAvatarService:
             raise LiveAvatarError(str(e))
 
     # ──────────────────────────────────────────
-    # Session Management (FULL Mode)
+    # Session Management (2-step FULL Mode)
     # ──────────────────────────────────────────
     async def create_session(
         self,
-        avatar_id: str,
+        avatar_id: str = "",
         language: str = "ja",
         persona_prompt: str = "",
         voice_id: Optional[str] = None,
         sandbox: bool = False,
     ) -> Dict[str, Any]:
         """
-        Create a LiveAvatar streaming session in FULL Mode.
+        Create and start a LiveAvatar streaming session in FULL Mode.
 
-        FULL Mode: Text sent via LiveKit data channel → avatar speaks.
-        Returns session_id and session_token for LiveKit connection.
+        Two-step flow:
+          Step 1: POST /v1/sessions/token → session_id + session_token
+          Step 2: POST /v1/sessions/start → livekit_url + livekit_client_token
 
         Args:
-            avatar_id: UUID of the avatar to use
+            avatar_id: UUID of the avatar to use (defaults to Ann Therapist)
             language: Language code (e.g., 'ja' for Japanese)
             persona_prompt: System prompt for the avatar persona
-            voice_id: Optional voice ID override
+            voice_id: Optional voice ID override (ElevenLabs voice)
             sandbox: If True, use sandbox mode (free, 1-min sessions)
+
+        Returns:
+            Dict with session_id, livekit_url, livekit_client_token, max_session_duration
         """
         if not self.api_key:
             raise LiveAvatarError("LIVEAVATAR_API_KEY not set")
 
-        if not persona_prompt:
-            persona_prompt = (
-                "あなたは京極琉（きょうごくりゅう）です。"
-                "美容師であり、KYOGOKUブランドの代表です。"
-                "ライブコマースで商品を紹介しています。"
-                "視聴者に親しみやすく、丁寧に話してください。"
-                "日本語で話してください。"
-            )
+        # Use defaults if not specified
+        if not avatar_id:
+            avatar_id = DEFAULT_AVATAR_ID
+        if not voice_id:
+            voice_id = DEFAULT_VOICE_ID
 
         try:
-            logger.info(f"[LiveAvatar] Creating FULL mode session for avatar: {avatar_id}")
+            # ── Step 1: Create session token ──
+            logger.info(f"[LiveAvatar] Step 1: Creating session token for avatar: {avatar_id}")
 
-            body: Dict[str, Any] = {
+            token_body: Dict[str, Any] = {
                 "mode": "FULL",
                 "avatar_id": avatar_id,
+                "is_sandbox": sandbox,
                 "avatar_persona": {
-                    "persona_id": "default",
-                    "persona_prompt": persona_prompt,
+                    "voice_id": voice_id,
                     "language": language,
+                },
+                "video_settings": {
+                    "quality": "medium",
+                    "encoding": "H264",
                 },
             }
 
-            # Add voice override if specified
-            if voice_id:
-                body["avatar_persona"]["voice_id"] = voice_id
-
-            # Sandbox mode for testing
-            if sandbox:
-                body["sandbox"] = True
+            # Add persona prompt if specified
+            if persona_prompt:
+                token_body["avatar_persona"]["persona_prompt"] = persona_prompt
 
             async with httpx.AsyncClient(timeout=60) as client:
                 resp = await client.post(
                     f"{self.base_url}/v1/sessions/token",
-                    headers=self._headers,
-                    json=body,
+                    headers=self._api_headers,
+                    json=token_body,
                 )
                 resp.raise_for_status()
-                result = resp.json()
+                token_result = resp.json()
 
-            data = result.get("data", {})
-            session_id = data.get("session_id", "")
-            session_token = data.get("session_token", "")
+            token_data = token_result.get("data", {})
+            session_id = token_data.get("session_id", "")
+            session_token = token_data.get("session_token", "")
 
             if not session_id or not session_token:
-                raise LiveAvatarError(f"Invalid response: {result}")
+                raise LiveAvatarError(f"Step 1 failed - invalid response: {token_result}")
 
-            logger.info(f"[LiveAvatar] Session created: {session_id}")
+            logger.info(f"[LiveAvatar] Step 1 complete: session_id={session_id}")
+
+            # ── Step 2: Start session (get LiveKit URL + token) ──
+            logger.info(f"[LiveAvatar] Step 2: Starting session {session_id}")
+
+            async with httpx.AsyncClient(timeout=120) as client:
+                resp = await client.post(
+                    f"{self.base_url}/v1/sessions/start",
+                    headers=self._token_headers(session_token),
+                    json={},
+                )
+                resp.raise_for_status()
+                start_result = resp.json()
+
+            start_data = start_result.get("data", {})
+            livekit_url = start_data.get("livekit_url", "")
+            livekit_client_token = start_data.get("livekit_client_token", "")
+            max_session_duration = start_data.get("max_session_duration", 1200)
+
+            if not livekit_url or not livekit_client_token:
+                raise LiveAvatarError(f"Step 2 failed - no LiveKit credentials: {start_result}")
+
+            logger.info(
+                f"[LiveAvatar] Step 2 complete: livekit_url={livekit_url[:50]}..., "
+                f"max_duration={max_session_duration}s"
+            )
 
             return {
                 "session_id": session_id,
                 "session_token": session_token,
+                "livekit_url": livekit_url,
+                "livekit_client_token": livekit_client_token,
+                "max_session_duration": max_session_duration,
                 "sandbox": sandbox,
             }
 
@@ -228,6 +275,8 @@ class LiveAvatarService:
             error_text = e.response.text[:500]
             logger.error(f"[LiveAvatar] HTTP error creating session: {e.response.status_code} - {error_text}")
             raise LiveAvatarError(f"HTTP {e.response.status_code}: {error_text}")
+        except LiveAvatarError:
+            raise
         except Exception as e:
             logger.error(f"[LiveAvatar] Error creating session: {e}")
             raise LiveAvatarError(str(e))
@@ -247,7 +296,7 @@ class LiveAvatarService:
             async with httpx.AsyncClient(timeout=30) as client:
                 resp = await client.post(
                     f"{self.base_url}/v1/sessions/stop",
-                    headers=self._headers,
+                    headers=self._api_headers,
                     json={"session_id": session_id},
                 )
                 resp.raise_for_status()
@@ -282,7 +331,7 @@ class LiveAvatarService:
             async with httpx.AsyncClient(timeout=15) as client:
                 resp = await client.get(
                     f"{self.base_url}/v1/avatars",
-                    headers=self._headers,
+                    headers=self._api_headers,
                     params={"page_size": 1},
                 )
                 resp.raise_for_status()

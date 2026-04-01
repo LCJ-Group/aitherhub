@@ -4053,16 +4053,16 @@ async def liveavatar_list_avatars(
     "/liveavatar/streaming/start",
     summary="Start a LiveAvatar streaming session (FULL Mode)",
     description=(
-        "Create a LiveAvatar FULL Mode streaming session. "
-        "Returns session_id and session_token for LiveKit WebRTC connection. "
-        "Text is sent via LiveKit data channel from the frontend."
+        "Create and start a LiveAvatar FULL Mode streaming session. "
+        "Returns session_id, livekit_url, and livekit_client_token for LiveKit WebRTC connection. "
+        "Frontend connects to LiveKit room, then sends text via data channel → avatar speaks."
     ),
 )
 async def liveavatar_streaming_start(
-    avatar_id: str = Body(..., description="LiveAvatar avatar UUID"),
+    avatar_id: str = Body("", description="LiveAvatar avatar UUID (defaults to Ann Therapist)"),
     language: str = Body("ja", description="Language code (e.g., ja, en)"),
     persona_prompt: str = Body("", description="System prompt for avatar persona"),
-    voice_id: str = Body(None, description="Optional voice ID override"),
+    voice_id: str = Body(None, description="Optional ElevenLabs voice ID override"),
     sandbox: bool = Body(False, description="Use sandbox mode (free, 1-min sessions)"),
     _auth: bool = Depends(verify_admin_key),
 ):
@@ -4078,7 +4078,9 @@ async def liveavatar_streaming_start(
         return {
             "success": True,
             "session_id": result["session_id"],
-            "session_token": result["session_token"],
+            "livekit_url": result["livekit_url"],
+            "livekit_client_token": result["livekit_client_token"],
+            "max_session_duration": result.get("max_session_duration", 1200),
             "sandbox": result.get("sandbox", False),
         }
     except LiveAvatarError as e:

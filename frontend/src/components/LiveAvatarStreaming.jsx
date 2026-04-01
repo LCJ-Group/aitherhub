@@ -21,23 +21,24 @@ import aiLiveCreatorService from "../base/services/aiLiveCreatorService";
  * Provides real-time avatar streaming via LiveAvatar FULL Mode + LiveKit WebRTC.
  * User types text → sends via LiveKit data channel → avatar speaks it in real-time.
  *
- * Key difference from old HeyGen Streaming:
- *   - Text is sent via LiveKit data channel (topic: "agent-control"), NOT via backend API
- *   - Session token (not access_token + url) is used for LiveKit connection
- *   - Events follow LiveAvatar protocol (avatar.speak_text, avatar.interrupt, etc.)
+ * Two-step session flow:
+ *   1. Backend calls LiveAvatar /v1/sessions/token → session_token
+ *   2. Backend calls LiveAvatar /v1/sessions/start → livekit_url + livekit_client_token
+ *   3. Frontend connects to LiveKit room using livekit_url + livekit_client_token
+ *   4. Text is sent via LiveKit data channel (topic: "agent-control")
  *
  * Props:
- *   - avatarId: Selected LiveAvatar avatar UUID
+ *   - avatarId: Selected LiveAvatar avatar UUID (optional, defaults to Ann Therapist)
  *   - language: Language code (e.g., "ja")
  *   - personaPrompt: System prompt for the avatar persona
- *   - voiceId: Optional voice ID override
+ *   - voiceId: Optional voice ID override (ElevenLabs)
  *   - sandbox: Use sandbox mode (free, 1-min sessions)
  *   - onStreamReady: Callback when stream is ready (receives MediaStream)
  *   - onError: Callback for errors
  *   - className: Additional CSS classes
  */
 export default function LiveAvatarStreaming({
-  avatarId,
+  avatarId = "",
   language = "ja",
   personaPrompt = "",
   voiceId = "",
@@ -56,6 +57,7 @@ export default function LiveAvatarStreaming({
   const [speakHistory, setSpeakHistory] = useState([]);
   const [error, setError] = useState(null);
   const [sessionDuration, setSessionDuration] = useState(0);
+  const [maxDuration, setMaxDuration] = useState(1200);
   const [connectionStatus, setConnectionStatus] = useState("disconnected"); // disconnected, connecting, connected, reconnecting
 
   // ── Refs ──
@@ -63,7 +65,8 @@ export default function LiveAvatarStreaming({
   const roomRef = useRef(null);
   const sessionTimerRef = useRef(null);
   const textInputRef = useRef(null);
-  const sessionIdRef = useRef(null); // Keep session_id in ref for data channel
+  const sessionIdRef = useRef(null);
+  const audioElementsRef = useRef([]); // Track audio elements for cleanup
 
   // ── Cleanup on unmount ──
   useEffect(() => {
@@ -173,21 +176,17 @@ export default function LiveAvatarStreaming({
     }
   }, []);
 
-  // ── Start Session ──
+  // ── Start Session (2-step flow) ──
   const startSession = useCallback(async () => {
-    if (!avatarId) {
-      setError("アバターを選択してください");
-      return;
-    }
-
     setIsConnecting(true);
     setConnectionStatus("connecting");
     setError(null);
 
     try {
-      // 1. Create LiveAvatar session via backend
+      // 1. Call backend → creates session token → starts session → returns LiveKit credentials
+      console.log("[LiveAvatar] Requesting session from backend...");
       const result = await aiLiveCreatorService.liveAvatarStreamingStart({
-        avatar_id: avatarId,
+        avatar_id: avatarId || "",
         language: language,
         persona_prompt: personaPrompt,
         voice_id: voiceId || null,
@@ -198,12 +197,19 @@ export default function LiveAvatarStreaming({
         throw new Error(result.error || "Failed to start LiveAvatar session");
       }
 
-      const { session_id, session_token } = result;
+      const { session_id, livekit_url, livekit_client_token, max_session_duration } = result;
+
+      if (!livekit_url || !livekit_client_token) {
+        throw new Error("Backend did not return LiveKit credentials");
+      }
+
       setSessionId(session_id);
       sessionIdRef.current = session_id;
+      setMaxDuration(max_session_duration || 1200);
 
-      // 2. Connect to LiveKit room using session_token
-      // LiveAvatar uses livekit.liveavatar.com as the WebSocket URL
+      console.log(`[LiveAvatar] Session created: ${session_id}, connecting to LiveKit: ${livekit_url}`);
+
+      // 2. Connect to LiveKit room using livekit_url + livekit_client_token
       const room = new Room({
         adaptiveStream: true,
         dynacast: true,
@@ -236,6 +242,7 @@ export default function LiveAvatarStreaming({
           element.autoplay = true;
           element.volume = 1.0;
           document.body.appendChild(element);
+          audioElementsRef.current.push(element);
         }
       });
 
@@ -264,11 +271,9 @@ export default function LiveAvatarStreaming({
         setConnectionStatus("connected");
       });
 
-      // Connect to LiveKit room
-      // LiveAvatar provides the session_token which contains the LiveKit URL
-      // The token itself is a JWT that LiveKit uses for auth
-      await room.connect("wss://livekit.liveavatar.com", session_token);
-      console.log("[LiveAvatar] Connected to LiveKit room");
+      // Connect to LiveKit room with the actual URL from LiveAvatar API
+      await room.connect(livekit_url, livekit_client_token);
+      console.log("[LiveAvatar] Connected to LiveKit room successfully");
 
       setIsConnected(true);
       setIsConnecting(false);
@@ -286,6 +291,12 @@ export default function LiveAvatarStreaming({
   // ── Stop Session ──
   const stopSession = useCallback(async () => {
     try {
+      // Clean up audio elements
+      audioElementsRef.current.forEach((el) => {
+        try { el.remove(); } catch (e) {}
+      });
+      audioElementsRef.current = [];
+
       if (roomRef.current) {
         roomRef.current.disconnect();
         roomRef.current = null;
@@ -315,7 +326,7 @@ export default function LiveAvatarStreaming({
     }
   }, [sessionId]);
 
-  // ── Speak Text ──
+  // ── Speak Text (direct TTS) ──
   const handleSpeak = useCallback(() => {
     if (!speakText.trim() || !isConnected) return;
 
@@ -327,26 +338,6 @@ export default function LiveAvatarStreaming({
     // Add to history
     setSpeakHistory((prev) => [
       { text, timestamp: new Date().toLocaleTimeString(), type: "sent" },
-      ...prev,
-    ].slice(0, 50));
-
-    setSpeakText("");
-    if (textInputRef.current) {
-      textInputRef.current.focus();
-    }
-  }, [speakText, isConnected, sendEvent]);
-
-  // ── Speak Response (LLM) ──
-  const handleSpeakResponse = useCallback(() => {
-    if (!speakText.trim() || !isConnected) return;
-
-    const text = speakText.trim();
-
-    // Send via LiveKit data channel - LLM will generate response
-    sendEvent("avatar.speak_response", { text });
-
-    setSpeakHistory((prev) => [
-      { text: `[LLM] ${text}`, timestamp: new Date().toLocaleTimeString(), type: "sent" },
       ...prev,
     ].slice(0, 50));
 
@@ -378,6 +369,10 @@ export default function LiveAvatarStreaming({
     return `${m}:${s.toString().padStart(2, "0")}`;
   };
 
+  // ── Remaining time warning ──
+  const remainingSeconds = maxDuration - sessionDuration;
+  const isNearEnd = remainingSeconds > 0 && remainingSeconds <= 120;
+
   // ── Connection status badge ──
   const statusConfig = {
     disconnected: { color: "gray", label: "未接続" },
@@ -399,7 +394,7 @@ export default function LiveAvatarStreaming({
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-900/80">
             <Radio className="w-12 h-12 text-gray-600 mb-3" />
             <p className="text-sm text-gray-400 mb-1">LiveAvatar Streaming</p>
-            <p className="text-xs text-gray-500">アバターを選択して接続開始</p>
+            <p className="text-xs text-gray-500">接続ボタンを押してストリーミング開始</p>
             {sandbox && (
               <p className="text-[10px] text-yellow-500 mt-2 bg-yellow-500/10 px-2 py-1 rounded">
                 サンドボックスモード（テスト用・1分制限）
@@ -420,13 +415,13 @@ export default function LiveAvatarStreaming({
         {/* Status bar */}
         {isConnected && (
           <div className="absolute top-2 left-2 right-2 flex items-center justify-between">
-            <div className={`flex items-center gap-1.5 bg-${status.color}-500/20 backdrop-blur-sm px-2 py-1 rounded-full border border-${status.color}-500/30`}>
-              <div className={`w-2 h-2 rounded-full bg-${status.color}-500 ${connectionStatus === 'connected' ? 'animate-pulse' : ''}`} />
-              <span className={`text-[10px] text-${status.color}-300 font-medium`}>{status.label}</span>
+            <div className="flex items-center gap-1.5 bg-green-500/20 backdrop-blur-sm px-2 py-1 rounded-full border border-green-500/30">
+              <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+              <span className="text-[10px] text-green-300 font-medium">{status.label}</span>
             </div>
             <div className="flex items-center gap-1.5 bg-black/40 backdrop-blur-sm px-2 py-1 rounded-full">
-              <span className="text-[10px] text-gray-300 font-mono">
-                {formatTime(sessionDuration)}
+              <span className={`text-[10px] font-mono ${isNearEnd ? 'text-red-400' : 'text-gray-300'}`}>
+                {formatTime(sessionDuration)} / {formatTime(maxDuration)}
               </span>
             </div>
           </div>
@@ -451,6 +446,16 @@ export default function LiveAvatarStreaming({
             </div>
           </div>
         )}
+
+        {/* Near-end warning */}
+        {isConnected && isNearEnd && (
+          <div className="absolute bottom-10 left-2 right-2 flex justify-center">
+            <div className="flex items-center gap-1.5 bg-red-500/20 backdrop-blur-sm px-3 py-1.5 rounded-full border border-red-500/30">
+              <AlertCircle className="w-3.5 h-3.5 text-red-400" />
+              <span className="text-[10px] text-red-300">残り {formatTime(remainingSeconds)}</span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── Connection Controls ── */}
@@ -458,9 +463,9 @@ export default function LiveAvatarStreaming({
         {!isConnected ? (
           <button
             onClick={startSession}
-            disabled={isConnecting || !avatarId}
+            disabled={isConnecting}
             className={`flex-1 py-2.5 px-4 rounded-lg font-medium text-xs flex items-center justify-center gap-2 transition-all ${
-              !isConnecting && avatarId
+              !isConnecting
                 ? "bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white shadow-lg shadow-green-500/20"
                 : "bg-gray-700/50 text-gray-500 cursor-not-allowed"
             }`}
@@ -512,18 +517,6 @@ export default function LiveAvatarStreaming({
                 )}
               </button>
               <button
-                onClick={handleSpeakResponse}
-                disabled={!speakText.trim() || isSpeaking}
-                className={`px-3 py-2 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-all ${
-                  speakText.trim() && !isSpeaking
-                    ? "bg-blue-500/20 hover:bg-blue-500/30 text-blue-400 border border-blue-500/30"
-                    : "bg-gray-700/50 text-gray-500 cursor-not-allowed border border-gray-700/30"
-                }`}
-                title="LLMで応答生成して話す"
-              >
-                <MessageSquare className="w-3 h-3" />
-              </button>
-              <button
                 onClick={handleInterrupt}
                 className="px-3 py-2 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-all bg-orange-500/20 hover:bg-orange-500/30 text-orange-400 border border-orange-500/30"
                 title="中断"
@@ -533,7 +526,7 @@ export default function LiveAvatarStreaming({
             </div>
           </div>
           <p className="text-[9px] text-gray-500 mt-1.5">
-            Enter: そのまま話す | 💬: LLM応答 | ■: 中断
+            Enter: テキスト送信 → アバターが話す | ■: 中断
           </p>
         </div>
       )}
