@@ -247,8 +247,8 @@ def visibility_renewal_loop():
 # DB Status Helpers (using shared.db)
 # =============================================================================
 
-def update_video_status_to_error(video_id: str):
-    """Mark a video as ERROR in the database."""
+def update_video_status_to_error(video_id: str, error_code: str = "POISON_MAX_RETRY"):
+    """Mark a video as ERROR in the database and set last_error_code."""
     try:
         from shared.db.session import get_session, run_sync
         from sqlalchemy import text
@@ -256,12 +256,24 @@ def update_video_status_to_error(video_id: str):
         async def _update():
             async with get_session() as session:
                 await session.execute(
-                    text("UPDATE videos SET status = :status WHERE id = :vid"),
-                    {"status": VideoStatus.ERROR, "vid": video_id},
+                    text(
+                        "UPDATE videos "
+                        "SET status = :status, "
+                        "    last_error_code = :error_code, "
+                        "    last_error_message = :error_msg, "
+                        "    updated_at = NOW() "
+                        "WHERE id = :vid"
+                    ),
+                    {
+                        "status": VideoStatus.ERROR,
+                        "error_code": error_code,
+                        "error_msg": f"Video processing failed after max retries ({error_code})",
+                        "vid": video_id,
+                    },
                 )
 
         run_sync(_update())
-        print(f"[worker] Marked video {video_id} as ERROR")
+        print(f"[worker] Marked video {video_id} as ERROR (code={error_code})")
     except Exception as db_err:
         print(f"[worker] Failed to mark video as ERROR: {db_err}")
 

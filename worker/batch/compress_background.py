@@ -72,6 +72,7 @@ def _record_compress_error(video_id: str, error_code: str, error_message: str):
             error_message=error_message[:2000],
             error_detail=None,
             source="compress_bg",
+            update_last_error=False,  # Non-fatal: don't overwrite last_error_code
         )
     except Exception as e:
         logger.warning("Failed to record compress error log: %s", e)

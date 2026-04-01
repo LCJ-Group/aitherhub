@@ -2089,8 +2089,16 @@ async def insert_video_error_log(
     error_message: str = None,
     error_detail: str = None,
     source: str = "worker",
+    update_last_error: bool = True,
 ):
-    """Insert a row into video_error_logs and update videos.last_error_*."""
+    """Insert a row into video_error_logs and optionally update videos.last_error_*.
+
+    Args:
+        update_last_error: If False, only insert into video_error_logs without
+            overwriting videos.last_error_code/last_error_message. Use False for
+            non-fatal warnings (e.g. PRODUCT_DATA_MISMATCH) that should not mask
+            the real fatal error.
+    """
     # Truncate long strings to avoid DB column overflow
     if error_message and len(error_message) > 2000:
         error_message = error_message[:2000] + "...(truncated)"
@@ -2119,11 +2127,12 @@ async def insert_video_error_log(
             "error_detail": error_detail,
             "source": source,
         })
-        await session.execute(sql_update, {
-            "video_id": video_id,
-            "error_code": error_code,
-            "error_message": error_message,
-        })
+        if update_last_error:
+            await session.execute(sql_update, {
+                "video_id": video_id,
+                "error_code": error_code,
+                "error_message": error_message,
+            })
         await session.commit()
 
 
@@ -2134,6 +2143,7 @@ def insert_video_error_log_sync(
     error_message: str = None,
     error_detail: str = None,
     source: str = "worker",
+    update_last_error: bool = True,
 ):
     """Synchronous wrapper for insert_video_error_log."""
     loop = get_event_loop()
@@ -2145,6 +2155,7 @@ def insert_video_error_log_sync(
             error_message=error_message,
             error_detail=error_detail,
             source=source,
+            update_last_error=update_last_error,
         )
     )
 

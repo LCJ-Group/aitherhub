@@ -156,8 +156,15 @@ class PipelineStepError(Exception):
         self.original = original
         super().__init__(f"[{step_name}] {error_code}: {original}")
 
-def _record_step_error(video_id, step_name, error_code, exc):
-    """Record a per-step error to video_error_logs without stopping the pipeline."""
+def _record_step_error(video_id, step_name, error_code, exc, update_last_error=False):
+    """Record a per-step error to video_error_logs without stopping the pipeline.
+
+    Args:
+        update_last_error: If True, also update videos.last_error_code.
+            Defaults to False because non-fatal step errors (e.g. PRODUCT_DATA_MISMATCH)
+            should NOT overwrite last_error_code — doing so masks the real fatal error
+            that later sets status=ERROR.
+    """
     import traceback as _tb
     try:
         insert_video_error_log_sync(
@@ -167,6 +174,7 @@ def _record_step_error(video_id, step_name, error_code, exc):
             error_message=str(exc)[:2000],
             error_detail=_tb.format_exc()[:10000],
             source="worker",
+            update_last_error=update_last_error,
         )
     except Exception as log_err:
         logger.warning("[ERROR_LOG] Failed to record step error: %s", log_err)
@@ -611,16 +619,27 @@ def main():
                 time_offset_seconds = excel_urls.get("time_offset_seconds", 0)
                 logger.info("[EXCEL] Time offset for this video: %.1f seconds", time_offset_seconds)
                 excel_data = load_excel_data(video_id, excel_urls)
-                logger.info(
-                    "[EXCEL] Loaded: %d products, %d trend entries",
-                    len(excel_data.get("products", [])),
-                    len(excel_data.get("trends", [])),
-                )
+                if excel_data:
+                    logger.info(
+                        "[EXCEL] Loaded: %d products, %d trend entries",
+                        len(excel_data.get("products", [])),
+                        len(excel_data.get("trends", [])),
+                    )
+                else:
+                    logger.warning("[EXCEL] load_excel_data returned None/empty for clean_video")
             else:
                 logger.info("[EXCEL] Screen recording mode, no Excel data")
         except Exception as e:
             logger.warning("[EXCEL] Failed to load Excel data: %s", e)
             excel_data = None
+            # Still set is_screen_recording correctly based on upload_type
+            try:
+                _ut = get_video_excel_urls_sync(video_id)
+                if _ut and _ut.get("upload_type") == "clean_video":
+                    is_screen_recording = False
+                    time_offset_seconds = _ut.get("time_offset_seconds", 0)
+            except Exception:
+                pass
 
         # Resume from the last completed step instead of restarting from 0.
         # Previously only allowed resume from step >= 7, now allows any step.
@@ -1660,11 +1679,16 @@ def main():
                     logger.info("[PRODUCT] Using %d products from Excel", len(product_list))
 
                 # ★ FALLBACK: excel_dataが初期ロードで失敗した場合、再ロードを試みる
+                # SASトークン期限切れが主な原因なので、force_regenerateで新しいトークンを取得
                 if not product_list:
                     try:
                         _fb_urls = get_video_excel_urls_sync(video_id)
                         if _fb_urls and _fb_urls.get("excel_product_blob_url"):
-                            logger.info("[PRODUCT] excel_data missing, retrying Excel load (fallback)...")
+                            logger.info(
+                                "[PRODUCT] excel_data missing, retrying Excel load (fallback)... "
+                                "product_url_prefix=%s",
+                                _fb_urls.get('excel_product_blob_url', '')[:80]
+                            )
                             _fb_excel = load_excel_data(video_id, _fb_urls)
                             if _fb_excel and _fb_excel.get("has_product_data"):
                                 product_list = _fb_excel.get("products", [])
@@ -1673,9 +1697,19 @@ def main():
                                     time_offset_seconds = _fb_urls.get("time_offset_seconds", 0)
                                 logger.info("[PRODUCT] Fallback loaded %d products from Excel", len(product_list))
                             else:
-                                logger.warning("[PRODUCT] Fallback Excel load returned no products")
+                                logger.warning(
+                                    "[PRODUCT] Fallback Excel load returned no products "
+                                    "(has_product=%s, products=%d)",
+                                    _fb_excel.get('has_product_data') if _fb_excel else None,
+                                    len(_fb_excel.get('products', [])) if _fb_excel else 0,
+                                )
+                        else:
+                            logger.info(
+                                "[PRODUCT] No excel_product_blob_url in DB for video %s",
+                                video_id
+                            )
                     except Exception as _fb_err:
-                        logger.warning("[PRODUCT] Fallback Excel load failed: %s", _fb_err)
+                        logger.warning("[PRODUCT] Fallback Excel load failed: %s (type=%s)", _fb_err, type(_fb_err).__name__)
 
                 if product_list:
                     # Load transcription segments from audio_text .txt files
@@ -2042,6 +2076,7 @@ def main():
                 error_message=str(exc)[:2000],
                 error_detail=_tb.format_exc()[:10000],
                 source="worker",
+                update_last_error=True,  # Fatal error: update last_error_code
             )
         except Exception as log_err:
             logger.warning("[ERROR_LOG] Failed to record error log: %s", log_err)

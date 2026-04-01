@@ -718,8 +718,6 @@ def _explain_score(phase, moments, product_names, video_duration):
 # SALES CLIP CANDIDATES (GET)
 # =========================================================
 @router.get("/{video_id}/sales-clip-candidates")
-
-@router.get("/{video_id}/sales-clip-candidates")
 async def get_sales_clip_candidates(
     video_id: str,
     top_n: int = 5,
