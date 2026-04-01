@@ -9,6 +9,7 @@ import AiLiveCreatorPage from './components/AiLiveCreatorPage'
 import PersonaPage from './components/PersonaPage'
 import ScriptGeneratorPage from './components/ScriptGeneratorPage'
 import PrivacyPolicy from './components/PrivacyPolicy'
+import AuthPage from './pages/authPages/AuthPage'
 import { Toaster } from "./components/ui/toaster";
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 
@@ -28,6 +29,9 @@ function App() {
         <Route path="/ai-live-creator" element={<AiLiveCreatorPage />} />
         <Route path="/personas" element={<PersonaPage />} />
         <Route path="/script-generator" element={<ScriptGeneratorPage />} />
+        <Route path="/login" element={<AuthPage mode="login" />} />
+        <Route path="/register" element={<AuthPage mode="register" />} />
+        <Route path="/forgot-password" element={<AuthPage mode="forgot-password" />} />
       </Routes>
       <Toaster />
     </BrowserRouter>
