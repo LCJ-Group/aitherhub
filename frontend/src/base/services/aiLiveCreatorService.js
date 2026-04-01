@@ -321,6 +321,59 @@ class AiLiveCreatorService {
     return res.data;
   }
 
+  // ══════════════════════════════════════════════════════════
+  // HeyGen Streaming Avatar (Real-time)
+  // ══════════════════════════════════════════════════════════
+
+  /**
+   * Start a HeyGen Streaming Avatar session.
+   * Returns session_id, access_token, and LiveKit WebSocket URL.
+   */
+  async heygenStreamingStart(params) {
+    const res = await axios.post(
+      `${this.baseURL}/api/v1/digital-human/heygen/streaming/start`,
+      params,
+      { headers: this._headers(), timeout: 60000 }
+    );
+    return res.data;
+  }
+
+  /**
+   * Send text to a streaming avatar to speak in real-time.
+   */
+  async heygenStreamingSpeak(params) {
+    const res = await axios.post(
+      `${this.baseURL}/api/v1/digital-human/heygen/streaming/speak`,
+      params,
+      { headers: this._headers(), timeout: 30000 }
+    );
+    return res.data;
+  }
+
+  /**
+   * Stop a streaming avatar session.
+   */
+  async heygenStreamingStop(params) {
+    const res = await axios.post(
+      `${this.baseURL}/api/v1/digital-human/heygen/streaming/stop`,
+      params,
+      { headers: this._headers(), timeout: 30000 }
+    );
+    return res.data;
+  }
+
+  /**
+   * Interrupt current speech in a streaming session.
+   */
+  async heygenStreamingInterrupt(params) {
+    const res = await axios.post(
+      `${this.baseURL}/api/v1/digital-human/heygen/streaming/interrupt`,
+      params,
+      { headers: this._headers(), timeout: 30000 }
+    );
+    return res.data;
+  }
+
   /**
    * Start the auto-pilot livestream brain.
    * The brain will automatically cycle through greeting → product intro →

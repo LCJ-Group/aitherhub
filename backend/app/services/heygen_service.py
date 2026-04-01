@@ -534,6 +534,207 @@ class HeyGenService:
             }
 
 
+    # ──────────────────────────────────────────
+    # Streaming Avatar (Real-time)
+    # ──────────────────────────────────────────
+    async def streaming_create_session(
+        self,
+        avatar_id: str,
+        voice_id: str = "",
+        quality: str = "medium",
+        language: str = "ja",
+    ) -> Dict[str, Any]:
+        """
+        Create a new streaming avatar session.
+
+        Uses HeyGen Streaming API v1/streaming.new + v1/streaming.start
+        to establish a LiveKit WebRTC session.
+
+        Returns session_id, access_token, LiveKit URL.
+        """
+        if not self.api_key:
+            raise HeyGenError("HEYGEN_API_KEY not set")
+
+        try:
+            # Step 1: Create new streaming session
+            logger.info(f"[HeyGen Streaming] Creating session for avatar: {avatar_id}")
+            body: Dict[str, Any] = {
+                "version": "v2",
+                "avatar_id": avatar_id,
+                "quality": quality,
+            }
+            if voice_id:
+                body["voice"] = {"voice_id": voice_id}
+            if language:
+                body["language"] = language
+
+            async with httpx.AsyncClient(timeout=60) as client:
+                resp = await client.post(
+                    f"{self.base_url}/v1/streaming.new",
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {self.api_key}",
+                    },
+                    json=body,
+                )
+                resp.raise_for_status()
+                session_data = resp.json()
+
+            # Extract session info from response
+            data = session_data.get("data", session_data)
+            session_id = data.get("session_id", "")
+            access_token = data.get("access_token", "")
+            url = data.get("url", "")
+
+            if not session_id:
+                raise HeyGenError(f"No session_id in response: {session_data}")
+
+            logger.info(f"[HeyGen Streaming] Session created: {session_id}")
+
+            # Step 2: Start the session
+            async with httpx.AsyncClient(timeout=60) as client:
+                resp = await client.post(
+                    f"{self.base_url}/v1/streaming.start",
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {self.api_key}",
+                    },
+                    json={"session_id": session_id},
+                )
+                resp.raise_for_status()
+
+            logger.info(f"[HeyGen Streaming] Session started: {session_id}")
+
+            return {
+                "session_id": session_id,
+                "access_token": access_token,
+                "url": url,
+                "is_paid": data.get("is_paid", False),
+                "session_duration_limit": data.get("session_duration_limit", 600),
+            }
+
+        except httpx.HTTPStatusError as e:
+            error_text = e.response.text[:500]
+            logger.error(f"[HeyGen Streaming] HTTP error creating session: {e.response.status_code} - {error_text}")
+            raise HeyGenError(f"HTTP {e.response.status_code}: {error_text}")
+        except Exception as e:
+            logger.error(f"[HeyGen Streaming] Error creating session: {e}")
+            raise HeyGenError(str(e))
+
+    async def streaming_speak(
+        self,
+        session_id: str,
+        text: str,
+        task_type: str = "repeat",
+    ) -> Dict[str, Any]:
+        """
+        Send text to a streaming avatar session.
+
+        The avatar will speak the text in real-time.
+        task_type: "repeat" (exact text) or "talk" (LLM processes first)
+        """
+        if not self.api_key:
+            raise HeyGenError("HEYGEN_API_KEY not set")
+
+        try:
+            logger.info(f"[HeyGen Streaming] Speaking in session {session_id}: {text[:50]}...")
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.post(
+                    f"{self.base_url}/v1/streaming.task",
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {self.api_key}",
+                    },
+                    json={
+                        "session_id": session_id,
+                        "text": text,
+                        "task_type": task_type,
+                    },
+                )
+                resp.raise_for_status()
+                result = resp.json()
+
+            logger.info(f"[HeyGen Streaming] Speak task sent successfully")
+            return result
+
+        except httpx.HTTPStatusError as e:
+            error_text = e.response.text[:500]
+            logger.error(f"[HeyGen Streaming] HTTP error sending speak: {e.response.status_code} - {error_text}")
+            raise HeyGenError(f"HTTP {e.response.status_code}: {error_text}")
+        except Exception as e:
+            logger.error(f"[HeyGen Streaming] Error sending speak: {e}")
+            raise HeyGenError(str(e))
+
+    async def streaming_stop(
+        self,
+        session_id: str,
+    ) -> Dict[str, Any]:
+        """
+        Stop a streaming avatar session.
+        """
+        if not self.api_key:
+            raise HeyGenError("HEYGEN_API_KEY not set")
+
+        try:
+            logger.info(f"[HeyGen Streaming] Stopping session: {session_id}")
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.post(
+                    f"{self.base_url}/v1/streaming.stop",
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {self.api_key}",
+                    },
+                    json={"session_id": session_id},
+                )
+                resp.raise_for_status()
+                result = resp.json()
+
+            logger.info(f"[HeyGen Streaming] Session stopped: {session_id}")
+            return result
+
+        except httpx.HTTPStatusError as e:
+            error_text = e.response.text[:500]
+            logger.error(f"[HeyGen Streaming] HTTP error stopping session: {e.response.status_code} - {error_text}")
+            raise HeyGenError(f"HTTP {e.response.status_code}: {error_text}")
+        except Exception as e:
+            logger.error(f"[HeyGen Streaming] Error stopping session: {e}")
+            raise HeyGenError(str(e))
+
+    async def streaming_interrupt(
+        self,
+        session_id: str,
+    ) -> Dict[str, Any]:
+        """
+        Interrupt the current speaking task in a streaming session.
+        """
+        if not self.api_key:
+            raise HeyGenError("HEYGEN_API_KEY not set")
+
+        try:
+            logger.info(f"[HeyGen Streaming] Interrupting session: {session_id}")
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.post(
+                    f"{self.base_url}/v1/streaming.interrupt",
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {self.api_key}",
+                    },
+                    json={"session_id": session_id},
+                )
+                resp.raise_for_status()
+                result = resp.json()
+
+            logger.info(f"[HeyGen Streaming] Session interrupted: {session_id}")
+            return result
+
+        except httpx.HTTPStatusError as e:
+            error_text = e.response.text[:500]
+            logger.error(f"[HeyGen Streaming] HTTP error interrupting: {e.response.status_code} - {error_text}")
+            raise HeyGenError(f"HTTP {e.response.status_code}: {error_text}")
+        except Exception as e:
+            logger.error(f"[HeyGen Streaming] Error interrupting: {e}")
+            raise HeyGenError(str(e))
+
     async def prefetch_avatars(self) -> None:
         """Pre-fetch avatar list on startup to warm the cache.
         

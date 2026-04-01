@@ -3885,3 +3885,120 @@ async def heygen_generate_from_text_avatar(
             error=f"Internal error: {str(e)}",
             engine="heygen-avatar",
         )
+
+
+# ══════════════════════════════════════════════
+# HEYGEN STREAMING AVATAR (Real-time)
+# ══════════════════════════════════════════════
+
+@router.post(
+    "/heygen/streaming/start",
+    summary="Start a HeyGen Streaming Avatar session",
+    description=(
+        "Create and start a real-time streaming avatar session. "
+        "Returns session_id, access_token, and LiveKit WebSocket URL "
+        "for establishing a WebRTC connection."
+    ),
+)
+async def heygen_streaming_start(
+    avatar_id: str = Body(..., description="HeyGen Interactive Avatar ID"),
+    voice_id: str = Body("", description="Voice ID (optional)"),
+    quality: str = Body("medium", description="Stream quality: low/medium/high"),
+    language: str = Body("ja", description="Language code (e.g., ja, en)"),
+    _auth: bool = Depends(verify_admin_key),
+):
+    service = get_heygen_service()
+    try:
+        result = await service.streaming_create_session(
+            avatar_id=avatar_id,
+            voice_id=voice_id,
+            quality=quality,
+            language=language,
+        )
+        return {
+            "success": True,
+            "session_id": result["session_id"],
+            "access_token": result["access_token"],
+            "url": result["url"],
+            "is_paid": result.get("is_paid", False),
+            "session_duration_limit": result.get("session_duration_limit", 600),
+        }
+    except HeyGenError as e:
+        logger.error(f"[HeyGen Streaming] Error starting session: {e}")
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        logger.exception(f"[HeyGen Streaming] Unexpected error: {e}")
+        return {"success": False, "error": f"Internal error: {str(e)}"}
+
+
+@router.post(
+    "/heygen/streaming/speak",
+    summary="Send text to a streaming avatar",
+    description=(
+        "Send text to an active streaming avatar session. "
+        "The avatar will speak the text in real-time. "
+        "task_type: 'repeat' (exact text) or 'talk' (LLM processes first)."
+    ),
+)
+async def heygen_streaming_speak(
+    session_id: str = Body(..., description="Active streaming session ID"),
+    text: str = Body(..., description="Text for the avatar to speak"),
+    task_type: str = Body("repeat", description="Task type: repeat or talk"),
+    _auth: bool = Depends(verify_admin_key),
+):
+    service = get_heygen_service()
+    try:
+        result = await service.streaming_speak(
+            session_id=session_id,
+            text=text,
+            task_type=task_type,
+        )
+        return {"success": True, "data": result}
+    except HeyGenError as e:
+        logger.error(f"[HeyGen Streaming] Error speaking: {e}")
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        logger.exception(f"[HeyGen Streaming] Unexpected error: {e}")
+        return {"success": False, "error": f"Internal error: {str(e)}"}
+
+
+@router.post(
+    "/heygen/streaming/stop",
+    summary="Stop a streaming avatar session",
+    description="Stop and close an active streaming avatar session.",
+)
+async def heygen_streaming_stop(
+    session_id: str = Body(..., description="Session ID to stop"),
+    _auth: bool = Depends(verify_admin_key),
+):
+    service = get_heygen_service()
+    try:
+        result = await service.streaming_stop(session_id=session_id)
+        return {"success": True, "data": result}
+    except HeyGenError as e:
+        logger.error(f"[HeyGen Streaming] Error stopping: {e}")
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        logger.exception(f"[HeyGen Streaming] Unexpected error: {e}")
+        return {"success": False, "error": f"Internal error: {str(e)}"}
+
+
+@router.post(
+    "/heygen/streaming/interrupt",
+    summary="Interrupt current speaking in a streaming session",
+    description="Interrupt the avatar's current speech in an active session.",
+)
+async def heygen_streaming_interrupt(
+    session_id: str = Body(..., description="Session ID to interrupt"),
+    _auth: bool = Depends(verify_admin_key),
+):
+    service = get_heygen_service()
+    try:
+        result = await service.streaming_interrupt(session_id=session_id)
+        return {"success": True, "data": result}
+    except HeyGenError as e:
+        logger.error(f"[HeyGen Streaming] Error interrupting: {e}")
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        logger.exception(f"[HeyGen Streaming] Unexpected error: {e}")
+        return {"success": False, "error": f"Internal error: {str(e)}"}

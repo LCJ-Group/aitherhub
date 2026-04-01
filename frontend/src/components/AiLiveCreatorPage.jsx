@@ -34,6 +34,7 @@ import aiLiveCreatorService from "../base/services/aiLiveCreatorService";
 import personaService from "../base/services/personaService";
 import LiveStreamPanel from "./LiveStreamPanel";
 import LivePreviewPlayer from "./LivePreviewPlayer";
+import HeyGenStreamingAvatar from "./HeyGenStreamingAvatar";
 
 /**
  * AI Live Creator Page — Full Livestream Studio
@@ -100,6 +101,8 @@ export default function AiLiveCreatorPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState(null);
   const [ttsInfo, setTtsInfo] = useState(null);
+  const [jobStartTime, setJobStartTime] = useState(null);
+  const [estimatedProgress, setEstimatedProgress] = useState(0);
 
   // ── Health ──
   const [health, setHealth] = useState(null);
@@ -162,9 +165,31 @@ export default function AiLiveCreatorPage() {
       try {
         const status = await aiLiveCreatorService.getStatus(currentJobId, currentEngine);
         setJobStatus(status);
+
+        // Calculate estimated progress based on elapsed time
+        if (["processing", "queued", "pending", "waiting"].includes(status.status) && jobStartTime) {
+          const elapsedSec = (Date.now() - jobStartTime) / 1000;
+          // Estimate: HeyGen typically takes 60-180s depending on text length
+          // Use TTS duration as hint: ~2x audio duration for video generation
+          const ttsDurationSec = ttsInfo?.duration_ms ? ttsInfo.duration_ms / 1000 : 60;
+          const estimatedTotalSec = Math.max(ttsDurationSec * 2.5, 60);
+          // Asymptotic progress: approaches 95% but never reaches 100% until completed
+          const rawProgress = Math.min(95, (elapsedSec / estimatedTotalSec) * 100);
+          // Smooth: use easeOutCubic for natural feel
+          const t = Math.min(elapsedSec / estimatedTotalSec, 1);
+          const eased = 1 - Math.pow(1 - t, 3);
+          const smoothProgress = Math.min(95, eased * 100);
+          setEstimatedProgress(Math.round(smoothProgress));
+        }
+
         if (["completed", "error", "failed"].includes(status.status)) {
           clearInterval(pollRef.current);
           pollRef.current = null;
+          if (status.status === "completed") {
+            setEstimatedProgress(100);
+          } else {
+            setEstimatedProgress(0);
+          }
           updateJobHistory(currentJobId, status);
           // Auto-play completed video in LivePreviewPlayer
           if (status.status === "completed" && status.video_url && window.__aitherhub_playVideo) {
@@ -184,7 +209,7 @@ export default function AiLiveCreatorPage() {
         pollRef.current = null;
       }
     };
-  }, [currentJobId, currentEngine]);
+  }, [currentJobId, currentEngine, jobStartTime, ttsInfo]);
 
   // ── Helpers ──
   const checkHealth = async () => {
@@ -428,6 +453,8 @@ export default function AiLiveCreatorPage() {
     setError(null);
     setJobStatus(null);
     setTtsInfo(null);
+    setJobStartTime(Date.now());
+    setEstimatedProgress(0);
 
     try {
       let result;
@@ -642,10 +669,10 @@ export default function AiLiveCreatorPage() {
     return map[s] || s || "Unknown";
   };
 
-  const isReadyText = engine === "heygen"
+  const isReadyText = (engine === "heygen" || engine === "realtime")
     ? selectedAvatarId && scriptText.trim()
     : portraitUrl && scriptText.trim() && !isUploadingPortrait;
-  const isReadyAudio = engine === "heygen"
+  const isReadyAudio = (engine === "heygen" || engine === "realtime")
     ? selectedAvatarId && audioUrl && !isUploadingAudio
     : portraitUrl && audioUrl && !isUploadingPortrait && !isUploadingAudio;
   const isReady = inputMode === "text" ? isReadyText : isReadyAudio;
@@ -780,55 +807,69 @@ export default function AiLiveCreatorPage() {
 
                 {/* Engine Selector (compact) */}
                 <div className="bg-gray-800/50 rounded-xl border border-gray-700/30 p-3">
-                  <div className="grid grid-cols-3 gap-2">
+                  <div className="grid grid-cols-4 gap-1.5">
                     <button
                       onClick={() => setEngine("heygen")}
-                      className={`p-2.5 rounded-lg border transition-all text-left ${
+                      className={`p-2 rounded-lg border transition-all text-left ${
                         engine === "heygen"
                           ? "border-amber-500/50 bg-amber-500/10"
                           : "border-gray-700/30 hover:border-gray-600"
                       }`}
                     >
-                      <div className="flex items-center gap-1.5 mb-1">
-                        <Crown className={`w-3.5 h-3.5 ${engine === "heygen" ? "text-amber-400" : "text-gray-500"}`} />
-                        <span className={`text-[10px] font-bold ${engine === "heygen" ? "text-amber-300" : "text-gray-400"}`}>HeyGen</span>
+                      <div className="flex items-center gap-1 mb-0.5">
+                        <Crown className={`w-3 h-3 ${engine === "heygen" ? "text-amber-400" : "text-gray-500"}`} />
+                        <span className={`text-[9px] font-bold ${engine === "heygen" ? "text-amber-300" : "text-gray-400"}`}>HeyGen</span>
                       </div>
-                      <p className="text-[8px] text-gray-500">Arcads級</p>
+                      <p className="text-[7px] text-gray-500">Arcads級</p>
+                    </button>
+                    <button
+                      onClick={() => setEngine("realtime")}
+                      className={`p-2 rounded-lg border transition-all text-left ${
+                        engine === "realtime"
+                          ? "border-green-500/50 bg-green-500/10"
+                          : "border-gray-700/30 hover:border-gray-600"
+                      }`}
+                    >
+                      <div className="flex items-center gap-1 mb-0.5">
+                        <Radio className={`w-3 h-3 ${engine === "realtime" ? "text-green-400" : "text-gray-500"}`} />
+                        <span className={`text-[9px] font-bold ${engine === "realtime" ? "text-green-300" : "text-gray-400"}`}>Realtime</span>
+                      </div>
+                      <p className="text-[7px] text-gray-500">リアルタイム</p>
                     </button>
                     <button
                       onClick={() => setEngine("imtalker")}
-                      className={`p-2.5 rounded-lg border transition-all text-left ${
+                      className={`p-2 rounded-lg border transition-all text-left ${
                         engine === "imtalker"
                           ? "border-purple-500/50 bg-purple-500/10"
                           : "border-gray-700/30 hover:border-gray-600"
                       }`}
                     >
-                      <div className="flex items-center gap-1.5 mb-1">
-                        <Sparkles className={`w-3.5 h-3.5 ${engine === "imtalker" ? "text-purple-400" : "text-gray-500"}`} />
-                        <span className={`text-[10px] font-bold ${engine === "imtalker" ? "text-purple-300" : "text-gray-400"}`}>Premium</span>
+                      <div className="flex items-center gap-1 mb-0.5">
+                        <Sparkles className={`w-3 h-3 ${engine === "imtalker" ? "text-purple-400" : "text-gray-500"}`} />
+                        <span className={`text-[9px] font-bold ${engine === "imtalker" ? "text-purple-300" : "text-gray-400"}`}>Premium</span>
                       </div>
-                      <p className="text-[8px] text-gray-500">フル表情</p>
+                      <p className="text-[7px] text-gray-500">フル表情</p>
                     </button>
                     <button
                       onClick={() => setEngine("musetalk")}
-                      className={`p-2.5 rounded-lg border transition-all text-left ${
+                      className={`p-2 rounded-lg border transition-all text-left ${
                         engine === "musetalk"
                           ? "border-blue-500/50 bg-blue-500/10"
                           : "border-gray-700/30 hover:border-gray-600"
                       }`}
                     >
-                      <div className="flex items-center gap-1.5 mb-1">
-                        <Zap className={`w-3.5 h-3.5 ${engine === "musetalk" ? "text-blue-400" : "text-gray-500"}`} />
-                        <span className={`text-[10px] font-bold ${engine === "musetalk" ? "text-blue-300" : "text-gray-400"}`}>Standard</span>
+                      <div className="flex items-center gap-1 mb-0.5">
+                        <Zap className={`w-3 h-3 ${engine === "musetalk" ? "text-blue-400" : "text-gray-500"}`} />
+                        <span className={`text-[9px] font-bold ${engine === "musetalk" ? "text-blue-300" : "text-gray-400"}`}>Standard</span>
                       </div>
-                      <p className="text-[8px] text-gray-500">リップシンク</p>
+                      <p className="text-[7px] text-gray-500">リップシンク</p>
                     </button>
                   </div>
                 </div>
 
                 {/* Portrait / Avatar Selection */}
-                {engine === "heygen" ? (
-                  /* ── HeyGen Avatar Selection Grid ── */
+                {(engine === "heygen" || engine === "realtime") ? (
+                  /* ── HeyGen Avatar Selection Grid (shared for HeyGen & Realtime) ── */
                   <div className="bg-gray-800/50 rounded-xl border border-amber-500/30 p-3">
                     <h4 className="text-[11px] font-medium text-amber-300 mb-2 flex items-center gap-1.5">
                       <Users className="w-3.5 h-3.5 text-amber-400" />
@@ -1008,7 +1049,23 @@ export default function AiLiveCreatorPage() {
                   </div>
                 )}
 
-                {/* Text Input (compact) */}
+                {/* Realtime Streaming Mode */}
+                {engine === "realtime" && (
+                  <HeyGenStreamingAvatar
+                    avatarId={selectedAvatarId}
+                    voiceId={selectedVoiceId}
+                    language={languageCode}
+                    onStreamReady={(stream) => {
+                      console.log('[Realtime] Stream ready, can connect to OBS');
+                    }}
+                    onError={(err) => {
+                      setError(err.message || 'Streaming error');
+                    }}
+                  />
+                )}
+
+                {/* Text Input (compact) - hidden in realtime mode */}
+                {engine !== "realtime" && (
                 <div className="bg-gray-800/50 rounded-xl border border-gray-700/30 p-3">
                   <h4 className="text-[11px] font-medium text-gray-400 mb-2 flex items-center gap-1.5">
                     <Type className="w-3.5 h-3.5 text-purple-400" />
@@ -1083,8 +1140,10 @@ export default function AiLiveCreatorPage() {
                     </select>
                   </div>
                 </div>
+                )}
 
-                {/* Generate Button */}
+                {/* Generate Button - hidden in realtime mode */}
+                {engine !== "realtime" && (
                 <button
                   onClick={handleGenerate}
                   disabled={!isReady || isSubmitting || isProcessing}
@@ -1110,6 +1169,7 @@ export default function AiLiveCreatorPage() {
                     <><Zap className="w-3.5 h-3.5" />Generate Video</>
                   )}
                 </button>
+                )}
 
                 {/* Job Status (compact) */}
                 {jobStatus && (
@@ -1229,7 +1289,7 @@ export default function AiLiveCreatorPage() {
               {/* Engine Selector */}
               <div className="bg-white rounded-xl border border-gray-200 p-4">
                 <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Animation Engine</h2>
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-4 gap-3">
                   <button
                     onClick={() => setEngine("heygen")}
                     className={`relative p-4 rounded-xl border-2 transition-all text-left ${
@@ -1241,15 +1301,34 @@ export default function AiLiveCreatorPage() {
                     <div className="flex items-center gap-2 mb-2">
                       <Crown className={`w-5 h-5 ${engine === "heygen" ? "text-amber-600" : "text-gray-400"}`} />
                       <span className={`text-sm font-bold ${engine === "heygen" ? "text-amber-700" : "text-gray-700"}`}>HeyGen</span>
-                      <span className="text-[9px] bg-gradient-to-r from-amber-500 to-orange-500 text-white px-1.5 py-0.5 rounded-full font-medium">BEST</span>
                     </div>
-                    <p className="text-[11px] text-gray-500 leading-relaxed">Arcads級の高品質。クラウドレンダリング。GPU不要。</p>
+                    <p className="text-[11px] text-gray-500 leading-relaxed">Arcads級の高品質。クラウドレンダリング。</p>
                     <div className="mt-2 flex flex-wrap gap-1">
                       <span className="text-[9px] bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded-full">Cloud</span>
-                      <span className="text-[9px] bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded-full">Arcads-level</span>
                       <span className="text-[9px] bg-green-100 text-green-600 px-1.5 py-0.5 rounded-full">No GPU</span>
                     </div>
                     {engine === "heygen" && <div className="absolute top-2 right-2"><CheckCircle className="w-5 h-5 text-amber-500" /></div>}
+                  </button>
+                  <button
+                    onClick={() => setEngine("realtime")}
+                    className={`relative p-4 rounded-xl border-2 transition-all text-left ${
+                      engine === "realtime"
+                        ? "border-green-500 bg-green-50/50 shadow-sm"
+                        : "border-gray-200 hover:border-gray-300 hover:bg-gray-50"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 mb-2">
+                      <Radio className={`w-5 h-5 ${engine === "realtime" ? "text-green-600" : "text-gray-400"}`} />
+                      <span className={`text-sm font-bold ${engine === "realtime" ? "text-green-700" : "text-gray-700"}`}>Realtime</span>
+                      <span className="text-[9px] bg-gradient-to-r from-green-500 to-emerald-500 text-white px-1.5 py-0.5 rounded-full font-medium">LIVE</span>
+                    </div>
+                    <p className="text-[11px] text-gray-500 leading-relaxed">リアルタイム。文字を打つと即座に嗋る。</p>
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      <span className="text-[9px] bg-green-100 text-green-600 px-1.5 py-0.5 rounded-full">WebRTC</span>
+                      <span className="text-[9px] bg-green-100 text-green-600 px-1.5 py-0.5 rounded-full">Instant</span>
+                      <span className="text-[9px] bg-green-100 text-green-600 px-1.5 py-0.5 rounded-full">No GPU</span>
+                    </div>
+                    {engine === "realtime" && <div className="absolute top-2 right-2"><CheckCircle className="w-5 h-5 text-green-500" /></div>}
                   </button>
                   <button
                     onClick={() => setEngine("imtalker")}
