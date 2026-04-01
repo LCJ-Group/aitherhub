@@ -1038,6 +1038,10 @@ class VideoService extends BaseApiService {
   async getEventScores(videoId) {
     try {
       const response = await this.get(`/api/v1/videos/${videoId}/event-scores`);
+      // API returns { model_version, score_source, scores: [...] }
+      if (response?.scores && Array.isArray(response.scores)) {
+        return response.scores;
+      }
       return Array.isArray(response) ? response : [];
     } catch (error) {
       console.warn('[VideoService] getEventScores failed:', error);

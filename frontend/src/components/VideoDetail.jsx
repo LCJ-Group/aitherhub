@@ -264,7 +264,9 @@ export default function VideoDetail({ videoData, editorParams }) {
     };
   }, [videoData?.id]);
 
-  // ===== Auto-generate clips for all phases on video load =====
+  // ===== Auto-generate clips for RECOMMENDED phases only =====
+  // Only generates clips for phases that are likely to contain "selling scenes"
+  // (product demos, price mentions, CTAs, etc.) and filters out greetings/chitchat.
   const autoClipTriggeredRef = useRef(false);
   useEffect(() => {
     if (!videoData?.id || !videoData?.reports_1?.length) return;
@@ -274,17 +276,122 @@ export default function VideoDetail({ videoData, editorParams }) {
     autoClipTriggeredRef.current = true;
 
     const CONCURRENCY = 2; // Max parallel clip generations
+    const MAX_AUTO_CLIPS = 10; // Maximum auto-generated clips
+
+    // ── Greeting/chitchat detection patterns ──
+    const GREETING_PATTERNS = [
+      /^おはよう/i, /^こんにちは/i, /^こんばんは/i,
+      /よろしくお願い/i, /ありがとうございます/i,
+      /お疲れ様/i, /お待たせ/i, /いらっしゃいませ/i,
+      /^はじめまして/i, /ご視聴ありがとう/i,
+      /コメントありがとう/i, /来てくれてありがとう/i,
+      /参加ありがとう/i, /フォローありがとう/i,
+    ];
+    const CHITCHAT_PATTERNS = [
+      /ご飯/i, /天気/i, /今日は何/i, /雑談/i,
+      /自己紹介/i, /最近どう/i, /休み/i,
+    ];
+    // ── Sales-relevant event types ──
+    const SALES_EVENT_TYPES = new Set([
+      'PRICE', 'CTA', 'URGENCY', 'SOCIAL_PROOF',
+      'DEMONSTRATION', 'OBJECTION', 'EDUCATION',
+    ]);
+    const LOW_VALUE_EVENT_TYPES = new Set([
+      'GREETING', 'CHAT', 'TRANSITION', 'CLOSING',
+    ]);
+    // ── Sales keyword patterns ──
+    const SALES_KEYWORD_PATTERNS = [
+      /円/i, /¥/i, /価格/i, /値段/i, /プライス/i,
+      /割引/i, /OFF/i, /セール/i, /半額/i, /お得/i, /特別価格/i,
+      /今だけ/i, /限定/i, /残り/i, /ラスト/i, /早い者勝ち/i,
+      /リンク/i, /カート/i, /タップ/i, /クリック/i, /購入/i, /買って/i,
+      /成分/i, /効果/i, /おすすめ/i, /人気/i, /使い方/i, /使用感/i,
+      /比較/i, /レビュー/i, /口コミ/i, /品質/i,
+      /在庫/i, /個限定/i, /セット/i, /特典/i,
+    ];
+
+    /**
+     * Score a phase for "sales relevance" (0-100).
+     * Higher = more likely to be a selling scene.
+     */
+    function scoreSalesRelevance(phase) {
+      const desc = phase.phase_description || phase.insight || '';
+      const tags = Array.isArray(phase.sales_psychology_tags)
+        ? phase.sales_psychology_tags
+        : [];
+      const ctaScore = Number(phase.cta_score) || 0;
+      const importance = Number(phase.csv_metrics?.importance_score) || 0;
+
+      let score = 0;
+
+      // ── Penalty: greeting/chitchat content ──
+      const isGreeting = GREETING_PATTERNS.some(p => p.test(desc));
+      const isChitchat = CHITCHAT_PATTERNS.some(p => p.test(desc));
+      if (isGreeting || isChitchat) {
+        score -= 30;
+      }
+
+      // ── Penalty: low-value event types ──
+      if (tags.some(t => LOW_VALUE_EVENT_TYPES.has(t))) {
+        score -= 20;
+      }
+
+      // ── Bonus: sales-relevant event types ──
+      if (tags.some(t => SALES_EVENT_TYPES.has(t))) {
+        score += 25;
+      }
+
+      // ── Bonus: CTA score (0-5 → 0-20 pts) ──
+      score += (ctaScore / 5) * 20;
+
+      // ── Bonus: importance score (0-1 → 0-15 pts) ──
+      score += importance * 15;
+
+      // ── Bonus: sales keywords in description ──
+      let kwMatches = 0;
+      for (const pat of SALES_KEYWORD_PATTERNS) {
+        if (pat.test(desc)) kwMatches++;
+      }
+      score += Math.min(kwMatches * 5, 20); // max 20 pts from keywords
+
+      // ── Bonus: description length (longer = more substance) ──
+      if (desc.length > 100) score += 5;
+      if (desc.length > 200) score += 5;
+
+      // ── Bonus: has CSV metrics (GMV, orders, clicks) ──
+      const gmv = Number(phase.csv_metrics?.gmv) || 0;
+      const orders = Number(phase.csv_metrics?.order_count) || 0;
+      const clicks = Number(phase.csv_metrics?.product_clicks) || 0;
+      if (gmv > 0) score += 15;
+      if (orders > 0) score += 10;
+      if (clicks > 0) score += 5;
+
+      return score;
+    }
 
     (async () => {
       try {
         // Get current clipStates snapshot (already loaded)
         const currentStates = { ...clipStates };
 
-        // Collect phases that need clip generation
-        const phasesToGenerate = [];
+        // Also try to use event-scores from API for better scoring
+        let apiScores = {};
+        try {
+          const scores = await VideoService.getEventScores(videoData.id);
+          if (Array.isArray(scores)) {
+            for (const s of scores) {
+              apiScores[s.phase_index] = s;
+            }
+          }
+        } catch (_e) {
+          console.warn('[AutoClipGen] Could not load event scores, using local scoring');
+        }
+
+        // Score and filter phases
+        const scoredPhases = [];
         for (let i = 0; i < videoData.reports_1.length; i++) {
           const phase = videoData.reports_1[i];
-          const phaseIndex = i; // array index is used as phaseIndex
+          const phaseIndex = i;
           const existing = currentStates[phaseIndex];
 
           // Skip if already completed, processing, or requesting
@@ -300,18 +407,41 @@ export default function VideoDetail({ videoData, editorParams }) {
           const timeEnd = Number(phase.time_end);
           if (isNaN(timeStart) || isNaN(timeEnd)) continue;
 
-          // Skip very short phases (< 3 seconds)
-          if (timeEnd - timeStart < 3) continue;
+          // Skip very short phases (< 5 seconds) - too short for useful clips
+          if (timeEnd - timeStart < 5) continue;
 
-          phasesToGenerate.push({ phaseIndex, timeStart, timeEnd });
+          // Calculate local sales relevance score
+          let relevanceScore = scoreSalesRelevance(phase);
+
+          // Boost with API event scores if available
+          const apiScore = apiScores[phase.phase_index ?? i];
+          if (apiScore) {
+            // API score_combined is 0-1, scale to 0-30 pts
+            relevanceScore += (apiScore.score_combined || 0) * 30;
+          }
+
+          scoredPhases.push({ phaseIndex, timeStart, timeEnd, relevanceScore, phase });
         }
 
+        // Filter: only phases with positive relevance score
+        const qualifiedPhases = scoredPhases.filter(p => p.relevanceScore > 0);
+
+        // Sort by relevance score (highest first) and take top N
+        qualifiedPhases.sort((a, b) => b.relevanceScore - a.relevanceScore);
+        const phasesToGenerate = qualifiedPhases.slice(0, MAX_AUTO_CLIPS);
+
         if (phasesToGenerate.length === 0) {
-          console.log('[AutoClipGen] All clips already generated or in progress');
+          console.log('[AutoClipGen] No sales-relevant phases found for auto-generation');
           return;
         }
 
-        console.log(`[AutoClipGen] Starting auto-generation for ${phasesToGenerate.length} phases (concurrency=${CONCURRENCY})`);
+        // Sort back by time order for sequential processing
+        phasesToGenerate.sort((a, b) => a.timeStart - b.timeStart);
+
+        console.log(`[AutoClipGen] Auto-generating ${phasesToGenerate.length} sales-relevant clips (from ${scoredPhases.length} total phases, filtered ${scoredPhases.length - qualifiedPhases.length} low-value phases)`);
+        phasesToGenerate.forEach(p => {
+          console.log(`  [AutoClipGen] Phase ${p.phaseIndex}: score=${p.relevanceScore.toFixed(1)}, time=${p.timeStart.toFixed(0)}-${p.timeEnd.toFixed(0)}s`);
+        });
 
         // Process in batches with concurrency limit
         for (let i = 0; i < phasesToGenerate.length; i += CONCURRENCY) {
@@ -327,7 +457,7 @@ export default function VideoDetail({ videoData, editorParams }) {
           }
         }
 
-        console.log('[AutoClipGen] All clip generation requests dispatched');
+        console.log('[AutoClipGen] All sales-relevant clip generation requests dispatched');
       } catch (err) {
         console.warn('[AutoClipGen] Auto clip generation error:', err);
       }
