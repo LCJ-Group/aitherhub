@@ -59,7 +59,7 @@ class HeyGenService:
         self._avatar_cache: Dict[str, str] = {}  # portrait_url → talking_photo_id
         self._avatars_list_cache: Optional[list] = None
         self._avatars_list_cache_time: float = 0
-        self._AVATARS_CACHE_TTL: int = 300  # 5 minutes
+        self._AVATARS_CACHE_TTL: int = 1800  # 30 minutes
         if not self.api_key:
             logger.warning(
                 "HEYGEN_API_KEY not set — HeyGen video generation will not work. "
@@ -248,7 +248,7 @@ class HeyGenService:
             logger.info(f"[HeyGen] Returning cached avatar list ({len(self._avatars_list_cache)} avatars)")
             avatars = self._avatars_list_cache
         else:
-            async with httpx.AsyncClient(timeout=120) as client:
+            async with httpx.AsyncClient(timeout=180) as client:
                 resp = await client.get(
                     f"{self.base_url}/v2/avatars",
                     headers=self._headers,
@@ -532,6 +532,24 @@ class HeyGenService:
                 "api_key_set": bool(self.api_key),
                 "error": str(e),
             }
+
+
+    async def prefetch_avatars(self) -> None:
+        """Pre-fetch avatar list on startup to warm the cache.
+        
+        HeyGen API v2/avatars is very slow on first call (~120s).
+        By pre-fetching during startup, subsequent requests from
+        the frontend will hit the cache and respond in <2s.
+        """
+        if not self.api_key:
+            logger.info("[HeyGen] Skipping avatar prefetch: no API key")
+            return
+        try:
+            logger.info("[HeyGen] Prefetching avatar list (this may take 60-120s)...")
+            avatars = await self.list_avatars(custom_only=False)
+            logger.info(f"[HeyGen] Prefetch complete: {len(avatars)} avatars cached")
+        except Exception as e:
+            logger.warning(f"[HeyGen] Prefetch failed (non-fatal): {e}")
 
 
 # ──────────────────────────────────────────────

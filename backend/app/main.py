@@ -612,6 +612,29 @@ async def ensure_persona_tables():
 
 
 @app.on_event("startup")
+async def prefetch_heygen_avatars():
+    """Pre-fetch HeyGen avatar list to warm the cache.
+    
+    HeyGen API v2/avatars is very slow on first call (~120s).
+    By pre-fetching during startup in the background, the first
+    frontend request will hit the cache and respond instantly.
+    """
+    import asyncio as _asyncio
+
+    async def _do_prefetch():
+        try:
+            from app.services.heygen_service import get_heygen_service
+            heygen = get_heygen_service()
+            await heygen.prefetch_avatars()
+        except Exception as e:
+            logger.warning(f"HeyGen avatar prefetch failed (non-fatal): {e}")
+
+    # Run in background so it doesn't block other startup tasks
+    _asyncio.create_task(_do_prefetch())
+    logger.info("HeyGen avatar prefetch task started in background")
+
+
+@app.on_event("startup")
 async def ensure_script_generations_table():
     """Ensure script_generations table exists for script scoring/learning."""
     try:

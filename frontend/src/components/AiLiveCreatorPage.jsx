@@ -229,11 +229,15 @@ export default function AiLiveCreatorPage() {
   };
 
   const loadHeygenAvatars = async (retryCount = 0) => {
-    const MAX_RETRIES = 3;
+    const MAX_RETRIES = 4;
     setLoadingAvatars(true);
     setAvatarError(null);
     try {
       // Backend filters to custom avatars only (custom_only=true) and caches results
+      // First call after server restart may take 60-120s (HeyGen API is slow)
+      if (retryCount === 0) {
+        setAvatarError('Loading avatars from HeyGen...');
+      }
       const res = await aiLiveCreatorService.heygenListAvatars(true);
       if (res.avatars && res.avatars.length > 0) {
         setHeygenAvatars(res.avatars);
@@ -248,13 +252,22 @@ export default function AiLiveCreatorPage() {
         const displayAvatars = (allRes.avatars || []).slice(0, 50);
         setHeygenAvatars(displayAvatars);
         if (displayAvatars.length > 0) setSelectedAvatarId(displayAvatars[0].avatar_id);
+      } else if (res.success === false && res.error) {
+        // Backend returned an error (e.g., HEYGEN_API_KEY not configured)
+        setAvatarError(res.error);
       }
     } catch (err) {
       console.error(`Failed to load HeyGen avatars (attempt ${retryCount + 1}/${MAX_RETRIES}):`, err);
+      const isTimeout = err?.code === 'ECONNABORTED' || err?.message?.includes('timeout');
       if (retryCount < MAX_RETRIES - 1) {
-        // Auto-retry with increasing delay (3s, 6s, 9s)
-        const delay = (retryCount + 1) * 3000;
-        setAvatarError(`Loading... retry in ${(delay / 1000).toFixed(0)}s`);
+        // Auto-retry with increasing delay
+        // Longer delay for timeouts since HeyGen API may need time to respond
+        const delay = isTimeout ? (retryCount + 1) * 10000 : (retryCount + 1) * 5000;
+        setAvatarError(
+          isTimeout
+            ? `HeyGen API is warming up... retry in ${(delay / 1000).toFixed(0)}s (${retryCount + 1}/${MAX_RETRIES})`
+            : `Loading... retry in ${(delay / 1000).toFixed(0)}s`
+        );
         await new Promise(r => setTimeout(r, delay));
         return loadHeygenAvatars(retryCount + 1);
       }
