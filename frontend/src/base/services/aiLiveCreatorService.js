@@ -401,6 +401,59 @@ class AiLiveCreatorService {
     );
     return res.data;
   }
+  // ── LiveAvatar Streaming (replaces HeyGen Streaming) ──────
+
+  /**
+   * List available LiveAvatar avatars (custom + public).
+   */
+  async liveAvatarListAvatars(includePublic = true) {
+    const res = await axios.get(
+      `${this.baseURL}/api/v1/digital-human/liveavatar/avatars`,
+      {
+        headers: this._headers(),
+        params: { include_public: includePublic },
+        timeout: 60000,
+      }
+    );
+    return res.data;
+  }
+
+  /**
+   * Start a LiveAvatar FULL Mode streaming session.
+   * Returns session_id and session_token for LiveKit connection.
+   * Text is sent via LiveKit data channel (not backend API).
+   */
+  async liveAvatarStreamingStart(params) {
+    const res = await axios.post(
+      `${this.baseURL}/api/v1/digital-human/liveavatar/streaming/start`,
+      params,
+      { headers: this._headers(), timeout: 60000 }
+    );
+    return res.data;
+  }
+
+  /**
+   * Stop a LiveAvatar streaming session.
+   */
+  async liveAvatarStreamingStop(params) {
+    const res = await axios.post(
+      `${this.baseURL}/api/v1/digital-human/liveavatar/streaming/stop`,
+      params,
+      { headers: this._headers(), timeout: 30000 }
+    );
+    return res.data;
+  }
+
+  /**
+   * LiveAvatar health check.
+   */
+  async liveAvatarHealth() {
+    const res = await axios.get(
+      `${this.baseURL}/api/v1/digital-human/liveavatar/health`,
+      { headers: this._headers(), timeout: 15000 }
+    );
+    return res.data;
+  }
 }
 
 const aiLiveCreatorService = new AiLiveCreatorService();

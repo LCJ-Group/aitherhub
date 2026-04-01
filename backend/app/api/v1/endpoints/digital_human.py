@@ -74,6 +74,11 @@ from app.services.heygen_service import (
     HeyGenError,
     get_heygen_service,
 )
+from app.services.liveavatar_service import (
+    LiveAvatarService,
+    LiveAvatarError,
+    get_liveavatar_service,
+)
 from app.services.hybrid_livestream_service import HybridLivestreamService
 from app.services.script_generator_service import (
     generate_liveroom_scripts,
@@ -4002,3 +4007,117 @@ async def heygen_streaming_interrupt(
     except Exception as e:
         logger.exception(f"[HeyGen Streaming] Unexpected error: {e}")
         return {"success": False, "error": f"Internal error: {str(e)}"}
+
+
+# ══════════════════════════════════════════════
+# LIVEAVATAR STREAMING (Real-time) - Replaces HeyGen Streaming
+# ══════════════════════════════════════════════
+
+@router.get(
+    "/liveavatar/avatars",
+    summary="List available LiveAvatar avatars",
+    description="List user's custom avatars and public avatars from LiveAvatar.",
+)
+async def liveavatar_list_avatars(
+    include_public: bool = Query(True, description="Include public avatars"),
+    _auth: bool = Depends(verify_admin_key),
+):
+    service = get_liveavatar_service()
+    try:
+        avatars = await service.list_avatars(include_public=include_public)
+        return {
+            "success": True,
+            "avatars": [
+                {
+                    "avatar_id": a.get("id", ""),
+                    "name": a.get("name", ""),
+                    "type": a.get("type", ""),
+                    "status": a.get("status", ""),
+                    "preview_url": a.get("preview_url", ""),
+                    "source": a.get("_source", "unknown"),
+                    "default_voice": a.get("default_voice"),
+                }
+                for a in avatars
+                if a.get("status") == "ACTIVE"
+            ],
+        }
+    except LiveAvatarError as e:
+        logger.error(f"[LiveAvatar] Error listing avatars: {e}")
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        logger.exception(f"[LiveAvatar] Unexpected error: {e}")
+        return {"success": False, "error": f"Internal error: {str(e)}"}
+
+
+@router.post(
+    "/liveavatar/streaming/start",
+    summary="Start a LiveAvatar streaming session (FULL Mode)",
+    description=(
+        "Create a LiveAvatar FULL Mode streaming session. "
+        "Returns session_id and session_token for LiveKit WebRTC connection. "
+        "Text is sent via LiveKit data channel from the frontend."
+    ),
+)
+async def liveavatar_streaming_start(
+    avatar_id: str = Body(..., description="LiveAvatar avatar UUID"),
+    language: str = Body("ja", description="Language code (e.g., ja, en)"),
+    persona_prompt: str = Body("", description="System prompt for avatar persona"),
+    voice_id: str = Body(None, description="Optional voice ID override"),
+    sandbox: bool = Body(False, description="Use sandbox mode (free, 1-min sessions)"),
+    _auth: bool = Depends(verify_admin_key),
+):
+    service = get_liveavatar_service()
+    try:
+        result = await service.create_session(
+            avatar_id=avatar_id,
+            language=language,
+            persona_prompt=persona_prompt,
+            voice_id=voice_id,
+            sandbox=sandbox,
+        )
+        return {
+            "success": True,
+            "session_id": result["session_id"],
+            "session_token": result["session_token"],
+            "sandbox": result.get("sandbox", False),
+        }
+    except LiveAvatarError as e:
+        logger.error(f"[LiveAvatar] Error starting session: {e}")
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        logger.exception(f"[LiveAvatar] Unexpected error: {e}")
+        return {"success": False, "error": f"Internal error: {str(e)}"}
+
+
+@router.post(
+    "/liveavatar/streaming/stop",
+    summary="Stop a LiveAvatar streaming session",
+    description="Stop and close an active LiveAvatar streaming session.",
+)
+async def liveavatar_streaming_stop(
+    session_id: str = Body(..., description="Session ID to stop"),
+    _auth: bool = Depends(verify_admin_key),
+):
+    service = get_liveavatar_service()
+    try:
+        result = await service.stop_session(session_id=session_id)
+        return {"success": True, "data": result}
+    except LiveAvatarError as e:
+        logger.error(f"[LiveAvatar] Error stopping: {e}")
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        logger.exception(f"[LiveAvatar] Unexpected error: {e}")
+        return {"success": False, "error": f"Internal error: {str(e)}"}
+
+
+@router.get(
+    "/liveavatar/health",
+    summary="LiveAvatar API health check",
+    description="Check LiveAvatar API connectivity and key validity.",
+)
+async def liveavatar_health(
+    _auth: bool = Depends(verify_admin_key),
+):
+    service = get_liveavatar_service()
+    result = await service.health_check()
+    return result

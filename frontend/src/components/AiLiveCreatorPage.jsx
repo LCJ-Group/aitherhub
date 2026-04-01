@@ -35,6 +35,7 @@ import personaService from "../base/services/personaService";
 import LiveStreamPanel from "./LiveStreamPanel";
 import LivePreviewPlayer from "./LivePreviewPlayer";
 import HeyGenStreamingAvatar from "./HeyGenStreamingAvatar";
+import LiveAvatarStreaming from "./LiveAvatarStreaming";
 
 /**
  * AI Live Creator Page — Full Livestream Studio
@@ -834,7 +835,7 @@ export default function AiLiveCreatorPage() {
                         <Radio className={`w-3 h-3 ${engine === "realtime" ? "text-green-400" : "text-gray-500"}`} />
                         <span className={`text-[9px] font-bold ${engine === "realtime" ? "text-green-300" : "text-gray-400"}`}>Realtime</span>
                       </div>
-                      <p className="text-[7px] text-gray-500">リアルタイム</p>
+                      <p className="text-[7px] text-gray-500">LiveAvatar リアルタイム</p>
                     </button>
                     <button
                       onClick={() => setEngine("imtalker")}
@@ -1049,17 +1050,19 @@ export default function AiLiveCreatorPage() {
                   </div>
                 )}
 
-                {/* Realtime Streaming Mode */}
+                {/* Realtime Streaming Mode - LiveAvatar (replaces HeyGen Streaming) */}
                 {engine === "realtime" && (
-                  <HeyGenStreamingAvatar
+                  <LiveAvatarStreaming
                     avatarId={selectedAvatarId}
-                    voiceId={selectedVoiceId}
                     language={languageCode}
+                    personaPrompt=""
+                    voiceId={selectedVoiceId}
+                    sandbox={false}
                     onStreamReady={(stream) => {
-                      console.log('[Realtime] Stream ready, can connect to OBS');
+                      console.log('[LiveAvatar] Stream ready, can connect to OBS');
                     }}
                     onError={(err) => {
-                      setError(err.message || 'Streaming error');
+                      setError(err.message || 'LiveAvatar streaming error');
                     }}
                   />
                 )}
