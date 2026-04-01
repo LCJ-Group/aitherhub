@@ -86,3 +86,9 @@ exec python -m gunicorn -k uvicorn.workers.UvicornWorker app.main:app \
     --access-logfile - \
     --error-logfile - \
     --keep-alive 120
+
+# Diagnostic: log the deploy state
+echo "[startup] Deploy diagnostics:"
+echo "[startup]   Files in /home/site/wwwroot: $(ls /home/site/wwwroot/ 2>/dev/null | wc -l)"
+echo "[startup]   antenv exists: $(test -d antenv && echo YES || echo NO)"
+echo "[startup]   antenv size: $(du -sh antenv 2>/dev/null | cut -f1 || echo N/A)"
