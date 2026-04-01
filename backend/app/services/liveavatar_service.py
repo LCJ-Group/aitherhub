@@ -21,10 +21,16 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 from typing import Any, Dict, List, Optional
 
 import httpx
+
+# UUID v4 regex pattern
+_UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
 
 logger = logging.getLogger(__name__)
 
@@ -191,10 +197,12 @@ class LiveAvatarService:
         if not self.api_key:
             raise LiveAvatarError("LIVEAVATAR_API_KEY not set")
 
-        # Use defaults if not specified
-        if not avatar_id:
+        # Use defaults if not specified or if not valid UUID format
+        if not avatar_id or not _UUID_RE.match(str(avatar_id)):
+            logger.info(f"[LiveAvatar] avatar_id '{avatar_id}' is empty or not UUID, using default: {DEFAULT_AVATAR_ID}")
             avatar_id = DEFAULT_AVATAR_ID
-        if not voice_id:
+        if not voice_id or not _UUID_RE.match(str(voice_id)):
+            logger.info(f"[LiveAvatar] voice_id '{voice_id}' is empty or not UUID, using default: {DEFAULT_VOICE_ID}")
             voice_id = DEFAULT_VOICE_ID
 
         try:
