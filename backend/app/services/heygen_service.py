@@ -57,6 +57,9 @@ class HeyGenService:
         self.base_url = HEYGEN_BASE_URL
         self.upload_url = HEYGEN_UPLOAD_URL
         self._avatar_cache: Dict[str, str] = {}  # portrait_url → talking_photo_id
+        self._avatars_list_cache: Optional[list] = None
+        self._avatars_list_cache_time: float = 0
+        self._AVATARS_CACHE_TTL: int = 300  # 5 minutes
         if not self.api_key:
             logger.warning(
                 "HEYGEN_API_KEY not set — HeyGen video generation will not work. "
@@ -232,16 +235,40 @@ class HeyGenService:
     # ──────────────────────────────────────────
     # Avatar List (Digital Twin / Photo Avatar)
     # ──────────────────────────────────────────
-    async def list_avatars(self) -> list:
-        """List all avatars (including Digital Twins and Photo Avatars)."""
-        async with httpx.AsyncClient(timeout=120) as client:
-            resp = await client.get(
-                f"{self.base_url}/v2/avatars",
-                headers=self._headers,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        return data.get("data", {}).get("avatars", [])
+    async def list_avatars(self, custom_only: bool = False) -> list:
+        """List all avatars (including Digital Twins and Photo Avatars).
+
+        Args:
+            custom_only: If True, return only user-created/custom avatars
+                         (filters by known name patterns like kg, ryu, kga, okuya).
+                         This dramatically reduces response size from ~550KB to ~20KB.
+        """
+        now = time.time()
+        if self._avatars_list_cache and (now - self._avatars_list_cache_time) < self._AVATARS_CACHE_TTL:
+            logger.info(f"[HeyGen] Returning cached avatar list ({len(self._avatars_list_cache)} avatars)")
+            avatars = self._avatars_list_cache
+        else:
+            async with httpx.AsyncClient(timeout=120) as client:
+                resp = await client.get(
+                    f"{self.base_url}/v2/avatars",
+                    headers=self._headers,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            avatars = data.get("data", {}).get("avatars", [])
+            self._avatars_list_cache = avatars
+            self._avatars_list_cache_time = now
+            logger.info(f"[HeyGen] Fetched and cached {len(avatars)} avatars from HeyGen API")
+
+        if custom_only:
+            CUSTOM_KEYWORDS = ['kg', 'ryu', 'kga', 'okuya']
+            filtered = [
+                a for a in avatars
+                if any(kw in (a.get('avatar_name') or '').lower() for kw in CUSTOM_KEYWORDS)
+            ]
+            logger.info(f"[HeyGen] Filtered to {len(filtered)} custom avatars")
+            return filtered
+        return avatars
 
     async def list_avatar_groups(self) -> list:
         """List all avatar groups (Photo Avatar Groups like 'kg')."""

@@ -143,10 +143,10 @@ class AiLiveCreatorService {
     return res.data;
   }
 
-  async heygenListAvatars() {
+  async heygenListAvatars(customOnly = true) {
     const res = await axios.get(
       `${this.baseURL}/api/v1/digital-human/heygen/avatars`,
-      { headers: this._headers(), timeout: 30000 }
+      { headers: this._headers(), timeout: 60000, params: { custom_only: customOnly } }
     );
     return res.data;
   }

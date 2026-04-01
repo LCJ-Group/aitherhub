@@ -233,21 +233,21 @@ export default function AiLiveCreatorPage() {
     setLoadingAvatars(true);
     setAvatarError(null);
     try {
-      const res = await aiLiveCreatorService.heygenListAvatars();
-      if (res.avatars) {
-        // Filter to show only custom avatars (kg and other user-created ones)
-        const customAvatars = res.avatars.filter(a => {
-          const name = (a.avatar_name || '').toLowerCase();
-          return name.includes('kg') || name.includes('ryu') || name.includes('okuya');
-        });
-        // If no custom found, show all
-        const displayAvatars = customAvatars.length > 0 ? customAvatars : res.avatars.slice(0, 50);
-        setHeygenAvatars(displayAvatars);
+      // Backend filters to custom avatars only (custom_only=true) and caches results
+      const res = await aiLiveCreatorService.heygenListAvatars(true);
+      if (res.avatars && res.avatars.length > 0) {
+        setHeygenAvatars(res.avatars);
         setAvatarError(null);
-        // Default to first kg avatar
-        const kgAvatar = displayAvatars.find(a => (a.avatar_name || '').toLowerCase().trim() === 'kg');
+        // Default to first 'kg' avatar if available
+        const kgAvatar = res.avatars.find(a => (a.avatar_name || '').toLowerCase().trim() === 'kg');
         if (kgAvatar) setSelectedAvatarId(kgAvatar.avatar_id);
-        else if (displayAvatars.length > 0) setSelectedAvatarId(displayAvatars[0].avatar_id);
+        else setSelectedAvatarId(res.avatars[0].avatar_id);
+      } else if (res.avatars && res.avatars.length === 0) {
+        // No custom avatars found - try fetching all avatars
+        const allRes = await aiLiveCreatorService.heygenListAvatars(false);
+        const displayAvatars = (allRes.avatars || []).slice(0, 50);
+        setHeygenAvatars(displayAvatars);
+        if (displayAvatars.length > 0) setSelectedAvatarId(displayAvatars[0].avatar_id);
       }
     } catch (err) {
       console.error(`Failed to load HeyGen avatars (attempt ${retryCount + 1}/${MAX_RETRIES}):`, err);

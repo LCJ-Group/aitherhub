@@ -37,7 +37,7 @@ import os
 import time
 from typing import Optional
 
-from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Header, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Header, Query, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
@@ -3653,14 +3653,14 @@ async def heygen_list_talking_photos(
     ),
 )
 async def heygen_list_avatars(
+    custom_only: bool = Query(False, description="If true, return only custom/user-created avatars (much faster response)"),
     _auth: bool = Depends(verify_admin_key),
 ):
     heygen = get_heygen_service()
     if not heygen.api_key:
         return {"success": False, "error": "HEYGEN_API_KEY not configured."}
-
     try:
-        avatars = await heygen.list_avatars()
+        avatars = await heygen.list_avatars(custom_only=custom_only)
         return {
             "success": True,
             "avatars": avatars,
