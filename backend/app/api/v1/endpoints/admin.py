@@ -806,7 +806,7 @@ async def retry_video(
             else:
                 raise HTTPException(status_code=400, detail=f"Invalid from_step: {from_step}. Valid: {valid_steps}")
         await db.execute(
-            text("UPDATE videos SET status = :status, step_progress = 0, worker_claimed_at = NULL, dequeue_count = 0 WHERE id = :vid"),
+            text("UPDATE videos SET status = :status, step_progress = 0, worker_claimed_at = NULL, dequeue_count = 0, updated_at = NOW() WHERE id = :vid"),
             {"vid": video_id, "status": resume_status},
         )
         await db.commit()
