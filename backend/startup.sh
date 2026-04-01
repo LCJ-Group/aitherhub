@@ -37,57 +37,70 @@ install_deps_background() {
 install_deps_background &
 
 # ── Set up Python environment ──
-# Dependencies are installed as flat packages in _pypackages/ (pip --target).
-# This avoids Kudu's PythonProjectOptimizer which crashes on "antenv" venv dirs.
-# We use PYTHONPATH to make them importable.
-
 echo "[startup] Setting up Python environment..."
+
+# Get the actual Python version
+PY_VER=$(python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "3.10")
+echo "[startup] Runtime Python version: $PY_VER"
 
 PACKAGES_FOUND=false
 
-# Check _pypackages first (new flat install approach)
+# Strategy 1: Check _pypackages (flat install - no Kudu interference)
 for PKG_PATH in "_pypackages" "/home/site/wwwroot/_pypackages"; do
     if [ -d "$PKG_PATH" ] && [ -f "$PKG_PATH/fastapi/__init__.py" ]; then
         echo "[startup] Found _pypackages at: $PKG_PATH"
         export PYTHONPATH="$PKG_PATH:${PYTHONPATH:-}"
-        echo "[startup] PYTHONPATH=$PYTHONPATH"
-
         if python -c "import fastapi; print(f'fastapi {fastapi.__version__}')" 2>/dev/null; then
-            echo "[startup] Package imports verified successfully"
+            echo "[startup] _pypackages verified successfully"
             PACKAGES_FOUND=true
             break
-        else
-            echo "[startup] Import failed with this path, trying next..."
-            unset PYTHONPATH
         fi
+        echo "[startup] _pypackages import failed, trying next..."
+        unset PYTHONPATH
     fi
 done
 
-# Fallback: check antenv (legacy venv approach)
+# Strategy 2: Check antenv with MATCHING python version first, then any version
 if [ "$PACKAGES_FOUND" = "false" ]; then
     for VENV_PATH in "antenv" "/home/site/wwwroot/antenv"; do
-        SITE_PACKAGES=$(find "$VENV_PATH/lib" -name "site-packages" -type d 2>/dev/null | head -1)
-        if [ -n "$SITE_PACKAGES" ]; then
-            echo "[startup] Found legacy antenv at: $SITE_PACKAGES"
-            export PYTHONPATH="$SITE_PACKAGES:${PYTHONPATH:-}"
-
+        # First try matching version
+        SP="$VENV_PATH/lib/python$PY_VER/site-packages"
+        if [ -d "$SP" ] && [ -f "$SP/fastapi/__init__.py" ]; then
+            echo "[startup] Found matching antenv: $SP"
+            export PYTHONPATH="$SP:${PYTHONPATH:-}"
             if python -c "import fastapi; print(f'fastapi {fastapi.__version__}')" 2>/dev/null; then
-                echo "[startup] Package imports verified successfully (legacy antenv)"
+                echo "[startup] antenv packages verified (matching version)"
                 PACKAGES_FOUND=true
                 break
-            else
+            fi
+            unset PYTHONPATH
+        fi
+        # Then try any version (cross-version compatibility)
+        for PY_DIR in "$VENV_PATH"/lib/python3.*; do
+            SP="$PY_DIR/site-packages"
+            if [ -d "$SP" ] && [ -f "$SP/fastapi/__init__.py" ]; then
+                echo "[startup] Found cross-version antenv: $SP"
+                export PYTHONPATH="$SP:${PYTHONPATH:-}"
+                if python -c "import fastapi; print(f'fastapi {fastapi.__version__}')" 2>/dev/null; then
+                    echo "[startup] antenv packages verified (cross-version)"
+                    PACKAGES_FOUND=true
+                    break 2
+                fi
+                echo "[startup] Cross-version import failed"
                 unset PYTHONPATH
             fi
-        fi
+        done
     done
 fi
 
-# Last resort: pip install
+# Strategy 3: pip install (last resort)
 if [ "$PACKAGES_FOUND" = "false" ]; then
     echo "[startup] WARNING: No pre-built packages found"
-    echo "[startup] Falling back to pip install (this may take several minutes)..."
-    pip install --no-cache-dir -r requirements.txt 2>&1 | tail -10
+    echo "[startup] Running pip install (this may take 10-15 minutes)..."
+    echo "[startup] Container timeout is 1800s, so this should complete in time."
+    pip install --no-cache-dir -r requirements.txt 2>&1 | tail -20
     pip install --no-cache-dir gunicorn 2>&1 | tail -3
+    echo "[startup] pip install completed"
 fi
 
 echo "[startup] Final Python check:"
