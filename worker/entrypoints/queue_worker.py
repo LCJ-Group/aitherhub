@@ -247,6 +247,32 @@ def visibility_renewal_loop():
 # DB Status Helpers (using shared.db)
 # =============================================================================
 
+def _is_video_retried(video_id: str) -> bool:
+    """Check if a video was retried (DB dequeue_count reset to 0 and status
+    is not ERROR).  Used to detect stale queue messages that should be
+    silently discarded instead of triggering POISON_MAX_RETRY."""
+    try:
+        from shared.db.session import get_session, run_sync
+        from sqlalchemy import text
+
+        result = {"retried": False}
+
+        async def _check():
+            async with get_session() as session:
+                row = (await session.execute(
+                    text("SELECT status, dequeue_count FROM videos WHERE id = :vid"),
+                    {"vid": video_id},
+                )).first()
+                if row and row.dequeue_count == 0 and row.status != "ERROR":
+                    result["retried"] = True
+
+        run_sync(_check())
+        return result["retried"]
+    except Exception as e:
+        print(f"[worker] _is_video_retried check failed: {e}")
+        return False  # fail-safe: treat as not retried
+
+
 def update_video_status_to_error(video_id: str, error_code: str = "POISON_MAX_RETRY"):
     """Mark a video as ERROR in the database and set last_error_code."""
     try:
@@ -1030,6 +1056,16 @@ def poll_and_process(executor: ThreadPoolExecutor):
             # --- Dead Letter Queue ---
             if hasattr(msg, "dequeue_count") and msg.dequeue_count is not None:
                 if msg.dequeue_count >= MAX_DEQUEUE_COUNT:
+                    # Check if this video was already retried via admin API
+                    # (retry-video resets DB dequeue_count to 0 and enqueues a NEW message,
+                    #  but the OLD message with high dequeue_count remains in the queue)
+                    if job_type in ("video_analysis", None) and job_id != "unknown":
+                        if _is_video_retried(job_id):
+                            print(f"[worker] STALE msg: job={job_id} dequeue={msg.dequeue_count}"
+                                  f" but DB shows retry — deleting old message")
+                            delete_message_safe(msg.id, msg.pop_receipt)
+                            continue
+
                     reason = f"POISON_MAX_RETRY (dequeue_count={msg.dequeue_count})"
                     print(f"[worker] POISON: job={job_id}, dequeue={msg.dequeue_count}")
 
