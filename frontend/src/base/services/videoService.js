@@ -1491,7 +1491,7 @@ class VideoService extends BaseApiService {
       // Step 2: Poll for completion with progressive intervals
       // First 15s: poll every 2s (fast feedback)
       // After 15s: poll every 4s (reduce server load)
-      const maxAttempts = 180; // ~10 minutes max
+      const maxAttempts = 540; // ~30 minutes max (Azure B1 can be very slow)
       for (let i = 0; i < maxAttempts; i++) {
         const delay = i < 8 ? 2000 : 4000; // 2s for first 16s, then 4s
         await new Promise(r => setTimeout(r, delay));
@@ -1513,7 +1513,7 @@ class VideoService extends BaseApiService {
         }
         // else: queued, downloading, encoding, uploading - keep polling
       }
-      throw new Error('Export timed out after 10 minutes');
+      throw new Error('Export timed out after 30 minutes');
     } catch (error) {
       console.error('Failed to export subtitled clip:', error);
       throw error;

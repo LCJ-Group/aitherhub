@@ -1455,7 +1455,7 @@ def _update_job(job_id: str, **kwargs):
 
 
 # Maximum age (seconds) before a non-terminal job is considered stale
-_STALE_JOB_TIMEOUT = 600  # 10 minutes
+_STALE_JOB_TIMEOUT = 3900  # 65 minutes (must be > FFMPEG_MAX_TIMEOUT=3600 + upload time)
 
 # ─── Export cache (avoid re-encoding identical exports) ────────────────────
 _EXPORT_CACHE_DIR = os.path.join(tempfile.gettempdir(), "aitherhub_export_cache")
@@ -1511,7 +1511,10 @@ async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, s
 
     _CDN_HOST = os.getenv("CDN_HOST", "https://cdn.aitherhub.com")
     _BLOB_HOST = f"https://{ACCOUNT_NAME}.blob.core.windows.net" if ACCOUNT_NAME else ""
-    FFMPEG_TIMEOUT = 600  # 10 minutes max for encoding (Azure B1 is very slow with ASS subtitle filter)
+    # Dynamic timeout: base 600s + 60s per minute of video (Azure B1 is very slow with ASS subtitle filter)
+    # Minimum 600s, maximum 3600s (1 hour)
+    FFMPEG_BASE_TIMEOUT = 600
+    FFMPEG_MAX_TIMEOUT = 3600
 
     tmp_dir = tempfile.mkdtemp(prefix="export_sub_")
     try:
@@ -1675,11 +1678,27 @@ async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, s
         vf_filter = f"ass='{ass_path_escaped}':fontsdir='{font_dir}'"
         logger.info(f"[export-job {job_id}] VF filter: {vf_filter}")
 
+        # If video is high-res (>1080p height or >1920p width), scale down to speed up encoding
+        scale_filter = None
+        if video_w > 1920 or video_h > 1920:
+            # Scale to max 1080p while maintaining aspect ratio
+            if video_w > video_h:
+                scale_filter = "scale=1920:-2"
+            else:
+                scale_filter = "scale=-2:1920"
+            logger.info(f"[export-job {job_id}] High-res video ({video_w}x{video_h}), adding scale filter: {scale_filter}")
+
+        # Combine filters: scale (if needed) + ASS subtitle
+        if scale_filter:
+            combined_vf = f"{scale_filter},{vf_filter}"
+        else:
+            combined_vf = vf_filter
+
         cmd = [
             "ffmpeg", "-y", "-hide_banner",
             "-progress", "pipe:1",  # output progress to stdout
             "-i", video_path,
-            "-vf", vf_filter,
+            "-vf", combined_vf,
             "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
             "-threads", "0",
             "-c:a", "copy",
@@ -1733,6 +1752,19 @@ async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, s
 
         progress_task = asyncio.create_task(_read_ffmpeg_progress())
 
+        # Calculate dynamic timeout based on source duration
+        if source_duration_us > 0:
+            source_duration_sec = source_duration_us / 1_000_000
+            # Base 600s + 60s per minute of video, capped at max
+            FFMPEG_TIMEOUT = min(
+                FFMPEG_MAX_TIMEOUT,
+                max(FFMPEG_BASE_TIMEOUT, int(FFMPEG_BASE_TIMEOUT + source_duration_sec))
+            )
+        else:
+            FFMPEG_TIMEOUT = FFMPEG_MAX_TIMEOUT  # Unknown duration: use max
+        logger.info(f"[export-job {job_id}] Dynamic ffmpeg timeout: {FFMPEG_TIMEOUT}s "
+                    f"(source duration: {source_duration_us/1_000_000:.1f}s)")
+
         try:
             # Read stderr in parallel (avoid pipe deadlock)
             stderr_task = asyncio.create_task(proc.stderr.read())
@@ -1745,7 +1777,9 @@ async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, s
             proc.kill()
             await proc.wait()
             logger.error(f"[export-job {job_id}] ffmpeg timed out after {FFMPEG_TIMEOUT}s")
-            _update_job(job_id, status="failed", error=f"Encoding timed out ({FFMPEG_TIMEOUT}s)")
+            _update_job(job_id, status="failed", error=f"Encoding timed out ({FFMPEG_TIMEOUT}s). "
+                        f"The video may be too long or complex for this server. "
+                        f"Try exporting a shorter clip.")
             return
 
         ffmpeg_stderr = stderr.decode(errors='replace')
