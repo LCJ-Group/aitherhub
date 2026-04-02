@@ -186,9 +186,20 @@ jobs:
             sudo systemctl stop simple-worker --force 2>/dev/null || true
             sudo systemctl kill -s SIGKILL simple-worker 2>/dev/null || true
             sleep 2
+            # Install/update encoding API service
+            if [ -f worker/systemd/aither-encoding-api.service ]; then
+              if [ ! -f /etc/systemd/system/aither-encoding-api.service ] || \
+                 ! diff -q worker/systemd/aither-encoding-api.service /etc/systemd/system/aither-encoding-api.service >/dev/null 2>&1; then
+                echo "Installing/updating encoding API service..."
+                sudo cp worker/systemd/aither-encoding-api.service /etc/systemd/system/
+                sudo systemctl daemon-reload
+                sudo systemctl enable aither-encoding-api
+              fi
+            fi
             echo "Starting workers..."
             sudo systemctl start aither-worker 2>/dev/null || true
             sudo systemctl start simple-worker 2>/dev/null || true
+            sudo systemctl restart aither-encoding-api 2>/dev/null || true
             sleep 5
 
             for i in 1 2 3; do
@@ -237,13 +248,20 @@ jobs:
           ssh -i ~/.ssh/worker_key -o StrictHostKeyChecking=no ${SSH_USER}@${SSH_HOST} << 'HEALTHCHECK'
             AITHER=$(sudo systemctl is-active aither-worker 2>/dev/null || echo "inactive")
             SIMPLE=$(sudo systemctl is-active simple-worker 2>/dev/null || echo "inactive")
+            ENCODING=$(sudo systemctl is-active aither-encoding-api 2>/dev/null || echo "inactive")
             echo "aither-worker: ${AITHER}"
             echo "simple-worker: ${SIMPLE}"
-            if [ "${AITHER}" = "active" ] || [ "${SIMPLE}" = "active" ]; then
+            echo "aither-encoding-api: ${ENCODING}"
+            if [ "$AITHER" = "active" ] || [ "$SIMPLE" = "active" ]; then
               echo "SUCCESS: Worker is running"
             else
               echo "FAIL: No worker is active"
               exit 1
+            fi
+            if [ "$ENCODING" = "active" ]; then
+              echo "SUCCESS: Encoding API is running"
+            else
+              echo "WARNING: Encoding API is not active"
             fi
             echo "=== Waiting 15s for worker to process queue ==="
             sleep 15

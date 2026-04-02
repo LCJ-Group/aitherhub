@@ -20,11 +20,23 @@ def extract_attention_metrics(phase):
     start = phase["metric_timeseries"].get("start") or {}
     end   = phase["metric_timeseries"].get("end") or {}
 
-    start_view = start.get("viewer_count")
-    end_view   = end.get("viewer_count")
+    def _safe_num(v):
+        """Convert value to int/float safely, return None on failure."""
+        if v is None:
+            return None
+        try:
+            return int(v)
+        except (ValueError, TypeError):
+            try:
+                return float(v)
+            except (ValueError, TypeError):
+                return None
 
-    start_like = start.get("like_count")
-    end_like   = end.get("like_count")
+    start_view = _safe_num(start.get("viewer_count"))
+    end_view   = _safe_num(end.get("viewer_count"))
+
+    start_like = _safe_num(start.get("like_count"))
+    end_like   = _safe_num(end.get("like_count"))
 
     duration = (
         phase["time_range"]["end_sec"]

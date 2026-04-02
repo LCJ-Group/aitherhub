@@ -1499,9 +1499,15 @@ def _save_cached_export(cache_key: str, download_url: str, file_size: int):
 async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, style: str,
                           position_x: float, position_y: float, time_start: float,
                           split_segments: list = None):
-    """Background task: download clip, burn subtitles, upload result."""
+    """Background task: download clip, burn subtitles, upload result.
+    
+    First tries to offload encoding to the GPU VM (NVENC) for 10-50x faster
+    processing. Falls back to local ffmpeg (libx264) on App Service if the
+    GPU VM is unavailable.
+    """
     import shutil
     import functools
+    import httpx
     from azure.storage.blob import BlobServiceClient, ContentSettings
     from app.services.storage_service import (
         CONNECTION_STRING, ACCOUNT_NAME, CONTAINER_NAME,
@@ -1511,8 +1517,103 @@ async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, s
 
     _CDN_HOST = os.getenv("CDN_HOST", "https://cdn.aitherhub.com")
     _BLOB_HOST = f"https://{ACCOUNT_NAME}.blob.core.windows.net" if ACCOUNT_NAME else ""
-    # Dynamic timeout: base 600s + 60s per minute of video (Azure B1 is very slow with ASS subtitle filter)
-    # Minimum 600s, maximum 3600s (1 hour)
+
+    # ── GPU VM Offload: Try encoding on GPU VM first ──
+    GPU_ENCODING_URL = os.getenv("GPU_ENCODING_URL", "")  # e.g. http://10.0.0.4:8765
+    if GPU_ENCODING_URL:
+        try:
+            logger.info(f"[export-job {job_id}] Attempting GPU VM offload to {GPU_ENCODING_URL}")
+            _update_job(job_id, status="encoding", progress_pct=5)
+
+            # Ensure clip_url has SAS token for GPU VM to download
+            gpu_clip_url = clip_url
+            if "?" not in clip_url or "sig=" not in clip_url:
+                try:
+                    sas_url = generate_read_sas_from_url(clip_url, expires_hours=2)
+                    if sas_url:
+                        gpu_clip_url = sas_url
+                except Exception:
+                    pass
+
+            # Submit encoding job to GPU VM
+            encode_payload = {
+                "job_id": job_id,
+                "video_id": video_id,
+                "clip_url": gpu_clip_url,
+                "captions": [c.dict() if hasattr(c, 'dict') else c for c in captions],
+                "style": style,
+                "position_x": position_x,
+                "position_y": position_y,
+                "split_segments": split_segments,
+            }
+
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(f"{GPU_ENCODING_URL}/encode", json=encode_payload)
+                resp.raise_for_status()
+                gpu_job = resp.json()
+                logger.info(f"[export-job {job_id}] GPU job submitted: {gpu_job}")
+
+            # Poll GPU VM for completion (max 30 min)
+            GPU_POLL_INTERVAL = 3  # seconds
+            GPU_MAX_POLLS = 600    # 30 min
+            for poll_i in range(GPU_MAX_POLLS):
+                await asyncio.sleep(GPU_POLL_INTERVAL)
+                try:
+                    async with httpx.AsyncClient(timeout=10) as client:
+                        status_resp = await client.get(f"{GPU_ENCODING_URL}/encode/{job_id}")
+                        status_resp.raise_for_status()
+                        gpu_status = status_resp.json()
+                except Exception as poll_err:
+                    logger.warning(f"[export-job {job_id}] GPU poll error: {poll_err}")
+                    if poll_i > 5:  # Allow a few transient failures
+                        raise
+                    continue
+
+                # Forward progress to our job store
+                _update_job(
+                    job_id,
+                    status=gpu_status.get("status", "encoding"),
+                    progress_pct=gpu_status.get("progress_pct", 0),
+                )
+
+                if gpu_status.get("status") == "done":
+                    _update_job(
+                        job_id,
+                        status="done",
+                        download_url=gpu_status.get("download_url"),
+                        file_size=gpu_status.get("file_size"),
+                        progress_pct=100,
+                    )
+                    encoder = gpu_status.get("encoder", "nvenc")
+                    enc_time = gpu_status.get("encode_time_sec", 0)
+                    logger.info(
+                        f"[export-job {job_id}] GPU encoding complete! "
+                        f"encoder={encoder}, time={enc_time}s"
+                    )
+                    return  # Success — skip local encoding
+
+                if gpu_status.get("status") == "failed":
+                    gpu_error = gpu_status.get("error", "unknown")
+                    logger.warning(
+                        f"[export-job {job_id}] GPU encoding failed: {gpu_error}. "
+                        f"Falling back to local encoding."
+                    )
+                    break  # Fall through to local encoding
+
+            else:
+                logger.warning(
+                    f"[export-job {job_id}] GPU encoding timed out after "
+                    f"{GPU_MAX_POLLS * GPU_POLL_INTERVAL}s. Falling back to local."
+                )
+
+        except Exception as gpu_err:
+            logger.warning(
+                f"[export-job {job_id}] GPU VM offload failed: {gpu_err}. "
+                f"Falling back to local encoding."
+            )
+
+    # ── Local Encoding Fallback (App Service B1) ──
+    # Dynamic timeout: base 600s + 60s per minute of video
     FFMPEG_BASE_TIMEOUT = 600
     FFMPEG_MAX_TIMEOUT = 3600
 

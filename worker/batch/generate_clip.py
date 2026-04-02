@@ -231,7 +231,7 @@ def download_video(blob_url: str, dest_path: str):
         azcopy_path = os.getenv("AZCOPY_PATH") or "/usr/local/bin/azcopy"
         result = subprocess.run(
             [azcopy_path, "copy", blob_url, dest_path, "--overwrite=true"],
-            check=True, capture_output=True, text=True, timeout=600
+            check=True, capture_output=True, text=True, timeout=1800
         )
         logger.info("AzCopy download succeeded")
         return
@@ -346,7 +346,7 @@ def cut_segment(input_path: str, output_path: str, start_sec: float, end_sec: fl
             output_path,
         ]
         try:
-            subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=600)
+            subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=1800)
             success = True
             logger.info(f"[CUT_SEGMENT] Re-encode cut succeeded")
         except subprocess.CalledProcessError as e:
@@ -371,7 +371,7 @@ def cut_segment(input_path: str, output_path: str, start_sec: float, end_sec: fl
             output_path,
         ]
         try:
-            subprocess.run(cmd_fallback, check=True, capture_output=True, text=True, timeout=600)
+            subprocess.run(cmd_fallback, check=True, capture_output=True, text=True, timeout=1800)
             success = True
             logger.info(f"[CUT_SEGMENT] Final fallback cut succeeded")
         except Exception as e2:
@@ -1223,7 +1223,7 @@ def _concat_via_filter_complex(video_path: str, intervals: list, output_path: st
         output_path,
     ]
 
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
     if result.returncode != 0:
         logger.error(f"filter_complex concat stderr: {result.stderr[-500:]}")
         raise RuntimeError(f"filter_complex concat failed (rc={result.returncode})")
@@ -1531,7 +1531,7 @@ def create_vertical_clip(
     ])
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
         if result.returncode != 0:
             logger.error(f"FFmpeg stderr: {result.stderr[-500:]}")
             return create_vertical_clip_drawtext(input_path, output_path, segments, style,
@@ -1614,7 +1614,7 @@ def create_vertical_clip_drawtext(
     ]
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
         if result.returncode != 0:
             logger.error(f"drawtext FFmpeg stderr: {result.stderr[-500:]}")
             # Last resort: just crop without subtitles
@@ -1650,7 +1650,7 @@ def create_vertical_clip_nosub(
     ]
 
     try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=600)
+        subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=1800)
         logger.info("Vertical clip created (no subtitles)")
         return True
     except Exception as e:
@@ -2021,7 +2021,7 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
         ])
 
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
             if result.returncode != 0:
                 logger.error(f"FFmpeg nosub stderr: {result.stderr[-500:]}")
                 # Fallback to create_vertical_clip_nosub helper

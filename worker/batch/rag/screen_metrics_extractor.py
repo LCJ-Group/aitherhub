@@ -27,7 +27,7 @@ logger = logging.getLogger("screen_metrics_extractor")
 
 AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
 AZURE_OPENAI_KEY = os.getenv("AZURE_OPENAI_KEY")
-VISION_API_VERSION = os.getenv("VISION_API_VERSION", "2024-06-01")
+VISION_API_VERSION = os.getenv("VISION_API_VERSION") or os.getenv("GPT5_API_VERSION", "2025-04-01-preview")
 VISION_MODEL = os.getenv("VISION_MODEL", "gpt-4o")
 
 # Lazy-initialized client

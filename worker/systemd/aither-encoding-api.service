@@ -1,0 +1,20 @@
+[Unit]
+Description=AitherHub GPU Encoding API
+After=network.target aither-worker.service
+Wants=aither-worker.service
+
+[Service]
+Type=simple
+User=azureuser
+WorkingDirectory=/opt/aitherhub
+Environment=PYTHONPATH=/opt/aitherhub:/opt/aitherhub/worker/batch
+EnvironmentFile=/opt/aitherhub/.env
+ExecStart=/opt/aitherhub/.venv/bin/python -m uvicorn worker.encoding_api:app --host 0.0.0.0 --port 8765 --log-level info
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aither-encoding-api
+
+[Install]
+WantedBy=multi-user.target
