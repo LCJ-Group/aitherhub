@@ -259,10 +259,10 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
   const tlTrimEnd = isClipVideo ? trimEnd - origStart : trimEnd;
   const tlOrigStart = isClipVideo ? 0 : origStart;
   const tlOrigEnd = isClipVideo ? origEnd - origStart : origEnd;
-  // Timeline denominator: for clip videos, phase may be longer than clip_url duration
-  // (e.g., phase=157s but clip video=112s after previous trim).
-  // Use the larger of video duration and phase duration so everything fits.
-  const tlDuration = isClipVideo ? Math.max(duration, origEnd - origStart) : duration;
+  // Timeline denominator: use the actual video duration so waveform fills the full bar.
+  // Previously used Math.max(duration, origEnd - origStart) which caused the waveform
+  // to only fill partway when clip_url duration < phase duration.
+  const tlDuration = duration || (origEnd - origStart) || 1;
   const rawVideoUrl = useMemo(() => {
     return clip?.clip_url || videoData?.video_url || clip?.video_url || null;
   }, [videoData, clip]);
@@ -555,8 +555,22 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
 
   // ─── Video Handlers ────────────────────────────────────────────
   const onTimeUpdate = useCallback(() => {
-    if (videoRef.current) setCurrentTime(videoRef.current.currentTime);
-  }, []);
+    if (!videoRef.current) return;
+    const t = videoRef.current.currentTime;
+    setCurrentTime(t);
+    // Skip over deleted ranges during playback
+    if (deletedRanges.length > 0 && !videoRef.current.paused) {
+      for (const dr of deletedRanges) {
+        if (t >= dr.start && t < dr.end) {
+          // Jump to end of deleted range
+          videoRef.current.currentTime = dr.end;
+          setCurrentTime(dr.end);
+          console.log(`[Playback] Skipped deleted range ${dr.start.toFixed(1)}-${dr.end.toFixed(1)}`);
+          return;
+        }
+      }
+    }
+  }, [deletedRanges]);
 
   const onMeta = useCallback(() => {
     if (videoRef.current) {
@@ -679,7 +693,8 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
 
     // Draw disabled segments (legacy)
     if (splitPoints.length > 0) {
-      const allPoints = [0, ...splitPoints, duration];
+      const sortedSp = [...splitPoints].sort((a, b) => a - b);
+      const allPoints = [0, ...sortedSp, duration];
       for (let i = 0; i < allPoints.length - 1; i++) {
         if (disabledSegments.has(i)) {
           const x1 = (allPoints[i] / effDuration) * W;
@@ -726,7 +741,8 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
       }
       // Also check legacy disabledSegments
       if (!isDisabled && splitPoints.length > 0) {
-        const allPoints = [0, ...splitPoints, duration];
+        const sortedSp2 = [...splitPoints].sort((a, b) => a - b);
+        const allPoints = [0, ...sortedSp2, duration];
         for (let si = 0; si < allPoints.length - 1; si++) {
           if (disabledSegments.has(si) && timeSec >= allPoints[si] && timeSec < allPoints[si + 1]) {
             isDisabled = true;
@@ -793,7 +809,8 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
   // ─── Split segments helper ────────────────────────────────────
   const splitSegments = useMemo(() => {
     if (splitPoints.length === 0) return [];
-    const allPoints = [0, ...splitPoints, duration || 0];
+    const sorted = [...splitPoints].sort((a, b) => a - b);
+    const allPoints = [0, ...sorted, duration || 0];
     return allPoints.slice(0, -1).map((start, i) => ({
       index: i,
       start,
@@ -805,21 +822,32 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
   // ─── Delete segment (CapCut-style: completely remove from timeline) ──────
   const deleteSegment = useCallback((segIdx) => {
     if (segIdx === null || segIdx === undefined) return;
-    // Get current segments from splitPoints
-    const allPoints = [0, ...splitPoints.sort((a, b) => a - b), duration || 0];
-    if (segIdx < 0 || segIdx >= allPoints.length - 1) return;
+    // Get current segments from splitPoints (use spread to avoid mutating state)
+    const allPoints = [0, ...[...splitPoints].sort((a, b) => a - b), duration || 0];
+    console.log('[DeleteSeg] segIdx:', segIdx, 'allPoints:', allPoints, 'deletedRanges:', deletedRanges.length);
+    if (segIdx < 0 || segIdx >= allPoints.length - 1) {
+      console.log('[DeleteSeg] segIdx out of range');
+      return;
+    }
     const segStart = allPoints[segIdx];
     const segEnd = allPoints[segIdx + 1];
     
     // Check if already deleted
     const alreadyDeleted = deletedRanges.some(r => Math.abs(r.start - segStart) < 0.05 && Math.abs(r.end - segEnd) < 0.05);
-    if (alreadyDeleted) return;
+    if (alreadyDeleted) {
+      console.log('[DeleteSeg] Already deleted:', segStart, '-', segEnd);
+      return;
+    }
     
-    // Don't allow deleting ALL segments
+    // Don't allow deleting ALL segments - must keep at least 1
     const totalSegs = allPoints.length - 1;
     const deletedCount = deletedRanges.length;
-    if (deletedCount + 1 >= totalSegs) return; // Must keep at least 1 segment
+    if (deletedCount + 1 >= totalSegs) {
+      console.log('[DeleteSeg] Cannot delete all segments. total:', totalSegs, 'deleted:', deletedCount);
+      return;
+    }
     
+    console.log('[DeleteSeg] Deleting segment', segIdx, ':', segStart.toFixed(1), '-', segEnd.toFixed(1));
     // Record deleted range for export (keep splitPoints intact!)
     setDeletedRanges(prev => [...prev, { start: segStart, end: segEnd }]);
     
@@ -2534,6 +2562,10 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
               st = st - origStart;
               en = en - origStart;
             }
+            // Clamp to actual video duration to prevent overflow
+            if (st >= duration) return null;
+            en = Math.min(en, duration);
+            if (en <= st) return null;
             const sc = seg.viral_score ?? seg.hook_score ?? 0;
             return (
               <div
