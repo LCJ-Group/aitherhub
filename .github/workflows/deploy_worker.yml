@@ -8,6 +8,7 @@ on:
       - 'worker/**'
       - 'shared/**'
       - 'deploy/**'
+      - 'gpu_vm/**'
       - 'requirements.txt'
       - 'backend/app/services/**'
       - '.github/workflows/deploy_worker.yml'
@@ -187,11 +188,11 @@ jobs:
             sudo systemctl kill -s SIGKILL simple-worker 2>/dev/null || true
             sleep 2
             # Install/update encoding API service
-            if [ -f worker/systemd/aither-encoding-api.service ]; then
+            if [ -f gpu_vm/systemd/aither-encoding-api.service ]; then
               if [ ! -f /etc/systemd/system/aither-encoding-api.service ] || \
-                 ! diff -q worker/systemd/aither-encoding-api.service /etc/systemd/system/aither-encoding-api.service >/dev/null 2>&1; then
+                 ! diff -q gpu_vm/systemd/aither-encoding-api.service /etc/systemd/system/aither-encoding-api.service >/dev/null 2>&1; then
                 echo "Installing/updating encoding API service..."
-                sudo cp worker/systemd/aither-encoding-api.service /etc/systemd/system/
+                sudo cp gpu_vm/systemd/aither-encoding-api.service /etc/systemd/system/
                 sudo systemctl daemon-reload
                 sudo systemctl enable aither-encoding-api
               fi
