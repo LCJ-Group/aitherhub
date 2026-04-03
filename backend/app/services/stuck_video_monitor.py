@@ -32,9 +32,10 @@ STUCK_THRESHOLD_MINUTES = 60      # Minutes without update → considered stuck
                                    # during long video processing (9h+ videos have
                                    # slow FFmpeg steps that don't update DB frequently)
 MAX_AUTO_RETRIES = 5              # Max auto-requeue attempts per video (was 3)
-WORKER_GUARD_HOURS = 24           # Hours since worker_claimed_at to consider stale
-                                   # Raised from 2 to 24 to match WORKER_VIDEO_TIMEOUT
-                                   # (9h+ videos may take 17-33h to process)
+WORKER_GUARD_HOURS = 4            # Hours since worker_claimed_at to consider stale
+                                   # Reduced from 24 to 4 to detect deploy-interrupted
+                                   # videos faster. Even the longest videos (9h+) should
+                                   # complete within 4h on GPU-accelerated worker.
 NEVER_ENQUEUED_THRESHOLD_MINUTES = 10  # Minutes after creation to detect never-enqueued videos
 SAS_RETRY_COUNT = 3               # Number of retries for SAS URL generation
 SAS_RETRY_DELAY_SECONDS = 5       # Delay between SAS retries
@@ -382,6 +383,42 @@ async def _check_and_requeue_stuck_videos():
                     await _requeue_video(
                         db, row, video_id, old_status, current_retries,
                         f"Stuck at {old_status} for >{STUCK_THRESHOLD_MINUTES}min"
+                    )
+
+                # ── Part 1b: Deploy-interrupted videos ─────────────────────
+                # Videos that were interrupted by SIGTERM during deployment.
+                # These have last_error_code='DEPLOY_SIGTERM' and are NOT in ERROR status.
+                # They should be requeued immediately regardless of worker_guard.
+                sql_deploy_interrupted = text("""
+                    SELECT v.id, v.original_filename, v.status, v.user_id,
+                           v.updated_at, v.dequeue_count,
+                           v.worker_claimed_at,
+                           u.email as user_email
+                    FROM videos v
+                    LEFT JOIN users u ON v.user_id = u.id
+                    WHERE v.last_error_code = 'DEPLOY_SIGTERM'
+                      AND v.status NOT IN ('ERROR', 'completed')
+                      AND COALESCE(v.dequeue_count, 0) < :max_retries
+                    ORDER BY v.updated_at ASC
+                    LIMIT 10
+                """)
+                result_deploy = await db.execute(sql_deploy_interrupted, {
+                    "max_retries": MAX_AUTO_RETRIES,
+                })
+                deploy_interrupted = result_deploy.fetchall()
+
+                if deploy_interrupted:
+                    logger.info(
+                        f"[stuck-monitor] Found {len(deploy_interrupted)} deploy-interrupted video(s)"
+                    )
+
+                for row in deploy_interrupted:
+                    video_id = str(row.id)
+                    old_status = row.status
+                    current_retries = row.dequeue_count or 0
+                    await _requeue_video(
+                        db, row, video_id, old_status, current_retries,
+                        f"Deploy-interrupted (SIGTERM) at {old_status}"
                     )
 
                 # ── Part 2: Never-enqueued videos (batch upload failures) ────

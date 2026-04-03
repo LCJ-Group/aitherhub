@@ -176,17 +176,39 @@ jobs:
             echo "Dependencies OK"
 
             # ============================================================
-            # 5. RESTART WORKER
+            # 5. RESTART WORKER (graceful shutdown)
             # ============================================================
             echo ""
-            echo "=== Restarting worker ==="
-            # Force-kill first to avoid systemctl restart hanging (worker ignores SIGTERM)
-            echo "Stopping workers (force kill if needed)..."
-            sudo systemctl stop aither-worker --force 2>/dev/null || true
-            sudo systemctl kill -s SIGKILL aither-worker 2>/dev/null || true
-            sudo systemctl stop simple-worker --force 2>/dev/null || true
-            sudo systemctl kill -s SIGKILL simple-worker 2>/dev/null || true
-            sleep 2
+            echo "=== Restarting worker (graceful) ==="
+            # Send SIGTERM first and wait for active jobs to finish.
+            # The worker sets shutdown_requested=True on SIGTERM and waits
+            # for active subprocesses to complete before exiting.
+            echo "Sending SIGTERM to workers..."
+            sudo systemctl stop aither-worker 2>/dev/null || true
+            sudo systemctl stop simple-worker 2>/dev/null || true
+
+            # Wait up to 5 minutes for graceful shutdown
+            GRACE_TIMEOUT=300
+            GRACE_ELAPSED=0
+            while [ $GRACE_ELAPSED -lt $GRACE_TIMEOUT ]; do
+              AITHER_PID=$(systemctl show -p MainPID aither-worker 2>/dev/null | cut -d= -f2)
+              SIMPLE_PID=$(systemctl show -p MainPID simple-worker 2>/dev/null | cut -d= -f2)
+              if [ "${AITHER_PID:-0}" = "0" ] && [ "${SIMPLE_PID:-0}" = "0" ]; then
+                echo "Workers stopped gracefully after ${GRACE_ELAPSED}s"
+                break
+              fi
+              echo "Waiting for graceful shutdown... (${GRACE_ELAPSED}/${GRACE_TIMEOUT}s)"
+              sleep 10
+              GRACE_ELAPSED=$((GRACE_ELAPSED + 10))
+            done
+
+            # If still running after grace period, force kill
+            if [ $GRACE_ELAPSED -ge $GRACE_TIMEOUT ]; then
+              echo "Grace period expired, force killing..."
+              sudo systemctl kill -s SIGKILL aither-worker 2>/dev/null || true
+              sudo systemctl kill -s SIGKILL simple-worker 2>/dev/null || true
+              sleep 2
+            fi
             # Install/update encoding API service
             if [ -f gpu_vm/systemd/aither-encoding-api.service ]; then
               if [ ! -f /etc/systemd/system/aither-encoding-api.service ] || \

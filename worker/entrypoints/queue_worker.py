@@ -86,6 +86,10 @@ live_monitor_lock = Lock()
 # Graceful shutdown flag
 shutdown_requested = False
 
+# Track active subprocess PIDs for graceful shutdown
+_active_subprocesses: dict = {}  # {video_id: subprocess.Popen}
+_active_subprocesses_lock = threading.Lock()
+
 # Worker instance identifier
 WORKER_INSTANCE_ID = f"{socket.gethostname()}-{os.getpid()}"
 
@@ -205,6 +209,13 @@ def signal_handler(signum, frame):
     global shutdown_requested
     print(f"\n[worker] Received signal {signum}, shutting down gracefully...")
     shutdown_requested = True
+    # Do NOT kill subprocesses — let them finish naturally.
+    # The main loop will stop accepting new jobs, and executor.shutdown(wait=True)
+    # will wait for all active jobs to complete before exiting.
+    with _active_subprocesses_lock:
+        active_count = len(_active_subprocesses)
+    if active_count > 0:
+        print(f"[worker] Waiting for {active_count} active subprocess(es) to finish...")
 
 
 # =============================================================================
@@ -271,6 +282,47 @@ def _is_video_retried(video_id: str) -> bool:
     except Exception as e:
         print(f"[worker] _is_video_retried check failed: {e}")
         return False  # fail-safe: treat as not retried
+
+
+def _record_video_error_log(video_id: str, error_code: str, error_step: str,
+                           error_message: str, update_last_error: bool = True):
+    """Record an error to video_error_logs table for observability."""
+    try:
+        from shared.db.session import get_session, run_sync
+        from sqlalchemy import text
+        import traceback as _tb
+
+        async def _insert():
+            async with get_session() as session:
+                await session.execute(
+                    text(
+                        "INSERT INTO video_error_logs "
+                        "(video_id, error_code, error_step, error_message, error_detail, source, created_at) "
+                        "VALUES (:vid, :code, :step, :msg, :detail, :source, NOW())"
+                    ),
+                    {
+                        "vid": video_id,
+                        "code": error_code[:100],
+                        "step": error_step[:100],
+                        "msg": error_message[:2000],
+                        "detail": _tb.format_exc()[:5000],
+                        "source": "queue_worker",
+                    },
+                )
+                if update_last_error:
+                    await session.execute(
+                        text(
+                            "UPDATE videos SET last_error_code = :code, "
+                            "last_error_message = :msg, updated_at = NOW() "
+                            "WHERE id = :vid"
+                        ),
+                        {"code": error_code[:100], "msg": error_message[:500], "vid": video_id},
+                    )
+
+        run_sync(_insert())
+        print(f"[worker] Recorded error log for {video_id}: {error_code}")
+    except Exception as db_err:
+        print(f"[worker] Warning: Failed to record error log: {db_err}")
 
 
 def update_video_status_to_error(video_id: str, error_code: str = "POISON_MAX_RETRY"):
@@ -564,6 +616,9 @@ def _run_video_job(payload: dict) -> bool:
             env={**os.environ, "PYTHONPATH": f"{str(PROJECT_ROOT)}:{BATCH_DIR}"},
             start_new_session=True,
         )
+        # Track subprocess for graceful shutdown
+        with _active_subprocesses_lock:
+            _active_subprocesses[video_id] = proc
         try:
             proc.wait(timeout=WORKER_VIDEO_TIMEOUT)
         except subprocess.TimeoutExpired:
@@ -602,16 +657,42 @@ def _run_video_job(payload: dict) -> bool:
                 metrics.finish(status="skipped")
             return True
         else:
-            log_error_type(video_id, "video_analysis", "SUBPROCESS_FAIL", f"exit={proc.returncode}")
+            _err_detail = f"exit={proc.returncode}"
+            # Check if killed by SIGTERM (exit=-15) during deployment
+            _is_sigterm = (proc.returncode == -15 or proc.returncode == -signal.SIGTERM)
+            if _is_sigterm:
+                # SIGTERM during deployment: do NOT mark as ERROR.
+                # Leave status as-is so stuck_video_monitor can requeue it.
+                log_error_type(video_id, "video_analysis", "DEPLOY_SIGTERM", _err_detail)
+                _record_video_error_log(video_id, "DEPLOY_SIGTERM",
+                                        "INTERRUPTED",
+                                        f"process_video.py killed by SIGTERM (deployment restart). "
+                                        f"Will be auto-retried by stuck_video_monitor.")
+                print(f"[worker] Video {video_id} interrupted by SIGTERM — will be auto-retried")
+            else:
+                log_error_type(video_id, "video_analysis", "SUBPROCESS_FAIL", _err_detail)
+                _record_video_error_log(video_id, "SUBPROCESS_FAIL",
+                                        "STEP_0_EXTRACT_FRAMES",
+                                        f"process_video.py exited with code {proc.returncode}")
+                # Mark as ERROR for non-SIGTERM failures so they don't loop forever
+                update_video_status_to_error(video_id, error_code="SUBPROCESS_FAIL")
             if metrics:
-                metrics.finish(status="failed")
+                metrics.finish(status="interrupted" if _is_sigterm else "failed")
             return False
     except Exception as e:
-        log_error_type(video_id, "video_analysis", "UNKNOWN", f"EXC={type(e).__name__} {e}")
+        _err_detail = f"EXC={type(e).__name__} {e}"
+        log_error_type(video_id, "video_analysis", "UNKNOWN", _err_detail)
+        # Record to video_error_logs so admin can see the failure reason
+        _record_video_error_log(video_id, "SUBPROCESS_LAUNCH_FAIL",
+                                "PRE_LAUNCH",
+                                f"Failed to launch process_video.py: {type(e).__name__}: {e}")
         if metrics:
             metrics.finish(status="error")
         return False
     finally:
+        # Unregister subprocess tracking
+        with _active_subprocesses_lock:
+            _active_subprocesses.pop(video_id, None)
         # ── Task 2: Temp cleanup for video analysis ──
         try:
             from worker.recovery.temp_manager import JobTempDir
