@@ -219,21 +219,30 @@ jobs:
                 sudo systemctl enable aither-encoding-api
               fi
             fi
+            # Reset failure counters before starting (prevents StartLimitBurst lockout)
+            sudo systemctl reset-failed aither-worker 2>/dev/null || true
+            sudo systemctl reset-failed simple-worker 2>/dev/null || true
+
             echo "Starting workers..."
             sudo systemctl start aither-worker 2>/dev/null || true
             sudo systemctl start simple-worker 2>/dev/null || true
             sudo systemctl restart aither-encoding-api 2>/dev/null || true
-            sleep 5
+            sleep 10
 
-            for i in 1 2 3; do
+            for i in 1 2 3 4 5 6; do
               AITHER=$(sudo systemctl is-active aither-worker 2>/dev/null || echo "inactive")
               SIMPLE=$(sudo systemctl is-active simple-worker 2>/dev/null || echo "inactive")
               if [ "$AITHER" = "active" ] || [ "$SIMPLE" = "active" ]; then
                 echo "Worker is active (aither=$AITHER simple=$SIMPLE)"
                 break
               fi
-              echo "Attempt $i: waiting 5s..."
-              sleep 5
+              # Also accept 'activating' as the worker may still be initializing
+              if [ "$AITHER" = "activating" ] || [ "$SIMPLE" = "activating" ]; then
+                echo "Worker is activating (aither=$AITHER simple=$SIMPLE), waiting..."
+              else
+                echo "Attempt $i: workers not active yet (aither=$AITHER simple=$SIMPLE)"
+              fi
+              sleep 10
             done
 
             # ============================================================
@@ -275,10 +284,31 @@ jobs:
             echo "aither-worker: ${AITHER}"
             echo "simple-worker: ${SIMPLE}"
             echo "aither-encoding-api: ${ENCODING}"
+            # Wait for worker to finish activating
+            for HC_ATTEMPT in 1 2 3 4 5; do
+              AITHER=$(sudo systemctl is-active aither-worker 2>/dev/null || echo "inactive")
+              SIMPLE=$(sudo systemctl is-active simple-worker 2>/dev/null || echo "inactive")
+              if [ "$AITHER" = "active" ] || [ "$SIMPLE" = "active" ]; then
+                break
+              fi
+              if [ "$AITHER" = "activating" ] || [ "$SIMPLE" = "activating" ]; then
+                echo "Worker still activating, waiting 10s... (attempt $HC_ATTEMPT/5)"
+                sleep 10
+              else
+                break
+              fi
+            done
+            echo "aither-worker: ${AITHER}"
+            echo "simple-worker: ${SIMPLE}"
             if [ "$AITHER" = "active" ] || [ "$SIMPLE" = "active" ]; then
               echo "SUCCESS: Worker is running"
             else
               echo "FAIL: No worker is active"
+              # Show journal for debugging
+              echo "=== simple-worker journal (last 30 lines) ==="
+              sudo journalctl -u simple-worker --no-pager -n 30 2>&1 || true
+              echo "=== aither-worker journal (last 30 lines) ==="
+              sudo journalctl -u aither-worker --no-pager -n 30 2>&1 || true
               exit 1
             fi
             if [ "$ENCODING" = "active" ]; then
