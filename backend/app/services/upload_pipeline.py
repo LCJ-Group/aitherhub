@@ -332,6 +332,25 @@ class UploadPipelineService:
             _logger.error(f"[upload_pipeline] Step 3 FAILED: {exc}")
             await self._log_stage_event(db, video_id, upload_id, user_id, evt)
             await self._update_video_stage(db, video_id, UploadStage.DB_RECORD, UploadStage.SAS_GENERATE, str(exc))
+            # Mark enqueue_status as FAILED so stuck_video_monitor can detect
+            # and retry this video (Part 2: never-enqueued detection)
+            try:
+                vid_uuid = uuid_module.UUID(video_id)
+                await db.execute(
+                    update(Video).where(Video.id == vid_uuid).values(
+                        enqueue_status="FAILED",
+                        enqueue_error=f"SAS URL generation failed: {exc}"[:2000],
+                        last_error_code="SAS_GENERATION_FAILED",
+                        last_error_message=f"SAS URL generation failed after retries: {exc}"[:2000],
+                    )
+                )
+                await db.commit()
+            except Exception as db_err:
+                _logger.debug(f"[upload_pipeline] Could not mark enqueue_status: {db_err}")
+                try:
+                    await db.rollback()
+                except Exception:
+                    pass
             raise
 
         # ── Step 4: Build queue payload ───────────────────────────────────
@@ -375,9 +394,27 @@ class UploadPipelineService:
             _logger.error(f"[upload_pipeline] Step 4 FAILED: {exc}")
             await self._log_stage_event(db, video_id, upload_id, user_id, evt)
             await self._update_video_stage(db, video_id, UploadStage.SAS_GENERATE, UploadStage.QUEUE_BUILD, str(exc))
+            # Mark enqueue_status as FAILED so stuck_video_monitor can detect
+            try:
+                vid_uuid = uuid_module.UUID(video_id)
+                await db.execute(
+                    update(Video).where(Video.id == vid_uuid).values(
+                        enqueue_status="FAILED",
+                        enqueue_error=f"Queue payload build failed: {exc}"[:2000],
+                        last_error_code="QUEUE_BUILD_FAILED",
+                        last_error_message=f"Queue payload build failed: {exc}"[:2000],
+                    )
+                )
+                await db.commit()
+            except Exception as db_err:
+                _logger.debug(f"[upload_pipeline] Could not mark enqueue_status: {db_err}")
+                try:
+                    await db.rollback()
+                except Exception:
+                    pass
             raise
 
-        # ── Step 5: Enqueue + persist evidence ────────────────────────────
+        # ── Step 5: Enqueue + persist evidence ─────────────────────────────
         t0 = time.monotonic()
         enqueue_result = await self._enqueue_and_persist(
             db=db,
@@ -520,15 +557,42 @@ class UploadPipelineService:
         email: str,
         video_id: str,
         filename: str,
+        max_retries: int = 3,
+        retry_delay: float = 3.0,
     ) -> str:
-        """Step 3: Generate a 24-hour read SAS URL for the worker."""
-        download_url, _ = await generate_download_sas(
-            email=email,
-            video_id=video_id,
-            filename=filename,
-            expires_in_minutes=1440,  # 24 hours
-        )
-        return download_url
+        """Step 3: Generate a 24-hour read SAS URL for the worker.
+
+        Includes retry logic to handle transient Azure Blob Storage
+        connection errors that previously caused videos to get stuck
+        in 'uploaded' status without ever being enqueued.
+        """
+        import asyncio as _asyncio
+
+        last_error = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                download_url, _ = await generate_download_sas(
+                    email=email,
+                    video_id=video_id,
+                    filename=filename,
+                    expires_in_minutes=1440,  # 24 hours
+                )
+                if attempt > 1:
+                    _logger.info(
+                        f"[upload_pipeline] SAS URL generated on attempt "
+                        f"{attempt}/{max_retries} for video {video_id}"
+                    )
+                return download_url
+            except Exception as e:
+                last_error = e
+                _logger.warning(
+                    f"[upload_pipeline] SAS URL attempt {attempt}/{max_retries} "
+                    f"failed for video {video_id}: {e}"
+                )
+                if attempt < max_retries:
+                    await _asyncio.sleep(retry_delay)
+
+        raise last_error
 
     @staticmethod
     def _build_queue_payload(

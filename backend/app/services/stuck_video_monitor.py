@@ -36,24 +36,158 @@ WORKER_GUARD_HOURS = 24           # Hours since worker_claimed_at to consider st
                                    # Raised from 2 to 24 to match WORKER_VIDEO_TIMEOUT
                                    # (9h+ videos may take 17-33h to process)
 NEVER_ENQUEUED_THRESHOLD_MINUTES = 10  # Minutes after creation to detect never-enqueued videos
+SAS_RETRY_COUNT = 3               # Number of retries for SAS URL generation
+SAS_RETRY_DELAY_SECONDS = 5       # Delay between SAS retries
 
 _monitor_task = None
+
+
+async def _generate_sas_with_retry(email, video_id, filename, retries=SAS_RETRY_COUNT):
+    """
+    Generate a download SAS URL with retry logic.
+    Azure Blob Storage can have transient connection errors; retrying
+    prevents a single network hiccup from permanently failing the video.
+    """
+    from app.services.storage_service import generate_download_sas
+
+    last_error = None
+    for attempt in range(1, retries + 1):
+        try:
+            download_url, expiry = await generate_download_sas(
+                email=email,
+                video_id=video_id,
+                filename=filename,
+                expires_in_minutes=1440,
+            )
+            if attempt > 1:
+                logger.info(
+                    f"[stuck-monitor] SAS URL generated on attempt {attempt}/{retries} "
+                    f"for video {video_id}"
+                )
+            return download_url, expiry
+        except Exception as e:
+            last_error = e
+            logger.warning(
+                f"[stuck-monitor] SAS URL generation attempt {attempt}/{retries} "
+                f"failed for video {video_id}: {e}"
+            )
+            if attempt < retries:
+                await asyncio.sleep(SAS_RETRY_DELAY_SECONDS)
+
+    raise last_error
+
+
+async def _increment_dequeue_count(db, video_id):
+    """
+    Increment dequeue_count for a video, even when requeue fails.
+    This prevents infinite retry loops where dequeue_count never increases
+    because the SAS URL generation or enqueue keeps failing.
+    """
+    try:
+        await db.execute(
+            text("""
+                UPDATE videos
+                SET dequeue_count = COALESCE(dequeue_count, 0) + 1,
+                    updated_at = NOW()
+                WHERE id = :vid
+            """),
+            {"vid": video_id},
+        )
+        await db.commit()
+    except Exception as e:
+        logger.warning(f"[stuck-monitor] Failed to increment dequeue_count for {video_id}: {e}")
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+
+
+async def _record_requeue_error(db, video_id, error_code, old_status, error_message, current_retries):
+    """
+    Record a requeue failure to video_error_logs for observability.
+    Also updates last_error_code and last_error_message on the video record.
+    """
+    try:
+        await db.execute(
+            text("""
+                INSERT INTO video_error_logs
+                    (video_id, error_code, error_step, error_message, source)
+                VALUES
+                    (:vid, :code, :step, :msg, 'monitor')
+            """),
+            {
+                "vid": video_id,
+                "code": error_code,
+                "step": old_status or "UNKNOWN",
+                "msg": f"{error_message} (retry {current_retries + 1}/{MAX_AUTO_RETRIES})",
+            },
+        )
+        await db.commit()
+    except Exception as log_err:
+        logger.warning(f"[stuck-monitor] Failed to record error log for {video_id}: {log_err}")
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+
+    # Also update last_error_code on the video for AI context visibility
+    try:
+        await db.execute(
+            text("""
+                UPDATE videos
+                SET last_error_code = :code,
+                    last_error_message = :msg
+                WHERE id = :vid
+            """),
+            {
+                "vid": video_id,
+                "code": error_code,
+                "msg": error_message[:2000] if error_message else "",
+            },
+        )
+        await db.commit()
+    except Exception:
+        try:
+            await db.rollback()
+        except Exception:
+            pass
 
 
 async def _requeue_video(db, row, video_id, old_status, current_retries, reason_prefix):
     """
     Shared logic to re-enqueue a single video.
     Returns True if successfully requeued, False otherwise.
+
+    Key improvement: dequeue_count is ALWAYS incremented, even on failure,
+    to prevent infinite retry loops. Previously, if SAS URL generation failed
+    with an exception, dequeue_count was never incremented because the DB
+    update was rolled back.
     """
     try:
-        from app.services.storage_service import generate_download_sas
-        download_url, _expiry = await generate_download_sas(
-            email=row.user_email,
-            video_id=video_id,
-            filename=row.original_filename,
-            expires_in_minutes=1440,
-        )
+        # Step 1: Generate SAS URL with retry
+        try:
+            download_url, _expiry = await _generate_sas_with_retry(
+                email=row.user_email,
+                video_id=video_id,
+                filename=row.original_filename,
+            )
+        except Exception as sas_err:
+            # SAS generation failed after all retries
+            logger.error(
+                f"[stuck-monitor] SAS URL generation failed for {video_id} "
+                f"after {SAS_RETRY_COUNT} retries: {sas_err}"
+            )
+            # CRITICAL FIX: Always increment dequeue_count to prevent infinite loops
+            await _increment_dequeue_count(db, video_id)
+            # Record the error for observability
+            await _record_requeue_error(
+                db, video_id, "SAS_GENERATION_FAILED", old_status,
+                f"SAS URL generation failed after {SAS_RETRY_COUNT} retries: {sas_err}",
+                current_retries,
+            )
+            return False
 
+        # Step 2: Update video status and increment retry counter
         # Keep current STEP_* status for resume, only reset
         # step_progress and increment retry counter.
         # For 'uploaded' or ERROR status, set to 'uploaded' so worker starts from step 0.
@@ -66,6 +200,8 @@ async def _requeue_video(db, row, video_id, old_status, current_retries, reason_
                     error_message = NULL,
                     enqueue_status = NULL,
                     enqueue_error = NULL,
+                    last_error_code = NULL,
+                    last_error_message = NULL,
                     dequeue_count = COALESCE(dequeue_count, 0) + 1,
                     updated_at = NOW()
                 WHERE id = :vid
@@ -74,7 +210,7 @@ async def _requeue_video(db, row, video_id, old_status, current_retries, reason_
         )
         await db.commit()
 
-        # Enqueue analysis job
+        # Step 3: Enqueue analysis job
         from app.services.queue_service import enqueue_job
         enqueue_result = await enqueue_job({
             "video_id": video_id,
@@ -83,6 +219,31 @@ async def _requeue_video(db, row, video_id, old_status, current_retries, reason_
         })
 
         if enqueue_result.success:
+            # Update enqueue_status to OK
+            try:
+                await db.execute(
+                    text("""
+                        UPDATE videos
+                        SET enqueue_status = 'OK',
+                            queue_message_id = :msg_id,
+                            queue_enqueued_at = :enqueued_at,
+                            enqueue_error = NULL
+                        WHERE id = :vid
+                    """),
+                    {
+                        "vid": video_id,
+                        "msg_id": enqueue_result.message_id,
+                        "enqueued_at": enqueue_result.enqueued_at,
+                    },
+                )
+                await db.commit()
+            except Exception as db_err:
+                logger.warning(f"[stuck-monitor] Failed to update enqueue_status: {db_err}")
+                try:
+                    await db.rollback()
+                except Exception:
+                    pass
+
             logger.info(
                 f"[stuck-monitor] {reason_prefix} requeued video {video_id} "
                 f"({row.original_filename}) was={old_status} "
@@ -114,17 +275,29 @@ async def _requeue_video(db, row, video_id, old_status, current_retries, reason_
                 f"[stuck-monitor] Enqueue failed for {video_id}: "
                 f"{enqueue_result.error}"
             )
-            # Rollback status change
+            # Rollback status change but keep the incremented dequeue_count
             await db.execute(
                 text("""
                     UPDATE videos
                     SET status = :old_status,
+                        enqueue_status = 'FAILED',
+                        enqueue_error = :error,
                         updated_at = NOW()
                     WHERE id = :vid
                 """),
-                {"vid": video_id, "old_status": old_status},
+                {
+                    "vid": video_id,
+                    "old_status": old_status,
+                    "error": (enqueue_result.error or "")[:2000],
+                },
             )
             await db.commit()
+            # Record the error
+            await _record_requeue_error(
+                db, video_id, "ENQUEUE_FAILED", old_status,
+                f"Queue enqueue failed: {enqueue_result.error}",
+                current_retries,
+            )
             return False
 
     except Exception as e:
@@ -135,6 +308,24 @@ async def _requeue_video(db, row, video_id, old_status, current_retries, reason_
             await db.rollback()
         except Exception as _e:
             logger.debug(f"Suppressed: {_e}")
+
+        # CRITICAL FIX: Even on unexpected exception, try to increment dequeue_count
+        # to prevent infinite retry loops
+        try:
+            await _increment_dequeue_count(db, video_id)
+        except Exception:
+            pass
+
+        # Record the error
+        try:
+            await _record_requeue_error(
+                db, video_id, "REQUEUE_EXCEPTION", old_status,
+                f"Unexpected error during requeue: {e}",
+                current_retries,
+            )
+        except Exception:
+            pass
+
         return False
 
 
