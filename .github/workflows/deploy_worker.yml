@@ -114,7 +114,46 @@ jobs:
             df -h / | tail -1
 
             # ============================================================
-            # 1. REPO UPDATE
+            # 1. STOP WORKERS FIRST (before code update)
+            #    This prevents crash loops when new code has breaking
+            #    changes and systemd Restart=always triggers restarts
+            #    during the git reset / rsync window.
+            # ============================================================
+            echo ""
+            echo "=== Stopping workers (graceful) ==="
+            echo "Sending SIGTERM to workers..."
+            sudo systemctl stop aither-worker 2>/dev/null || true
+            sudo systemctl stop simple-worker 2>/dev/null || true
+
+            # Wait up to 5 minutes for graceful shutdown
+            GRACE_TIMEOUT=300
+            GRACE_ELAPSED=0
+            while [ $GRACE_ELAPSED -lt $GRACE_TIMEOUT ]; do
+              AITHER_PID=$(systemctl show -p MainPID aither-worker 2>/dev/null | cut -d= -f2)
+              SIMPLE_PID=$(systemctl show -p MainPID simple-worker 2>/dev/null | cut -d= -f2)
+              if [ "${AITHER_PID:-0}" = "0" ] && [ "${SIMPLE_PID:-0}" = "0" ]; then
+                echo "Workers stopped gracefully after ${GRACE_ELAPSED}s"
+                break
+              fi
+              echo "Waiting for graceful shutdown... (${GRACE_ELAPSED}/${GRACE_TIMEOUT}s)"
+              sleep 10
+              GRACE_ELAPSED=$((GRACE_ELAPSED + 10))
+            done
+
+            # If still running after grace period, force kill
+            if [ $GRACE_ELAPSED -ge $GRACE_TIMEOUT ]; then
+              echo "Grace period expired, force killing..."
+              sudo systemctl kill -s SIGKILL aither-worker 2>/dev/null || true
+              sudo systemctl kill -s SIGKILL simple-worker 2>/dev/null || true
+              sleep 2
+            fi
+
+            # Reset failure counters (prevents StartLimitBurst lockout)
+            sudo systemctl reset-failed aither-worker 2>/dev/null || true
+            sudo systemctl reset-failed simple-worker 2>/dev/null || true
+
+            # ============================================================
+            # 2. REPO UPDATE (workers are stopped, safe to update code)
             # ============================================================
             cd /opt/aitherhub
             git config --global --add safe.directory /opt/aitherhub
@@ -125,7 +164,7 @@ jobs:
             echo "After:  $(git rev-parse HEAD)"
 
             # ============================================================
-            # 2. SYNC to /var/www/aitherhub (legacy path)
+            # 3. SYNC to /var/www/aitherhub (legacy path)
             # ============================================================
             echo ""
             echo "=== Syncing to /var/www/aitherhub ==="
@@ -153,7 +192,7 @@ jobs:
             fi
 
             # ============================================================
-            # 3. STALE LOCK CLEANUP
+            # 4. STALE LOCK CLEANUP
             # ============================================================
             LOCK_FILE="/tmp/simple_worker.lock"
             if [ -f "$LOCK_FILE" ]; then
@@ -165,7 +204,7 @@ jobs:
             fi
 
             # ============================================================
-            # 4. VENV + DEPENDENCIES
+            # 5. VENV + DEPENDENCIES
             # ============================================================
             echo ""
             echo "=== Installing dependencies ==="
@@ -176,39 +215,10 @@ jobs:
             echo "Dependencies OK"
 
             # ============================================================
-            # 5. RESTART WORKER (graceful shutdown)
+            # 6. START WORKERS (code is fully updated and synced)
             # ============================================================
             echo ""
-            echo "=== Restarting worker (graceful) ==="
-            # Send SIGTERM first and wait for active jobs to finish.
-            # The worker sets shutdown_requested=True on SIGTERM and waits
-            # for active subprocesses to complete before exiting.
-            echo "Sending SIGTERM to workers..."
-            sudo systemctl stop aither-worker 2>/dev/null || true
-            sudo systemctl stop simple-worker 2>/dev/null || true
-
-            # Wait up to 5 minutes for graceful shutdown
-            GRACE_TIMEOUT=300
-            GRACE_ELAPSED=0
-            while [ $GRACE_ELAPSED -lt $GRACE_TIMEOUT ]; do
-              AITHER_PID=$(systemctl show -p MainPID aither-worker 2>/dev/null | cut -d= -f2)
-              SIMPLE_PID=$(systemctl show -p MainPID simple-worker 2>/dev/null | cut -d= -f2)
-              if [ "${AITHER_PID:-0}" = "0" ] && [ "${SIMPLE_PID:-0}" = "0" ]; then
-                echo "Workers stopped gracefully after ${GRACE_ELAPSED}s"
-                break
-              fi
-              echo "Waiting for graceful shutdown... (${GRACE_ELAPSED}/${GRACE_TIMEOUT}s)"
-              sleep 10
-              GRACE_ELAPSED=$((GRACE_ELAPSED + 10))
-            done
-
-            # If still running after grace period, force kill
-            if [ $GRACE_ELAPSED -ge $GRACE_TIMEOUT ]; then
-              echo "Grace period expired, force killing..."
-              sudo systemctl kill -s SIGKILL aither-worker 2>/dev/null || true
-              sudo systemctl kill -s SIGKILL simple-worker 2>/dev/null || true
-              sleep 2
-            fi
+            echo "=== Starting workers ==="
             # Install/update encoding API service
             if [ -f gpu_vm/systemd/aither-encoding-api.service ]; then
               if [ ! -f /etc/systemd/system/aither-encoding-api.service ] || \
@@ -219,9 +229,6 @@ jobs:
                 sudo systemctl enable aither-encoding-api
               fi
             fi
-            # Reset failure counters before starting (prevents StartLimitBurst lockout)
-            sudo systemctl reset-failed aither-worker 2>/dev/null || true
-            sudo systemctl reset-failed simple-worker 2>/dev/null || true
 
             echo "Starting workers..."
             sudo systemctl start aither-worker 2>/dev/null || true
@@ -246,7 +253,7 @@ jobs:
             done
 
             # ============================================================
-            # 6. VERIFY
+            # 7. VERIFY
             # ============================================================
             echo ""
             echo "=== Disk status (final) ==="
