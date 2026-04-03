@@ -219,6 +219,27 @@ jobs:
             # ============================================================
             echo ""
             echo "=== Starting workers ==="
+            # Install/update simple-worker service (KillMode=process for graceful shutdown)
+            if [ -f deploy/simple-worker.service ]; then
+              if [ ! -f /etc/systemd/system/simple-worker.service ] || \
+                 ! diff -q deploy/simple-worker.service /etc/systemd/system/simple-worker.service >/dev/null 2>&1; then
+                echo "Installing/updating simple-worker service..."
+                sudo cp deploy/simple-worker.service /etc/systemd/system/
+                sudo systemctl daemon-reload
+                sudo systemctl enable simple-worker
+              fi
+            fi
+
+            # Ensure aither-worker also uses KillMode=process (if service file exists)
+            if [ -f /etc/systemd/system/aither-worker.service ]; then
+              if ! grep -q 'KillMode=process' /etc/systemd/system/aither-worker.service; then
+                echo "Adding KillMode=process to aither-worker.service..."
+                sudo sed -i '/KillSignal=SIGTERM/a KillMode=process' /etc/systemd/system/aither-worker.service 2>/dev/null || \
+                sudo sed -i '/\[Service\]/a KillMode=process' /etc/systemd/system/aither-worker.service
+                sudo systemctl daemon-reload
+              fi
+            fi
+
             # Install/update encoding API service
             if [ -f gpu_vm/systemd/aither-encoding-api.service ]; then
               if [ ! -f /etc/systemd/system/aither-encoding-api.service ] || \

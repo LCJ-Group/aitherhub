@@ -29,6 +29,7 @@ ExecStart=/opt/aitherhub/.venv/bin/python -m worker.entrypoints.queue_worker
 
 # Graceful shutdown
 KillSignal=SIGTERM
+KillMode=process
 TimeoutStopSec=300
 
 # Auto-restart on failure
