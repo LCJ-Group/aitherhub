@@ -1,0 +1,188 @@
+name: Build Docker image and deploy to Azure Container Apps
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - 'backend/**'
+      - '.github/workflows/deploy_backend_docker.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-aitherhubapi-docker
+  cancel-in-progress: true
+
+env:
+  ACR_NAME: liveboostacr
+  ACR_LOGIN_SERVER: liveboostacr.azurecr.io
+  IMAGE_NAME: aitherhub-api
+  RESOURCE_GROUP: rg-vdp-kyogoku
+  CONTAINER_APP_NAME: aitherhub-api
+  CONTAINER_APP_ENV: aitherhub-env
+
+jobs:
+  pre_deploy_check:
+    runs-on: ubuntu-latest
+    name: Pre-deploy smoke test
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run startup smoke test
+        run: python tests/test_startup_smoke.py
+
+      - name: Run import boundary tests
+        run: python tests/test_import_boundaries.py
+
+  build_and_push:
+    needs: pre_deploy_check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tag }}
+      full_image: ${{ steps.meta.outputs.full_image }}
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Generate image metadata
+        id: meta
+        run: |
+          SHORT_SHA="${{ github.sha }}"
+          SHORT_SHA="${SHORT_SHA:0:7}"
+          TAG="${SHORT_SHA}-$(date -u +%Y%m%d%H%M%S)"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "full_image=${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:$TAG" >> "$GITHUB_OUTPUT"
+          echo "Image: ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:$TAG"
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_AA4E9EC299D1433D9FF12541F06BA50D }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_AE01A735F8B046C49C5F169706AC5842 }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_8E4F3767CE0647AEAA62C4C721F843FE }}
+
+      - name: Build and push Docker image via ACR
+        run: |
+          # Use 'az acr build' to build in ACR (no local Docker needed)
+          az acr build \
+            --registry ${{ env.ACR_NAME }} \
+            --image "${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }}" \
+            --image "${{ env.IMAGE_NAME }}:latest" \
+            --file backend/Dockerfile \
+            backend/
+
+      - name: Logout from Azure
+        if: always()
+        run: az logout
+
+  deploy:
+    needs: build_and_push
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_AA4E9EC299D1433D9FF12541F06BA50D }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_AE01A735F8B046C49C5F169706AC5842 }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_8E4F3767CE0647AEAA62C4C721F843FE }}
+
+      - name: Deploy to Container Apps
+        run: |
+          COMMIT_SHA="${{ github.sha }}"
+          SHORT_SHA="${COMMIT_SHA:0:7}"
+          BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          az containerapp update \
+            --name ${{ env.CONTAINER_APP_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --image "${{ needs.build_and_push.outputs.full_image }}" \
+            --set-env-vars \
+              "GIT_COMMIT_SHA=$SHORT_SHA" \
+              "GIT_BRANCH=${{ github.ref_name }}" \
+              "BUILD_TIME=$BUILD_TIME" \
+              "DEPLOY_TIME=$BUILD_TIME" \
+            --output none
+
+      - name: Logout from Azure
+        if: always()
+        run: az logout
+
+  verify_deploy:
+    needs: [build_and_push, deploy]
+    if: always() && needs.deploy.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Wait for Container Apps rollout
+        env:
+          EXPECTED_COMMIT: ${{ github.sha }}
+        run: |
+          # Container Apps URL will be set after creation
+          # For now, use the FQDN from Container Apps
+          API_URL="${CONTAINER_APP_URL:-https://aitherhub-api.japaneast.azurecontainerapps.io}"
+          SHORT_SHA="${EXPECTED_COMMIT:0:7}"
+          echo "Expected commit: $SHORT_SHA"
+          echo "API URL: $API_URL"
+          echo ""
+
+          VERIFIED=false
+          MAX_ATTEMPTS=20
+          INTERVAL=15
+
+          for i in $(seq 1 $MAX_ATTEMPTS); do
+            RESPONSE=$(curl -sf --connect-timeout 10 --max-time 15 "$API_URL/version" 2>/dev/null || echo "")
+
+            if [ -n "$RESPONSE" ]; then
+              CURRENT_COMMIT=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('commit',''))" 2>/dev/null || echo "")
+              UPTIME=$(echo "$RESPONSE" | python3 -c "import sys,json; print(f'{json.load(sys.stdin).get(\"uptime_seconds\",0):.0f}')" 2>/dev/null || echo "?")
+
+              echo "Attempt $i/$MAX_ATTEMPTS: commit=$CURRENT_COMMIT, uptime=${UPTIME}s"
+
+              if [ "$CURRENT_COMMIT" = "$SHORT_SHA" ]; then
+                echo ""
+                echo "Deploy verified: commit $SHORT_SHA is live."
+                VERIFIED=true
+                break
+              fi
+            else
+              echo "Attempt $i/$MAX_ATTEMPTS: API not responding yet"
+            fi
+
+            sleep $INTERVAL
+          done
+
+          if [ "$VERIFIED" != "true" ]; then
+            echo "::warning::Deploy verification timed out."
+          fi
+
+      - name: Final health check
+        if: always()
+        run: |
+          API_URL="${CONTAINER_APP_URL:-https://aitherhub-api.japaneast.azurecontainerapps.io}"
+          echo "=== Version ==="
+          curl -sf --max-time 15 "$API_URL/version" 2>/dev/null || echo "No response"
+          echo ""
+          echo "=== Root ==="
+          curl -sf --max-time 15 "$API_URL/" 2>/dev/null || echo "No response"

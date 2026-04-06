@@ -1448,6 +1448,13 @@ def _load_job(job_id: str) -> dict | None:
 
 def _update_job(job_id: str, **kwargs):
     """Update specific fields in a job."""
+    # Clamp progress_pct to 0-100 to prevent abnormal display values
+    # (ffmpeg out_time_us can return negative or overflow values)
+    if "progress_pct" in kwargs:
+        try:
+            kwargs["progress_pct"] = max(0, min(100, int(kwargs["progress_pct"])))
+        except (TypeError, ValueError):
+            kwargs["progress_pct"] = 0
     data = _load_job(job_id) or {}
     data.update(kwargs)
     data["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -2044,7 +2051,7 @@ async def get_export_status(video_id: str, job_id: str):
         "job_id": job_id,
         "status": status,
         "video_id": video_id,
-        "progress_pct": job.get("progress_pct", 0),
+        "progress_pct": max(0, min(100, int(job.get("progress_pct", 0)))),
     }
     if status == "done":
         result["download_url"] = job.get("download_url")

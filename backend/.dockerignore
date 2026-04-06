@@ -1,0 +1,40 @@
+# Python
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.venv
+antenv
+_pypackages
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Git
+.git
+.gitignore
+
+# Docker
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# CI/CD
+.github
+
+# Deployment artifacts
+deploy.zip
+*.zip
+
+# Environment
+.env
+.env.*
+
+# Temporary files
+tmp/
+temp/
+scripts/
+*.log

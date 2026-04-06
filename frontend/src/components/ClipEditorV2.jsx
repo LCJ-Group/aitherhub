@@ -1413,7 +1413,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                         // Indeterminate: poll timed out, retrying
                         setStatus({ ok: true, msg: '接続を再試行中...' });
                       } else {
-                        setExportProgress(pct || 0);
+                        setExportProgress(Math.max(0, Math.min(100, pct || 0)));
                         setStatus({ ok: true, msg: statusLabels[st] || `処理中 (${st})...` });
                       }
                     },

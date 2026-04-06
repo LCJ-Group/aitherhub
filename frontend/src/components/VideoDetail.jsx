@@ -1956,7 +1956,7 @@ export default function VideoDetail({ videoData, editorParams }) {
                                         </div>
                                       ) : isLoading ? (
                                         (() => {
-                                          const pct = clipState?.progress_pct || 0;
+                                          const pct = Math.max(0, Math.min(100, clipState?.progress_pct || 0));
                                           const step = clipState?.progress_step || '';
                                           const stepLabels = {
                                             downloading: 'ソース動画を取得中',
