@@ -1409,8 +1409,13 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                     } : {}),
                   }, {
                     onProgress: (st, pct) => {
-                      setExportProgress(pct || 0);
-                      setStatus({ ok: true, msg: statusLabels[st] || `処理中 (${st})...` });
+                      if (pct === -1) {
+                        // Indeterminate: poll timed out, retrying
+                        setStatus({ ok: true, msg: '接続を再試行中...' });
+                      } else {
+                        setExportProgress(pct || 0);
+                        setStatus({ ok: true, msg: statusLabels[st] || `処理中 (${st})...` });
+                      }
                     },
                   });
                   if (res?.download_url) {

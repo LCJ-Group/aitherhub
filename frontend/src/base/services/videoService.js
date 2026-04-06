@@ -1492,12 +1492,44 @@ class VideoService extends BaseApiService {
       // First 15s: poll every 2s (fast feedback)
       // After 15s: poll every 4s (reduce server load)
       const maxAttempts = 540; // ~30 minutes max (Azure B1 can be very slow)
+      const POLL_TIMEOUT = 60000; // 60s per poll (Azure cold-start can be slow)
+      const MAX_CONSECUTIVE_TIMEOUTS = 5; // Give up after 5 consecutive timeouts
+      let consecutiveTimeouts = 0;
       for (let i = 0; i < maxAttempts; i++) {
         const delay = i < 8 ? 2000 : 4000; // 2s for first 16s, then 4s
         await new Promise(r => setTimeout(r, delay));
-        const status = await this.get(`/api/v1/editor/${videoId}/export-subtitled/${jobId}`, {
-          timeout: 30000,
-        });
+
+        let status;
+        try {
+          status = await this.get(`/api/v1/editor/${videoId}/export-subtitled/${jobId}`, {
+            timeout: POLL_TIMEOUT,
+          });
+          consecutiveTimeouts = 0; // Reset on success
+        } catch (pollErr) {
+          // Transient timeout/network error during polling — retry silently
+          const isTimeout = pollErr?.code === 'ECONNABORTED' ||
+            pollErr?.message?.includes('timeout') ||
+            pollErr?.message?.includes('Timeout') ||
+            pollErr?.message?.includes('Network Error');
+          if (isTimeout) {
+            consecutiveTimeouts++;
+            console.warn(
+              `[exportSubtitledClip] Poll timeout #${consecutiveTimeouts}/${MAX_CONSECUTIVE_TIMEOUTS} ` +
+              `(attempt ${i + 1}/${maxAttempts})`
+            );
+            if (consecutiveTimeouts >= MAX_CONSECUTIVE_TIMEOUTS) {
+              throw new Error(
+                'サーバーとの通信がタイムアウトしました。ネットワーク接続を確認して再度お試しください。'
+              );
+            }
+            // Update UI to show retry status
+            if (onProgress) onProgress('encoding', -1); // -1 = indeterminate
+            continue; // Retry the poll
+          }
+          // Non-timeout error (401, 500, etc.) — propagate
+          throw pollErr;
+        }
+
         const st = status?.status || status?.data?.status;
         const pct = status?.progress_pct ?? status?.data?.progress_pct ?? 0;
         if (onProgress) onProgress(st, pct);
