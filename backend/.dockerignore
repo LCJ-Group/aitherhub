@@ -38,3 +38,4 @@ tmp/
 temp/
 scripts/
 *.log
+# Docker + Container Apps deployment
