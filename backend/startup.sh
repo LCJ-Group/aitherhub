@@ -11,30 +11,16 @@ echo "[startup] Python: $(python --version 2>&1)"
 echo "[startup] Working dir: $(pwd)"
 echo "[startup] Date: $(date -u)"
 
-# ── Install ffmpeg & CJK fonts in BACKGROUND ──
-install_deps_background() {
-    if ! command -v ffmpeg &> /dev/null; then
-        echo "[startup-bg] Installing ffmpeg..."
-        apt-get update -qq && apt-get install -y -qq --no-install-recommends ffmpeg libass-dev 2>&1 | tail -3
-        echo "[startup-bg] ffmpeg installed: $(ffmpeg -version 2>&1 | head -1)"
-    else
-        echo "[startup-bg] ffmpeg already available: $(ffmpeg -version 2>&1 | head -1)"
-    fi
-
-    if ! fc-list 2>/dev/null | grep -qi "noto.*cjk"; then
-        echo "[startup-bg] Installing CJK fonts..."
-        apt-get install -y -qq --no-install-recommends fonts-noto-cjk 2>&1 | tail -3
-        fc-cache -f 2>/dev/null
-        echo "[startup-bg] CJK fonts installed"
-    else
-        echo "[startup-bg] CJK fonts already available"
-    fi
-
-    echo "[startup-bg] Background dependency installation complete"
-}
-
-# Start background installation (won't block gunicorn startup)
-install_deps_background &
+# ── Check ffmpeg availability (NO background install - Docker will handle this) ──
+if command -v ffmpeg &> /dev/null; then
+    echo "[startup] ffmpeg available: $(ffmpeg -version 2>&1 | head -1)"
+else
+    echo "[startup] WARNING: ffmpeg not found. Export features will not work."
+    echo "[startup] Installing ffmpeg synchronously (one-time)..."
+    apt-get update -qq && apt-get install -y -qq --no-install-recommends ffmpeg libass-dev fonts-noto-cjk 2>&1 | tail -5
+    fc-cache -f 2>/dev/null
+    echo "[startup] ffmpeg installed: $(ffmpeg -version 2>&1 | head -1)"
+fi
 
 # ── Set up Python environment ──
 echo "[startup] Setting up Python environment..."
@@ -97,7 +83,6 @@ fi
 if [ "$PACKAGES_FOUND" = "false" ]; then
     echo "[startup] WARNING: No pre-built packages found"
     echo "[startup] Running pip install (this may take 10-15 minutes)..."
-    echo "[startup] Container timeout is 1800s, so this should complete in time."
     pip install --no-cache-dir -r requirements.txt 2>&1 | tail -20
     pip install --no-cache-dir gunicorn 2>&1 | tail -3
     echo "[startup] pip install completed"
