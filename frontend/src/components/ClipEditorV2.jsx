@@ -1374,7 +1374,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                 setExportProgress(0);
                 setStatus({ ok: true, msg: '字幕付きMP4を生成中...' });
                 const statusLabels = {
-                  queued: '準備中...',
+                  queued: '順番待ち中...（他のエクスポートが完了次第開始します）',
                   downloading: 'クリップをダウンロード中...',
                   encoding: '字幕を焼き込み中...',
                   uploading: 'アップロード中...',

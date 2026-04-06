@@ -1462,7 +1462,13 @@ def _update_job(job_id: str, **kwargs):
 
 
 # Maximum age (seconds) before a non-terminal job is considered stale
-_STALE_JOB_TIMEOUT = 3900  # 65 minutes (must be > FFMPEG_MAX_TIMEOUT=3600 + upload time)
+_STALE_JOB_TIMEOUT = 300  # 5 minutes — detect stuck jobs faster (background task should update within seconds)
+
+# ─── Concurrency limiter for exports ──────────────────────────────────────
+_EXPORT_SEMAPHORE = asyncio.Semaphore(2)  # Max 2 concurrent exports to prevent OOM
+_GPU_HEALTHY = None  # None = unknown, True/False = last check result
+_GPU_LAST_CHECK = 0.0  # timestamp of last GPU health check
+_GPU_CHECK_INTERVAL = 120  # re-check GPU every 2 minutes
 
 # ─── Export cache (avoid re-encoding identical exports) ────────────────────
 _EXPORT_CACHE_DIR = os.path.join(tempfile.gettempdir(), "aitherhub_export_cache")
@@ -1503,6 +1509,25 @@ def _save_cached_export(cache_key: str, download_url: str, file_size: int):
         json.dump({'download_url': download_url, 'file_size': file_size, 'created_at': datetime.now(timezone.utc).isoformat()}, f)
 
 
+async def _check_gpu_health(gpu_url: str) -> bool:
+    """Quick health check for GPU VM. Caches result for _GPU_CHECK_INTERVAL seconds."""
+    global _GPU_HEALTHY, _GPU_LAST_CHECK
+    import time as _time
+    now = _time.time()
+    if now - _GPU_LAST_CHECK < _GPU_CHECK_INTERVAL and _GPU_HEALTHY is not None:
+        return _GPU_HEALTHY
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(f"{gpu_url}/health")
+            _GPU_HEALTHY = resp.status_code == 200
+    except Exception:
+        _GPU_HEALTHY = False
+    _GPU_LAST_CHECK = now
+    logger.info(f"[gpu-health] GPU VM at {gpu_url} healthy={_GPU_HEALTHY}")
+    return _GPU_HEALTHY
+
+
 async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, style: str,
                           position_x: float, position_y: float, time_start: float,
                           split_segments: list = None):
@@ -1511,7 +1536,34 @@ async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, s
     First tries to offload encoding to the GPU VM (NVENC) for 10-50x faster
     processing. Falls back to local ffmpeg (libx264) on App Service if the
     GPU VM is unavailable.
+    
+    Uses a semaphore to limit concurrent exports and prevent OOM.
     """
+    import shutil
+    import functools
+    import httpx
+    from azure.storage.blob import BlobServiceClient, ContentSettings
+    from app.services.storage_service import (
+        CONNECTION_STRING, ACCOUNT_NAME, CONTAINER_NAME,
+        generate_read_sas_from_url,
+    )
+    from urllib.parse import unquote
+
+    # ── Wait for semaphore (limit concurrent exports) ──
+    _update_job(job_id, status="queued", progress_pct=0)
+    logger.info(f"[export-job {job_id}] Waiting for export slot (semaphore)...")
+    async with _EXPORT_SEMAPHORE:
+        logger.info(f"[export-job {job_id}] Got export slot, starting...")
+        await _run_export_job_inner(
+            job_id, video_id, clip_url, captions, style,
+            position_x, position_y, time_start, split_segments,
+        )
+
+
+async def _run_export_job_inner(job_id: str, video_id: str, clip_url: str, captions, style: str,
+                                position_x: float, position_y: float, time_start: float,
+                                split_segments: list = None):
+    """Inner export logic, runs inside semaphore."""
     import shutil
     import functools
     import httpx
@@ -1527,7 +1579,7 @@ async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, s
 
     # ── GPU VM Offload: Try encoding on GPU VM first ──
     GPU_ENCODING_URL = os.getenv("GPU_ENCODING_URL", "")  # e.g. http://10.0.0.4:8765
-    if GPU_ENCODING_URL:
+    if GPU_ENCODING_URL and await _check_gpu_health(GPU_ENCODING_URL):
         try:
             logger.info(f"[export-job {job_id}] Attempting GPU VM offload to {GPU_ENCODING_URL}")
             _update_job(job_id, status="encoding", progress_pct=5)
@@ -1999,13 +2051,26 @@ async def export_subtitled_clip(
         "created_at": datetime.now(timezone.utc).isoformat(),
     })
 
-    # Launch background task
+    # Launch background task with exception safety
     split_segs = [s.dict() if hasattr(s, 'dict') else s for s in req.split_segments] if req.split_segments else None
-    asyncio.create_task(_run_export_job(
-        job_id, video_id, req.clip_url, cap_dicts,
-        req.style, req.position_x, req.position_y, req.time_start,
-        split_segments=split_segs,
-    ))
+
+    async def _safe_export_wrapper():
+        """Wrapper to catch and log any unhandled exceptions from background export."""
+        try:
+            await _run_export_job(
+                job_id, video_id, req.clip_url, cap_dicts,
+                req.style, req.position_x, req.position_y, req.time_start,
+                split_segments=split_segs,
+            )
+        except Exception as bg_err:
+            logger.error(f"[export-job {job_id}] Background task crashed: {bg_err}", exc_info=True)
+            try:
+                _update_job(job_id, status="failed",
+                            error=f"Internal error: {str(bg_err)[:200]}. Please try again.")
+            except Exception:
+                pass  # Last resort: can't even update job status
+
+    asyncio.create_task(_safe_export_wrapper())
 
     return {
         "job_id": job_id,
@@ -2070,3 +2135,38 @@ def _cleanup_tmp(tmp_dir: str):
         shutil.rmtree(tmp_dir, ignore_errors=True)
     except Exception as _e:
         logger.debug(f"Non-critical error suppressed: {_e}")
+
+
+@router.get("/export-jobs/active")
+async def list_active_export_jobs():
+    """Diagnostic endpoint: list all active (non-terminal) export jobs.
+    Useful for debugging stuck exports."""
+    active_jobs = []
+    try:
+        for fname in os.listdir(_EXPORT_JOB_DIR):
+            if not fname.endswith('.json'):
+                continue
+            job_id = fname[:-5]
+            job = _load_job(job_id)
+            if not job:
+                continue
+            status = job.get("status", "unknown")
+            if status in ("done", "failed"):
+                continue
+            # Include basic info
+            active_jobs.append({
+                "job_id": job_id,
+                "status": status,
+                "video_id": job.get("video_id"),
+                "progress_pct": job.get("progress_pct", 0),
+                "created_at": job.get("created_at"),
+                "updated_at": job.get("updated_at"),
+            })
+    except Exception as e:
+        logger.warning(f"[export-jobs] Failed to list jobs: {e}")
+    return {
+        "active_jobs": active_jobs,
+        "count": len(active_jobs),
+        "semaphore_available": _EXPORT_SEMAPHORE._value,
+        "gpu_healthy": _GPU_HEALTHY,
+    }
