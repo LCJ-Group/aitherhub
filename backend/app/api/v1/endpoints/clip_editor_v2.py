@@ -1556,6 +1556,9 @@ async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, s
             # Poll GPU VM for completion (max 30 min)
             GPU_POLL_INTERVAL = 3  # seconds
             GPU_MAX_POLLS = 600    # 30 min
+            GPU_STALL_TIMEOUT = 300  # 5 min: max time without progress change
+            _gpu_last_pct = -1
+            _gpu_last_change = asyncio.get_event_loop().time()
             for poll_i in range(GPU_MAX_POLLS):
                 await asyncio.sleep(GPU_POLL_INTERVAL)
                 try:
@@ -1569,11 +1572,23 @@ async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, s
                         raise
                     continue
 
+                cur_pct = gpu_status.get("progress_pct", 0)
+                # Track progress stall
+                if cur_pct != _gpu_last_pct:
+                    _gpu_last_pct = cur_pct
+                    _gpu_last_change = asyncio.get_event_loop().time()
+                elif (asyncio.get_event_loop().time() - _gpu_last_change) > GPU_STALL_TIMEOUT:
+                    logger.warning(
+                        f"[export-job {job_id}] GPU encoding stalled at {cur_pct}% "
+                        f"for {GPU_STALL_TIMEOUT}s. Falling back to local encoding."
+                    )
+                    break  # Fall through to local encoding
+
                 # Forward progress to our job store
                 _update_job(
                     job_id,
                     status=gpu_status.get("status", "encoding"),
-                    progress_pct=gpu_status.get("progress_pct", 0),
+                    progress_pct=cur_pct,
                 )
 
                 if gpu_status.get("status") == "done":
@@ -2021,8 +2036,10 @@ async def get_export_status(video_id: str, job_id: str):
 
     # Stale job detection: if a non-terminal job hasn't been updated for too long,
     # the background task likely crashed (container restart, OOM, etc.)
+    # Also detect progress stalls where updated_at keeps refreshing but progress doesn't change.
     if status not in ("done", "failed"):
         updated_at = job.get("updated_at") or job.get("created_at")
+        created_at = job.get("created_at")
         if updated_at:
             try:
                 last_update = datetime.fromisoformat(updated_at)
@@ -2035,6 +2052,25 @@ async def get_export_status(video_id: str, job_id: str):
                     _update_job(job_id, status="failed",
                                 error=f"Job timed out (stuck in '{status}' for {int(age_seconds)}s). "
                                       f"The server may have restarted. Please try again.")
+                    status = "failed"
+                    job = _load_job(job_id)
+            except (ValueError, TypeError):
+                pass
+
+        # Also check total job age from creation — even if updated_at refreshes,
+        # a job shouldn't take more than 65 minutes total
+        if status not in ("done", "failed") and created_at:
+            try:
+                job_created = datetime.fromisoformat(created_at)
+                if job_created.tzinfo is None:
+                    job_created = job_created.replace(tzinfo=timezone.utc)
+                total_age = (datetime.now(timezone.utc) - job_created).total_seconds()
+                if total_age > _STALE_JOB_TIMEOUT:
+                    logger.warning(f"[export-job {job_id}] Job exceeded max lifetime: "
+                                   f"status={status}, total_age={total_age:.0f}s")
+                    _update_job(job_id, status="failed",
+                                error=f"Job exceeded maximum time ({int(total_age)}s). "
+                                      f"Please try again.")
                     status = "failed"
                     job = _load_job(job_id)
             except (ValueError, TypeError):
