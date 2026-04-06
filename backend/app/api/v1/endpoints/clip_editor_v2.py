@@ -1450,6 +1450,12 @@ def _update_job(job_id: str, **kwargs):
     """Update specific fields in a job."""
     data = _load_job(job_id) or {}
     data.update(kwargs)
+    # Clamp progress_pct to 0-100 range (ffmpeg can report anomalous values)
+    if "progress_pct" in data:
+        try:
+            data["progress_pct"] = max(0, min(100, int(data["progress_pct"])))
+        except (ValueError, TypeError):
+            data["progress_pct"] = 0
     data["updated_at"] = datetime.now(timezone.utc).isoformat()
     _save_job(job_id, data)
 
@@ -1857,8 +1863,10 @@ async def _run_export_job(job_id: str, video_id: str, clip_url: str, captions, s
                     if decoded.startswith('out_time_us=') and source_duration_us > 0:
                         try:
                             current_us = int(decoded.split('=')[1])
+                            if current_us < 0:
+                                continue  # Skip negative values from ffmpeg
                             # Map encoding progress to 20-80% range
-                            ratio = min(current_us / source_duration_us, 1.0)
+                            ratio = max(0.0, min(current_us / source_duration_us, 1.0))
                             pct = int(20 + ratio * 60)  # 20% to 80%
                             _update_job(job_id, status="encoding", progress_pct=pct)
                         except (ValueError, ZeroDivisionError):
@@ -2080,7 +2088,7 @@ async def get_export_status(video_id: str, job_id: str):
         "job_id": job_id,
         "status": status,
         "video_id": video_id,
-        "progress_pct": job.get("progress_pct", 0),
+        "progress_pct": max(0, min(100, int(job.get("progress_pct", 0) or 0))),
     }
     if status == "done":
         result["download_url"] = job.get("download_url")

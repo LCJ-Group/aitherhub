@@ -1531,7 +1531,8 @@ class VideoService extends BaseApiService {
         }
 
         const st = status?.status || status?.data?.status;
-        const pct = status?.progress_pct ?? status?.data?.progress_pct ?? 0;
+        const rawPct = status?.progress_pct ?? status?.data?.progress_pct ?? 0;
+        const pct = Math.max(0, Math.min(100, Math.round(Number(rawPct) || 0)));
         if (onProgress) onProgress(st, pct);
 
         if (st === 'done') {
