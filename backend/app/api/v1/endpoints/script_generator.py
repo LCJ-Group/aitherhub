@@ -149,7 +149,7 @@ async def generate_standalone_script(
                 images_analyzed_count = 1 if product_analysis else 0
             else:
                 product_analysis = await _analyze_multiple_product_images(all_image_urls)
-                images_analyzed_count = len(all_image_urls)
+                images_analyzed_count = len(all_image_urls) if product_analysis else 0
         except Exception as e:
             logger.warning(f"Product image analysis failed: {e}")
 
@@ -885,27 +885,49 @@ async def admin_get_script_generation(
 
 async def _analyze_product_image(image_url: str) -> Optional[Dict[str, Any]]:
     """
-    Analyze a product image using Azure OpenAI Vision API.
-    Extracts product features, colors, packaging, and selling points.
+    Analyze a product image using Azure OpenAI Responses API (Vision).
+    Extracts detailed product features including text/OCR, ingredients,
+    usage instructions, and live commerce demo suggestions.
     """
     import openai
 
     azure_key = os.getenv("AZURE_OPENAI_KEY", "")
     azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
-    vision_model = os.getenv("VISION_MODEL", "gpt-4o")
-    vision_api_version = os.getenv("VISION_API_VERSION", "2024-06-01")
+    # Use the same model as script generation for reliability
+    vision_model = os.getenv("GPT5_MODEL") or os.getenv("GPT5_DEPLOYMENT") or "gpt-4.1-mini"
+    api_version = os.getenv("GPT5_API_VERSION", "2025-04-01-preview")
 
     if not azure_key or not azure_endpoint:
+        logger.warning("Product image analysis skipped: missing AZURE_OPENAI_KEY or AZURE_OPENAI_ENDPOINT")
         return None
 
-    prompt = """この商品画像を分析して、以下の情報をJSON形式で返してください：
+    prompt = """あなたはライブコマースの商品分析エキスパートです。この商品画像を徹底的に分析してください。
+
+## 分析指示（必ず全項目を埋めること）
+
+1. **画像内テキストの完全読み取り**: パッケージに書かれた文字、成分表、効能表示、使用方法、キャッチコピー、ブランド名を全て読み取ってください
+2. **商品の物理的特徴**: 色、質感、サイズ感、容器の形状、高級感の有無
+3. **成分・効能の分析**: 読み取れた成分名から期待される効果を推測
+4. **ビフォーアフター**: もし比較画像なら、変化の具体的な説明
+5. **使用シーン**: 画像から読み取れる使い方のヒント
+
+以下のJSON形式で返してください：
 {
-  "product_type": "商品の種類（例：シャンプー、美容液、サプリメント）",
-  "visual_features": ["目立つ視覚的特徴のリスト"],
-  "colors": ["主要な色"],
-  "packaging": "パッケージの特徴",
-  "selling_points": ["画像から読み取れるセールスポイント"],
-  "suggested_demo": "ライブコマースでのデモ方法の提案"
+  "product_type": "商品の種類（具体的に。例：ピーリング美容液、高保湿クリーム）",
+  "brand_name": "ブランド名（画像から読み取れた場合）",
+  "text_on_image": ["画像内に書かれている全てのテキスト（成分名、効能、キャッチコピー等）"],
+  "ingredients_found": ["読み取れた成分名のリスト"],
+  "claimed_effects": ["画像から読み取れる効能・効果の主張"],
+  "visual_features": ["商品の視覚的特徴（色、質感、形状、高級感等）"],
+  "packaging": "パッケージの詳細な特徴（素材感、デザイン、サイズ感）",
+  "usage_instructions": "画像から読み取れる使い方の情報",
+  "selling_points": ["ライブコマースで訴求すべきセールスポイント（5つ以上）"],
+  "demo_script_suggestions": [
+    "具体的なデモ提案1: 例）手の甲に1-2滴垂らして浸透速度を見せる",
+    "具体的なデモ提案2: 例）テクスチャーの伸びを見せながら『サラッとしてるでしょ？』",
+    "具体的なデモ提案3: 例）パッケージを近づけて成分表を読み上げる"
+  ],
+  "talk_points": ["配信者が話すべき具体的なトークポイント（商品の特徴を活かした会話例）"]
 }
 JSONのみを出力してください。"""
 
@@ -913,59 +935,103 @@ JSONのみを出力してください。"""
         client = openai.AzureOpenAI(
             api_key=azure_key,
             azure_endpoint=azure_endpoint,
-            api_version=vision_api_version,
+            api_version=api_version,
         )
-        response = client.chat.completions.create(
+        # Use Responses API with input_image format
+        response = client.responses.create(
             model=vision_model,
-            messages=[
+            input=[
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": prompt},
+                        {"type": "input_text", "text": prompt},
                         {
-                            "type": "image_url",
-                            "image_url": {"url": image_url, "detail": "high"},
+                            "type": "input_image",
+                            "image_url": image_url,
                         },
                     ],
                 }
             ],
-            max_tokens=1000,
-            temperature=0.3,
+            max_output_tokens=2500,
         )
-        content = response.choices[0].message.content
+        # Extract text from Responses API output
+        content = ""
+        if hasattr(response, "output_text") and response.output_text:
+            content = response.output_text.strip()
+        elif hasattr(response, "output") and response.output:
+            for item in response.output:
+                if hasattr(item, "content"):
+                    for part in item.content:
+                        if hasattr(part, "text"):
+                            content += part.text
+            content = content.strip()
+
+        if not content:
+            logger.warning("Product image analysis returned empty content")
+            return None
+
         json_match = re.search(r"\{[\s\S]*\}", content)
         if json_match:
-            return json.loads(json_match.group())
+            result = json.loads(json_match.group())
+            logger.info(f"Product image analysis success: {len(result.get('selling_points', []))} selling points found")
+            return result
         return {"raw_analysis": content}
     except Exception as e:
-        logger.warning(f"Product image analysis failed: {e}")
+        logger.warning(f"Product image analysis failed: {type(e).__name__}: {e}")
         return None
 
 
 async def _analyze_multiple_product_images(image_urls: List[str]) -> Optional[Dict[str, Any]]:
     """
-    Analyze multiple product images using Azure OpenAI Vision API.
+    Analyze multiple product images using Azure OpenAI Responses API (Vision).
     Sends all images in a single request for comprehensive analysis.
+    Extracts text, ingredients, usage info, and generates demo suggestions.
     """
     import openai
 
     azure_key = os.getenv("AZURE_OPENAI_KEY", "")
     azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
-    vision_model = os.getenv("VISION_MODEL", "gpt-4o")
-    vision_api_version = os.getenv("VISION_API_VERSION", "2024-06-01")
+    vision_model = os.getenv("GPT5_MODEL") or os.getenv("GPT5_DEPLOYMENT") or "gpt-4.1-mini"
+    api_version = os.getenv("GPT5_API_VERSION", "2025-04-01-preview")
 
     if not azure_key or not azure_endpoint:
+        logger.warning("Multiple image analysis skipped: missing AZURE_OPENAI_KEY or AZURE_OPENAI_ENDPOINT")
         return None
 
-    prompt = f"""以下の{len(image_urls)}枚の商品画像を総合的に分析して、以下の情報をJSON形式で返してください：
+    prompt = f"""あなたはライブコマースの商品分析エキスパートです。以下の{len(image_urls)}枚の商品画像を全て徹底的に分析してください。
+
+## 分析指示（各画像について必ず実行すること）
+
+1. **画像内テキストの完全読み取り（OCR）**: 各画像のパッケージ、ラベル、成分表、効能表示、使用方法、キャッチコピー、注意書きを全て読み取る
+2. **成分分析**: 読み取れた成分名から、その効果・効能を専門的に解説
+3. **使用方法の読み取り**: 画像から読み取れる使い方、適量、頻度の情報
+4. **ビフォーアフター分析**: 比較画像があれば、変化を具体的に説明
+5. **パッケージデザイン分析**: 高級感、ブランドイメージ、ターゲット層の推測
+6. **ライブコマース活用法**: 各画像をライブ配信でどう見せるかの具体的提案
+
+以下のJSON形式で返してください：
 {{
-  "product_type": "商品の種類（例：シャンプー、美容液、サプリメント）",
-  "visual_features": ["全画像から読み取れる目立つ視覚的特徴のリスト"],
-  "colors": ["主要な色"],
-  "packaging": "パッケージの特徴",
-  "selling_points": ["全画像から読み取れるセールスポイント"],
-  "suggested_demo": "ライブコマースでのデモ方法の提案",
-  "image_descriptions": ["各画像の簡単な説明"]
+  "product_type": "商品の種類（具体的に。例：ピーリング美容液、高保湿クリーム）",
+  "brand_name": "ブランド名（画像から読み取れた場合）",
+  "text_on_images": ["全画像から読み取った全てのテキスト（成分名、効能、キャッチコピー、使用方法等）"],
+  "ingredients_found": ["読み取れた成分名とその効果の説明（例：ヒアルロン酸 - 保湿・水分保持）"],
+  "claimed_effects": ["画像から読み取れる効能・効果の主張"],
+  "visual_features": ["商品の視覚的特徴（色、質感、テクスチャー、形状、高級感等）"],
+  "packaging": "パッケージの詳細な特徴（素材感、デザイン、サイズ感、開封方法）",
+  "usage_instructions": "画像から読み取れる使い方の詳細情報（適量、頻度、手順）",
+  "selling_points": ["ライブコマースで訴求すべきセールスポイント（8つ以上、具体的に）"],
+  "demo_script_suggestions": [
+    "具体的なデモ提案1（例：手の甲に1-2滴垂らして浸透速度を実演）",
+    "具体的なデモ提案2（例：テクスチャーの伸びを見せながらコメント）",
+    "具体的なデモ提案3（例：パッケージを近づけて成分表を読み上げる）",
+    "具体的なデモ提案4（例：ビフォーアフターの写真を見せて解説）"
+  ],
+  "talk_points": [
+    "配信者が話すべき具体的トークポイント1（商品特徴を活かした自然な会話例）",
+    "配信者が話すべき具体的トークポイント2",
+    "配信者が話すべき具体的トークポイント3"
+  ],
+  "image_descriptions": ["各画像の詳細な説明（何が写っているか、どんな情報が読み取れるか）"]
 }}
 JSONのみを出力してください。"""
 
@@ -973,34 +1039,53 @@ JSONのみを出力してください。"""
         client = openai.AzureOpenAI(
             api_key=azure_key,
             azure_endpoint=azure_endpoint,
-            api_version=vision_api_version,
+            api_version=api_version,
         )
 
-        # Build content array with text + all images
-        content = [{"type": "text", "text": prompt}]
+        # Build content array with text + all images (Responses API format)
+        content_parts = [{"type": "input_text", "text": prompt}]
         for url in image_urls[:10]:  # max 10 images
-            content.append({
-                "type": "image_url",
-                "image_url": {"url": url, "detail": "high"},
+            content_parts.append({
+                "type": "input_image",
+                "image_url": url,
             })
 
-        response = client.chat.completions.create(
+        response = client.responses.create(
             model=vision_model,
-            messages=[{"role": "user", "content": content}],
-            max_tokens=1500,
-            temperature=0.3,
+            input=[{"role": "user", "content": content_parts}],
+            max_output_tokens=4000,
         )
-        result_content = response.choices[0].message.content
+
+        # Extract text from Responses API output
+        result_content = ""
+        if hasattr(response, "output_text") and response.output_text:
+            result_content = response.output_text.strip()
+        elif hasattr(response, "output") and response.output:
+            for item in response.output:
+                if hasattr(item, "content"):
+                    for part in item.content:
+                        if hasattr(part, "text"):
+                            result_content += part.text
+            result_content = result_content.strip()
+
+        if not result_content:
+            logger.warning("Multiple image analysis returned empty content")
+            # Fallback: try single image
+            return await _analyze_product_image(image_urls[0])
+
         json_match = re.search(r"\{[\s\S]*\}", result_content)
         if json_match:
-            return json.loads(json_match.group())
+            result = json.loads(json_match.group())
+            logger.info(f"Multiple image analysis success: {len(image_urls)} images, {len(result.get('selling_points', []))} selling points")
+            return result
         return {"raw_analysis": result_content}
     except Exception as e:
-        logger.warning(f"Multiple product image analysis failed: {e}")
+        logger.warning(f"Multiple product image analysis failed: {type(e).__name__}: {e}")
         # Fallback: analyze just the first image
         try:
             return await _analyze_product_image(image_urls[0])
-        except Exception:
+        except Exception as e2:
+            logger.warning(f"Single image fallback also failed: {e2}")
             return None
 
 
@@ -1071,33 +1156,109 @@ def _build_standalone_prompt(
         product_section += f"\n### 配信限定特典・キャンペーン\n{benefits}\n"
         product_section += "- 【重要】特典情報は台本のCTAセクションで必ず強調してください。視聴者限定の特別感を演出してください。\n"
 
-    # Product image analysis section
+    # Product image analysis section — CRITICAL for script quality
     image_section = ""
     if product_analysis:
-        image_section = "\n## AI商品画像分析結果\n"
+        image_section = "\n## AI商品画像分析結果（★台本に必ず反映すること）\n"
+        image_section += "※ 以下の分析結果は実際の商品画像からAIが読み取った情報です。\n"
+        image_section += "※ 台本のセリフ内でこれらの情報を具体的に言及してください。\n\n"
         if isinstance(product_analysis, dict):
             if product_analysis.get("product_type"):
-                image_section += f"- 商品タイプ: {product_analysis['product_type']}\n"
+                image_section += f"### 商品タイプ: {product_analysis['product_type']}\n"
+            if product_analysis.get("brand_name"):
+                image_section += f"- ブランド名: {product_analysis['brand_name']}\n"
+
+            # Text found on images (OCR results)
+            text_on = product_analysis.get("text_on_images") or product_analysis.get("text_on_image") or []
+            if text_on:
+                if isinstance(text_on, list):
+                    image_section += f"\n### 画像内テキスト（パッケージから読み取った情報）:\n"
+                    for t in text_on:
+                        image_section += f"- {t}\n"
+                else:
+                    image_section += f"\n### 画像内テキスト: {text_on}\n"
+
+            # Ingredients
+            ingredients = product_analysis.get("ingredients_found", [])
+            if ingredients:
+                if isinstance(ingredients, list):
+                    image_section += f"\n### 成分情報（台本内で具体的に言及すること）:\n"
+                    for ing in ingredients:
+                        image_section += f"- {ing}\n"
+                else:
+                    image_section += f"\n### 成分情報: {ingredients}\n"
+
+            # Claimed effects
+            effects = product_analysis.get("claimed_effects", [])
+            if effects:
+                if isinstance(effects, list):
+                    image_section += f"\n### 効能・効果（台本の商品説明セクションで必ず触れる）:\n"
+                    for eff in effects:
+                        image_section += f"- {eff}\n"
+                else:
+                    image_section += f"\n### 効能・効果: {effects}\n"
+
+            # Visual features
             if product_analysis.get("visual_features"):
                 features = product_analysis['visual_features']
                 if isinstance(features, list):
-                    image_section += f"- 視覚的特徴: {', '.join(features)}\n"
+                    image_section += f"\n### 視覚的特徴: {', '.join(features)}\n"
                 else:
-                    image_section += f"- 視覚的特徴: {features}\n"
+                    image_section += f"\n### 視覚的特徴: {features}\n"
+
+            # Usage instructions
+            usage = product_analysis.get("usage_instructions", "")
+            if usage:
+                image_section += f"\n### 使用方法（デモセクションで実演する）: {usage}\n"
+
+            # Packaging
+            if product_analysis.get("packaging"):
+                image_section += f"- パッケージ: {product_analysis['packaging']}\n"
+
+            # Selling points
             if product_analysis.get("selling_points"):
                 points = product_analysis['selling_points']
                 if isinstance(points, list):
-                    image_section += f"- セールスポイント: {', '.join(points)}\n"
+                    image_section += f"\n### セールスポイント（台本全体で活用）:\n"
+                    for i, sp in enumerate(points, 1):
+                        image_section += f"{i}. {sp}\n"
                 else:
-                    image_section += f"- セールスポイント: {points}\n"
-            if product_analysis.get("suggested_demo"):
-                image_section += f"- デモ提案: {product_analysis['suggested_demo']}\n"
+                    image_section += f"\n### セールスポイント: {points}\n"
+
+            # Demo suggestions
+            demos = product_analysis.get("demo_script_suggestions") or []
+            if demos:
+                if isinstance(demos, list):
+                    image_section += f"\n### デモ実演提案（台本のデモセクションに直接反映）:\n"
+                    for d in demos:
+                        image_section += f"- {d}\n"
+                elif product_analysis.get("suggested_demo"):
+                    image_section += f"- デモ提案: {product_analysis['suggested_demo']}\n"
+
+            # Talk points
+            talks = product_analysis.get("talk_points", [])
+            if talks:
+                if isinstance(talks, list):
+                    image_section += f"\n### トークポイント（セリフに織り込む）:\n"
+                    for tp in talks:
+                        image_section += f"- {tp}\n"
+
+            # Image descriptions
             if product_analysis.get("image_descriptions"):
                 descs = product_analysis['image_descriptions']
                 if isinstance(descs, list) and len(descs) > 1:
-                    image_section += "- 各画像の分析:\n"
+                    image_section += "\n### 各画像の分析:\n"
                     for i, desc in enumerate(descs, 1):
                         image_section += f"  {i}. {desc}\n"
+
+            # Strong instruction to use image analysis in script
+            image_section += "\n### ★★★ 重要指示 ★★★\n"
+            image_section += "上記の商品画像分析結果を台本に必ず反映してください：\n"
+            image_section += "1. 成分名をセリフ内で具体的に言及する（例：『これ、ヒアルロン酸が入ってるんですよ』）\n"
+            image_section += "2. 効能を自然な会話で伝える（例：『これのいいところは、保湿力がすごいんです』）\n"
+            image_section += "3. デモ提案を台本の実演セクションに織り込む\n"
+            image_section += "4. パッケージの特徴をオープニングで見せる演出に活用\n"
+            image_section += "5. トークポイントをセリフの自然な流れに組み込む\n"
 
     # ── Feedback Knowledge Section (NEW - the key differentiator) ──
     feedback_section = ""

@@ -61,6 +61,10 @@ export default function ScriptGeneratorPage() {
   const [error, setError] = useState(null);
   const [copied, setCopied] = useState(false);
 
+  // Progress bar state
+  const [generationStep, setGenerationStep] = useState(0); // 0-5
+  const [generationProgress, setGenerationProgress] = useState(0); // 0-100
+
   // Rating state
   const [ratingValue, setRatingValue] = useState(0);
   const [ratingHover, setRatingHover] = useState(0);
@@ -236,16 +240,27 @@ export default function ScriptGeneratorPage() {
     setRatingGoodTags([]);
     setRatingBadTags([]);
     setRatingSubmitted(false);
+    setGenerationStep(0);
+    setGenerationProgress(0);
 
-    // Upload all images first
+    // Step 1: Upload images
+    setGenerationStep(1);
+    setGenerationProgress(5);
     let imageUrls = [];
     if (imageFiles.length > 0) {
       try {
         imageUrls = await uploadAllImages();
+        setGenerationProgress(15);
       } catch (e) {
         console.warn("Some image uploads failed, continuing:", e);
       }
+    } else {
+      setGenerationProgress(15);
     }
+
+    // Step 2: Prepare data
+    setGenerationStep(2);
+    setGenerationProgress(20);
 
     // Build price string
     let priceStr = "";
@@ -256,6 +271,25 @@ export default function ScriptGeneratorPage() {
     } else if (originalPrice.trim()) {
       priceStr = originalPrice.trim();
     }
+
+    // Step 3: Generate (this is the long step)
+    setGenerationStep(3);
+    setGenerationProgress(25);
+
+    // Start a fake progress timer for the long generation step
+    const progressInterval = setInterval(() => {
+      setGenerationProgress((prev) => {
+        if (prev >= 90) return prev; // cap at 90 until done
+        // Slow down as we approach 90
+        const increment = prev < 50 ? 2 : prev < 70 ? 1 : 0.5;
+        return Math.min(prev + increment, 90);
+      });
+      // Update step based on progress
+      setGenerationProgress((prev) => {
+        if (prev >= 60) setGenerationStep(4);
+        return prev;
+      });
+    }, 1500);
 
     try {
       const result = await scriptGeneratorService.generateScript({
@@ -273,10 +307,14 @@ export default function ScriptGeneratorPage() {
         duration_minutes: durationMinutes,
         additional_instructions: additionalInstructions.trim() || undefined,
       });
+      clearInterval(progressInterval);
+      setGenerationStep(5);
+      setGenerationProgress(100);
       setGeneratedScript(result);
       // Refresh history after generation
       loadHistory();
     } catch (e) {
+      clearInterval(progressInterval);
       console.error("Script generation failed:", e);
       const msg = e?.response?.data?.detail || e.message || "台本の生成に失敗しました";
       setError(msg);
@@ -673,12 +711,74 @@ export default function ScriptGeneratorPage() {
               )}
             </button>
 
+            {/* ── Progress Bar (visible during generation) ── */}
+            {isGenerating && (
+              <div className="bg-gradient-to-br from-orange-50 to-amber-50 border border-orange-200 rounded-xl p-4 space-y-3 animate-in fade-in duration-300">
+                {/* Progress bar */}
+                <div className="relative w-full h-2.5 bg-orange-100 rounded-full overflow-hidden">
+                  <div
+                    className="absolute inset-y-0 left-0 bg-gradient-to-r from-orange-400 to-red-500 rounded-full transition-all duration-700 ease-out"
+                    style={{ width: `${generationProgress}%` }}
+                  />
+                  <div
+                    className="absolute inset-y-0 left-0 bg-gradient-to-r from-white/30 to-transparent rounded-full animate-pulse"
+                    style={{ width: `${generationProgress}%` }}
+                  />
+                </div>
+
+                {/* Progress percentage */}
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-orange-700 font-medium">
+                    {generationProgress < 100 ? `${Math.round(generationProgress)}%` : '✅ 完了'}
+                  </span>
+                  <span className="text-orange-500">
+                    {generationStep <= 1 && '↑ 画像アップロード中...'}
+                    {generationStep === 2 && '📊 データ準備中...'}
+                    {generationStep === 3 && '🧠 AIが台本を生成中...'}
+                    {generationStep === 4 && '✨ 台本を仕上げ中...'}
+                    {generationStep >= 5 && '✅ 完了！'}
+                  </span>
+                </div>
+
+                {/* Step indicators */}
+                <div className="grid grid-cols-5 gap-1">
+                  {[
+                    { step: 1, icon: '📷', label: '画像アップロード' },
+                    { step: 2, icon: '📊', label: 'データ収集' },
+                    { step: 3, icon: '🧠', label: 'AI分析・生成' },
+                    { step: 4, icon: '✨', label: '台本仕上げ' },
+                    { step: 5, icon: '✅', label: '完了' },
+                  ].map(({ step, icon, label }) => (
+                    <div
+                      key={step}
+                      className={`flex flex-col items-center gap-0.5 py-1.5 rounded-lg text-center transition-all duration-300 ${
+                        generationStep >= step
+                          ? generationStep === step
+                            ? 'bg-orange-100 border border-orange-300 scale-105'
+                            : 'bg-green-50 border border-green-200'
+                          : 'bg-white/60 border border-gray-100'
+                      }`}
+                    >
+                      <span className={`text-base ${
+                        generationStep === step ? 'animate-bounce' : ''
+                      }`}>{icon}</span>
+                      <span className={`text-[10px] leading-tight ${
+                        generationStep >= step
+                          ? generationStep === step ? 'text-orange-700 font-semibold' : 'text-green-700'
+                          : 'text-gray-400'
+                      }`}>{label}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {error && (
               <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">
                 {error}
               </div>
             )}
-          </div>
+          </div>>
 
           {/* ── Right: Output & Patterns ── */}
           <div className="lg:col-span-3 space-y-4">
