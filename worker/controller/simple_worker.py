@@ -655,16 +655,18 @@ def process_video_job(payload: dict):
             cwd=BATCH_DIR,
             env={**os.environ, "PYTHONPATH": BATCH_DIR},
             start_new_session=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
         )
         try:
-            proc.wait(timeout=VIDEO_PROCESS_TIMEOUT)
+            stdout_data, _ = proc.communicate(timeout=VIDEO_PROCESS_TIMEOUT)
         except subprocess.TimeoutExpired:
             print(f"[worker] Video timeout — killing process group (pid={proc.pid})")
             try:
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
             except (ProcessLookupError, OSError) as _e:
                 print(f"Suppressed: {_e}")
-            proc.wait()
+            stdout_data, _ = proc.communicate()
             log_error_type(video_id, "video_analysis", "TIMEOUT_VIDEO", f"timeout={VIDEO_PROCESS_TIMEOUT}s")
             update_video_status_to_error(
                 video_id,
@@ -673,6 +675,11 @@ def process_video_job(payload: dict):
                 error_message=f"Video processing timed out after {VIDEO_PROCESS_TIMEOUT}s",
             )
             return False
+
+        output = stdout_data.decode("utf-8", errors="replace") if stdout_data else ""
+        # Always log last 2000 chars of output for debugging
+        if output:
+            print(f"[worker] process_video output (last 2000 chars):\n{output[-2000:]}")
 
         if proc.returncode == 0:
             print(f"[worker] Batch completed successfully for {video_id}")
@@ -685,11 +692,38 @@ def process_video_job(payload: dict):
                            "DB record not found, message will be deleted")
             return True  # Return True so process_job() deletes the queue message
         else:
-            log_error_type(video_id, "video_analysis", "SUBPROCESS_FAIL", f"exit_code={proc.returncode}")
+            # Subprocess failed — record error to DB so frontend can display it
+            error_tail = output[-500:] if output else "(no output captured)"
+            error_code = "SUBPROCESS_FAIL"
+            # Detect common crash patterns
+            if proc.returncode == -9 or proc.returncode == 137:
+                error_code = "OOM_KILLED"
+            elif proc.returncode == -15 or proc.returncode == 143:
+                error_code = "SIGTERM_KILLED"
+            elif proc.returncode == -11 or proc.returncode == 139:
+                error_code = "SEGFAULT"
+
+            log_error_type(video_id, "video_analysis", error_code,
+                           f"exit_code={proc.returncode} output_tail={error_tail}")
+            # Record to DB so frontend ErrorLogPanel can display it
+            update_video_status_to_error(
+                video_id,
+                error_code=error_code,
+                error_step="VIDEO_PROCESSING",
+                error_message=f"process_video.py exited with code {proc.returncode}. "
+                              f"Last output: {error_tail}",
+            )
             return False
     except Exception as e:
         exc_name = type(e).__name__
         log_error_type(video_id, "video_analysis", "UNKNOWN", f"EXC={exc_name} {e}")
+        # Also record to DB
+        update_video_status_to_error(
+            video_id,
+            error_code="WORKER_EXCEPTION",
+            error_step="VIDEO_PROCESSING",
+            error_message=f"{exc_name}: {str(e)[:500]}",
+        )
         return False
 
 

@@ -72,9 +72,9 @@ function formatRelativeTime(date) {
 /**
  * ErrorLogPanel - Collapsible error log viewer for video processing errors
  */
-function ErrorLogPanel({ videoId }) {
+function ErrorLogPanel({ videoId, autoOpen = false }) {
   const [errorLogs, setErrorLogs] = useState([]);
-  const [showLogs, setShowLogs] = useState(false);
+  const [showLogs, setShowLogs] = useState(autoOpen);
   const [loading, setLoading] = useState(false);
   const [fetched, setFetched] = useState(false);
 
@@ -125,7 +125,9 @@ function ErrorLogPanel({ videoId }) {
             <p className="text-xs text-gray-400 text-center py-2">読み込み中...</p>
           )}
           {!loading && errorLogs.length === 0 && (
-            <p className="text-xs text-gray-500 text-center py-2">エラーログはありません</p>
+            <p className="text-xs text-gray-500 text-center py-2">
+              エラーの詳細が記録されていません。「解析を再試行」ボタンで再実行してください。
+            </p>
           )}
           {errorLogs.map((log, idx) => (
             <div key={log.id || idx} className="p-2.5 bg-gray-800/50 border border-gray-700 rounded-md text-left">

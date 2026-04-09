@@ -904,6 +904,31 @@ async def get_video_error_logs(
                 "created_at": r.created_at.isoformat() if r.created_at else None,
             })
 
+        # Fallback: if no error logs found but video has last_error_code,
+        # synthesize a log entry from the videos table so the UI always shows something
+        if not logs:
+            fallback_result = await db.execute(
+                text("""
+                    SELECT last_error_code, last_error_message, error_message, updated_at
+                    FROM videos WHERE id = :vid
+                """),
+                {"vid": video_id},
+            )
+            fb_row = fallback_result.fetchone()
+            if fb_row:
+                fb_code = fb_row.last_error_code or fb_row.error_message
+                fb_msg = fb_row.last_error_message or fb_row.error_message
+                if fb_code or fb_msg:
+                    logs.append({
+                        "id": 0,
+                        "error_code": fb_code or "UNKNOWN",
+                        "error_step": "UNKNOWN",
+                        "error_message": fb_msg or "エラーの詳細が記録されていません。解析を再試行してください。",
+                        "error_detail": None,
+                        "source": "fallback",
+                        "created_at": fb_row.updated_at.isoformat() if fb_row.updated_at else None,
+                    })
+
         return {"video_id": video_id, "error_logs": logs, "total": len(logs)}
 
     except HTTPException:

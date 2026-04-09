@@ -1271,7 +1271,7 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
                   <p className="text-xs text-gray-400 text-center py-2">読み込み中...</p>
                 )}
                 {!loadingErrorLogs && errorLogs.length === 0 && (
-                  <p className="text-xs text-gray-400 text-center py-2">エラーログはありません</p>
+                  <p className="text-xs text-gray-400 text-center py-2">エラーの詳細が記録されていません。「解析を再試行」ボタンで再実行してください。</p>
                 )}
                 {errorLogs.map((log, idx) => (
                   <div key={log.id || idx} className="p-2.5 bg-gray-50 border border-gray-200 rounded-md text-left">
