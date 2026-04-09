@@ -382,19 +382,58 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
     const tEnd = clipData.time_end || 0;
 
     // Filter transcripts that overlap with this clip's time range
-    return transcripts
-      .filter((t) => {
-        const s = t.start ?? 0;
-        const e = t.end ?? 0;
-        return s < tEnd && e > tStart;
-      })
-      .map((t) => ({
-        start: Math.max(t.start, tStart),
-        end: Math.min(t.end, tEnd),
-        text: t.text || "",
-        confidence: t.confidence,
-        source: "transcript",
-      }));
+    const overlapping = transcripts.filter((t) => {
+      const s = t.start ?? 0;
+      const e = t.end ?? 0;
+      return s < tEnd && e > tStart;
+    });
+
+    // Split large transcript chunks into sentence-level captions
+    const result = [];
+    for (const t of overlapping) {
+      const segStart = Math.max(t.start, tStart);
+      const segEnd = Math.min(t.end, tEnd);
+      const text = (t.text || '').trim();
+      if (!text) continue;
+
+      // If segment is short enough (<10s), keep as-is
+      const segDur = segEnd - segStart;
+      if (segDur <= 10) {
+        result.push({ start: segStart, end: segEnd, text, source: 'master_transcript' });
+        continue;
+      }
+
+      // Split by sentence boundaries
+      const sentences = text.split(/[。！？\n]/).map(s => s.trim()).filter(Boolean);
+      if (sentences.length <= 1) {
+        // Can't split further - chunk by ~5 second intervals
+        const chunkDur = 5;
+        const numChunks = Math.ceil(segDur / chunkDur);
+        const chars = text.split('');
+        const charsPerChunk = Math.ceil(chars.length / numChunks);
+        for (let c = 0; c < numChunks; c++) {
+          const chunkText = chars.slice(c * charsPerChunk, (c + 1) * charsPerChunk).join('');
+          if (!chunkText) continue;
+          result.push({
+            start: Math.round((segStart + c * chunkDur) * 100) / 100,
+            end: Math.round(Math.min(segStart + (c + 1) * chunkDur, segEnd) * 100) / 100,
+            text: chunkText,
+            source: 'master_transcript',
+          });
+        }
+      } else {
+        const perSentence = segDur / sentences.length;
+        sentences.forEach((sent, i) => {
+          result.push({
+            start: Math.round((segStart + i * perSentence) * 100) / 100,
+            end: Math.round((segStart + (i + 1) * perSentence) * 100) / 100,
+            text: sent,
+            source: 'master_transcript',
+          });
+        });
+      }
+    }
+    return result;
   }, []);
 
   // Fallback: build subtitle-like captions from phase audio_text (raw speech text per phase)
@@ -1048,11 +1087,66 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
     });
   };
 
+  // Delete a single caption
+  const deleteCap = (i) => {
+    setCaptions((p) => p.filter((_, idx) => idx !== i));
+  };
+
+  // Clear all captions
+  const clearAllCaptions = () => {
+    if (!window.confirm('全ての字幕を削除しますか？この操作は保存するまで取り消せます。')) return;
+    setCaptions([]);
+  };
+
+  // Add a new empty caption
+  const addCaption = () => {
+    const lastCap = captions[captions.length - 1];
+    const newStart = lastCap ? (lastCap.end || lastCap.start + 3) : 0;
+    setCaptions((p) => [...p, {
+      start: Math.round(newStart * 100) / 100,
+      end: Math.round((newStart + 3) * 100) / 100,
+      text: '',
+      source: 'manual',
+    }]);
+  };
+
+  // Load captions from master timeline transcripts
+  const loadFromMasterTranscripts = () => {
+    if (!timelineData?.transcripts?.length) {
+      setStatus({ ok: false, msg: 'マスター文字起こしデータがありません' });
+      return;
+    }
+    if (!clip) return;
+    const fromTranscripts = buildCaptionsFromTranscripts(timelineData.transcripts, clip);
+    if (fromTranscripts.length > 0) {
+      setCaptions(fromTranscripts);
+      setStatus({ ok: true, msg: `マスター文字起こしから${fromTranscripts.length}件の字幕を反映しました` });
+    } else {
+      // Try audio_text fallback
+      if (timelineData?.phases?.length > 0) {
+        const fallback = buildCaptionsFromAudioText(timelineData.phases, clip);
+        if (fallback.length > 0) {
+          setCaptions(fallback);
+          setStatus({ ok: true, msg: `フェーズ音声テキストから${fallback.length}件の字幕を反映しました` });
+          return;
+        }
+      }
+      setStatus({ ok: false, msg: 'この区間に対応する文字起こしが見つかりません' });
+    }
+  };
+
   const saveCaps = async () => {
     if (!clip?.clip_id) return;
     setSavingCaps(true);
     setStatus(null);
     try {
+      // Handle empty captions (clear all)
+      if (captions.length === 0) {
+        await VideoService.updateClipCaptions(videoId, clip.clip_id, []);
+        setStatus({ ok: true, msg: '字幕を全て削除しました' });
+        setSavingCaps(false);
+        return;
+      }
       // Apply caption offset to timestamps before saving (bake in the timing adjustment)
       const capsToSave = captions.map(c => ({
         ...c,
@@ -2254,48 +2348,95 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                 {/* ═══ 字幕編集 ═══ */}
                 <SectionTitle>字幕編集</SectionTitle>
                 <p style={{ color: C.textMuted, fontSize: 11, margin: "0 0 10px", lineHeight: 1.5 }}>
-                  配信者の音声書き起こしです。テキストを直接編集できます。タイムスタンプをクリックするとその位置にジャンプします。
+                  配信者の音声書き起こしです。テキストを直接編集・削除できます。タイムスタンプをクリックするとその位置にジャンプします。
                 </p>
                 {captions.length > 0 && captions[0]?.source && (
                   <p style={{ color: C.textDim, fontSize: 10, margin: "0 0 8px" }}>
-                    データソース: {captions[0].source === "whisper" ? "Whisper音声認識（オンデマンド）" : captions[0].source === "transcript" ? "Whisper音声認識" : captions[0].source === "audio_text" ? "フェーズ音声テキスト" : "クリップ字幕"}
+                    データソース: {captions[0].source === "whisper" ? "Whisper音声認識（オンデマンド）" : captions[0].source === "transcript" ? "Whisper音声認識" : captions[0].source === "audio_text" ? "フェーズ音声テキスト" : captions[0].source === "saved" ? "保存済み" : captions[0].source === "manual" ? "手動追加" : captions[0].source === "master_transcript" ? "マスター文字起こし" : "クリップ字幕"}
                   </p>
                 )}
-                {/* Generate subtitles button - always visible */}
-                <button
-                  onClick={generateSubtitles}
-                  disabled={transcribing}
-                  style={{
-                    width: "100%",
-                    padding: "10px 16px",
-                    border: `1px solid ${C.accent}66`,
-                    borderRadius: 8,
-                    backgroundColor: transcribing ? C.surfaceLight : C.accent + "22",
-                    color: C.accent,
-                    fontSize: 13,
-                    fontWeight: 600,
-                    cursor: transcribing ? "not-allowed" : "pointer",
-                    marginBottom: 12,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    gap: 8,
-                    opacity: transcribing ? 0.7 : 1,
-                  }}
-                >
-                  {transcribing ? (
-                    <>
-                      <span style={{ animation: "spin 1s linear infinite", display: "inline-block" }}>⟳</span>
-                      AI音声認識で字幕を生成中...
-                    </>
-                  ) : captions.length > 0 ? (
-                    <>🎤 字幕を再生成（AI音声認識）</>
-                  ) : (
-                    <>🎤 字幕を生成（AI音声認識）</>
+
+                {/* Action buttons row */}
+                <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
+                  {/* Generate subtitles button */}
+                  <button
+                    onClick={generateSubtitles}
+                    disabled={transcribing}
+                    style={{
+                      flex: '1 1 auto',
+                      padding: '8px 12px',
+                      border: `1px solid ${C.accent}66`,
+                      borderRadius: 8,
+                      backgroundColor: transcribing ? C.surfaceLight : C.accent + '22',
+                      color: C.accent,
+                      fontSize: 11,
+                      fontWeight: 600,
+                      cursor: transcribing ? 'not-allowed' : 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 4,
+                      opacity: transcribing ? 0.7 : 1,
+                      minWidth: 0,
+                    }}
+                  >
+                    {transcribing ? (
+                      <><span style={{ animation: 'spin 1s linear infinite', display: 'inline-block' }}>{'⟳'}</span> 生成中...</>
+                    ) : (
+                      <>{captions.length > 0 ? '🎤 AI再生成' : '🎤 AI生成'}</>
+                    )}
+                  </button>
+
+                  {/* Load from master transcripts button */}
+                  <button
+                    onClick={loadFromMasterTranscripts}
+                    style={{
+                      flex: '1 1 auto',
+                      padding: '8px 12px',
+                      border: `1px solid ${C.blue || '#3b82f6'}66`,
+                      borderRadius: 8,
+                      backgroundColor: (C.blue || '#3b82f6') + '18',
+                      color: C.blue || '#3b82f6',
+                      fontSize: 11,
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 4,
+                      minWidth: 0,
+                    }}
+                  >
+                    {'📝'} マスター反映
+                  </button>
+
+                  {/* Clear all captions button */}
+                  {captions.length > 0 && (
+                    <button
+                      onClick={clearAllCaptions}
+                      style={{
+                        flex: '0 0 auto',
+                        padding: '8px 12px',
+                        border: `1px solid ${C.red || '#ef4444'}44`,
+                        borderRadius: 8,
+                        backgroundColor: (C.red || '#ef4444') + '12',
+                        color: C.red || '#ef4444',
+                        fontSize: 11,
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 4,
+                      }}
+                    >
+                      {'🗑'} 全削除
+                    </button>
                   )}
-                </button>
+                </div>
+
                 {transcribing && (
-                  <p style={{ color: C.textMuted, fontSize: 10, textAlign: "center", margin: "0 0 10px" }}>
+                  <p style={{ color: C.textMuted, fontSize: 10, textAlign: 'center', margin: '0 0 10px' }}>
                     OpenAI Whisperで音声を書き起こしています。30秒〜1分程度かかります。
                   </p>
                 )}
@@ -2303,32 +2444,33 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                   <div
                     style={{
                       color: C.textDim,
-                      textAlign: "center",
+                      textAlign: 'center',
                       padding: 24,
                       fontSize: 13,
                       backgroundColor: C.surfaceLight,
                       borderRadius: 8,
                     }}
                   >
-                    音声書き起こしデータがありません。
+                    字幕がありません。
                     <br />
-                    上のボタンをクリックしてAI音声認識で字幕を生成してください。
+                    <span style={{ fontSize: 11 }}>「AI生成」で音声認識、または「マスター反映」でタイムラインの文字起こしを使用できます。</span>
                   </div>
                 ) : (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                     {captions.map((cap, i) => {
                       const isActive = currentCaption === cap;
                       return (
                         <div
                           key={i}
                           style={{
-                            display: "flex",
-                            gap: 8,
-                            padding: "8px 10px",
-                            backgroundColor: isActive ? C.accent + "18" : C.surfaceLight,
+                            display: 'flex',
+                            gap: 6,
+                            padding: '8px 10px',
+                            backgroundColor: isActive ? C.accent + '18' : C.surfaceLight,
                             borderRadius: 6,
-                            border: isActive ? `1px solid ${C.accent}55` : `1px solid transparent`,
-                            transition: "all 0.2s ease",
+                            border: isActive ? `1px solid ${C.accent}55` : '1px solid transparent',
+                            transition: 'all 0.2s ease',
+                            alignItems: 'flex-start',
                           }}
                         >
                           <span
@@ -2341,7 +2483,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                               fontSize: 11,
                               minWidth: 42,
                               fontWeight: 600,
-                              cursor: "pointer",
+                              cursor: 'pointer',
                               paddingTop: 3,
                               flexShrink: 0,
                             }}
@@ -2354,7 +2496,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                             rows={2}
                             style={{
                               flex: 1,
-                              padding: "4px 8px",
+                              padding: '4px 8px',
                               backgroundColor: C.bg,
                               border: `1px solid ${C.border}`,
                               borderRadius: 5,
@@ -2362,11 +2504,11 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                               fontSize: 13,
                               fontWeight: cap.emphasis ? 700 : 400,
                               lineHeight: 1.5,
-                              outline: "none",
-                              resize: "vertical",
+                              outline: 'none',
+                              resize: 'vertical',
                               minHeight: 36,
-                              fontFamily: "inherit",
-                              transition: "border-color 0.2s ease",
+                              fontFamily: 'inherit',
+                              transition: 'border-color 0.2s ease',
                             }}
                             onFocus={(e) => {
                               e.target.style.borderColor = C.accent;
@@ -2375,27 +2517,83 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                               e.target.style.borderColor = C.border;
                             }}
                           />
+                          {/* Delete single caption button */}
+                          <button
+                            onClick={() => deleteCap(i)}
+                            title="この字幕を削除"
+                            style={{
+                              flexShrink: 0,
+                              width: 24,
+                              height: 24,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              border: 'none',
+                              borderRadius: 4,
+                              backgroundColor: 'transparent',
+                              color: C.textDim,
+                              fontSize: 14,
+                              cursor: 'pointer',
+                              padding: 0,
+                              marginTop: 2,
+                              transition: 'all 0.15s ease',
+                            }}
+                            onMouseEnter={(e) => {
+                              e.target.style.backgroundColor = (C.red || '#ef4444') + '22';
+                              e.target.style.color = C.red || '#ef4444';
+                            }}
+                            onMouseLeave={(e) => {
+                              e.target.style.backgroundColor = 'transparent';
+                              e.target.style.color = C.textDim;
+                            }}
+                          >
+                            {'×'}
+                          </button>
                         </div>
                       );
                     })}
-                    <button
-                      onClick={saveCaps}
-                      disabled={savingCaps}
-                      style={{
-                        padding: "10px 20px",
-                        border: "none",
-                        borderRadius: 8,
-                        backgroundColor: C.green,
-                        color: "#fff",
-                        fontSize: 13,
-                        fontWeight: 600,
-                        cursor: "pointer",
-                        opacity: savingCaps ? 0.6 : 1,
-                        marginTop: 10,
-                      }}
-                    >
-                      {savingCaps ? "保存中..." : "字幕を保存"}
-                    </button>
+
+                    {/* Add caption + Save buttons */}
+                    <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                      <button
+                        onClick={addCaption}
+                        style={{
+                          flex: 1,
+                          padding: '8px 16px',
+                          border: `1px dashed ${C.border}`,
+                          borderRadius: 8,
+                          backgroundColor: 'transparent',
+                          color: C.textMuted,
+                          fontSize: 12,
+                          fontWeight: 500,
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: 4,
+                        }}
+                      >
+                        {'+'} 字幕を追加
+                      </button>
+                      <button
+                        onClick={saveCaps}
+                        disabled={savingCaps}
+                        style={{
+                          flex: 1,
+                          padding: '8px 16px',
+                          border: 'none',
+                          borderRadius: 8,
+                          backgroundColor: C.green,
+                          color: '#fff',
+                          fontSize: 13,
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          opacity: savingCaps ? 0.6 : 1,
+                        }}
+                      >
+                        {savingCaps ? '保存中...' : '字幕を保存'}
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>

@@ -596,10 +596,12 @@ async def update_clip_captions(
     """
     try:
         user_id = user.get("user_id") or user.get("id")
-        captions = request_body.get("captions", [])
+        captions = request_body.get("captions")
 
-        if not captions:
-            raise HTTPException(status_code=400, detail="captions array is required")
+        if captions is None:
+            raise HTTPException(status_code=400, detail="captions field is required")
+
+        # Allow empty array (clears all captions)
 
         # Verify clip exists
         sql = text("""
