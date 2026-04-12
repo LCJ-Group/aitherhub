@@ -269,11 +269,22 @@ export default function VideoDetail({ videoData, editorParams }) {
   // (product demos, price mentions, CTAs, etc.) and filters out greetings/chitchat.
   const autoClipTriggeredRef = useRef(false);
   useEffect(() => {
-    if (!videoData?.id || !videoData?.reports_1?.length) return;
-    if (!clipStatesLoaded) return; // Wait for existing clip states to load
+    console.log(`[AutoClipGen] Check: videoId=${videoData?.id}, reports_1_len=${videoData?.reports_1?.length}, clipStatesLoaded=${clipStatesLoaded}, triggered=${autoClipTriggeredRef.current}`);
+    if (!videoData?.id || !videoData?.reports_1?.length) {
+      console.log('[AutoClipGen] Skipped: missing videoData.id or reports_1');
+      return;
+    }
+    if (!clipStatesLoaded) {
+      console.log('[AutoClipGen] Skipped: clipStatesLoaded is false');
+      return;
+    }
     // Only trigger once per video load
-    if (autoClipTriggeredRef.current) return;
+    if (autoClipTriggeredRef.current) {
+      console.log('[AutoClipGen] Skipped: already triggered for this video');
+      return;
+    }
     autoClipTriggeredRef.current = true;
+    console.log('[AutoClipGen] Starting auto clip generation...');
 
     const CONCURRENCY = 2; // Max parallel clip generations
     const MAX_AUTO_CLIPS = 10; // Maximum auto-generated clips

@@ -299,8 +299,8 @@ class VideoService extends BaseApiService {
     const signal = controller.signal;
 
     // Retry configuration
-    const MAX_RETRIES = 5;
-    const RETRY_DELAY = 3000; // 3 seconds
+    const MAX_RETRIES = 20; // Increased for long videos (1h+) where Azure may timeout SSE multiple times
+    const RETRY_DELAY = 2000; // 2 seconds
     const HEARTBEAT_TIMEOUT = 120000; // 2 minutes without heartbeat = connection lost
     let retryCount = 0;
     let lastHeartbeatTime = Date.now();
@@ -412,6 +412,7 @@ class VideoService extends BaseApiService {
         }
 
         // Handle remaining buffer
+        let foundDoneInBuffer = false;
         if (buffer) {
           const lines = buffer.split(/\r?\n/);
           for (const line of lines) {
@@ -421,14 +422,41 @@ class VideoService extends BaseApiService {
               if (payload === "[DONE]" || payload === "DONE") {
                 console.log('SSE: Stream completed (from buffer)');
                 clearTimeout(heartbeatTimeoutId);
+                foundDoneInBuffer = true;
                 onDone();
+                return;
               }
+              // Also check for DONE status in JSON payload
+              try {
+                const data = JSON.parse(payload);
+                if (data.status === 'DONE' || data.status === 'ERROR') {
+                  console.log(`SSE: Processing ${data.status} (from buffer)`);
+                  clearTimeout(heartbeatTimeoutId);
+                  onStatusUpdate(data);
+                  onDone();
+                  return;
+                }
+                onStatusUpdate(data);
+              } catch (_) {}
             }
           }
         }
 
         clearTimeout(heartbeatTimeoutId);
-        onDone();
+
+        // Stream ended without [DONE] marker - this is likely a timeout/disconnect
+        // Retry instead of calling onDone() which would falsely mark as complete
+        if (!foundDoneInBuffer) {
+          console.warn('SSE: Stream ended without DONE marker (likely timeout), retrying...');
+          if (retryCount < MAX_RETRIES) {
+            retryCount++;
+            await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+            return connectWithRetry();
+          } else {
+            console.error(`SSE: Max retries (${MAX_RETRIES}) exceeded after stream timeout`);
+            onError(new Error('SSE stream ended without completion after max retries'));
+          }
+        }
       } catch (err) {
         clearTimeout(heartbeatTimeoutId);
 

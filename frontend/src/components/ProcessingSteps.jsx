@@ -85,7 +85,7 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
   const retryCountRef = useRef(0);
   const lastInitializedVideoIdRef = useRef(null);
   const maxProgressRef = useRef(0);
-  const MAX_SSE_RETRIES = 5;
+  const MAX_SSE_RETRIES = 20; // Increased for long videos where Azure may timeout SSE connections
 
   // ── Timing refs (not state to avoid re-renders) ──
   const clockSkewMsRef = useRef(null);        // clientNow - serverNow (measured once)
@@ -637,13 +637,36 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
       },
 
       onDone: async () => {
-        console.log('✅ SSE Stream completed');
-        setCurrentStatus('DONE');
-        maxProgressRef.current = 100;
-        setSmoothProgress(100);
-        setEstimatedRemainingMs(0);
-        if (handleProcessingComplete) {
-          handleProcessingComplete();
+        console.log('✅ SSE Stream completed, verifying actual video status...');
+        // Verify the video is actually DONE before marking as complete
+        // (SSE stream may close due to timeout before actual completion)
+        try {
+          const response = await VideoService.getVideoById(videoId);
+          const actualStatus = response?.status;
+          console.log(`✅ Verified video status: ${actualStatus}`);
+          if (actualStatus === 'DONE') {
+            setCurrentStatus('DONE');
+            maxProgressRef.current = 100;
+            setSmoothProgress(100);
+            setEstimatedRemainingMs(0);
+            if (handleProcessingComplete) {
+              handleProcessingComplete();
+            }
+          } else if (actualStatus === 'ERROR') {
+            setCurrentStatus('ERROR');
+            setErrorMessage('処理中にエラーが発生しました');
+          } else {
+            // Video is still processing - SSE closed prematurely
+            // Fall back to polling to continue monitoring
+            console.warn(`⚠️ SSE closed but video status is ${actualStatus}, starting polling fallback`);
+            const normalized = normalizeProcessingStatus(actualStatus);
+            setCurrentStatus(normalized);
+            startPolling();
+          }
+        } catch (err) {
+          console.error('Failed to verify video status after SSE done:', err);
+          // Fall back to polling as safety net
+          startPolling();
         }
       },
 
