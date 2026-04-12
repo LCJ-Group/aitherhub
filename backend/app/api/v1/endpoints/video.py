@@ -273,7 +273,8 @@ async def stream_video_status(
     This endpoint provides real-time status updates for video processing.
     It polls the database every 2 seconds and sends status changes to the client.
     The stream automatically closes when processing reaches DONE or ERROR status.
-    Supports long-running videos up to 4 hours with heartbeat messages every 30 seconds.
+    Supports long-running videos up to 4 hours with heartbeat messages every 15 seconds.
+    Uses SSE comment keep-alive pings between heartbeats to prevent Azure App Service idle timeout (~230s).
 
     Args:
         video_id: UUID of the video to monitor
@@ -286,7 +287,7 @@ async def stream_video_status(
         - progress: Progress percentage (0-100)
         - message: User-friendly Japanese status message
         - updated_at: Timestamp of last update
-        - heartbeat: Boolean indicating heartbeat message (sent every 30 seconds)
+        - heartbeat: Boolean indicating heartbeat message (sent every 15 seconds)
 
     Example SSE events:
         data: {"video_id": "...", "status": "STEP_3_TRANSCRIBE_AUDIO", "progress": 40, "message": "音声書き起こし中...", "updated_at": "2026-01-20T..."}
@@ -313,6 +314,13 @@ async def stream_video_status(
                 return
 
             # Stream status updates
+            # ── Keep-alive strategy ──
+            # Azure App Service has an idle timeout of ~230 seconds.
+            # We use a multi-layer keep-alive approach:
+            # 1. SSE comment pings (`: keep-alive`) every poll cycle (2s) - invisible to SSE parsers
+            # 2. JSON heartbeat messages every 15 seconds - visible to frontend
+            # 3. Status updates whenever status/progress changes
+            # This ensures the connection is NEVER idle for more than 2 seconds.
             while poll_count < max_polls:
                 try:
                     # Refresh video data
@@ -352,9 +360,14 @@ async def stream_video_status(
                         last_step_progress = current_step_progress
 
                         logger.info(f"SSE: Video {video_id} status={current_status} step_progress={current_step_progress}%")
+                    else:
+                        # No status change - send SSE comment ping to prevent Azure idle timeout
+                        # SSE spec: lines starting with ':' are comments, ignored by EventSource parsers
+                        yield ": keep-alive\n\n"
 
-                    # Send heartbeat every 30 seconds (15 * 2 seconds) to keep connection alive
-                    if poll_count > 0 and poll_count % 15 == 0:
+                    # Send JSON heartbeat every 15 seconds (7-8 poll cycles * 2s)
+                    # This is visible to the frontend and resets its heartbeat timer
+                    if poll_count > 0 and poll_count % 7 == 0:
                         heartbeat_payload = {
                             "heartbeat": True,
                             "timestamp": datetime.utcnow().isoformat(),

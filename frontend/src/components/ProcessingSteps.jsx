@@ -95,6 +95,7 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
   const emaRemainingRef = useRef(null);
   const elapsedTimerRef = useRef(null);
   const phaseDurationsRef = useRef({});
+  const watchdogIntervalRef = useRef(null);  // Watchdog timer: periodically checks video status via API
 
   // Upload elapsed time ticker
   useEffect(() => {
@@ -705,6 +706,10 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
         clearInterval(pollingIntervalRef.current);
         pollingIntervalRef.current = null;
       }
+      if (watchdogIntervalRef.current) {
+        clearInterval(watchdogIntervalRef.current);
+        watchdogIntervalRef.current = null;
+      }
     };
   }, [videoId]);
 
@@ -819,6 +824,98 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
       return () => clearTimeout(timeout);
     }
   }, [currentStatus, videoId]);
+
+  // ── Watchdog timer: periodically verify video status via API ──
+  // This is the ultimate safety net against SSE connection issues.
+  // Even if SSE drops silently and retries fail, the watchdog will detect DONE/ERROR
+  // and trigger the correct transition. Runs every 45 seconds.
+  useEffect(() => {
+    if (!videoId) return;
+    // Don't run watchdog if already DONE or ERROR
+    if (currentStatus === 'DONE' || currentStatus === 'ERROR') {
+      if (watchdogIntervalRef.current) {
+        clearInterval(watchdogIntervalRef.current);
+        watchdogIntervalRef.current = null;
+      }
+      return;
+    }
+
+    const watchdogCheck = async () => {
+      try {
+        const response = await VideoService.getVideoById(videoId);
+        if (!response || !response.status) return;
+
+        const actualStatus = response.status;
+        console.log(`🐕 Watchdog check: actual status = ${actualStatus}, current UI status = ${currentStatus}`);
+
+        if (actualStatus === 'DONE') {
+          console.log('🐕 Watchdog detected DONE! Triggering completion...');
+          // Clean up SSE and polling
+          if (statusStreamRef.current) {
+            statusStreamRef.current.close();
+            statusStreamRef.current = null;
+          }
+          if (pollingIntervalRef.current) {
+            clearInterval(pollingIntervalRef.current);
+            pollingIntervalRef.current = null;
+          }
+          if (watchdogIntervalRef.current) {
+            clearInterval(watchdogIntervalRef.current);
+            watchdogIntervalRef.current = null;
+          }
+          setCurrentStatus('DONE');
+          maxProgressRef.current = 100;
+          setSmoothProgress(100);
+          setEstimatedRemainingMs(0);
+          if (handleProcessingComplete) {
+            handleProcessingComplete();
+          }
+        } else if (actualStatus === 'ERROR') {
+          console.log('🐕 Watchdog detected ERROR!');
+          if (statusStreamRef.current) {
+            statusStreamRef.current.close();
+            statusStreamRef.current = null;
+          }
+          if (pollingIntervalRef.current) {
+            clearInterval(pollingIntervalRef.current);
+            pollingIntervalRef.current = null;
+          }
+          if (watchdogIntervalRef.current) {
+            clearInterval(watchdogIntervalRef.current);
+            watchdogIntervalRef.current = null;
+          }
+          setCurrentStatus('ERROR');
+          setErrorMessage('処理中にエラーが発生しました');
+          VideoService.getErrorLogs(videoId).then(res => {
+            if (res?.error_logs) setErrorLogs(res.error_logs);
+          }).catch(() => {});
+        } else {
+          // Still processing - update UI status if it's ahead of actual
+          const normalized = normalizeProcessingStatus(actualStatus);
+          // Only update if SSE/polling isn't active (stale state)
+          if (!statusStreamRef.current && !pollingIntervalRef.current) {
+            console.log('🐕 Watchdog: No active SSE or polling, restarting polling');
+            startPolling();
+          }
+        }
+      } catch (err) {
+        console.warn('🐕 Watchdog check failed:', err);
+      }
+    };
+
+    // Start watchdog with 45-second interval
+    watchdogIntervalRef.current = setInterval(watchdogCheck, 45000);
+    // Also run an initial check after 30 seconds (catch early failures)
+    const initialTimeout = setTimeout(watchdogCheck, 30000);
+
+    return () => {
+      if (watchdogIntervalRef.current) {
+        clearInterval(watchdogIntervalRef.current);
+        watchdogIntervalRef.current = null;
+      }
+      clearTimeout(initialTimeout);
+    };
+  }, [videoId, currentStatus, handleProcessingComplete, startPolling]);
 
   // Dynamic upload step label: show "アップロード中..." during upload, "アップロード完了" when done
   const uploadStepLabel = (() => {

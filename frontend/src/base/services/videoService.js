@@ -301,7 +301,7 @@ class VideoService extends BaseApiService {
     // Retry configuration
     const MAX_RETRIES = 20; // Increased for long videos (1h+) where Azure may timeout SSE multiple times
     const RETRY_DELAY = 2000; // 2 seconds
-    const HEARTBEAT_TIMEOUT = 120000; // 2 minutes without heartbeat = connection lost
+    const HEARTBEAT_TIMEOUT = 60000; // 60 seconds without heartbeat = connection lost (backend sends every ~15s)
     let retryCount = 0;
     let lastHeartbeatTime = Date.now();
     let heartbeatTimeoutId = null;
