@@ -351,7 +351,14 @@ class LiveAvatarService:
                 resp.raise_for_status()
                 data = resp.json()
 
-            voices = data.get("data", {}).get("results", [])
+            raw_data = data.get("data", [])
+            # Handle both {"data": {"results": [...]}} and {"data": [...]}
+            if isinstance(raw_data, list):
+                voices = raw_data
+            elif isinstance(raw_data, dict):
+                voices = raw_data.get("results", [])
+            else:
+                voices = []
             logger.info(f"[LiveAvatar] Fetched {len(voices)} voices")
             return voices
 
@@ -379,7 +386,14 @@ class LiveAvatarService:
                 resp.raise_for_status()
                 data = resp.json()
 
-            secrets = data.get("data", {}).get("results", [])
+            raw_data = data.get("data", [])
+            # Handle both {"data": {"results": [...]}} and {"data": [...]}
+            if isinstance(raw_data, list):
+                secrets = raw_data
+            elif isinstance(raw_data, dict):
+                secrets = raw_data.get("results", [])
+            else:
+                secrets = []
             logger.info(f"[LiveAvatar] Fetched {len(secrets)} secrets")
             return secrets
 
