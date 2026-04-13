@@ -6,6 +6,7 @@ import FaceSwapPage from './components/FaceSwapPage'
 import AutoVideoPage from './components/AutoVideoPage'
 import DigitalHumanPage from './components/DigitalHumanPage'
 import AiLiveCreatorPage from './components/AiLiveCreatorPage'
+import OBSOutputPage from './components/OBSOutputPage'
 import PersonaPage from './components/PersonaPage'
 import ScriptGeneratorPage from './components/ScriptGeneratorPage'
 import PrivacyPolicy from './components/PrivacyPolicy'
@@ -27,6 +28,7 @@ function App() {
         <Route path="/auto-video" element={<AutoVideoPage />} />
         <Route path="/digital-human" element={<DigitalHumanPage />} />
         <Route path="/ai-live-creator" element={<AiLiveCreatorPage />} />
+        <Route path="/ai-live-creator/obs" element={<OBSOutputPage />} />
         <Route path="/personas" element={<PersonaPage />} />
         <Route path="/script-generator" element={<ScriptGeneratorPage />} />
         <Route path="/login" element={<AuthPage mode="login" />} />

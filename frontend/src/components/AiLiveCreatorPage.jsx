@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Upload,
@@ -29,6 +29,9 @@ import {
   Film,
   Users,
   Grid3X3,
+  ExternalLink,
+  Copy,
+  Tv,
 } from "lucide-react";
 import aiLiveCreatorService from "../base/services/aiLiveCreatorService";
 import personaService from "../base/services/personaService";
@@ -132,6 +135,8 @@ export default function AiLiveCreatorPage() {
   const [liveAvatarError, setLiveAvatarError] = useState(null);
   const [liveAvatarStream, setLiveAvatarStream] = useState(null); // MediaStream from LiveAvatar for left preview
   const [liveAvatarConnected, setLiveAvatarConnected] = useState(false);
+  const [obsUrlCopied, setObsUrlCopied] = useState(false);
+  const obsWindowRef = useRef(null);
 
   // ── AutoPilot State ──
   const [autoPilotActive, setAutoPilotActive] = useState(false);
@@ -350,6 +355,55 @@ export default function AiLiveCreatorPage() {
       setLoadingLiveAvatars(false);
     }
   };
+
+  // ── OBS Integration Functions ──
+  const getObsUrl = useCallback(() => {
+    const base = window.location.origin;
+    const params = new URLSearchParams();
+    if (selectedLiveAvatarId) params.set("avatar_id", selectedLiveAvatarId);
+    if (selectedVoiceId) params.set("voice_id", selectedVoiceId);
+    params.set("language", languageCode || "ja");
+    params.set("bg", "green");
+    params.set("autostart", "true");
+    return `${base}/ai-live-creator/obs?${params.toString()}`;
+  }, [selectedLiveAvatarId, selectedVoiceId, languageCode]);
+
+  const handleObsPopout = useCallback(() => {
+    const url = getObsUrl();
+    // Open in a new window sized for portrait (1080x1920 scaled down)
+    const w = 540;
+    const h = 960;
+    const left = window.screenX + window.outerWidth;
+    const top = window.screenY;
+    if (obsWindowRef.current && !obsWindowRef.current.closed) {
+      obsWindowRef.current.focus();
+      return;
+    }
+    obsWindowRef.current = window.open(
+      url,
+      "aitherhub-obs-output",
+      `width=${w},height=${h},left=${left},top=${top},resizable=yes,scrollbars=no,toolbar=no,menubar=no,location=no,status=no`
+    );
+  }, [getObsUrl]);
+
+  const handleCopyObsUrl = useCallback(async () => {
+    const url = getObsUrl();
+    try {
+      await navigator.clipboard.writeText(url);
+      setObsUrlCopied(true);
+      setTimeout(() => setObsUrlCopied(false), 2000);
+    } catch (err) {
+      // Fallback for non-HTTPS
+      const textarea = document.createElement("textarea");
+      textarea.value = url;
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+      setObsUrlCopied(true);
+      setTimeout(() => setObsUrlCopied(false), 2000);
+    }
+  }, [getObsUrl]);
 
   const loadPersonas = async () => {
     try {
@@ -1214,6 +1268,59 @@ export default function AiLiveCreatorPage() {
                       setLiveAvatarConnected(false);
                     }}
                   />
+                )}
+
+                {/* OBS Integration Panel (Realtime mode only) */}
+                {engine === "realtime" && (
+                  <div className="bg-gray-800/50 rounded-xl border border-cyan-500/30 p-3">
+                    <h4 className="text-[11px] font-medium text-cyan-300 mb-2 flex items-center gap-1.5">
+                      <Tv className="w-3.5 h-3.5 text-cyan-400" />
+                      OBS連携
+                      {liveAvatarConnected && (
+                        <span className="ml-auto text-[9px] bg-green-500/20 text-green-300 px-1.5 py-0.5 rounded-full">
+                          LIVE
+                        </span>
+                      )}
+                    </h4>
+                    <p className="text-[9px] text-gray-400 mb-2">
+                      OBSの「ブラウザソース」にURLを追加して配信できます。クロマキー対応のグリーンバックです。
+                    </p>
+                    <div className="flex gap-1.5">
+                      <button
+                        onClick={handleCopyObsUrl}
+                        className={`flex-1 py-2 px-3 rounded-lg text-[10px] font-medium flex items-center justify-center gap-1.5 transition-all border ${
+                          obsUrlCopied
+                            ? "bg-green-500/20 border-green-500/50 text-green-300"
+                            : "bg-cyan-500/10 border-cyan-500/30 text-cyan-300 hover:bg-cyan-500/20"
+                        }`}
+                      >
+                        {obsUrlCopied ? (
+                          <><CheckCircle className="w-3 h-3" />コピー済み</>
+                        ) : (
+                          <><Copy className="w-3 h-3" />OBS URLをコピー</>
+                        )}
+                      </button>
+                      <button
+                        onClick={handleObsPopout}
+                        className="py-2 px-3 rounded-lg text-[10px] font-medium flex items-center justify-center gap-1.5 transition-all border bg-purple-500/10 border-purple-500/30 text-purple-300 hover:bg-purple-500/20"
+                        title="別ウィンドウで開く（OBS Window Capture用）"
+                      >
+                        <ExternalLink className="w-3 h-3" />Pop-out
+                      </button>
+                    </div>
+                    <div className="mt-2 p-2 bg-gray-900/50 rounded-lg border border-gray-700/30">
+                      <p className="text-[8px] text-gray-500 font-medium mb-1">OBS設定ガイド:</p>
+                      <ol className="text-[8px] text-gray-500 space-y-0.5 list-decimal list-inside">
+                        <li>OBSで「ソース追加」→「ブラウザ」を選択</li>
+                        <li>上の「OBS URLをコピー」で取得したURLを貼り付け</li>
+                        <li>幅: 1080、高さ: 1920に設定</li>
+                        <li>クロマキーで緑背景を透過させる（任意）</li>
+                      </ol>
+                      <p className="text-[8px] text-gray-500 mt-1">
+                        または「Pop-out」で別ウィンドウに開き、OBSの「ウィンドウキャプチャ」で取り込めます。
+                      </p>
+                    </div>
+                  </div>
                 )}
 
                 {/* Text Input (compact) - hidden in realtime mode */}
