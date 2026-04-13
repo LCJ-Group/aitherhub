@@ -44,7 +44,14 @@ LIVEAVATAR_BASE_URL = "https://api.liveavatar.com"
 DEFAULT_AVATAR_ID = "d55f3fc1-372f-426e-8fcf-75f0da82a04a"
 
 # Default ElevenLabs voice connected to LiveAvatar
-DEFAULT_VOICE_ID = "de5574fc-009e-4a01-a881-9919ef8f5a0c"
+# Bound from ElevenLabs voice_id: RJs5YoIcR2WzF8qHIg1q (japan kyogoku ryu)
+DEFAULT_VOICE_ID = "14efbcf8-d01b-425c-8b82-9d6802616997"
+
+# ElevenLabs voice_id → LiveAvatar UUID mapping
+# When frontend sends an ElevenLabs voice_id, we map it to the LiveAvatar UUID
+ELEVENLABS_TO_LIVEAVATAR_VOICE_MAP: Dict[str, str] = {
+    "RJs5YoIcR2WzF8qHIg1q": "14efbcf8-d01b-425c-8b82-9d6802616997",  # japan kyogoku ryu
+}
 
 
 class LiveAvatarError(Exception):
@@ -200,7 +207,13 @@ class LiveAvatarService:
         if not avatar_id or not _UUID_RE.match(str(avatar_id)):
             logger.info(f"[LiveAvatar] avatar_id '{avatar_id}' is empty or not UUID, using default: {DEFAULT_AVATAR_ID}")
             avatar_id = DEFAULT_AVATAR_ID
-        if not voice_id or not _UUID_RE.match(str(voice_id)):
+
+        # Map ElevenLabs voice_id to LiveAvatar UUID if needed
+        if voice_id and voice_id in ELEVENLABS_TO_LIVEAVATAR_VOICE_MAP:
+            mapped_id = ELEVENLABS_TO_LIVEAVATAR_VOICE_MAP[voice_id]
+            logger.info(f"[LiveAvatar] Mapped ElevenLabs voice_id '{voice_id}' → LiveAvatar UUID '{mapped_id}'")
+            voice_id = mapped_id
+        elif not voice_id or not _UUID_RE.match(str(voice_id)):
             logger.info(f"[LiveAvatar] voice_id '{voice_id}' is empty or not UUID, using default: {DEFAULT_VOICE_ID}")
             voice_id = DEFAULT_VOICE_ID
 
