@@ -8,6 +8,7 @@ import AdminBugReports from "./admin/AdminBugReports";
 import AdminWorkLogs from "./admin/AdminWorkLogs";
 import AdminLessons from "./admin/AdminLessons";
 import AdminScriptGenerations from "./admin/AdminScriptGenerations";
+import AdminClipDB from "./admin/AdminClipDB";
 
 const ADMIN_ID = "aither";
 const ADMIN_PASS = "hub";
@@ -24,7 +25,10 @@ export default function AdminDashboard() {
   const [feedbackLoading, setFeedbackLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [activeTab, setActiveTab] = useState("dashboard"); // "dashboard" | "feedbacks" | "videos"
+  // Support ?tab= URL parameter
+const urlParams = new URLSearchParams(window.location.search);
+const initialTab = urlParams.get("tab") || "dashboard";
+const [activeTab, setActiveTab] = useState(initialTab);
   const [selectedVideoId, setSelectedVideoId] = useState(null);
   const [uploadHealth, setUploadHealth] = useState(null);
   const [uploadHealthLoading, setUploadHealthLoading] = useState(false);
@@ -346,6 +350,16 @@ export default function AdminDashboard() {
           >
             📝 台本学習
           </button>
+          <button
+            onClick={() => setActiveTab("clip-db")}
+            className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+              activeTab === "clip-db"
+                ? "bg-white text-purple-600 shadow-sm"
+                : "text-gray-500 hover:text-gray-700"
+            }`}
+          >
+            🎬 クリップDB
+          </button>
         </div>
 
         {activeTab === "dashboard" && (
@@ -436,6 +450,9 @@ export default function AdminDashboard() {
         )}
         {activeTab === "script-generations" && (
           <AdminScriptGenerations adminKey={`${ADMIN_ID}:${ADMIN_PASS}`} />
+        )}
+        {activeTab === "clip-db" && (
+          <AdminClipDB adminKey={`${ADMIN_ID}:${ADMIN_PASS}`} />
         )}
       </div>
     </div>

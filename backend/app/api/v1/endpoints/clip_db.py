@@ -18,13 +18,31 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional, List
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_session
 from app.api.deps import get_current_user_optional
+
+ADMIN_ID = "aither"
+ADMIN_PASS = "hub"
+
+
+def _check_admin_or_user(
+    user: dict = None,
+    x_admin_key: str = None,
+) -> bool:
+    """Return True if admin (via X-Admin-Key or admin email)."""
+    expected = f"{ADMIN_ID}:{ADMIN_PASS}"
+    if x_admin_key == expected:
+        return True
+    if user:
+        email = user.get("email", "")
+        if email in ("admin@aitherhub.com", "ryuhairartist@gmail.com"):
+            return True
+    return False
 
 logger = logging.getLogger("clip_db")
 
@@ -146,6 +164,7 @@ async def search_clips(
     page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_session),
     user: dict = Depends(get_current_user_optional),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
 ):
     """
     Search clips with structured filters, tags, and sorting.
@@ -154,11 +173,11 @@ async def search_clips(
     conditions = ["vc.status = 'completed'", "vc.clip_url IS NOT NULL"]
     params = {}
 
+    is_admin = _check_admin_or_user(user, x_admin_key)
     # User filter (non-admin sees only their clips)
-    if user:
+    if not is_admin and user:
         user_id = user.get("user_id") or user.get("id")
-        is_admin = user.get("email") in ("admin@aitherhub.com", "ryuhairartist@gmail.com")
-        if not is_admin and user_id:
+        if user_id:
             conditions.append("vc.user_id = :user_id")
             params["user_id"] = user_id
 
@@ -394,6 +413,7 @@ async def search_clips(
 async def get_clip_stats(
     db: AsyncSession = Depends(get_session),
     user: dict = Depends(get_current_user_optional),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
 ):
     """
     Get aggregate statistics for the clip database.
@@ -524,6 +544,7 @@ async def get_clip_stats(
 async def get_all_tags(
     db: AsyncSession = Depends(get_session),
     user: dict = Depends(get_current_user_optional),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
 ):
     """Get all unique tags across clips (from both vc.tags and vp.sales_psychology_tags)."""
     try:
@@ -580,6 +601,7 @@ async def enrich_clip(
     clip_id: str,
     db: AsyncSession = Depends(get_session),
     user: dict = Depends(get_current_user_optional),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
 ):
     """
     Enrich a single clip with metadata from video_phases, video, and captions.
@@ -601,16 +623,13 @@ async def enrich_all_clips(
     force: bool = Query(False, description="Force re-enrich even if already enriched"),
     db: AsyncSession = Depends(get_session),
     user: dict = Depends(get_current_user_optional),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
 ):
     """
     Batch enrich all completed clips that haven't been enriched yet.
     Admin-only endpoint.
     """
-    if not user:
-        raise HTTPException(status_code=401, detail="Authentication required")
-
-    email = user.get("email", "")
-    if email not in ("admin@aitherhub.com", "ryuhairartist@gmail.com"):
+    if not _check_admin_or_user(user, x_admin_key):
         raise HTTPException(status_code=403, detail="Admin only")
 
     try:
