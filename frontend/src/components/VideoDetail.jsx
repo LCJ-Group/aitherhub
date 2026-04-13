@@ -288,6 +288,7 @@ export default function VideoDetail({ videoData, editorParams }) {
 
     const CONCURRENCY = 2; // Max parallel clip generations
     const MAX_AUTO_CLIPS = 10; // Maximum auto-generated clips
+    const MIN_CLIPS = 5; // Minimum clips to generate (relax threshold if needed)
 
     // ── Greeting/chitchat detection patterns ──
     const GREETING_PATTERNS = [
@@ -324,6 +325,7 @@ export default function VideoDetail({ videoData, editorParams }) {
     /**
      * Score a phase for "sales relevance" (0-100).
      * Higher = more likely to be a selling scene.
+     * Base score of 10 ensures non-greeting/chitchat phases are candidates.
      */
     function scoreSalesRelevance(phase) {
       const desc = phase.phase_description || phase.insight || '';
@@ -333,7 +335,9 @@ export default function VideoDetail({ videoData, editorParams }) {
       const ctaScore = Number(phase.cta_score) || 0;
       const importance = Number(phase.csv_metrics?.importance_score) || 0;
 
-      let score = 0;
+      // Base score: every phase starts with 10 points
+      // This ensures phases with any content are candidates
+      let score = 10;
 
       // ── Penalty: greeting/chitchat content ──
       const isGreeting = GREETING_PATTERNS.some(p => p.test(desc));
@@ -344,7 +348,7 @@ export default function VideoDetail({ videoData, editorParams }) {
 
       // ── Penalty: low-value event types ──
       if (tags.some(t => LOW_VALUE_EVENT_TYPES.has(t))) {
-        score -= 20;
+        score -= 15;
       }
 
       // ── Bonus: sales-relevant event types ──
@@ -366,8 +370,15 @@ export default function VideoDetail({ videoData, editorParams }) {
       score += Math.min(kwMatches * 5, 20); // max 20 pts from keywords
 
       // ── Bonus: description length (longer = more substance) ──
+      if (desc.length > 50) score += 3;
       if (desc.length > 100) score += 5;
       if (desc.length > 200) score += 5;
+
+      // ── Bonus: phase duration (longer phases = more content) ──
+      const duration = Number(phase.time_end) - Number(phase.time_start);
+      if (duration >= 30) score += 5;
+      if (duration >= 60) score += 5;
+      if (duration >= 120) score += 3;
 
       // ── Bonus: has CSV metrics (GMV, orders, clicks) ──
       const gmv = Number(phase.csv_metrics?.gmv) || 0;
@@ -434,11 +445,20 @@ export default function VideoDetail({ videoData, editorParams }) {
           scoredPhases.push({ phaseIndex, timeStart, timeEnd, relevanceScore, phase });
         }
 
-        // Filter: only phases with positive relevance score
-        const qualifiedPhases = scoredPhases.filter(p => p.relevanceScore > 0);
+        // Sort all scored phases by relevance score (highest first)
+        scoredPhases.sort((a, b) => b.relevanceScore - a.relevanceScore);
 
-        // Sort by relevance score (highest first) and take top N
-        qualifiedPhases.sort((a, b) => b.relevanceScore - a.relevanceScore);
+        // Filter: only phases with positive relevance score
+        let qualifiedPhases = scoredPhases.filter(p => p.relevanceScore > 0);
+
+        // If we have fewer than MIN_CLIPS qualified, relax the threshold
+        // to include phases with score > -10 (exclude only clear greeting/chitchat)
+        if (qualifiedPhases.length < MIN_CLIPS && scoredPhases.length >= MIN_CLIPS) {
+          console.log(`[AutoClipGen] Only ${qualifiedPhases.length} qualified phases (< ${MIN_CLIPS}), relaxing threshold`);
+          qualifiedPhases = scoredPhases.filter(p => p.relevanceScore > -10);
+        }
+
+        // Take top N
         const phasesToGenerate = qualifiedPhases.slice(0, MAX_AUTO_CLIPS);
 
         if (phasesToGenerate.length === 0) {
