@@ -43,7 +43,9 @@ export default function LiveAvatarStreaming({
   personaPrompt = "",
   voiceId = "",
   sandbox = false,
+  hideVideo = false,
   onStreamReady,
+  onDisconnect,
   onError,
   className = "",
 }) {
@@ -259,6 +261,7 @@ export default function LiveAvatarStreaming({
         setConnectionStatus("disconnected");
         setSessionId(null);
         sessionIdRef.current = null;
+        if (onDisconnect) onDisconnect();
       });
 
       room.on(RoomEvent.Reconnecting, () => {
@@ -324,7 +327,10 @@ export default function LiveAvatarStreaming({
     if (videoRef.current) {
       videoRef.current.innerHTML = "";
     }
-  }, [sessionId]);
+
+    // Notify parent that stream is disconnected
+    if (onDisconnect) onDisconnect();
+  }, [sessionId, onDisconnect]);
 
   // ── Speak Text (direct TTS) ──
   const handleSpeak = useCallback(() => {
@@ -385,8 +391,8 @@ export default function LiveAvatarStreaming({
 
   return (
     <div className={`flex flex-col gap-3 ${className}`}>
-      {/* ── Video Display ── */}
-      <div className="relative bg-gray-900 rounded-xl overflow-hidden" style={{ aspectRatio: "9/16", maxHeight: "500px" }}>
+      {/* ── Video Display (hidden when hideVideo=true, video still renders for stream capture) ── */}
+      <div className={`relative bg-gray-900 rounded-xl overflow-hidden ${hideVideo ? 'hidden' : ''}`} style={{ aspectRatio: "9/16", maxHeight: "500px" }}>
         <div ref={videoRef} className="w-full h-full" />
 
         {/* Overlay: Not connected */}

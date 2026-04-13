@@ -130,6 +130,8 @@ export default function AiLiveCreatorPage() {
   const [selectedLiveAvatarId, setSelectedLiveAvatarId] = useState("");
   const [loadingLiveAvatars, setLoadingLiveAvatars] = useState(false);
   const [liveAvatarError, setLiveAvatarError] = useState(null);
+  const [liveAvatarStream, setLiveAvatarStream] = useState(null); // MediaStream from LiveAvatar for left preview
+  const [liveAvatarConnected, setLiveAvatarConnected] = useState(false);
 
   // ── AutoPilot State ──
   const [autoPilotActive, setAutoPilotActive] = useState(false);
@@ -813,6 +815,8 @@ export default function AiLiveCreatorPage() {
                 engine={engine}
                 portraitVideoUrl={portraitType === "video" ? portraitPreview : null}
                 avatarPreviewUrl={engine === "heygen" && selectedAvatarId ? (heygenAvatars.find(a => a.avatar_id === selectedAvatarId)?.preview_image_url || null) : null}
+                liveAvatarStream={liveAvatarStream}
+                liveAvatarConnected={liveAvatarConnected}
                 videoQueue={previewVideoQueue}
                 commentHistory={previewCommentHistory}
                 products={previewProducts}
@@ -1194,11 +1198,20 @@ export default function AiLiveCreatorPage() {
                     personaPrompt=""
                     voiceId={selectedVoiceId}
                     sandbox={false}
+                    hideVideo={true}
                     onStreamReady={(stream) => {
-                      console.log('[LiveAvatar] Stream ready, can connect to OBS');
+                      console.log('[LiveAvatar] Stream ready → left preview');
+                      setLiveAvatarStream(stream);
+                      setLiveAvatarConnected(true);
+                    }}
+                    onDisconnect={() => {
+                      setLiveAvatarStream(null);
+                      setLiveAvatarConnected(false);
                     }}
                     onError={(err) => {
                       setError(err.message || 'LiveAvatar streaming error');
+                      setLiveAvatarStream(null);
+                      setLiveAvatarConnected(false);
                     }}
                   />
                 )}

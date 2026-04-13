@@ -57,6 +57,8 @@ export default function LivePreviewPlayer({
   onRequestNextVideo,
   onAutoPilotStateChange,
   onSpeakingChange,
+  liveAvatarStream = null,
+  liveAvatarConnected = false,
 }) {
   // ── Video Loop State ──
   const [isPlaying, setIsPlaying] = useState(false);
@@ -96,6 +98,7 @@ export default function LivePreviewPlayer({
   // ── Refs ──
   const loopVideoRef = useRef(null);     // Background loop video (muted)
   const lipSyncVideoRef = useRef(null);  // Lip-sync segment video (with audio)
+  const liveAvatarVideoRef = useRef(null); // LiveAvatar WebRTC stream
   const audioRef = useRef(null);          // Fallback TTS audio
   const containerRef = useRef(null);
   const heartIdRef = useRef(0);
@@ -113,6 +116,19 @@ export default function LivePreviewPlayer({
   useEffect(() => {
     autoPilotActiveRef.current = autoPilotActive;
   }, [autoPilotActive]);
+
+  // ══════════════════════════════════════════════
+  // LiveAvatar Stream — Attach WebRTC MediaStream to video element
+  // ══════════════════════════════════════════════
+  useEffect(() => {
+    if (liveAvatarVideoRef.current && liveAvatarStream) {
+      liveAvatarVideoRef.current.srcObject = liveAvatarStream;
+      liveAvatarVideoRef.current.play().catch(() => {});
+    }
+    if (liveAvatarVideoRef.current && !liveAvatarStream) {
+      liveAvatarVideoRef.current.srcObject = null;
+    }
+  }, [liveAvatarStream]);
 
   // ══════════════════════════════════════════════
   // Video Loop — Portrait video plays continuously (background)
@@ -549,8 +565,39 @@ export default function LivePreviewPlayer({
         style={{ display: "none" }}
       />
 
+      {/* ── LiveAvatar WebRTC Stream Layer (Realtime mode) ── */}
+      {engine === "realtime" && (
+        <>
+          <video
+            ref={liveAvatarVideoRef}
+            className="absolute inset-0 w-full h-full object-cover bg-black"
+            style={{ zIndex: liveAvatarConnected ? 10 : -1, opacity: liveAvatarConnected ? 1 : 0, transition: "opacity 0.3s ease" }}
+            autoPlay
+            playsInline
+            muted={false}
+          />
+          {!liveAvatarConnected && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-gray-900 via-gray-800 to-black" style={{ zIndex: 1 }}>
+              <div className="relative mb-6">
+                <div className="w-24 h-24 rounded-full bg-gradient-to-r from-green-500 to-emerald-500 flex items-center justify-center">
+                  <Radio className="w-10 h-10 text-white" />
+                </div>
+                <div className="absolute -bottom-1 -right-1 w-8 h-8 bg-gradient-to-r from-pink-500 to-red-500 rounded-full flex items-center justify-center border-2 border-black">
+                  <Sparkles className="w-4 h-4 text-white" />
+                </div>
+              </div>
+              <h3 className="text-white text-lg font-bold mb-1">AI Live Creator</h3>
+              <p className="text-gray-400 text-xs mb-2">LiveAvatar Realtime</p>
+              <p className="text-gray-500 text-[11px] text-center px-8">
+                右側の「ストリーミング開始」を押してアバターを起動
+              </p>
+            </div>
+          )}
+        </>
+      )}
+
       {/* ── Background Video Layer (Looping Portrait — always present) ── */}
-      {portraitVideoUrl ? (
+      {engine !== "realtime" && portraitVideoUrl ? (
         <video
           ref={loopVideoRef}
           className="absolute inset-0 w-full h-full object-cover bg-black"
@@ -572,7 +619,7 @@ export default function LivePreviewPlayer({
             console.error("Video loop error:", e);
           }}
         />
-      ) : avatarPreviewUrl ? (
+      ) : engine !== "realtime" && avatarPreviewUrl ? (
         /* ── HeyGen Avatar Preview (static image background) ── */
         <div
           className="absolute inset-0 bg-black"
@@ -595,8 +642,8 @@ export default function LivePreviewPlayer({
             </div>
           )}
         </div>
-      ) : (
-        /* ── Idle / Waiting Screen ── */
+      ) : engine !== "realtime" ? (
+        /* ── Idle / Waiting Screen (non-realtime modes only) ── */
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-gray-900 via-gray-800 to-black">
           <div className="relative mb-6">
             <div className="w-24 h-24 rounded-full bg-gradient-to-r from-indigo-500 to-purple-500 flex items-center justify-center">
@@ -617,7 +664,7 @@ export default function LivePreviewPlayer({
             }
           </p>
         </div>
-      )}
+      ) : null}
 
       {/* ── Lip-Sync Video Layer (overlays loop during speech) ── */}
       <video
@@ -697,17 +744,17 @@ export default function LivePreviewPlayer({
           <div className="flex items-center gap-2">
             <div
               className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold ${
-                autoPilotActive || isPlaying || avatarPreviewUrl
+                autoPilotActive || isPlaying || avatarPreviewUrl || liveAvatarConnected
                   ? "bg-red-500 text-white"
                   : "bg-gray-600/80 text-gray-300"
               }`}
             >
               <span
                 className={`w-1.5 h-1.5 rounded-full ${
-                  autoPilotActive || isPlaying ? "bg-white animate-pulse" : "bg-gray-400"
+                  autoPilotActive || isPlaying || liveAvatarConnected ? "bg-white animate-pulse" : "bg-gray-400"
                 }`}
               />
-              {autoPilotActive ? "LIVE" : (isPlaying || avatarPreviewUrl) ? "PREVIEW" : "OFFLINE"}
+              {autoPilotActive ? "LIVE" : liveAvatarConnected ? "LIVE" : (isPlaying || avatarPreviewUrl) ? "PREVIEW" : "OFFLINE"}
             </div>
             <div className="flex items-center gap-1 bg-black/40 px-2 py-1 rounded-full">
               <Eye className="w-3 h-3 text-white/70" />
