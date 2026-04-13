@@ -23,8 +23,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.db import get_session
-from app.api.deps import get_current_user_optional
+from app.core.db import get_db
 
 ADMIN_ID = "aither"
 ADMIN_PASS = "hub"
@@ -162,8 +161,7 @@ async def search_clips(
     # Pagination
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    db: AsyncSession = Depends(get_session),
-    user: dict = Depends(get_current_user_optional),
+    db: AsyncSession = Depends(get_db),
     x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
 ):
     """
@@ -173,13 +171,7 @@ async def search_clips(
     conditions = ["vc.status = 'completed'", "vc.clip_url IS NOT NULL"]
     params = {}
 
-    is_admin = _check_admin_or_user(user, x_admin_key)
-    # User filter (non-admin sees only their clips)
-    if not is_admin and user:
-        user_id = user.get("user_id") or user.get("id")
-        if user_id:
-            conditions.append("vc.user_id = :user_id")
-            params["user_id"] = user_id
+    is_admin = _check_admin_or_user(x_admin_key=x_admin_key)
 
     # Text search in transcript
     if q:
@@ -411,8 +403,7 @@ async def search_clips(
 
 @router.get("/stats", response_model=ClipStatsResponse)
 async def get_clip_stats(
-    db: AsyncSession = Depends(get_session),
-    user: dict = Depends(get_current_user_optional),
+    db: AsyncSession = Depends(get_db),
     x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
 ):
     """
@@ -542,8 +533,7 @@ async def get_clip_stats(
 
 @router.get("/tags")
 async def get_all_tags(
-    db: AsyncSession = Depends(get_session),
-    user: dict = Depends(get_current_user_optional),
+    db: AsyncSession = Depends(get_db),
     x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
 ):
     """Get all unique tags across clips (from both vc.tags and vp.sales_psychology_tags)."""
@@ -599,8 +589,7 @@ async def get_all_tags(
 @router.post("/enrich/{clip_id}", response_model=EnrichResult)
 async def enrich_clip(
     clip_id: str,
-    db: AsyncSession = Depends(get_session),
-    user: dict = Depends(get_current_user_optional),
+    db: AsyncSession = Depends(get_db),
     x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
 ):
     """
@@ -621,15 +610,14 @@ async def enrich_clip(
 @router.post("/enrich-all")
 async def enrich_all_clips(
     force: bool = Query(False, description="Force re-enrich even if already enriched"),
-    db: AsyncSession = Depends(get_session),
-    user: dict = Depends(get_current_user_optional),
+    db: AsyncSession = Depends(get_db),
     x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
 ):
     """
     Batch enrich all completed clips that haven't been enriched yet.
     Admin-only endpoint.
     """
-    if not _check_admin_or_user(user, x_admin_key):
+    if not _check_admin_or_user(x_admin_key=x_admin_key):
         raise HTTPException(status_code=403, detail="Admin only")
 
     try:
@@ -670,8 +658,8 @@ async def enrich_all_clips(
 async def semantic_search_clips(
     q: str = Query(..., description="Natural language query for semantic search"),
     limit: int = Query(10, ge=1, le=50),
-    db: AsyncSession = Depends(get_session),
-    user: dict = Depends(get_current_user_optional),
+    db: AsyncSession = Depends(get_db),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
 ):
     """
     Semantic search using Qdrant vector DB.
