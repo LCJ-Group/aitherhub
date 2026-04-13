@@ -724,3 +724,115 @@ async def ensure_script_generations_table():
         logger.warning("Timeout (30s) while ensuring script_generations table on startup")
     except Exception as e:
         logger.warning(f"Failed to ensure script_generations table on startup: {e}")
+
+
+@app.on_event("startup")
+async def ensure_widget_tables():
+    """Ensure widget-related tables exist for GTM widget system."""
+    try:
+        from app.core.db import engine
+        from sqlalchemy import text as _text
+
+        async with asyncio.timeout(60):
+          async with engine.begin() as conn:
+            # ── widget_clients: stores client (brand) configurations ──
+            await conn.execute(_text("""
+                CREATE TABLE IF NOT EXISTS widget_clients (
+                    client_id VARCHAR(20) PRIMARY KEY,
+                    name VARCHAR(200) NOT NULL,
+                    domain VARCHAR(500) NOT NULL,
+                    theme_color VARCHAR(20) DEFAULT '#FF2D55',
+                    position VARCHAR(30) DEFAULT 'bottom-right',
+                    cta_text VARCHAR(100) DEFAULT '購入する',
+                    cta_url_template TEXT,
+                    cart_selector VARCHAR(500),
+                    is_active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """))
+            await conn.execute(_text("""
+                CREATE INDEX IF NOT EXISTS ix_widget_clients_domain
+                ON widget_clients (domain)
+            """))
+
+            # ── widget_clip_assignments: which clips are assigned to which client ──
+            await conn.execute(_text("""
+                CREATE TABLE IF NOT EXISTS widget_clip_assignments (
+                    id VARCHAR(36) PRIMARY KEY,
+                    client_id VARCHAR(20) NOT NULL REFERENCES widget_clients(client_id),
+                    clip_id VARCHAR(36) NOT NULL,
+                    page_url_pattern TEXT,
+                    sort_order INTEGER DEFAULT 0,
+                    is_active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    CONSTRAINT uq_widget_clip_client UNIQUE (client_id, clip_id)
+                )
+            """))
+            await conn.execute(_text("""
+                CREATE INDEX IF NOT EXISTS ix_widget_clip_assignments_client
+                ON widget_clip_assignments (client_id, is_active)
+            """))
+
+            # ── widget_page_contexts: Hack 1 — DOM auto-scraped data ──
+            await conn.execute(_text("""
+                CREATE TABLE IF NOT EXISTS widget_page_contexts (
+                    id VARCHAR(36) PRIMARY KEY,
+                    client_id VARCHAR(20) NOT NULL,
+                    page_url TEXT NOT NULL,
+                    canonical_url TEXT,
+                    title TEXT,
+                    og_title TEXT,
+                    og_image TEXT,
+                    h1_text TEXT,
+                    product_price VARCHAR(100),
+                    meta_description TEXT,
+                    session_id VARCHAR(100),
+                    visitor_ip VARCHAR(50),
+                    user_agent VARCHAR(500),
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """))
+            await conn.execute(_text("""
+                CREATE INDEX IF NOT EXISTS ix_widget_page_contexts_client
+                ON widget_page_contexts (client_id, created_at DESC)
+            """))
+            await conn.execute(_text("""
+                CREATE INDEX IF NOT EXISTS ix_widget_page_contexts_url
+                ON widget_page_contexts (canonical_url)
+            """))
+
+            # ── widget_tracking_events: Hack 3 — Shadow Tracking events ──
+            await conn.execute(_text("""
+                CREATE TABLE IF NOT EXISTS widget_tracking_events (
+                    id VARCHAR(36) PRIMARY KEY,
+                    client_id VARCHAR(20) NOT NULL,
+                    session_id VARCHAR(100) NOT NULL,
+                    event_type VARCHAR(50) NOT NULL,
+                    page_url TEXT,
+                    clip_id VARCHAR(36),
+                    video_current_time REAL,
+                    extra_data JSONB,
+                    visitor_ip VARCHAR(50),
+                    user_agent VARCHAR(500),
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """))
+            await conn.execute(_text("""
+                CREATE INDEX IF NOT EXISTS ix_widget_tracking_client_type
+                ON widget_tracking_events (client_id, event_type, created_at DESC)
+            """))
+            await conn.execute(_text("""
+                CREATE INDEX IF NOT EXISTS ix_widget_tracking_session
+                ON widget_tracking_events (session_id)
+            """))
+            await conn.execute(_text("""
+                CREATE INDEX IF NOT EXISTS ix_widget_tracking_created
+                ON widget_tracking_events (created_at DESC)
+            """))
+
+        logger.info("Widget tables (widget_clients, widget_clip_assignments, widget_page_contexts, widget_tracking_events) verified/created")
+    except asyncio.TimeoutError:
+        logger.warning("Timeout (60s) while ensuring widget tables on startup")
+    except Exception as e:
+        logger.warning(f"Failed to ensure widget tables on startup: {e}")

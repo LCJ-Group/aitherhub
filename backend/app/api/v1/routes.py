@@ -25,6 +25,7 @@ from app.api.v1.endpoints.auto_video import router as auto_video_router
 from app.api.v1.endpoints.persona import router as persona_router
 from app.api.v1.endpoints.script_generator import router as script_generator_router
 from app.api.v1.endpoints.clip_db import router as clip_db_router
+from app.api.v1.endpoints.widget import router as widget_router
 
 routers = APIRouter()
 routers.include_router(auth_router, prefix="/auth", tags=["Auth"])
@@ -52,3 +53,4 @@ routers.include_router(auto_video_router)
 routers.include_router(persona_router)
 routers.include_router(script_generator_router)
 routers.include_router(clip_db_router, prefix="/clip-db", tags=["Clip DB"])
+routers.include_router(widget_router, tags=["Widget"])

@@ -9,6 +9,7 @@ import AdminWorkLogs from "./admin/AdminWorkLogs";
 import AdminLessons from "./admin/AdminLessons";
 import AdminScriptGenerations from "./admin/AdminScriptGenerations";
 import AdminClipDB from "./admin/AdminClipDB";
+import AdminWidgetManager from "./admin/AdminWidgetManager";
 
 const ADMIN_ID = "aither";
 const ADMIN_PASS = "hub";
@@ -360,6 +361,16 @@ const [activeTab, setActiveTab] = useState(initialTab);
           >
             🎬 クリップDB
           </button>
+          <button
+            onClick={() => setActiveTab("widget")}
+            className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+              activeTab === "widget"
+                ? "bg-white text-pink-600 shadow-sm"
+                : "text-gray-500 hover:text-gray-700"
+            }`}
+          >
+            🎯 ウィジェット
+          </button>
         </div>
 
         {activeTab === "dashboard" && (
@@ -453,6 +464,9 @@ const [activeTab, setActiveTab] = useState(initialTab);
         )}
         {activeTab === "clip-db" && (
           <AdminClipDB adminKey={`${ADMIN_ID}:${ADMIN_PASS}`} />
+        )}
+        {activeTab === "widget" && (
+          <AdminWidgetManager adminKey={`${ADMIN_ID}:${ADMIN_PASS}`} />
         )}
       </div>
     </div>
