@@ -221,6 +221,10 @@ class LiveAvatarService:
             # ── Step 1: Create session token ──
             logger.info(f"[LiveAvatar] Step 1: Creating session token for avatar: {avatar_id}")
 
+            # Build session token body following official Custom TTS Integration docs:
+            # https://docs.liveavatar.com/docs/full-mode/custom-tts
+            # When using a bound ElevenLabs voice, only pass voice_id — do NOT include
+            # voice_settings, as LiveAvatar handles TTS + lip-sync automatically.
             token_body: Dict[str, Any] = {
                 "mode": "FULL",
                 "avatar_id": avatar_id,
@@ -228,15 +232,6 @@ class LiveAvatarService:
                 "avatar_persona": {
                     "voice_id": voice_id,
                     "language": language,
-                    "voice_settings": {
-                        "provider": "elevenLabs",
-                        "speed": 1,
-                        "stability": 0.75,
-                        "similarity_boost": 0.75,
-                        "style": 0,
-                        "use_speaker_boost": True,
-                        "model": "eleven_flash_v2_5",
-                    },
                 },
                 "video_settings": {
                     "quality": "high",
