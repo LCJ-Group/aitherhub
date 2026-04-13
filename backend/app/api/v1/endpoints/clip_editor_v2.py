@@ -856,19 +856,127 @@ async def transcribe_clip(
                 logger.info(f"[transcribe] Deduplicated: {len(segments)} -> {len(deduped)} segments")
             segments = deduped
 
+        # ─── Split long segments into readable subtitle chunks ───
+        # Whisper segment-level output often produces very long segments (30s+, 100+ chars)
+        # that are unreadable as subtitles. Split them into 8-15 char chunks using
+        # word-level timestamps when available, falling back to character-proportional splitting.
+        MAX_CHARS_PER_LINE = 15  # Maximum characters per subtitle line
+        MIN_CHARS_PER_LINE = 4   # Minimum characters (avoid tiny fragments)
+        MAX_DURATION_PER_LINE = 4.0  # Maximum seconds per subtitle line
+
+        split_segments = []
+        for seg in segments:
+            text_val = seg.get("text", "").strip()
+            seg_start = seg.get("start", 0)
+            seg_end = seg.get("end", 0)
+            seg_words = seg.get("words", [])
+            seg_duration = seg_end - seg_start
+
+            # If segment is already short enough, keep as-is
+            if len(text_val) <= MAX_CHARS_PER_LINE and seg_duration <= MAX_DURATION_PER_LINE:
+                split_segments.append(seg)
+                continue
+
+            # Strategy 1: Use word-level timestamps to split at natural boundaries
+            if seg_words:
+                current_text = ""
+                current_words = []
+                current_start = None
+
+                for w in seg_words:
+                    w_text = w.get("word", "").strip()
+                    if not w_text:
+                        continue
+                    w_start = w.get("start", 0)
+                    w_end = w.get("end", 0)
+
+                    if current_start is None:
+                        current_start = w_start
+
+                    test_text = current_text + w_text
+                    test_duration = w_end - current_start
+
+                    # Break if adding this word would exceed limits
+                    if (len(test_text) > MAX_CHARS_PER_LINE or test_duration > MAX_DURATION_PER_LINE) and len(current_text) >= MIN_CHARS_PER_LINE:
+                        split_segments.append({
+                            "start": round(current_start, 3),
+                            "end": round(current_words[-1]["end"], 3),
+                            "text": current_text,
+                            "words": current_words[:],
+                        })
+                        current_text = w_text
+                        current_words = [w]
+                        current_start = w_start
+                    else:
+                        current_text = test_text
+                        current_words.append(w)
+
+                # Flush remaining
+                if current_text and current_words:
+                    # If remaining is too short, merge with previous
+                    if len(current_text) < MIN_CHARS_PER_LINE and split_segments:
+                        prev = split_segments[-1]
+                        prev["text"] += current_text
+                        prev["end"] = round(current_words[-1]["end"], 3)
+                        prev["words"] = prev.get("words", []) + current_words
+                    else:
+                        split_segments.append({
+                            "start": round(current_start, 3),
+                            "end": round(current_words[-1]["end"], 3),
+                            "text": current_text,
+                            "words": current_words[:],
+                        })
+            else:
+                # Strategy 2: No word timestamps - split by character count proportionally
+                chars = list(text_val)
+                total_chars = len(chars)
+                num_chunks = max(1, -(-total_chars // MAX_CHARS_PER_LINE))  # ceil division
+                chars_per_chunk = max(MIN_CHARS_PER_LINE, -(-total_chars // num_chunks))
+
+                for c_idx in range(0, total_chars, chars_per_chunk):
+                    chunk_text = "".join(chars[c_idx:c_idx + chars_per_chunk])
+                    if not chunk_text.strip():
+                        continue
+                    ratio_start = c_idx / total_chars
+                    ratio_end = min((c_idx + len(chunk_text)) / total_chars, 1.0)
+                    chunk_start = seg_start + seg_duration * ratio_start
+                    chunk_end = seg_start + seg_duration * ratio_end
+                    split_segments.append({
+                        "start": round(chunk_start, 3),
+                        "end": round(chunk_end, 3),
+                        "text": chunk_text,
+                    })
+
+        if len(split_segments) != len(segments):
+            logger.info(f"[transcribe] Split long segments: {len(segments)} -> {len(split_segments)} segments")
+        segments = split_segments
+
     except Exception as e:
         logger.error(f"[transcribe] Whisper API failed: {e}", exc_info=True)
         _cleanup_tmp(tmp_dir)
         raise HTTPException(status_code=500, detail=f"Whisper transcription failed: {str(e)}")
 
-    # Step 3: Convert local times to absolute times and save to DB
-    # Whisper returns times relative to the clip (0-based)
-    # We need to store them as absolute times (offset by time_start)
-    absolute_segments = []
+    # Step 3: Build both absolute and local segment lists
+    # Whisper returns times relative to the clip (0-based = "local")
+    # video_transcripts table needs absolute times (offset by time_start)
+    # video_clips.captions and API response should use LOCAL times (0-based)
+    # so the frontend can directly match them to clip video playback (currentTime is 0-based)
+    absolute_segments = []  # For video_transcripts DB table
+    local_segments = []     # For video_clips.captions and API response
     for i, seg in enumerate(segments):
         abs_start = req.time_start + seg["start"]
         abs_end = req.time_start + seg["end"]
-        seg_data = {
+
+        # Word-level timestamps (already local/0-based from Whisper)
+        local_words = []
+        if "words" in seg and seg["words"]:
+            local_words = [
+                {"start": round(w["start"], 3), "end": round(w["end"], 3), "word": w["word"]}
+                for w in seg["words"]
+            ]
+
+        # Absolute segment (for video_transcripts)
+        abs_seg = {
             "segment_index": i,
             "start": abs_start,
             "end": abs_end,
@@ -876,13 +984,21 @@ async def transcribe_clip(
             "local_end": seg["end"],
             "text": seg["text"],
         }
-        # Include word-level timestamps (for karaoke-style highlighting)
-        if "words" in seg and seg["words"]:
-            seg_data["words"] = [
-                {"start": w["start"], "end": w["end"], "word": w["word"]}
-                for w in seg["words"]
-            ]
-        absolute_segments.append(seg_data)
+        if local_words:
+            abs_seg["words"] = [{"start": req.time_start + w["start"], "end": req.time_start + w["end"], "word": w["word"]} for w in local_words]
+        absolute_segments.append(abs_seg)
+
+        # Local segment (for video_clips.captions and API response)
+        local_seg = {
+            "segment_index": i,
+            "start": round(seg["start"], 3),
+            "end": round(seg["end"], 3),
+            "text": seg["text"],
+            "source": "whisper",
+        }
+        if local_words:
+            local_seg["words"] = local_words
+        local_segments.append(local_seg)
 
     # Save to video_transcripts table
     saved_count = 0
@@ -931,13 +1047,19 @@ async def transcribe_clip(
         # Still return the segments even if DB save fails
 
     # Also update video_clips captions if clip_id exists
+    # IMPORTANT: Save LOCAL times (0-based) to video_clips.captions
+    # because the frontend plays clip_url where currentTime is 0-based
     try:
-        # Build captions array for video_clips
+        # Build captions array for video_clips using LOCAL times
         captions_json = json.dumps([{
             "start": seg["start"],
             "end": seg["end"],
             "text": seg["text"],
-        } for seg in absolute_segments], ensure_ascii=False)
+            "source": "whisper",
+            **({
+                "words": seg["words"]
+            } if seg.get("words") else {}),
+        } for seg in local_segments], ensure_ascii=False)
 
         # Find the clip in video_clips
         clip_sql = text("""
@@ -973,10 +1095,13 @@ async def transcribe_clip(
     # Cleanup
     _cleanup_tmp(tmp_dir)
 
+    # Return LOCAL time segments to frontend
+    # Frontend plays clip_url where currentTime is 0-based,
+    # so captions must also be 0-based for correct sync
     return {
         "video_id": video_id,
-        "segments": absolute_segments,
-        "segment_count": len(absolute_segments),
+        "segments": local_segments,
+        "segment_count": len(local_segments),
         "time_start": req.time_start,
         "time_end": req.time_end,
         "source": "whisper",

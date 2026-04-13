@@ -380,6 +380,8 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
     if (!transcripts?.length || !clipData) return [];
     const tStart = clipData.time_start || 0;
     const tEnd = clipData.time_end || 0;
+    const MAX_CHARS = 15; // Max characters per subtitle line
+    const MAX_DUR = 4.0;  // Max seconds per subtitle line
 
     // Filter transcripts that overlap with this clip's time range
     const overlapping = transcripts.filter((t) => {
@@ -388,49 +390,65 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
       return s < tEnd && e > tStart;
     });
 
-    // Split large transcript chunks into sentence-level captions
+    // Helper: split text into chunks of MAX_CHARS with proportional timestamps
+    const splitTextChunks = (txt, start, end) => {
+      const chars = [...txt];
+      const dur = end - start;
+      const numChunks = Math.max(1, Math.ceil(chars.length / MAX_CHARS));
+      const charsPerChunk = Math.ceil(chars.length / numChunks);
+      const chunks = [];
+      for (let c = 0; c < numChunks; c++) {
+        const chunkText = chars.slice(c * charsPerChunk, (c + 1) * charsPerChunk).join('');
+        if (!chunkText.trim()) continue;
+        const ratioStart = c * charsPerChunk / chars.length;
+        const ratioEnd = Math.min((c + 1) * charsPerChunk / chars.length, 1.0);
+        chunks.push({
+          start: Math.round((start + dur * ratioStart) * 100) / 100,
+          end: Math.round((start + dur * ratioEnd) * 100) / 100,
+          text: chunkText,
+          source: 'master_transcript',
+        });
+      }
+      return chunks;
+    };
+
+    // Split large transcript chunks into readable subtitle lines
     const result = [];
     for (const t of overlapping) {
       const segStart = Math.max(t.start, tStart);
       const segEnd = Math.min(t.end, tEnd);
       const text = (t.text || '').trim();
       if (!text) continue;
-
-      // If segment is short enough (<10s), keep as-is
       const segDur = segEnd - segStart;
-      if (segDur <= 10) {
+
+      // If segment is short AND text is short, keep as-is
+      if (segDur <= MAX_DUR && text.length <= MAX_CHARS) {
         result.push({ start: segStart, end: segEnd, text, source: 'master_transcript' });
         continue;
       }
 
-      // Split by sentence boundaries
+      // Try splitting by sentence boundaries first
       const sentences = text.split(/[。！？\n]/).map(s => s.trim()).filter(Boolean);
-      if (sentences.length <= 1) {
-        // Can't split further - chunk by ~5 second intervals
-        const chunkDur = 5;
-        const numChunks = Math.ceil(segDur / chunkDur);
-        const chars = text.split('');
-        const charsPerChunk = Math.ceil(chars.length / numChunks);
-        for (let c = 0; c < numChunks; c++) {
-          const chunkText = chars.slice(c * charsPerChunk, (c + 1) * charsPerChunk).join('');
-          if (!chunkText) continue;
-          result.push({
-            start: Math.round((segStart + c * chunkDur) * 100) / 100,
-            end: Math.round(Math.min(segStart + (c + 1) * chunkDur, segEnd) * 100) / 100,
-            text: chunkText,
-            source: 'master_transcript',
-          });
+      if (sentences.length > 1) {
+        const perSentence = segDur / sentences.length;
+        for (let i = 0; i < sentences.length; i++) {
+          const sentStart = segStart + i * perSentence;
+          const sentEnd = segStart + (i + 1) * perSentence;
+          // If sentence itself is too long, split further
+          if (sentences[i].length > MAX_CHARS) {
+            result.push(...splitTextChunks(sentences[i], sentStart, sentEnd));
+          } else {
+            result.push({
+              start: Math.round(sentStart * 100) / 100,
+              end: Math.round(sentEnd * 100) / 100,
+              text: sentences[i],
+              source: 'master_transcript',
+            });
+          }
         }
       } else {
-        const perSentence = segDur / sentences.length;
-        sentences.forEach((sent, i) => {
-          result.push({
-            start: Math.round((segStart + i * perSentence) * 100) / 100,
-            end: Math.round((segStart + (i + 1) * perSentence) * 100) / 100,
-            text: sent,
-            source: 'master_transcript',
-          });
-        });
+        // Single long text - split by character count
+        result.push(...splitTextChunks(text, segStart, segEnd));
       }
     }
     return result;
@@ -442,6 +460,29 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
     const phaseIdx = clipData.phase_index;
     const tStart = clipData.time_start || 0;
     const tEnd = clipData.time_end || 0;
+    const MAX_CHARS = 15;
+
+    // Helper: split long text into MAX_CHARS chunks with proportional timestamps
+    const splitLongText = (txt, start, end) => {
+      const chars = [...txt];
+      const dur = end - start;
+      const numChunks = Math.max(1, Math.ceil(chars.length / MAX_CHARS));
+      const charsPerChunk = Math.ceil(chars.length / numChunks);
+      const chunks = [];
+      for (let c = 0; c < numChunks; c++) {
+        const chunkText = chars.slice(c * charsPerChunk, (c + 1) * charsPerChunk).join('');
+        if (!chunkText.trim()) continue;
+        const ratioStart = c * charsPerChunk / chars.length;
+        const ratioEnd = Math.min((c + 1) * charsPerChunk / chars.length, 1.0);
+        chunks.push({
+          start: Math.round((start + dur * ratioStart) * 100) / 100,
+          end: Math.round((start + dur * ratioEnd) * 100) / 100,
+          text: chunkText,
+          source: 'audio_text',
+        });
+      }
+      return chunks;
+    };
 
     // Find matching phase(s) for this clip's time range
     const matchingPhases = phases.filter((p) => {
@@ -466,17 +507,24 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
       // Split text into sentences for better subtitle display
       const sentences = txt.split(/[。！？\n]/).map((s) => s.trim()).filter(Boolean);
       if (sentences.length === 0) {
-        result.push({ start: pStart, end: pEnd, text: txt.trim(), source: "audio_text" });
+        // Single block of text - split by character count
+        if (txt.trim().length > MAX_CHARS) {
+          result.push(...splitLongText(txt.trim(), pStart, pEnd));
+        } else {
+          result.push({ start: pStart, end: pEnd, text: txt.trim(), source: "audio_text" });
+        }
       } else {
         const dur = pEnd - pStart;
         const perSentence = dur / sentences.length;
         sentences.forEach((sent, i) => {
-          result.push({
-            start: Math.round((pStart + i * perSentence) * 100) / 100,
-            end: Math.round((pStart + (i + 1) * perSentence) * 100) / 100,
-            text: sent,
-            source: "audio_text",
-          });
+          const sentStart = Math.round((pStart + i * perSentence) * 100) / 100;
+          const sentEnd = Math.round((pStart + (i + 1) * perSentence) * 100) / 100;
+          // If sentence is too long, split further
+          if (sent.length > MAX_CHARS) {
+            result.push(...splitLongText(sent, sentStart, sentEnd));
+          } else {
+            result.push({ start: sentStart, end: sentEnd, text: sent, source: "audio_text" });
+          }
         });
       }
     }
@@ -503,9 +551,38 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
         if (res?.captions && res.captions.length > 0) {
           // Ensure saved captions have a source marker
           const saved = Array.isArray(res.captions) ? res.captions : [];
-          const withSource = saved.map(c => ({ ...c, source: c.source || 'saved' }));
-          console.log(`[Subtitles] Loaded ${withSource.length} saved captions from DB`);
-          setCaptions(withSource);
+          // Auto-split any saved captions that are too long (legacy data protection)
+          const MAX_CAP_CHARS = 15;
+          const splitSaved = [];
+          for (const c of saved) {
+            const txt = (c.text || '').trim();
+            if (txt.length <= MAX_CAP_CHARS) {
+              splitSaved.push({ ...c, source: c.source || 'saved' });
+            } else {
+              // Split long saved caption into readable chunks
+              const chars = [...txt];
+              const dur = (c.end || 0) - (c.start || 0);
+              const numChunks = Math.max(1, Math.ceil(chars.length / MAX_CAP_CHARS));
+              const charsPerChunk = Math.ceil(chars.length / numChunks);
+              for (let ci = 0; ci < numChunks; ci++) {
+                const chunkText = chars.slice(ci * charsPerChunk, (ci + 1) * charsPerChunk).join('');
+                if (!chunkText.trim()) continue;
+                const ratioS = ci * charsPerChunk / chars.length;
+                const ratioE = Math.min((ci + 1) * charsPerChunk / chars.length, 1.0);
+                splitSaved.push({
+                  ...c,
+                  start: Math.round(((c.start || 0) + dur * ratioS) * 1000) / 1000,
+                  end: Math.round(((c.start || 0) + dur * ratioE) * 1000) / 1000,
+                  text: chunkText,
+                  source: c.source || 'saved',
+                  // Drop words array for split chunks (no longer accurate)
+                  words: undefined,
+                });
+              }
+            }
+          }
+          console.log(`[Subtitles] Loaded ${saved.length} saved captions from DB (split to ${splitSaved.length})`);
+          setCaptions(splitSaved);
           setCaptionsLoaded(true);
           return;
         }
@@ -515,8 +592,52 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
 
       // Priority 1: clip.captions (from generate_clip Whisper)
       if (clip?.captions && clip.captions.length > 0) {
-        console.log("[Subtitles] Using clip.captions");
-        setCaptions(clip.captions);
+        // Auto-split any clip captions that are too long
+        const MAX_CAP_CHARS = 15;
+        const splitClipCaps = [];
+        for (const c of clip.captions) {
+          const txt = (c.text || '').trim();
+          if (txt.length <= MAX_CAP_CHARS) {
+            splitClipCaps.push(c);
+          } else if (c.words && c.words.length > 0) {
+            // Use word-level timestamps to split
+            let curText = '';
+            let curWords = [];
+            let curStart = null;
+            for (const w of c.words) {
+              const wt = (w.word || '').trim();
+              if (!wt) continue;
+              if (curStart === null) curStart = w.start;
+              if ((curText + wt).length > MAX_CAP_CHARS && curText.length >= 4) {
+                splitClipCaps.push({ start: curStart, end: curWords[curWords.length - 1].end, text: curText, words: [...curWords], source: c.source });
+                curText = wt;
+                curWords = [w];
+                curStart = w.start;
+              } else {
+                curText += wt;
+                curWords.push(w);
+              }
+            }
+            if (curText && curWords.length) {
+              splitClipCaps.push({ start: curStart, end: curWords[curWords.length - 1].end, text: curText, words: [...curWords], source: c.source });
+            }
+          } else {
+            // No words - split by character count
+            const chars = [...txt];
+            const dur = (c.end || 0) - (c.start || 0);
+            const numChunks = Math.max(1, Math.ceil(chars.length / MAX_CAP_CHARS));
+            const cpc = Math.ceil(chars.length / numChunks);
+            for (let ci = 0; ci < numChunks; ci++) {
+              const ct = chars.slice(ci * cpc, (ci + 1) * cpc).join('');
+              if (!ct.trim()) continue;
+              const rs = ci * cpc / chars.length;
+              const re = Math.min((ci + 1) * cpc / chars.length, 1.0);
+              splitClipCaps.push({ start: (c.start || 0) + dur * rs, end: (c.start || 0) + dur * re, text: ct, source: c.source });
+            }
+          }
+        }
+        console.log(`[Subtitles] Using clip.captions (${clip.captions.length} -> ${splitClipCaps.length} after split)`);
+        setCaptions(splitClipCaps);
         setCaptionsLoaded(true);
         return;
       }
@@ -1206,13 +1327,29 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
         phase_index: clip.phase_index,
       });
       if (res?.segments?.length > 0) {
+        // API now returns LOCAL times (0-based relative to clip start)
+        // Verify: if max start time > clip duration, something is wrong
+        const clipDuration = (clip.time_end || origEnd) - (clip.time_start || origStart);
+        const maxSegStart = Math.max(...res.segments.map(s => s.start || 0));
+        const needsConversion = clipDuration > 0 && maxSegStart > clipDuration * 1.5;
+        if (needsConversion) {
+          console.warn(`[Subtitles] API returned absolute times (max=${maxSegStart.toFixed(1)}s > clipDur=${clipDuration.toFixed(1)}s), converting to local`);
+        }
+        const offset = needsConversion ? (clip.time_start || origStart) : 0;
+
         const newCaps = res.segments.map((s) => ({
-          start: s.start,
-          end: s.end,
+          start: Math.max(0, (s.start || 0) - offset),
+          end: Math.max(0, (s.end || 0) - offset),
           text: s.text,
-          source: "whisper",
+          source: s.source || "whisper",
           // Include word-level timestamps for karaoke-style highlighting
-          ...(s.words && s.words.length > 0 ? { words: s.words } : {}),
+          ...(s.words && s.words.length > 0 ? {
+            words: s.words.map(w => ({
+              ...w,
+              start: Math.max(0, (w.start || 0) - offset),
+              end: Math.max(0, (w.end || 0) - offset),
+            }))
+          } : {}),
         }));
         setCaptions(newCaps);
         setStatus({ ok: true, msg: `${newCaps.length}件の字幕を生成しました` });
@@ -1222,7 +1359,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
             const capsToSave = newCaps.map(c => ({ ...c, source: 'saved' }));
             await VideoService.updateClipCaptions(videoId, clip.clip_id, capsToSave);
             setCaptions(capsToSave);
-            console.log("[Subtitles] Auto-saved generated subtitles");
+            console.log("[Subtitles] Auto-saved generated subtitles (local times)");
           } catch (saveErr) {
             console.warn("[Subtitles] Auto-save failed:", saveErr);
           }
@@ -1776,8 +1913,10 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                     pointerEvents: "auto",
                     zIndex: 10,
                     cursor: isDraggingSub ? "grabbing" : "grab",
-                    maxWidth: "95%",
+                    maxWidth: "85%",
                     userSelect: "none",
+                    overflow: "hidden",
+                    wordBreak: "keep-all",
                     transition: isDraggingSub ? 'none' : 'left 0.1s ease, top 0.1s ease',
                   }}
                 >
