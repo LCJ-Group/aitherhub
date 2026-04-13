@@ -291,8 +291,18 @@ export default function LiveAvatarStreaming({
             videoRef.current.appendChild(element);
           }
 
-          if (onStreamReady && track.mediaStream) {
-            onStreamReady(track.mediaStream);
+          // Pass MediaStream to parent for preview player
+          if (onStreamReady) {
+            // track.mediaStream may be null in LiveKit SDK v2;
+            // create MediaStream explicitly from the underlying mediaStreamTrack
+            const stream = track.mediaStream
+              || (track.mediaStreamTrack ? new MediaStream([track.mediaStreamTrack]) : null);
+            if (stream) {
+              console.log('[LiveAvatar] Passing MediaStream to parent (tracks:', stream.getTracks().length, ')');
+              onStreamReady(stream);
+            } else {
+              console.warn('[LiveAvatar] No MediaStream available from video track');
+            }
           }
         }
         if (track.kind === Track.Kind.Audio) {
