@@ -65,6 +65,7 @@ export default function LiveAvatarStreaming({
   // ── Refs ──
   const videoRef = useRef(null);
   const roomRef = useRef(null);
+  const wsRef = useRef(null); // WebSocket for command events
   const sessionTimerRef = useRef(null);
   const textInputRef = useRef(null);
   const sessionIdRef = useRef(null);
@@ -106,12 +107,51 @@ export default function LiveAvatarStreaming({
     });
   };
 
-  // ── Send event via LiveKit data channel ──
-  // Matches official @heygen/liveavatar-web-sdk sendCommandEvent format:
-  //   { event_id, event_type, ...payload } sent to topic: "agent-control"
-  // NOTE: Do NOT include session_id in payload (SDK does not include it)
+  // ── Send event via WebSocket (preferred) or LiveKit data channel (fallback) ──
+  // Matches official @heygen/liveavatar-web-sdk sendCommandEvent behavior:
+  //   1. Try WebSocket first (if connected)
+  //   2. Fall back to LiveKit data channel
   const sendEvent = useCallback((eventType, extraData = {}) => {
+    const ws = wsRef.current;
     const room = roomRef.current;
+    const eventId = generateEventId();
+
+    // Build the LiveKit data channel format
+    const livekitEvent = {
+      event_id: eventId,
+      event_type: eventType,
+      ...extraData,
+    };
+
+    // Try WebSocket first (like official SDK)
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      try {
+        // Map event types to WebSocket format
+        let wsMessage;
+        if (eventType === "avatar.speak_text") {
+          // For speak_text, send via BOTH WebSocket and LiveKit data channel
+          // WebSocket doesn't handle speak_text in SDK, so use LiveKit
+          // But first try WebSocket with agent.speak format
+          wsMessage = null; // speak_text is not handled via WS in SDK
+        } else if (eventType === "avatar.interrupt") {
+          wsMessage = { type: "agent.interrupt", event_id: eventId };
+        } else if (eventType === "avatar.start_listening") {
+          wsMessage = { type: "agent.start_listening", event_id: eventId };
+        } else if (eventType === "avatar.stop_listening") {
+          wsMessage = { type: "agent.stop_listening", event_id: eventId };
+        }
+
+        if (wsMessage) {
+          ws.send(JSON.stringify(wsMessage));
+          console.log("[LiveAvatar] Sent via WebSocket:", wsMessage.type, JSON.stringify(wsMessage));
+          return eventId;
+        }
+      } catch (err) {
+        console.warn("[LiveAvatar] WebSocket send failed, falling back to LiveKit:", err);
+      }
+    }
+
+    // Fall back to LiveKit data channel
     if (!room || !room.localParticipant) {
       console.warn("[LiveAvatar] Cannot send event: not connected. Room state:", room?.state);
       return;
@@ -122,24 +162,25 @@ export default function LiveAvatarStreaming({
       return;
     }
 
-    const event = {
-      event_id: generateEventId(),
-      event_type: eventType,
-      ...extraData,
-    };
-
     const encoder = new TextEncoder();
-    const data = encoder.encode(JSON.stringify(event));
+    const data = encoder.encode(JSON.stringify(livekitEvent));
 
     try {
+      // Log participant permissions for debugging
+      const perms = room.localParticipant.permissions;
+      console.log("[LiveAvatar] Participant permissions:", JSON.stringify(perms));
+      console.log("[LiveAvatar] Room state:", room.state, "Participant identity:", room.localParticipant.identity);
+
       room.localParticipant.publishData(data, {
         reliable: true,
         topic: "agent-control",
       });
-      console.log("[LiveAvatar] Sent event:", eventType, JSON.stringify(event));
+      console.log("[LiveAvatar] Sent via LiveKit data channel:", eventType, JSON.stringify(livekitEvent));
     } catch (err) {
       console.error("[LiveAvatar] Failed to publish data:", err);
+      console.error("[LiveAvatar] Error details:", err.message, err.stack);
     }
+    return eventId;
   }, []);
 
   // ── Handle incoming events from avatar ──
@@ -213,7 +254,7 @@ export default function LiveAvatarStreaming({
         throw new Error(result.error || "Failed to start LiveAvatar session");
       }
 
-      const { session_id, livekit_url, livekit_client_token, max_session_duration } = result;
+      const { session_id, livekit_url, livekit_client_token, ws_url, max_session_duration } = result;
 
       if (!livekit_url || !livekit_client_token) {
         throw new Error("Backend did not return LiveKit credentials");
@@ -224,6 +265,7 @@ export default function LiveAvatarStreaming({
       setMaxDuration(max_session_duration || 1200);
 
       console.log(`[LiveAvatar] Session created: ${session_id}, connecting to LiveKit: ${livekit_url}`);
+      console.log(`[LiveAvatar] WebSocket URL: ${ws_url || 'not provided'}`);
 
       // 2. Connect to LiveKit room using livekit_url + livekit_client_token
       const room = new Room({
@@ -292,6 +334,55 @@ export default function LiveAvatarStreaming({
       await room.connect(livekit_url, livekit_client_token);
       console.log("[LiveAvatar] Connected to LiveKit room successfully");
 
+      // Log participant permissions for debugging
+      const perms = room.localParticipant.permissions;
+      console.log("[LiveAvatar] Participant permissions:", JSON.stringify(perms));
+      console.log("[LiveAvatar] Participant identity:", room.localParticipant.identity);
+      console.log("[LiveAvatar] Participant SID:", room.localParticipant.sid);
+
+      // 3. Connect to WebSocket if ws_url is provided (like official SDK)
+      if (ws_url) {
+        try {
+          console.log("[LiveAvatar] Connecting to WebSocket:", ws_url);
+          const ws = new WebSocket(ws_url);
+          wsRef.current = ws;
+
+          ws.onopen = () => {
+            console.log("[LiveAvatar] WebSocket connected successfully");
+          };
+
+          ws.onmessage = (event) => {
+            try {
+              const data = JSON.parse(event.data);
+              console.log("[LiveAvatar] WebSocket message:", data.type, data);
+
+              // Handle WebSocket events (same as SDK)
+              if (data.type === "agent.speak_started") {
+                setIsSpeaking(true);
+              } else if (data.type === "agent.speak_ended") {
+                setIsSpeaking(false);
+              } else if (data.type === "session.stopped") {
+                console.log("[LiveAvatar] Session stopped via WebSocket");
+                stopSession();
+              }
+            } catch (e) {
+              console.warn("[LiveAvatar] Failed to parse WebSocket message:", e);
+            }
+          };
+
+          ws.onerror = (err) => {
+            console.warn("[LiveAvatar] WebSocket error:", err);
+          };
+
+          ws.onclose = (event) => {
+            console.warn("[LiveAvatar] WebSocket closed:", event.code, event.reason);
+            wsRef.current = null;
+          };
+        } catch (wsErr) {
+          console.warn("[LiveAvatar] Failed to connect WebSocket (non-fatal):", wsErr);
+        }
+      }
+
       setIsConnected(true);
       setIsConnecting(false);
       setConnectionStatus("connected");
@@ -313,6 +404,20 @@ export default function LiveAvatarStreaming({
         try { el.remove(); } catch (e) {}
       });
       audioElementsRef.current = [];
+
+      // Clean up WebSocket
+      if (wsRef.current) {
+        try {
+          wsRef.current.onopen = null;
+          wsRef.current.onmessage = null;
+          wsRef.current.onerror = null;
+          wsRef.current.onclose = null;
+          if (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING) {
+            wsRef.current.close();
+          }
+        } catch (e) {}
+        wsRef.current = null;
+      }
 
       if (roomRef.current) {
         roomRef.current.disconnect();

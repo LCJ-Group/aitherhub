@@ -259,6 +259,7 @@ class LiveAvatarService:
             start_data = start_result.get("data", {})
             livekit_url = start_data.get("livekit_url", "")
             livekit_client_token = start_data.get("livekit_client_token", "")
+            ws_url = start_data.get("ws_url", "")
             max_session_duration = start_data.get("max_session_duration", 1200)
 
             if not livekit_url or not livekit_client_token:
@@ -266,6 +267,7 @@ class LiveAvatarService:
 
             logger.info(
                 f"[LiveAvatar] Step 2 complete: livekit_url={livekit_url[:50]}..., "
+                f"ws_url={'yes' if ws_url else 'no'}, "
                 f"max_duration={max_session_duration}s"
             )
 
@@ -274,6 +276,7 @@ class LiveAvatarService:
                 "session_token": session_token,
                 "livekit_url": livekit_url,
                 "livekit_client_token": livekit_client_token,
+                "ws_url": ws_url,
                 "max_session_duration": max_session_duration,
                 "sandbox": sandbox,
             }

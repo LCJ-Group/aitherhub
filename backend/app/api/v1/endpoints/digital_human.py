@@ -4080,6 +4080,7 @@ async def liveavatar_streaming_start(
             "session_id": result["session_id"],
             "livekit_url": result["livekit_url"],
             "livekit_client_token": result["livekit_client_token"],
+            "ws_url": result.get("ws_url", ""),
             "max_session_duration": result.get("max_session_duration", 1200),
             "sandbox": result.get("sandbox", False),
         }
