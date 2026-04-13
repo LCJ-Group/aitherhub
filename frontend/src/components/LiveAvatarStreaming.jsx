@@ -97,35 +97,49 @@ export default function LiveAvatarStreaming({
     };
   }, [isConnected]);
 
-  // ── Generate unique event ID ──
+  // Generate UUID-style event ID (matching LiveAvatar SDK format)
   const generateEventId = () => {
-    return `evt_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+      const r = (Math.random() * 16) | 0;
+      const v = c === 'x' ? r : (r & 0x3) | 0x8;
+      return v.toString(16);
+    });
   };
 
   // ── Send event via LiveKit data channel ──
+  // Matches official @heygen/liveavatar-web-sdk sendCommandEvent format:
+  //   { event_id, event_type, ...payload } sent to topic: "agent-control"
+  // NOTE: Do NOT include session_id in payload (SDK does not include it)
   const sendEvent = useCallback((eventType, extraData = {}) => {
     const room = roomRef.current;
     if (!room || !room.localParticipant) {
-      console.warn("[LiveAvatar] Cannot send event: not connected");
+      console.warn("[LiveAvatar] Cannot send event: not connected. Room state:", room?.state);
+      return;
+    }
+
+    if (room.state !== "connected") {
+      console.warn("[LiveAvatar] Room not in connected state:", room.state);
       return;
     }
 
     const event = {
       event_id: generateEventId(),
       event_type: eventType,
-      session_id: sessionIdRef.current || "",
       ...extraData,
     };
 
     const encoder = new TextEncoder();
     const data = encoder.encode(JSON.stringify(event));
 
-    room.localParticipant.publishData(data, {
-      reliable: true,
-      topic: "agent-control",
-    });
-
-    console.log("[LiveAvatar] Sent event:", eventType, event);
+    try {
+      room.localParticipant.publishData(data, {
+        reliable: true,
+        topic: "agent-control",
+      });
+      console.log("[LiveAvatar] Sent event:", eventType, JSON.stringify(event));
+    } catch (err) {
+      console.error("[LiveAvatar] Failed to publish data:", err);
+    }
   }, []);
 
   // ── Handle incoming events from avatar ──
