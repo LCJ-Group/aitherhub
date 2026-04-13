@@ -4098,7 +4098,7 @@ async def liveavatar_streaming_start(
     description="Stop and close an active LiveAvatar streaming session.",
 )
 async def liveavatar_streaming_stop(
-    session_id: str = Body(..., description="Session ID to stop"),
+    session_id: str = Body(..., embed=True, description="Session ID to stop"),
     _auth: bool = Depends(verify_admin_key),
 ):
     service = get_liveavatar_service()
@@ -4107,6 +4107,103 @@ async def liveavatar_streaming_stop(
         return {"success": True, "data": result}
     except LiveAvatarError as e:
         logger.error(f"[LiveAvatar] Error stopping: {e}")
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        logger.exception(f"[LiveAvatar] Unexpected error: {e}")
+        return {"success": False, "error": f"Internal error: {str(e)}"}
+
+
+@router.get(
+    "/liveavatar/voices",
+    summary="List LiveAvatar voices",
+    description="List all voices registered in LiveAvatar (custom + third-party bound).",
+)
+async def liveavatar_list_voices(
+    _auth: bool = Depends(verify_admin_key),
+):
+    service = get_liveavatar_service()
+    try:
+        voices = await service.list_voices()
+        return {"success": True, "voices": voices}
+    except LiveAvatarError as e:
+        logger.error(f"[LiveAvatar] Error listing voices: {e}")
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        logger.exception(f"[LiveAvatar] Unexpected error: {e}")
+        return {"success": False, "error": f"Internal error: {str(e)}"}
+
+
+@router.get(
+    "/liveavatar/secrets",
+    summary="List LiveAvatar secrets",
+    description="List all secrets (API keys) stored in LiveAvatar.",
+)
+async def liveavatar_list_secrets(
+    _auth: bool = Depends(verify_admin_key),
+):
+    service = get_liveavatar_service()
+    try:
+        secrets = await service.list_secrets()
+        return {"success": True, "secrets": secrets}
+    except LiveAvatarError as e:
+        logger.error(f"[LiveAvatar] Error listing secrets: {e}")
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        logger.exception(f"[LiveAvatar] Unexpected error: {e}")
+        return {"success": False, "error": f"Internal error: {str(e)}"}
+
+
+@router.post(
+    "/liveavatar/secrets",
+    summary="Create a LiveAvatar secret",
+    description="Store a third-party API key (e.g., ElevenLabs) in LiveAvatar.",
+)
+async def liveavatar_create_secret(
+    provider: str = Body(..., description="Provider name (e.g., 'elevenLabs')"),
+    api_key_value: str = Body(..., description="The API key to store"),
+    name: str = Body("", description="Optional name for the secret"),
+    _auth: bool = Depends(verify_admin_key),
+):
+    service = get_liveavatar_service()
+    try:
+        result = await service.create_secret(
+            provider=provider,
+            api_key_value=api_key_value,
+            name=name,
+        )
+        return {"success": True, "data": result}
+    except LiveAvatarError as e:
+        logger.error(f"[LiveAvatar] Error creating secret: {e}")
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        logger.exception(f"[LiveAvatar] Unexpected error: {e}")
+        return {"success": False, "error": f"Internal error: {str(e)}"}
+
+
+@router.post(
+    "/liveavatar/voices/bind",
+    summary="Bind a third-party voice to LiveAvatar",
+    description=(
+        "Bind an ElevenLabs voice to LiveAvatar. "
+        "Returns a UUID voice_id that can be used in LiveAvatar sessions."
+    ),
+)
+async def liveavatar_bind_voice(
+    provider_voice_id: str = Body(..., description="ElevenLabs voice ID (e.g., RJs5YoIcR2WzF8qHIg1q)"),
+    secret_id: str = Body(..., description="LiveAvatar secret ID containing the ElevenLabs API key"),
+    name: str = Body("", description="Optional name for the voice"),
+    _auth: bool = Depends(verify_admin_key),
+):
+    service = get_liveavatar_service()
+    try:
+        result = await service.bind_third_party_voice(
+            provider_voice_id=provider_voice_id,
+            secret_id=secret_id,
+            name=name,
+        )
+        return {"success": True, "data": result}
+    except LiveAvatarError as e:
+        logger.error(f"[LiveAvatar] Error binding voice: {e}")
         return {"success": False, "error": str(e)}
     except Exception as e:
         logger.exception(f"[LiveAvatar] Unexpected error: {e}")

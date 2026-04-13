@@ -215,9 +215,18 @@ class LiveAvatarService:
                 "avatar_persona": {
                     "voice_id": voice_id,
                     "language": language,
+                    "voice_settings": {
+                        "provider": "elevenLabs",
+                        "speed": 1,
+                        "stability": 0.75,
+                        "similarity_boost": 0.75,
+                        "style": 0,
+                        "use_speaker_boost": True,
+                        "model": "eleven_flash_v2_5",
+                    },
                 },
                 "video_settings": {
-                    "quality": "medium",
+                    "quality": "high",
                     "encoding": "H264",
                 },
             }
@@ -321,6 +330,153 @@ class LiveAvatarService:
             raise LiveAvatarError(f"HTTP {e.response.status_code}: {error_text}")
         except Exception as e:
             logger.error(f"[LiveAvatar] Error stopping session: {e}")
+            raise LiveAvatarError(str(e))
+
+    # ──────────────────────────────────────────
+    # Voice Management
+    # ──────────────────────────────────────────
+    async def list_voices(self) -> List[Dict[str, Any]]:
+        """
+        List all voices registered in LiveAvatar (custom + third-party bound).
+        """
+        if not self.api_key:
+            raise LiveAvatarError("LIVEAVATAR_API_KEY not set")
+
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.get(
+                    f"{self.base_url}/v1/voices",
+                    headers=self._api_headers,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+
+            voices = data.get("data", {}).get("results", [])
+            logger.info(f"[LiveAvatar] Fetched {len(voices)} voices")
+            return voices
+
+        except httpx.HTTPStatusError as e:
+            error_text = e.response.text[:500]
+            logger.error(f"[LiveAvatar] HTTP error listing voices: {e.response.status_code} - {error_text}")
+            raise LiveAvatarError(f"HTTP {e.response.status_code}: {error_text}")
+        except Exception as e:
+            logger.error(f"[LiveAvatar] Error listing voices: {e}")
+            raise LiveAvatarError(str(e))
+
+    async def list_secrets(self) -> List[Dict[str, Any]]:
+        """
+        List all secrets (API keys) stored in LiveAvatar.
+        """
+        if not self.api_key:
+            raise LiveAvatarError("LIVEAVATAR_API_KEY not set")
+
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.get(
+                    f"{self.base_url}/v1/secrets",
+                    headers=self._api_headers,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+
+            secrets = data.get("data", {}).get("results", [])
+            logger.info(f"[LiveAvatar] Fetched {len(secrets)} secrets")
+            return secrets
+
+        except httpx.HTTPStatusError as e:
+            error_text = e.response.text[:500]
+            logger.error(f"[LiveAvatar] HTTP error listing secrets: {e.response.status_code} - {error_text}")
+            raise LiveAvatarError(f"HTTP {e.response.status_code}: {error_text}")
+        except Exception as e:
+            logger.error(f"[LiveAvatar] Error listing secrets: {e}")
+            raise LiveAvatarError(str(e))
+
+    async def create_secret(
+        self,
+        provider: str,
+        api_key_value: str,
+        name: str = "",
+    ) -> Dict[str, Any]:
+        """
+        Create a secret (store a third-party API key in LiveAvatar).
+        """
+        if not self.api_key:
+            raise LiveAvatarError("LIVEAVATAR_API_KEY not set")
+
+        try:
+            body = {
+                "provider": provider,
+                "api_key": api_key_value,
+            }
+            if name:
+                body["name"] = name
+
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.post(
+                    f"{self.base_url}/v1/secrets",
+                    headers=self._api_headers,
+                    json=body,
+                )
+                resp.raise_for_status()
+                result = resp.json()
+
+            secret_data = result.get("data", {})
+            logger.info(f"[LiveAvatar] Created secret: {secret_data.get('secret_id', 'unknown')}")
+            return secret_data
+
+        except httpx.HTTPStatusError as e:
+            error_text = e.response.text[:500]
+            logger.error(f"[LiveAvatar] HTTP error creating secret: {e.response.status_code} - {error_text}")
+            raise LiveAvatarError(f"HTTP {e.response.status_code}: {error_text}")
+        except Exception as e:
+            logger.error(f"[LiveAvatar] Error creating secret: {e}")
+            raise LiveAvatarError(str(e))
+
+    async def bind_third_party_voice(
+        self,
+        provider_voice_id: str,
+        secret_id: str,
+        name: str = "",
+    ) -> Dict[str, Any]:
+        """
+        Bind a third-party voice (e.g., ElevenLabs) to LiveAvatar.
+
+        Returns a UUID voice_id that can be used in LiveAvatar sessions.
+        """
+        if not self.api_key:
+            raise LiveAvatarError("LIVEAVATAR_API_KEY not set")
+
+        try:
+            body: Dict[str, Any] = {
+                "provider_voice_id": provider_voice_id,
+                "secret_id": secret_id,
+            }
+            if name:
+                body["name"] = name
+
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.post(
+                    f"{self.base_url}/v1/voices/third_party",
+                    headers=self._api_headers,
+                    json=body,
+                )
+                resp.raise_for_status()
+                result = resp.json()
+
+            voice_data = result.get("data", {})
+            logger.info(
+                f"[LiveAvatar] Bound third-party voice: "
+                f"provider_voice_id={provider_voice_id} -> "
+                f"liveavatar_voice_id={voice_data.get('voice_id', 'unknown')}"
+            )
+            return voice_data
+
+        except httpx.HTTPStatusError as e:
+            error_text = e.response.text[:500]
+            logger.error(f"[LiveAvatar] HTTP error binding voice: {e.response.status_code} - {error_text}")
+            raise LiveAvatarError(f"HTTP {e.response.status_code}: {error_text}")
+        except Exception as e:
+            logger.error(f"[LiveAvatar] Error binding voice: {e}")
             raise LiveAvatarError(str(e))
 
     # ──────────────────────────────────────────
