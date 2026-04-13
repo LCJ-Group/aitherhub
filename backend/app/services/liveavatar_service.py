@@ -40,9 +40,8 @@ logger = logging.getLogger(__name__)
 LIVEAVATAR_API_KEY = os.getenv("LIVEAVATAR_API_KEY", "")
 LIVEAVATAR_BASE_URL = "https://api.liveavatar.com"
 
-# Default avatar: Ann Therapist (public)
-# Will be replaced with kyogokuryu custom avatar once ready
-DEFAULT_AVATAR_ID = "513fd1b7-7ef9-466d-9af2-344e51eeb833"
+# Default avatar: kyogokuryu custom avatar (kokumin1010)
+DEFAULT_AVATAR_ID = "d55f3fc1-372f-426e-8fcf-75f0da82a04a"
 
 # Default ElevenLabs voice connected to LiveAvatar
 DEFAULT_VOICE_ID = "de5574fc-009e-4a01-a881-9919ef8f5a0c"
