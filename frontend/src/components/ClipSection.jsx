@@ -413,6 +413,51 @@ export default function ClipSection({ videoData, clipStates, reports1, editorPar
                         )}
                       </div>
 
+                      {/* Sales psychology tags from phase */}
+                      {clip.phase?.sales_psychology_tags && (() => {
+                        let tags = clip.phase.sales_psychology_tags;
+                        if (typeof tags === 'string') { try { tags = JSON.parse(tags); } catch { tags = []; } }
+                        if (!Array.isArray(tags) || tags.length === 0) return null;
+                        const TAG_COLORS = {
+                          '共感': '#92400E', '権威': '#1E40AF', '限定性': '#9D174D',
+                          '実演': '#065F46', '比較': '#3730A3', 'ストーリー': '#991B1B',
+                          'テンション': '#9A3412', '緊急性': '#854D0E', '社会的証明': '#166534',
+                          '価格訴求': '#047857', '問題提起': '#9F1239', '解決提示': '#0C4A6E',
+                        };
+                        return (
+                          <div className="flex flex-wrap gap-1 mb-2">
+                            {tags.slice(0, 4).map((tag, i) => (
+                              <span
+                                key={i}
+                                className="px-1.5 py-0.5 rounded text-[10px] font-medium border"
+                                style={{
+                                  color: TAG_COLORS[tag] || '#374151',
+                                  backgroundColor: (TAG_COLORS[tag] || '#374151') + '15',
+                                  borderColor: (TAG_COLORS[tag] || '#374151') + '30',
+                                }}
+                              >
+                                {tag}
+                              </span>
+                            ))}
+                            {tags.length > 4 && <span className="text-[10px] text-gray-400">+{tags.length - 4}</span>}
+                          </div>
+                        );
+                      })()}
+
+                      {/* GMV & product info from phase */}
+                      {clip.phase && (clip.phase.gmv > 0 || clip.phase.product_names) && (
+                        <div className="flex items-center gap-2 mb-2 text-[11px]">
+                          {clip.phase.gmv > 0 && (
+                            <span className="font-bold text-green-600">
+                              ¥{clip.phase.gmv >= 10000 ? `${(clip.phase.gmv / 10000).toFixed(1)}万` : Math.round(clip.phase.gmv).toLocaleString()}
+                            </span>
+                          )}
+                          {clip.phase.product_names && (
+                            <span className="text-gray-500 truncate max-w-[150px]">{clip.phase.product_names}</span>
+                          )}
+                        </div>
+                      )}
+
                       {/* Insight preview */}
                       {clip.insight && (
                         <p className="text-gray-600 text-xs leading-relaxed line-clamp-2 mb-3">

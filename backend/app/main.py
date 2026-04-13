@@ -221,6 +221,23 @@ async def ensure_tables_exist():
                 "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS progress_pct INTEGER DEFAULT 0",
                 "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS progress_step TEXT DEFAULT ''",
                 "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS job_payload JSONB",
+                # ── Clip DB columns (searchable metadata) ──
+                "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS transcript_text TEXT",
+                "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS product_name TEXT",
+                "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS product_category TEXT",
+                "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS tags JSONB",
+                "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS is_sold BOOLEAN",
+                "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS gmv REAL DEFAULT 0",
+                "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS viewer_count INTEGER DEFAULT 0",
+                "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS liver_name TEXT",
+                "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS stream_date DATE",
+                "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS thumbnail_url TEXT",
+                "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS duration_sec REAL",
+                "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS embedding_id TEXT",
+                "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS phase_description TEXT",
+                "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS cta_score INTEGER",
+                "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS importance_score REAL",
+                "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS enriched_at TIMESTAMPTZ",
             ]:
                 try:
                     await conn.execute(text(col_sql))

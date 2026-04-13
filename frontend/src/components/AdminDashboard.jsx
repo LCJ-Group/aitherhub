@@ -392,6 +392,9 @@ export default function AdminDashboard() {
                 <StatCard label="今月アップ人数" value={user_scale.this_month_uploaders} unit="人" color="teal" />
               </div>
             </section>
+
+            {/* クリップDB (売れる瞬間) */}
+            <ClipDBStatsSection />
           </>
         )}
 
@@ -940,6 +943,107 @@ function StatCard({ label, value, unit, color = "gray", small = false }) {
         {unit && <span className="text-sm font-normal ml-1">{unit}</span>}
       </p>
     </div>
+  );
+}
+
+// ─── Clip DB Stats Section ───
+function ClipDBStatsSection() {
+  const [clipStats, setClipStats] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const baseURL = import.meta.env.VITE_API_BASE_URL;
+        const res = await axios.get(`${baseURL}/api/v1/clip-db/stats`, {
+          headers: { "X-Admin-Key": "aither:hub" },
+          timeout: 15000,
+        });
+        setClipStats(res.data);
+      } catch (e) {
+        console.warn("ClipDB stats fetch failed:", e);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  if (loading) {
+    return (
+      <section className="mb-8">
+        <div className="flex items-center gap-2 mb-4">
+          <span className="text-lg">🎬</span>
+          <h2 className="text-lg font-semibold text-gray-700">クリップDB</h2>
+          <span className="text-xs text-gray-400 ml-1">売れる瞬間</span>
+        </div>
+        <div className="text-sm text-gray-400">読み込み中...</div>
+      </section>
+    );
+  }
+
+  if (!clipStats) return null;
+
+  const TAG_COLORS = {
+    '共感': '#92400E', '権威': '#1E40AF', '限定性': '#9D174D',
+    '実演': '#065F46', '比較': '#3730A3', 'ストーリー': '#991B1B',
+    'テンション': '#9A3412', '緊急性': '#854D0E', '社会的証明': '#166534',
+    '価格訴求': '#047857', '問題提起': '#9F1239', '解決提示': '#0C4A6E',
+  };
+
+  return (
+    <section className="mb-8">
+      <div className="flex items-center gap-2 mb-4">
+        <span className="text-lg">🎬</span>
+        <h2 className="text-lg font-semibold text-gray-700">クリップDB</h2>
+        <span className="text-xs text-gray-400 ml-1">売れる瞬間</span>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+        <StatCard label="総クリップ" value={clipStats.total_clips} unit="件" color="purple" />
+        <StatCard label="売れた" value={clipStats.sold_clips} unit="件" color="green" />
+        <StatCard label="未売" value={clipStats.unsold_clips} unit="件" color="gray" />
+        <StatCard label="総GMV" value={clipStats.total_gmv >= 10000 ? `¥${(clipStats.total_gmv / 10000).toFixed(1)}万` : `¥${Math.round(clipStats.total_gmv || 0).toLocaleString()}`} color="blue" />
+      </div>
+
+      {/* Top tags */}
+      {clipStats.top_tags && clipStats.top_tags.length > 0 && (
+        <div className="bg-white rounded-xl border border-gray-200 p-4 mb-4">
+          <h3 className="text-sm font-semibold text-gray-600 mb-3">トップタグ（売れた理由）</h3>
+          <div className="flex flex-wrap gap-2">
+            {clipStats.top_tags.slice(0, 12).map((t, i) => {
+              const color = TAG_COLORS[t.tag] || '#374151';
+              return (
+                <span
+                  key={i}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border"
+                  style={{ color, backgroundColor: color + '12', borderColor: color + '30' }}
+                >
+                  {t.tag}
+                  <span className="text-[10px] opacity-60">{t.count}</span>
+                </span>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Top products */}
+      {clipStats.top_products && clipStats.top_products.length > 0 && (
+        <div className="bg-white rounded-xl border border-gray-200 p-4">
+          <h3 className="text-sm font-semibold text-gray-600 mb-3">トップ商品</h3>
+          <div className="space-y-1.5">
+            {clipStats.top_products.slice(0, 6).map((p, i) => (
+              <div key={i} className="flex items-center justify-between text-xs py-1 border-b border-gray-50 last:border-0">
+                <span className="text-gray-700 truncate flex-1">{p.product}</span>
+                <span className="text-gray-400 mx-2">{p.count}件</span>
+                <span className="font-semibold text-green-600">
+                  {p.gmv >= 10000 ? `¥${(p.gmv / 10000).toFixed(1)}万` : `¥${Math.round(p.gmv || 0).toLocaleString()}`}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 

@@ -24,6 +24,7 @@ from app.api.v1.endpoints.face_swap_video import router as face_swap_video_route
 from app.api.v1.endpoints.auto_video import router as auto_video_router
 from app.api.v1.endpoints.persona import router as persona_router
 from app.api.v1.endpoints.script_generator import router as script_generator_router
+from app.api.v1.endpoints.clip_db import router as clip_db_router
 
 routers = APIRouter()
 routers.include_router(auth_router, prefix="/auth", tags=["Auth"])
@@ -50,3 +51,4 @@ routers.include_router(face_swap_video_router)
 routers.include_router(auto_video_router)
 routers.include_router(persona_router)
 routers.include_router(script_generator_router)
+routers.include_router(clip_db_router, prefix="/clip-db", tags=["Clip DB"])

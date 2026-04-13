@@ -2075,6 +2075,13 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
         update_clip_status(clip_id, "completed", clip_url=uploaded_url, captions=captions_data if captions_data else None)
         logger.info(f"=== Clip generation completed successfully ({len(captions_data)} captions saved) ===")
 
+        # 8. Auto-enrich clip metadata (Clip DB)
+        try:
+            _enrich_clip_after_generation(clip_id, video_id, phase_index, captions_data, segments)
+            logger.info(f"[ClipDB] Auto-enriched clip {clip_id}")
+        except Exception as enrich_err:
+            logger.warning(f"[ClipDB] Auto-enrich failed (non-fatal): {enrich_err}")
+
     except Exception as e:
         logger.exception(f"Clip generation failed: {e}")
         update_clip_status(clip_id, "failed", error_message=str(e)[:500])
@@ -2089,6 +2096,101 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
             logger.debug(f"Suppressed: {_e}")
 
         close_db_sync()
+
+
+# =========================
+# Clip DB auto-enrichment
+# =========================
+
+def _enrich_clip_after_generation(clip_id: str, video_id: str, phase_index, captions_data: list, segments: list):
+    """
+    Auto-enrich clip metadata after generation completes.
+    Copies relevant data from video_phases into video_clips columns
+    so clips become searchable in the Clip DB.
+    """
+    loop = get_event_loop()
+
+    async def _do_enrich():
+        async with get_session() as session:
+            # 1. Build transcript from captions
+            transcript = ""
+            if captions_data:
+                transcript = " ".join(c.get("text", "") for c in captions_data if c.get("text"))
+            elif segments:
+                transcript = " ".join(s.get("text", "") for s in segments if s.get("text"))
+
+            # 2. Get phase metadata (only for numeric phase_index)
+            phase_idx_str = str(phase_index)
+            updates = {
+                "transcript_text": transcript[:10000] if transcript else None,
+                "enriched_at": "NOW()",
+            }
+            params = {"clip_id": clip_id}
+
+            if phase_idx_str.isdigit():
+                phase_sql = text("""
+                    SELECT vp.phase_description, vp.gmv, vp.order_count, vp.viewer_count,
+                           vp.product_names, vp.importance_score, vp.cta_score,
+                           vp.sales_psychology_tags, vp.conversion_rate
+                    FROM video_phases vp
+                    WHERE vp.video_id = :vid AND vp.phase_index = :pidx
+                """)
+                p_result = await session.execute(phase_sql, {"vid": video_id, "pidx": int(phase_idx_str)})
+                phase = p_result.fetchone()
+
+                if phase:
+                    updates["phase_description"] = phase.phase_description
+                    updates["gmv"] = phase.gmv or 0
+                    updates["viewer_count"] = phase.viewer_count or 0
+                    updates["product_name"] = phase.product_names
+                    updates["cta_score"] = phase.cta_score
+                    updates["importance_score"] = phase.importance_score
+                    updates["is_sold"] = (phase.gmv or 0) > 0 or (phase.order_count or 0) > 0
+
+                    # Parse and save tags
+                    raw_tags = phase.sales_psychology_tags
+                    if raw_tags:
+                        import json as _json
+                        try:
+                            parsed = _json.loads(raw_tags) if isinstance(raw_tags, str) else raw_tags
+                            if isinstance(parsed, list):
+                                updates["tags"] = _json.dumps(parsed, ensure_ascii=False)
+                        except Exception:
+                            pass
+
+            # 3. Get video metadata for stream_date and liver_name
+            video_sql = text("""
+                SELECT v.created_at, v.original_filename
+                FROM videos v WHERE v.id = :vid
+            """)
+            v_result = await session.execute(video_sql, {"vid": video_id})
+            video = v_result.fetchone()
+            if video and video.created_at:
+                updates["stream_date"] = video.created_at.date() if hasattr(video.created_at, 'date') else None
+
+            # 4. Calculate duration
+            clip_sql = text("SELECT time_start, time_end FROM video_clips WHERE id = :clip_id")
+            c_result = await session.execute(clip_sql, {"clip_id": clip_id})
+            clip_row = c_result.fetchone()
+            if clip_row and clip_row.time_start is not None and clip_row.time_end is not None:
+                updates["duration_sec"] = round(clip_row.time_end - clip_row.time_start, 2)
+
+            # 5. Build and execute UPDATE
+            set_parts = []
+            final_params = {"clip_id": clip_id}
+            for key, val in updates.items():
+                if val is not None and key != "enriched_at":
+                    set_parts.append(f"{key} = :{key}")
+                    final_params[key] = val
+            set_parts.append("enriched_at = NOW()")
+
+            if set_parts:
+                update_sql = text(f"UPDATE video_clips SET {', '.join(set_parts)} WHERE id = :clip_id")
+                await session.execute(update_sql, final_params)
+
+            logger.info(f"[ClipDB] Enriched clip {clip_id} with {len(set_parts)} fields")
+
+    loop.run_until_complete(_do_enrich())
 
 
 # =========================

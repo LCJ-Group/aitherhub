@@ -12,7 +12,7 @@ import AuthService from "../base/services/userService";
 import VideoService from "../base/services/videoService";
 import personaService from "../base/services/personaService";
 
-import { ChevronDown, LogOut, Settings, User, Users, X, MoreHorizontal, Pencil, Trash2, Scissors, MessageSquareText, Radio, Video, Eye, Calendar, Sparkles, UserCircle, Clapperboard, Wand2, Brain, Check, FileText } from "lucide-react";
+import { ChevronDown, LogOut, Settings, User, Users, X, MoreHorizontal, Pencil, Trash2, Scissors, MessageSquareText, Radio, Video, Eye, Calendar, Sparkles, UserCircle, Clapperboard, Wand2, Brain, Check, FileText, Database } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -512,6 +512,17 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
               >
                 <Users className={`w-4 h-4 transition-colors duration-200 ease-out ${location.pathname === '/personas' ? 'text-pink-600' : 'text-gray-500'}`} />
                 <span className={`text-sm transition-colors duration-200 ease-out ${location.pathname === '/personas' ? 'text-pink-700 font-medium' : 'text-muted-foreground'}`}>Liver Clone</span>
+              </div>
+              <div
+                onClick={() => { navigate('/clip-db'); onClose?.(); }}
+                className={`flex items-center gap-2 p-2 px-4 rounded-md cursor-pointer transition-all duration-200 ease-out ${
+                  location.pathname === '/clip-db'
+                    ? 'border border-emerald-300 bg-emerald-50 text-emerald-700'
+                    : 'hover:bg-gray-100'
+                }`}
+              >
+                <Database className={`w-4 h-4 transition-colors duration-200 ease-out ${location.pathname === '/clip-db' ? 'text-emerald-600' : 'text-gray-500'}`} />
+                <span className={`text-sm transition-colors duration-200 ease-out ${location.pathname === '/clip-db' ? 'text-emerald-700 font-medium' : 'text-muted-foreground'}`}>クリップDB</span>
               </div>
             </div>
           </div>

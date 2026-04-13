@@ -9,6 +9,7 @@ import AiLiveCreatorPage from './components/AiLiveCreatorPage'
 import OBSOutputPage from './components/OBSOutputPage'
 import PersonaPage from './components/PersonaPage'
 import ScriptGeneratorPage from './components/ScriptGeneratorPage'
+import ClipDBPage from './components/ClipDBPage'
 import PrivacyPolicy from './components/PrivacyPolicy'
 import AuthPage from './pages/authPages/AuthPage'
 import { Toaster } from "./components/ui/toaster";
@@ -31,6 +32,7 @@ function App() {
         <Route path="/ai-live-creator/obs" element={<OBSOutputPage />} />
         <Route path="/personas" element={<PersonaPage />} />
         <Route path="/script-generator" element={<ScriptGeneratorPage />} />
+        <Route path="/clip-db" element={<ClipDBPage />} />
         <Route path="/login" element={<AuthPage mode="login" />} />
         <Route path="/register" element={<AuthPage mode="register" />} />
         <Route path="/forgot-password" element={<AuthPage mode="forgot-password" />} />
