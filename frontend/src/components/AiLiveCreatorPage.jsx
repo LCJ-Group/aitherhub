@@ -125,6 +125,12 @@ export default function AiLiveCreatorPage() {
   const [loadingAvatars, setLoadingAvatars] = useState(false);
   const [avatarError, setAvatarError] = useState(null);
 
+  // ── LiveAvatar State (Realtime mode) ──
+  const [liveAvatarList, setLiveAvatarList] = useState([]);
+  const [selectedLiveAvatarId, setSelectedLiveAvatarId] = useState("");
+  const [loadingLiveAvatars, setLoadingLiveAvatars] = useState(false);
+  const [liveAvatarError, setLiveAvatarError] = useState(null);
+
   // ── AutoPilot State ──
   const [autoPilotActive, setAutoPilotActive] = useState(false);
 
@@ -152,6 +158,7 @@ export default function AiLiveCreatorPage() {
     loadVoices();
     loadPersonas();
     loadHeygenAvatars();
+    loadLiveAvatars();
     try {
       const saved = localStorage.getItem("aiLiveCreator_jobs");
       if (saved) setJobHistory(JSON.parse(saved));
@@ -300,6 +307,45 @@ export default function AiLiveCreatorPage() {
       setAvatarError('Failed to load avatars. Tap to retry.');
     } finally {
       setLoadingAvatars(false);
+    }
+  };
+
+  const loadLiveAvatars = async (retryCount = 0) => {
+    const MAX_RETRIES = 3;
+    setLoadingLiveAvatars(true);
+    setLiveAvatarError(null);
+    try {
+      if (retryCount === 0) {
+        setLiveAvatarError('Loading LiveAvatar avatars...');
+      }
+      const res = await aiLiveCreatorService.liveAvatarListAvatars(true);
+      if (res.success && res.avatars && res.avatars.length > 0) {
+        setLiveAvatarList(res.avatars);
+        setLiveAvatarError(null);
+        // Default to first custom avatar, or first available
+        const customAvatar = res.avatars.find(a => a.source === 'custom');
+        if (customAvatar) {
+          setSelectedLiveAvatarId(customAvatar.avatar_id);
+        } else {
+          setSelectedLiveAvatarId(res.avatars[0].avatar_id);
+        }
+      } else if (res.success === false && res.error) {
+        setLiveAvatarError(res.error);
+      } else {
+        setLiveAvatarError(null);
+        setLiveAvatarList([]);
+      }
+    } catch (err) {
+      console.error(`Failed to load LiveAvatar avatars (attempt ${retryCount + 1}/${MAX_RETRIES}):`, err);
+      if (retryCount < MAX_RETRIES - 1) {
+        const delay = (retryCount + 1) * 5000;
+        setLiveAvatarError(`Loading... retry in ${(delay / 1000).toFixed(0)}s`);
+        await new Promise(r => setTimeout(r, delay));
+        return loadLiveAvatars(retryCount + 1);
+      }
+      setLiveAvatarError('Failed to load LiveAvatar avatars. Tap to retry.');
+    } finally {
+      setLoadingLiveAvatars(false);
     }
   };
 
@@ -869,8 +915,98 @@ export default function AiLiveCreatorPage() {
                 </div>
 
                 {/* Portrait / Avatar Selection */}
-                {(engine === "heygen" || engine === "realtime") ? (
-                  /* ── HeyGen Avatar Selection Grid (shared for HeyGen & Realtime) ── */
+                {engine === "realtime" ? (
+                  /* ── LiveAvatar Selection Grid (Realtime mode) ── */
+                  <div className="bg-gray-800/50 rounded-xl border border-green-500/30 p-3">
+                    <h4 className="text-[11px] font-medium text-green-300 mb-2 flex items-center gap-1.5">
+                      <Radio className="w-3.5 h-3.5 text-green-400" />
+                      LiveAvatar
+                      {selectedLiveAvatarId && (
+                        <span className="ml-auto text-[9px] bg-green-500/20 text-green-300 px-1.5 py-0.5 rounded-full">
+                          Selected
+                        </span>
+                      )}
+                    </h4>
+                    {loadingLiveAvatars ? (
+                      <div className="flex flex-col items-center justify-center py-6 gap-2">
+                        <div className="flex items-center">
+                          <Loader2 className="w-5 h-5 text-green-400 animate-spin" />
+                          <span className="ml-2 text-[10px] text-gray-400">
+                            {liveAvatarError || 'Loading LiveAvatar avatars...'}
+                          </span>
+                        </div>
+                      </div>
+                    ) : liveAvatarError ? (
+                      <div className="text-center py-4">
+                        <AlertCircle className="w-6 h-6 text-red-400 mx-auto mb-1" />
+                        <p className="text-[10px] text-red-400">{liveAvatarError}</p>
+                        <button
+                          onClick={() => loadLiveAvatars()}
+                          className="mt-2 px-3 py-1 text-[9px] bg-green-500/20 text-green-400 hover:bg-green-500/30 rounded-lg transition-colors"
+                        >
+                          Retry
+                        </button>
+                      </div>
+                    ) : liveAvatarList.length === 0 ? (
+                      <div className="text-center py-4">
+                        <Users className="w-6 h-6 text-gray-600 mx-auto mb-1" />
+                        <p className="text-[10px] text-gray-500">No LiveAvatar avatars available</p>
+                        <button
+                          onClick={() => loadLiveAvatars()}
+                          className="mt-2 px-3 py-1 text-[9px] bg-green-500/20 text-green-400 hover:bg-green-500/30 rounded-lg transition-colors"
+                        >
+                          Retry
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-3 gap-1.5 max-h-[200px] overflow-y-auto pr-1 custom-scrollbar">
+                        {liveAvatarList.map((avatar) => (
+                          <button
+                            key={avatar.avatar_id}
+                            onClick={() => setSelectedLiveAvatarId(avatar.avatar_id)}
+                            className={`relative rounded-lg overflow-hidden border-2 transition-all hover:scale-[1.02] ${
+                              selectedLiveAvatarId === avatar.avatar_id
+                                ? "border-green-400 shadow-lg shadow-green-500/20 ring-1 ring-green-400/50"
+                                : "border-gray-700/50 hover:border-gray-500"
+                            }`}
+                          >
+                            {avatar.preview_url ? (
+                              <img
+                                src={avatar.preview_url}
+                                alt={avatar.name || "Avatar"}
+                                className="w-full h-16 object-cover bg-gray-900"
+                                loading="lazy"
+                              />
+                            ) : (
+                              <div className="w-full h-16 bg-gray-900 flex items-center justify-center">
+                                <Radio className="w-4 h-4 text-green-600" />
+                              </div>
+                            )}
+                            {selectedLiveAvatarId === avatar.avatar_id && (
+                              <div className="absolute top-0.5 right-0.5 bg-green-500 rounded-full p-0.5">
+                                <CheckCircle className="w-2.5 h-2.5 text-white" />
+                              </div>
+                            )}
+                            <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent px-1 py-0.5">
+                              <p className="text-[7px] text-white/90 truncate">
+                                {avatar.name || "Avatar"}
+                              </p>
+                            </div>
+                            {avatar.source === 'custom' && (
+                              <div className="absolute top-0.5 left-0.5 bg-green-600/80 rounded px-1">
+                                <p className="text-[6px] text-white">Custom</p>
+                              </div>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    <p className="text-[8px] text-gray-500 mt-1.5">
+                      {loadingLiveAvatars ? 'Loading...' : `${liveAvatarList.length} avatars available`}
+                    </p>
+                  </div>
+                ) : engine === "heygen" ? (
+                  /* ── HeyGen Avatar Selection Grid ── */
                   <div className="bg-gray-800/50 rounded-xl border border-amber-500/30 p-3">
                     <h4 className="text-[11px] font-medium text-amber-300 mb-2 flex items-center gap-1.5">
                       <Users className="w-3.5 h-3.5 text-amber-400" />
@@ -1053,7 +1189,7 @@ export default function AiLiveCreatorPage() {
                 {/* Realtime Streaming Mode - LiveAvatar (replaces HeyGen Streaming) */}
                 {engine === "realtime" && (
                   <LiveAvatarStreaming
-                    avatarId={selectedAvatarId}
+                    avatarId={selectedLiveAvatarId}
                     language={languageCode}
                     personaPrompt=""
                     voiceId={selectedVoiceId}
