@@ -4092,6 +4092,31 @@ async def liveavatar_streaming_start(
         return {"success": False, "error": f"Internal error: {str(e)}"}
 
 
+@router.get(
+    "/liveavatar/session/active",
+    summary="Get active LiveAvatar session (for OBS Browser Source)",
+    description=(
+        "Returns the currently active LiveAvatar session's LiveKit credentials. "
+        "Used by OBS Browser Source to join the same LiveKit room as the main page "
+        "without needing postMessage (since OBS has no window.opener)."
+    ),
+)
+async def liveavatar_get_active_session(
+    _auth: bool = Depends(verify_admin_key),
+):
+    service = get_liveavatar_service()
+    active = service.get_active_session()
+    if active:
+        return {
+            "success": True,
+            "active": True,
+            "session_id": active["session_id"],
+            "livekit_url": active["livekit_url"],
+            "livekit_client_token": active["livekit_client_token"],
+        }
+    return {"success": True, "active": False}
+
+
 @router.post(
     "/liveavatar/streaming/stop",
     summary="Stop a LiveAvatar streaming session",

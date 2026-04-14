@@ -86,6 +86,9 @@ class LiveAvatarService:
         self._avatars_cache: Optional[List[Dict]] = None
         self._avatars_cache_time: float = 0
         self._AVATARS_CACHE_TTL: int = 1800  # 30 minutes
+        # Active session store — allows OBS Browser Source to retrieve
+        # LiveKit credentials without postMessage (direct URL access)
+        self._active_session: Optional[Dict[str, Any]] = None
         if not self.api_key:
             logger.warning(
                 "LIVEAVATAR_API_KEY not set — LiveAvatar streaming will not work. "
@@ -305,7 +308,7 @@ class LiveAvatarService:
                 f"max_duration={max_session_duration}s"
             )
 
-            return {
+            result = {
                 "session_id": session_id,
                 "session_token": session_token,
                 "livekit_url": livekit_url,
@@ -314,6 +317,17 @@ class LiveAvatarService:
                 "max_session_duration": max_session_duration,
                 "sandbox": sandbox,
             }
+
+            # Store as active session so OBS Browser Source can retrieve it
+            self._active_session = {
+                "session_id": session_id,
+                "livekit_url": livekit_url,
+                "livekit_client_token": livekit_client_token,
+                "created_at": time.time(),
+            }
+            logger.info(f"[LiveAvatar] Stored active session for OBS: {session_id}")
+
+            return result
 
         except httpx.HTTPStatusError as e:
             error_text = e.response.text[:500]
@@ -347,6 +361,12 @@ class LiveAvatarService:
                 result = resp.json()
 
             logger.info(f"[LiveAvatar] Session stopped: {session_id}")
+
+            # Clear active session if it matches
+            if self._active_session and self._active_session.get("session_id") == session_id:
+                self._active_session = None
+                logger.info(f"[LiveAvatar] Cleared active session: {session_id}")
+
             return result
 
         except httpx.HTTPStatusError as e:
@@ -356,6 +376,31 @@ class LiveAvatarService:
         except Exception as e:
             logger.error(f"[LiveAvatar] Error stopping session: {e}")
             raise LiveAvatarError(str(e))
+
+    # ──────────────────────────────────────────
+    # Active Session (for OBS Browser Source)
+    # ──────────────────────────────────────────
+    def get_active_session(self) -> Optional[Dict[str, Any]]:
+        """
+        Get the currently active LiveAvatar session info.
+
+        Used by OBS Browser Source to retrieve LiveKit credentials
+        without needing postMessage (since OBS has no window.opener).
+
+        Returns None if no active session, or the session info dict
+        containing session_id, livekit_url, livekit_client_token.
+        """
+        if not self._active_session:
+            return None
+
+        # Check if session is too old (max 2 hours)
+        created_at = self._active_session.get("created_at", 0)
+        if time.time() - created_at > 7200:
+            logger.info("[LiveAvatar] Active session expired (>2h), clearing")
+            self._active_session = None
+            return None
+
+        return self._active_session
 
     # ──────────────────────────────────────────
     # Voice Management

@@ -1,34 +1,31 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Room, RoomEvent, Track } from "livekit-client";
+import axios from "axios";
+
+const ADMIN_KEY = "aither:hub";
 
 /**
- * OBS Output Page — Shared Session Mode (方式A)
+ * OBS Output Page — Shared Session Mode (方式A + API Polling)
  *
  * URL: /ai-live-creator/obs?bg=green
  *
  * This page does NOT create its own LiveAvatar session.
- * Instead, it receives LiveKit credentials from the main AiLiveCreatorPage
- * via postMessage and joins the SAME LiveKit room as a receive-only client.
+ * It retrieves LiveKit credentials from the backend's active session API
+ * and joins the SAME LiveKit room as a receive-only client.
+ *
+ * Two credential sources (whichever arrives first):
+ *   1. API Polling: GET /api/v1/digital-human/liveavatar/session/active (every 3s)
+ *   2. postMessage: From parent window (when opened via Pop-out button)
  *
  * This ensures:
- *   - OBS sees the exact same avatar video + audio as the main page
+ *   - OBS Browser Source (direct URL) works via API polling
+ *   - Pop-out window works via postMessage (faster)
  *   - Lip-sync works perfectly because it's the same LiveKit stream
  *   - No extra session costs (only one LiveAvatar session is active)
- *   - Future comment responses automatically appear in OBS too
- *
- * Flow:
- *   1. Main page creates LiveAvatar session → gets livekit_url + livekit_client_token
- *   2. Main page sends credentials via postMessage({ type: "obs-livekit-creds", ... })
- *   3. This page connects to the same LiveKit room using those credentials
- *   4. Video/audio tracks are received and displayed (receive-only, no publishing)
  *
  * URL Parameters:
  *   - bg: Background color (green|blue|black|transparent) default: green
- *   - avatar_id: (legacy, kept for URL compatibility)
- *   - voice_id: (legacy, kept for URL compatibility)
- *   - language: (legacy, kept for URL compatibility)
- *   - autostart: (legacy, ignored — session is started by main page)
  */
 export default function OBSOutputPage() {
   const [searchParams] = useSearchParams();
@@ -41,6 +38,7 @@ export default function OBSOutputPage() {
   const [error, setError] = useState(null);
   const [sessionDuration, setSessionDuration] = useState(0);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [credSource, setCredSource] = useState(""); // "api" | "postMessage"
 
   // Refs
   const videoContainerRef = useRef(null);
@@ -48,6 +46,10 @@ export default function OBSOutputPage() {
   const sessionTimerRef = useRef(null);
   const audioElementsRef = useRef([]);
   const connectedRef = useRef(false); // prevent double-connect
+  const pollingRef = useRef(null);
+  const currentSessionIdRef = useRef(null);
+
+  const baseURL = import.meta.env.VITE_API_BASE_URL;
 
   // Background color map
   const bgMap = {
@@ -61,18 +63,28 @@ export default function OBSOutputPage() {
   const backgroundColor = bgMap[bgColor] || bgMap.green;
 
   // ── Connect to LiveKit room using shared credentials ──
-  const connectToRoom = useCallback(async (livekitUrl, livekitToken) => {
-    if (connectedRef.current) {
-      console.log("[OBS] Already connected, ignoring duplicate credentials");
+  const connectToRoom = useCallback(async (livekitUrl, livekitToken, sessionId, source) => {
+    // Prevent double-connect to the same session
+    if (connectedRef.current && currentSessionIdRef.current === sessionId) {
+      console.log("[OBS] Already connected to this session, ignoring");
       return;
     }
+
+    // If connected to a different session, disconnect first
+    if (connectedRef.current) {
+      console.log("[OBS] Switching to new session, disconnecting old one");
+      disconnectFromRoom();
+    }
+
     connectedRef.current = true;
+    currentSessionIdRef.current = sessionId;
 
     setStatus("connecting");
     setError(null);
+    setCredSource(source || "unknown");
 
     try {
-      console.log("[OBS] Connecting to shared LiveKit room:", livekitUrl);
+      console.log(`[OBS] Connecting to shared LiveKit room (source: ${source}):`, livekitUrl);
 
       // Disconnect existing room if any
       if (roomRef.current) {
@@ -156,6 +168,7 @@ export default function OBSOutputPage() {
         console.log("[OBS] Disconnected from LiveKit room");
         setStatus("waiting");
         connectedRef.current = false;
+        currentSessionIdRef.current = null;
         if (videoContainerRef.current) {
           videoContainerRef.current.innerHTML = "";
         }
@@ -166,7 +179,13 @@ export default function OBSOutputPage() {
       setStatus("connected");
       console.log("[OBS] Successfully connected to shared LiveKit room");
 
-      // Notify parent window that OBS is connected
+      // Stop polling once connected
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
+
+      // Notify parent window that OBS is connected (for Pop-out mode)
       if (window.opener) {
         window.opener.postMessage({ type: "obs-stream-ready" }, "*");
       }
@@ -175,25 +194,90 @@ export default function OBSOutputPage() {
       setError(err.message);
       setStatus("error");
       connectedRef.current = false;
+      currentSessionIdRef.current = null;
+
+      // Resume polling on error so we can retry
+      startPolling();
     }
   }, []);
 
-  // ── Listen for postMessage from main page ──
+  // ── Disconnect from room ──
+  const disconnectFromRoom = useCallback(() => {
+    audioElementsRef.current.forEach((el) => {
+      try { el.remove(); } catch (e) {}
+    });
+    audioElementsRef.current = [];
+
+    if (roomRef.current) {
+      roomRef.current.disconnect();
+      roomRef.current = null;
+    }
+
+    setStatus("waiting");
+    setIsSpeaking(false);
+    connectedRef.current = false;
+    currentSessionIdRef.current = null;
+
+    if (videoContainerRef.current) {
+      videoContainerRef.current.innerHTML = "";
+    }
+  }, []);
+
+  // ── API Polling for active session ──
+  const pollActiveSession = useCallback(async () => {
+    if (connectedRef.current) return; // Already connected, skip
+
+    try {
+      const resp = await axios.get(
+        `${baseURL}/api/v1/digital-human/liveavatar/session/active`,
+        { headers: { "X-Admin-Key": ADMIN_KEY }, timeout: 5000 }
+      );
+
+      if (resp.data?.active && resp.data.livekit_url && resp.data.livekit_client_token) {
+        console.log("[OBS] Found active session via API:", resp.data.session_id);
+        connectToRoom(
+          resp.data.livekit_url,
+          resp.data.livekit_client_token,
+          resp.data.session_id,
+          "api"
+        );
+      }
+    } catch (err) {
+      // Silently ignore polling errors (backend may be temporarily unavailable)
+      console.debug("[OBS] Polling error:", err.message);
+    }
+  }, [baseURL, connectToRoom]);
+
+  const startPolling = useCallback(() => {
+    if (pollingRef.current) return; // Already polling
+    console.log("[OBS] Starting API polling for active session (every 3s)");
+    // Poll immediately, then every 3 seconds
+    pollActiveSession();
+    pollingRef.current = setInterval(pollActiveSession, 3000);
+  }, [pollActiveSession]);
+
+  // ── Listen for postMessage from main page + Start API polling ──
   useEffect(() => {
     const handleMessage = (event) => {
       if (!event.data || typeof event.data !== "object") return;
 
       switch (event.data.type) {
         case "obs-livekit-creds":
-          // Receive LiveKit credentials from main page
-          console.log("[OBS] Received LiveKit credentials from main page");
+          // Receive LiveKit credentials from main page (Pop-out mode)
+          console.log("[OBS] Received LiveKit credentials via postMessage");
           if (event.data.livekit_url && event.data.livekit_client_token) {
-            connectToRoom(event.data.livekit_url, event.data.livekit_client_token);
+            connectToRoom(
+              event.data.livekit_url,
+              event.data.livekit_client_token,
+              event.data.session_id || "unknown",
+              "postMessage"
+            );
           }
           break;
         case "obs-stop":
           // Stop and disconnect
           disconnectFromRoom();
+          startPolling(); // Resume polling after disconnect
           break;
         default:
           break;
@@ -202,13 +286,22 @@ export default function OBSOutputPage() {
 
     window.addEventListener("message", handleMessage);
 
-    // Also notify main page that OBS is ready to receive credentials
+    // Notify parent window that OBS is ready (for Pop-out mode)
     if (window.opener) {
       window.opener.postMessage({ type: "obs-ready" }, "*");
     }
 
-    return () => window.removeEventListener("message", handleMessage);
-  }, [connectToRoom]);
+    // Start API polling (for OBS Browser Source direct URL mode)
+    startPolling();
+
+    return () => {
+      window.removeEventListener("message", handleMessage);
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
+    };
+  }, [connectToRoom, disconnectFromRoom, startPolling]);
 
   // ── Session duration timer ──
   useEffect(() => {
@@ -232,28 +325,11 @@ export default function OBSOutputPage() {
   useEffect(() => {
     return () => {
       disconnectFromRoom();
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
     };
-  }, []);
-
-  // ── Disconnect from room ──
-  const disconnectFromRoom = useCallback(() => {
-    audioElementsRef.current.forEach((el) => {
-      try { el.remove(); } catch (e) {}
-    });
-    audioElementsRef.current = [];
-
-    if (roomRef.current) {
-      roomRef.current.disconnect();
-      roomRef.current = null;
-    }
-
-    setStatus("waiting");
-    setIsSpeaking(false);
-    connectedRef.current = false;
-
-    if (videoContainerRef.current) {
-      videoContainerRef.current.innerHTML = "";
-    }
   }, []);
 
   // ── Format time ──
@@ -311,18 +387,32 @@ export default function OBSOutputPage() {
               AitherHub OBS Output
             </h2>
             <p style={{ fontSize: "12px", color: "#888", marginBottom: "24px" }}>
-              Shared Session Mode — Waiting for main page
+              Shared Session Mode — API Polling + postMessage
             </p>
 
             {status === "waiting" && (
               <div style={{ color: "#facc15" }}>
-                <p style={{ fontSize: "14px" }}>Waiting for LiveKit credentials...</p>
+                <p style={{ fontSize: "14px" }}>Waiting for active LiveAvatar session...</p>
                 <p style={{ fontSize: "11px", color: "#888", marginTop: "8px" }}>
-                  Start a LiveAvatar session on the main page, then open this OBS window.
+                  Start a LiveAvatar session on the main page.
                 </p>
                 <p style={{ fontSize: "11px", color: "#888", marginTop: "4px" }}>
-                  Credentials will be sent automatically via postMessage.
+                  This page polls the backend every 3 seconds for active sessions.
                 </p>
+                <div style={{ marginTop: "12px" }}>
+                  <span
+                    style={{
+                      display: "inline-block",
+                      width: "8px",
+                      height: "8px",
+                      borderRadius: "50%",
+                      backgroundColor: "#facc15",
+                      animation: "pulse 1.5s infinite",
+                      marginRight: "6px",
+                    }}
+                  />
+                  <span style={{ fontSize: "11px", color: "#facc15" }}>Polling...</span>
+                </div>
               </div>
             )}
 
@@ -341,7 +431,7 @@ export default function OBSOutputPage() {
                   {error}
                 </p>
                 <p style={{ fontSize: "11px", color: "#888" }}>
-                  Please restart the session from the main page.
+                  Retrying automatically via API polling...
                 </p>
               </div>
             )}
@@ -383,6 +473,9 @@ export default function OBSOutputPage() {
             }}
           />
           LIVE {formatTime(sessionDuration)}
+          {credSource && (
+            <span style={{ color: "#888", marginLeft: "4px" }}>({credSource})</span>
+          )}
           {isSpeaking && (
             <span style={{ color: "#38bdf8", marginLeft: "4px" }}>Speaking</span>
           )}
