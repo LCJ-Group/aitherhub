@@ -431,8 +431,10 @@ async def _auto_assign_clips(db: AsyncSession, client_id: str, keywords: str) ->
     try:
         result = await db.execute(text(query), params)
         count = result.rowcount or 0
+        await db.commit()
         logger.info(f"Auto-assigned {count} clips to client {client_id}")
         return count
     except Exception as e:
         logger.error(f"Auto-assign clips error for {client_id}: {e}")
+        await db.rollback()
         return 0
