@@ -1,0 +1,45 @@
+# =============================================================================
+# systemd service for AitherHub Worker (aither-worker)
+# =============================================================================
+# Install:
+#   sudo cp deploy/aither-worker.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable aither-worker.service
+#   sudo systemctl start aither-worker.service
+#
+# Logs:
+#   journalctl -u aither-worker.service -f
+# =============================================================================
+[Unit]
+Description=AitherHub Worker Service
+After=network.target
+
+[Service]
+Type=simple
+User=azureuser
+Group=azureuser
+WorkingDirectory=/opt/aitherhub
+EnvironmentFile=/opt/aitherhub/.env
+ExecStart=/opt/aitherhub/.venv/bin/python -m worker.entrypoints.queue_worker
+
+# Graceful shutdown: only send SIGTERM to the main Python process,
+# NOT to child processes (FFmpeg, process_video.py, generate_clip.py).
+# The main process handles SIGTERM by stopping new job acceptance and
+# waiting for active jobs to finish via executor.shutdown(wait=True).
+KillSignal=SIGTERM
+KillMode=process
+TimeoutStopSec=300
+
+# Auto-restart on failure
+Restart=always
+RestartSec=10
+StartLimitBurst=5
+StartLimitIntervalSec=300
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aitherhub-worker
+
+[Install]
+WantedBy=multi-user.target

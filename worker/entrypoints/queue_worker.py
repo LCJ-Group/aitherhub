@@ -210,11 +210,20 @@ def signal_handler(signum, frame):
     global shutdown_requested
     print(f"\n[worker] Received signal {signum}, shutting down gracefully...")
     shutdown_requested = True
-    # Do NOT kill subprocesses — let them finish naturally.
-    # The main loop will stop accepting new jobs, and executor.shutdown(wait=True)
-    # will wait for all active jobs to complete before exiting.
+    # Send SIGINT to active subprocesses so FFmpeg can finish the current
+    # frame and exit cleanly (FFmpeg handles SIGINT gracefully, unlike SIGTERM
+    # which may leave partial output files).
+    # With KillMode=process in the systemd unit, only the main Python process
+    # receives SIGTERM from systemd — child processes are untouched.
     with _active_subprocesses_lock:
         active_count = len(_active_subprocesses)
+        for vid, proc in _active_subprocesses.items():
+            try:
+                if proc.poll() is None:  # still running
+                    os.killpg(os.getpgid(proc.pid), signal.SIGINT)
+                    print(f"[worker] Sent SIGINT to subprocess for {vid} (pid={proc.pid})")
+            except (ProcessLookupError, OSError) as _e:
+                pass  # process already exited
     if active_count > 0:
         print(f"[worker] Waiting for {active_count} active subprocess(es) to finish...")
 
@@ -1118,16 +1127,36 @@ def get_active_count() -> int:
         return len(active_jobs)
 
 
+# Job types considered "high priority" — processed before lower-priority jobs.
+# This prevents queue starvation when many generate_clip jobs flood the queue.
+_HIGH_PRIORITY_JOB_TYPES = {"video_analysis", "video_pipeline", "live_analysis"}
+
+
 def poll_and_process(executor: ThreadPoolExecutor):
-    """Poll queue and submit jobs to thread pool."""
+    """Poll queue and submit jobs to thread pool.
+
+    Priority logic: messages are sorted so that video_analysis / video_pipeline /
+    live_analysis jobs are dispatched before generate_clip jobs.  This prevents
+    queue starvation when many clip generation jobs are queued.
+    """
     active_count = get_active_count()
     heavy_slots_full = active_count >= MAX_WORKERS
 
     client = get_queue_client()
-    messages = client.receive_messages(
+    messages = list(client.receive_messages(
         messages_per_page=5,
         visibility_timeout=VISIBILITY_TIMEOUT,
-    )
+    ))
+
+    # ── Priority sort: high-priority job types first ──
+    def _priority_key(m):
+        try:
+            p = json.loads(m.content)
+            jt = p.get("job_type", "video_analysis")
+            return 0 if jt in _HIGH_PRIORITY_JOB_TYPES else 1
+        except Exception:
+            return 2
+    messages.sort(key=_priority_key)
 
     for msg in messages:
         try:
@@ -1278,11 +1307,50 @@ CLIP_FALLBACK_AGE = 120       # Clips pending for > 2 minutes
 _last_clip_fallback_check = 0
 
 
+# Dedicated engine + event loop for DB fallback (avoids sharing the global
+# async engine which causes 'attached to a different loop' errors when the
+# main thread's event loop and HeartbeatManager/StalledJobRecovery threads diverge).
+_fallback_engine = None
+_fallback_loop = None
+
+
+def _get_fallback_engine():
+    """Lazy-init a dedicated async engine for poll_pending_clips_from_db.
+
+    This engine is ONLY used by the main thread's DB fallback polling,
+    never shared with daemon threads (heartbeat/recovery have their own).
+    """
+    global _fallback_engine, _fallback_loop
+    import asyncio
+    if _fallback_loop is None or _fallback_loop.is_closed():
+        _fallback_loop = asyncio.new_event_loop()
+    if _fallback_engine is None:
+        from shared.config import DATABASE_URL, prepare_database_url
+        from sqlalchemy.ext.asyncio import create_async_engine
+        if not DATABASE_URL:
+            raise RuntimeError("DATABASE_URL is not set.")
+        cleaned_url, connect_args = prepare_database_url(DATABASE_URL)
+        _fallback_engine = create_async_engine(
+            cleaned_url,
+            pool_pre_ping=True,
+            pool_size=2,
+            max_overflow=3,
+            pool_recycle=300,
+            echo=False,
+            connect_args=connect_args,
+        )
+    return _fallback_engine, _fallback_loop
+
+
 def poll_pending_clips_from_db():
     """DB fallback: pick up clips stuck in 'pending' with job_payload.
 
     If a clip has been pending for > CLIP_FALLBACK_AGE seconds and is not already
     being processed, submit it to the executor.
+
+    Uses a DEDICATED async engine + event loop to avoid sharing the global
+    engine (which causes 'attached to a different loop' asyncpg errors when
+    HeartbeatManager or StalledJobRecovery threads also use the global engine).
     """
     global _last_clip_fallback_check
     now = time.time()
@@ -1291,23 +1359,30 @@ def poll_pending_clips_from_db():
     _last_clip_fallback_check = now
 
     try:
-        from shared.db.session import get_session, run_sync
+        from sqlalchemy.ext.asyncio import AsyncSession
+        from sqlalchemy.orm import sessionmaker
         from sqlalchemy import text
 
-        async def _fetch_pending():
-            async with get_session() as session:
-                sql = text(f"""
-                    SELECT id, job_payload
-                    FROM video_clips
-                    WHERE status IN ('pending', 'retrying')
-                    AND COALESCE(updated_at, created_at) < NOW() - INTERVAL '{CLIP_FALLBACK_AGE} seconds'
-                    AND job_payload IS NOT NULL
-                    LIMIT 5
-                """)
-                result = await session.execute(sql)
-                return result.fetchall()
+        engine, loop = _get_fallback_engine()
+        factory = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 
-        rows = run_sync(_fetch_pending())
+        async def _fetch_pending():
+            async with factory() as session:
+                try:
+                    sql = text(f"""
+                        SELECT id, job_payload
+                        FROM video_clips
+                        WHERE status IN ('pending', 'retrying')
+                        AND COALESCE(updated_at, created_at) < NOW() - INTERVAL '{CLIP_FALLBACK_AGE} seconds'
+                        AND job_payload IS NOT NULL
+                        LIMIT 5
+                    """)
+                    result = await session.execute(sql)
+                    return result.fetchall()
+                finally:
+                    await session.close()
+
+        rows = loop.run_until_complete(_fetch_pending())
 
         if not rows:
             return
@@ -1327,14 +1402,18 @@ def poll_pending_clips_from_db():
             _cid = clip_id
             try:
                 async def _mark_processing(cid=_cid):
-                    async with get_session() as session:
-                        sql = text("""
-                            UPDATE video_clips
-                            SET status = 'processing', progress_step = 'queued_by_fallback', updated_at = NOW()
-                            WHERE id = :clip_id AND status IN ('pending', 'retrying')
-                        """)
-                        await session.execute(sql, {"clip_id": cid})
-                run_sync(_mark_processing())
+                    async with factory() as session:
+                        try:
+                            sql = text("""
+                                UPDATE video_clips
+                                SET status = 'processing', progress_step = 'queued_by_fallback', updated_at = NOW()
+                                WHERE id = :clip_id AND status IN ('pending', 'retrying')
+                            """)
+                            await session.execute(sql, {"clip_id": cid})
+                            await session.commit()
+                        finally:
+                            await session.close()
+                loop.run_until_complete(_mark_processing())
             except Exception as mark_err:
                 print(f"[worker] DB fallback: failed to mark {clip_id} as processing: {mark_err}")
 
