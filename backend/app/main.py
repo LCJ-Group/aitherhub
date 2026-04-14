@@ -2,7 +2,9 @@ import asyncio
 import logging
 import os
 import time
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import Response
+from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.cors import CORSMiddleware
 
 from app.api.v1.routes import routers as v1_routers
@@ -10,6 +12,32 @@ from app.core.config import configs
 from app.core.container import Container
 from app.core.request_id_middleware import RequestIdMiddleware, RequestIdFilter
 from app.utils.class_object import singleton
+
+
+class WidgetCORSMiddleware(BaseHTTPMiddleware):
+    """Allow any origin for /widget/ endpoints (SaaS widget loaded on client sites)."""
+
+    async def dispatch(self, request: Request, call_next):
+        # Only apply to widget endpoints
+        if "/widget/" in request.url.path:
+            origin = request.headers.get("origin", "*")
+            # Handle preflight
+            if request.method == "OPTIONS":
+                return Response(
+                    status_code=200,
+                    headers={
+                        "Access-Control-Allow-Origin": origin,
+                        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+                        "Access-Control-Allow-Headers": "Content-Type, X-Admin-Key",
+                        "Access-Control-Max-Age": "86400",
+                    },
+                )
+            response = await call_next(request)
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+            response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Admin-Key"
+            return response
+        return await call_next(request)
 
 # RequestIdFilter を root logger に追加して、全ログに request_id/video_id/user_id を自動付与
 _rid_filter = RequestIdFilter()
@@ -71,7 +99,10 @@ class AppCreator:
         # 1. Add RequestIdMiddleware FIRST (will be inner / closer to app)
         self.app.add_middleware(RequestIdMiddleware)
 
-        # 2. Add CORSMiddleware LAST (will be outer / first to process requests)
+        # 2. Add WidgetCORSMiddleware for /widget/ endpoints (any origin)
+        self.app.add_middleware(WidgetCORSMiddleware)
+
+        # 3. Add CORSMiddleware LAST (will be outer / first to process requests)
         self.app.add_middleware(
             CORSMiddleware,
             allow_origins=_all_origins,
