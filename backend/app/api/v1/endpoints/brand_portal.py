@@ -313,7 +313,7 @@ async def _brand_list_clips_impl(client_id: str, limit: int, offset: int, db: As
                    CASE WHEN vc.uploaded_by_brand = :cid THEN TRUE ELSE FALSE END as is_own_upload
             FROM video_clips vc
             LEFT JOIN widget_clip_assignments wca
-                ON wca.clip_id = vc.id AND wca.client_id = :cid
+                ON wca.clip_id::uuid = vc.id AND wca.client_id = :cid
             WHERE vc.uploaded_by_brand = :cid
                OR (wca.client_id = :cid AND wca.is_active = TRUE)
             ORDER BY vc.created_at DESC
@@ -345,7 +345,7 @@ async def _brand_list_clips_impl(client_id: str, limit: int, offset: int, db: As
             SELECT COUNT(DISTINCT vc.id)
             FROM video_clips vc
             LEFT JOIN widget_clip_assignments wca
-                ON wca.clip_id = vc.id AND wca.client_id = :cid
+                ON wca.clip_id::uuid = vc.id AND wca.client_id = :cid
             WHERE vc.uploaded_by_brand = :cid
                OR (wca.client_id = :cid AND wca.is_active = TRUE)
         """),
@@ -506,7 +506,7 @@ async def _brand_list_widget_clips_impl(client_id: str, db: AsyncSession):
                    vc.clip_url, vc.thumbnail_url, vc.transcript_text,
                    vc.duration_sec, vc.liver_name
             FROM widget_clip_assignments wca
-            JOIN video_clips vc ON vc.id = wca.clip_id
+            JOIN video_clips vc ON vc.id = wca.clip_id::uuid
             WHERE wca.client_id = :cid AND wca.is_active = TRUE
             ORDER BY wca.sort_order ASC
         """),
