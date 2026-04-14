@@ -268,9 +268,12 @@ export default function LiveAvatarStreaming({
       console.log(`[LiveAvatar] WebSocket URL: ${ws_url || 'not provided'}`);
 
       // 2. Connect to LiveKit room using livekit_url + livekit_client_token
+      // IMPORTANT: Do NOT enable adaptiveStream or dynacast.
+      // LiveAvatar SDK uses default Room() settings.
+      // adaptiveStream causes video frames to stop when element is not visible.
       const room = new Room({
-        adaptiveStream: true,
-        dynacast: true,
+        adaptiveStream: false,
+        dynacast: false,
       });
       roomRef.current = room;
 
@@ -293,9 +296,10 @@ export default function LiveAvatarStreaming({
 
           // Pass MediaStream to parent for preview player
           if (onStreamReady) {
-            // track.mediaStream may be null in LiveKit SDK v2;
-            // create MediaStream explicitly from the underlying mediaStreamTrack
-            const stream = track.mediaStream
+            // Use the MediaStream from the attached element (most reliable)
+            // track.attach() creates a proper MediaStream internally
+            const stream = element.srcObject
+              || track.mediaStream
               || (track.mediaStreamTrack ? new MediaStream([track.mediaStreamTrack]) : null);
             if (stream) {
               console.log('[LiveAvatar] Passing MediaStream to parent (tracks:', stream.getTracks().length, ')');

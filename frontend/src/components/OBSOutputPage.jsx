@@ -209,7 +209,10 @@ export default function OBSOutputPage() {
       sessionIdRef.current = session_id;
 
       // Connect to LiveKit
-      const room = new Room({ adaptiveStream: true, dynacast: true });
+      // IMPORTANT: Do NOT enable adaptiveStream or dynacast.
+      // LiveAvatar SDK uses default Room() settings.
+      // adaptiveStream causes video frames to stop when element is not visible.
+      const room = new Room({ adaptiveStream: false, dynacast: false });
       roomRef.current = room;
 
       room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
