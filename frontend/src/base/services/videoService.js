@@ -1597,6 +1597,22 @@ class VideoService extends BaseApiService {
     }
   }
 
+  /**
+   * Get download counts per phase_index for a video.
+   * Used by ClipSection to show download badges.
+   * @param {string} videoId
+   * @returns {Promise<{video_id: string, downloads: Object, total_downloads: number}>}
+   */
+  async getClipDownloads(videoId) {
+    try {
+      const response = await this.get(`/api/v1/feedback/${videoId}/clip-downloads`);
+      return response;
+    } catch (error) {
+      console.warn('[getClipDownloads] Failed (non-blocking):', error.message);
+      return { downloads: {}, total_downloads: 0 };
+    }
+  }
+
   async retryAnalysis(videoId) {
     try {
       const response = await this.post(`/api/v1/videos/${videoId}/retry-analysis`);

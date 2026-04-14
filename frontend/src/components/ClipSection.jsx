@@ -6,7 +6,7 @@ import ClipEditorV2 from "./ClipEditorV2";
  * Download a clip by fetching a fresh SAS URL from the API first.
  * Falls back to the cached URL if the API call fails.
  */
-async function handleDownloadClip(videoId, phaseIndex, fallbackUrl) {
+async function handleDownloadClip(videoId, phaseIndex, fallbackUrl, clip, onDownloaded) {
   try {
     const res = await VideoService.getClipStatus(videoId, phaseIndex);
     const freshUrl = res?.clip_url || fallbackUrl;
@@ -18,11 +18,29 @@ async function handleDownloadClip(videoId, phaseIndex, fallbackUrl) {
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
+      // Record download for ML training (non-blocking)
+      VideoService.recordClipDownload(videoId, {
+        phase_index: phaseIndex,
+        time_start: clip?.time_start || null,
+        time_end: clip?.time_end || null,
+        clip_id: clip?.clip_id || null,
+        export_type: 'raw',
+      });
+      if (onDownloaded) onDownloaded(phaseIndex);
     }
   } catch (e) {
     console.warn('[ClipSection] Failed to fetch fresh download URL, using cached:', e);
     if (fallbackUrl) {
       window.open(fallbackUrl, '_blank', 'noopener,noreferrer');
+      // Still record the download attempt
+      VideoService.recordClipDownload(videoId, {
+        phase_index: phaseIndex,
+        time_start: clip?.time_start || null,
+        time_end: clip?.time_end || null,
+        clip_id: clip?.clip_id || null,
+        export_type: 'raw',
+      });
+      if (onDownloaded) onDownloaded(phaseIndex);
     }
   }
 }
@@ -66,6 +84,7 @@ export default function ClipSection({ videoData, clipStates, reports1, editorPar
   const [editorClip, setEditorClip] = useState(null);
   const editorAutoOpenedRef = useRef(false);
   const [clipRatings, setClipRatings] = useState({});
+  const [clipDownloads, setClipDownloads] = useState({});
   // Auto-generation state for when editorParams targets a clip that doesn't exist yet
   const [autoGenerating, setAutoGenerating] = useState(false);
   const [autoGenerateStatus, setAutoGenerateStatus] = useState('');
@@ -88,9 +107,23 @@ export default function ClipSection({ videoData, clipStates, reports1, editorPar
     }
   }, [videoData?.id]);
 
+  // Fetch clip download counts for badge display
+  const fetchClipDownloads = useCallback(async () => {
+    if (!videoData?.id) return;
+    try {
+      const resp = await VideoService.getClipDownloads(videoData.id);
+      if (resp?.downloads) {
+        setClipDownloads(resp.downloads);
+      }
+    } catch (e) {
+      console.warn('[ClipSection] Failed to fetch clip downloads:', e);
+    }
+  }, [videoData?.id]);
+
   useEffect(() => {
     fetchClipRatings();
-  }, [fetchClipRatings]);
+    fetchClipDownloads();
+  }, [fetchClipRatings, fetchClipDownloads]);
 
   // Get clips that are completed or generating subtitles
   const visibleClips = useMemo(() => {
@@ -411,6 +444,15 @@ export default function ClipSection({ videoData, clipStates, reports1, editorPar
                             <span>👎</span> 微妙
                           </span>
                         )}
+                        {/* Download status badge */}
+                        {clipDownloads[String(clip.phaseIndex)]?.total > 0 && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold bg-blue-100 text-blue-700 border border-blue-200">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+                            </svg>
+                            DL済{clipDownloads[String(clip.phaseIndex)].total > 1 ? ` x${clipDownloads[String(clip.phaseIndex)].total}` : ''}
+                          </span>
+                        )}
                       </div>
 
                       {/* Sales psychology tags from phase */}
@@ -491,7 +533,13 @@ export default function ClipSection({ videoData, clipStates, reports1, editorPar
                         </button>
                         {/* Download button - fetches fresh SAS URL on click */}
                         <button
-                          onClick={() => handleDownloadClip(videoData?.id, clip.phaseIndex, clip.clip_url)}
+                          onClick={() => handleDownloadClip(videoData?.id, clip.phaseIndex, clip.clip_url, clip, (pi) => {
+                            // Update local download state immediately
+                            setClipDownloads(prev => {
+                              const existing = prev[String(pi)] || { total: 0, raw: 0, subtitled: 0, last_downloaded_at: null };
+                              return { ...prev, [String(pi)]: { ...existing, total: existing.total + 1, raw: existing.raw + 1, last_downloaded_at: new Date().toISOString() } };
+                            });
+                          })}
                           className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-gradient-to-r from-purple-500 to-pink-500 text-white text-sm font-medium hover:from-purple-600 hover:to-pink-600 transition-all shadow-sm hover:shadow-md group-hover:shadow-lg"
                         >
                           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -551,7 +599,12 @@ export default function ClipSection({ videoData, clipStates, reports1, editorPar
           videoData={videoData}
           clip={editorClip}
           phases={reports1}
-          onClose={() => setEditorClip(null)}
+          onClose={() => {
+            setEditorClip(null);
+            // Refresh download/rating badges after editor closes
+            fetchClipDownloads();
+            fetchClipRatings();
+          }}
           onClipUpdated={(res) => {
             // Keep editor open after trim - update clip data instead of closing
             if (res && typeof res === 'object') {
