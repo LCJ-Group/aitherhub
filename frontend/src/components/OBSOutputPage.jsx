@@ -1,9 +1,10 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Room, RoomEvent, Track, DataPacket_Kind } from "livekit-client";
+import { Room, RoomEvent, Track } from "livekit-client";
 import axios from "axios";
 
 const ADMIN_KEY = "aither:hub";
+const QUEUE_POLL_INTERVAL = 1500; // 1.5 seconds
 
 /**
  * OBS Output Page — Independent Session + SpeakText Queue Relay
@@ -17,16 +18,8 @@ const ADMIN_KEY = "aither:hub";
  *   4. OBS receives the text from the queue and sends it to its own LiveKit room
  *   5. Both avatars speak the same text simultaneously
  *
- * This approach works because:
- *   - LiveKit tokens are single-use (same token = same identity = kick previous)
- *   - LiveAvatar has no viewer token API
- *   - OBS Browser Source has no window.opener (postMessage doesn't work)
- *   - Independent sessions ensure stable connections
- *
- * URL Parameters:
- *   - bg: Background color (green|blue|black|transparent) default: green
- *   - language: Language code (default: ja)
- *   - avatar_id: Optional avatar ID override
+ * IMPORTANT: All functions use refs directly (no useCallback chains) to avoid
+ * stale closure issues. setInterval callbacks always read the latest roomRef.current.
  */
 export default function OBSOutputPage() {
   const [searchParams] = useSearchParams();
@@ -37,14 +30,13 @@ export default function OBSOutputPage() {
   const avatarIdParam = searchParams.get("avatar_id") || "";
 
   // State
-  const [status, setStatus] = useState("idle"); // idle | creating | connecting | connected | error
+  const [status, setStatus] = useState("idle");
   const [error, setError] = useState(null);
   const [sessionDuration, setSessionDuration] = useState(0);
   const [isSpeaking, setIsSpeaking] = useState(false);
-  const [lastQueueId, setLastQueueId] = useState("0");
-  const [queuePollCount, setQueuePollCount] = useState(0);
+  const [debugInfo, setDebugInfo] = useState("");
 
-  // Refs
+  // Refs — used by interval callbacks to avoid stale closures
   const videoContainerRef = useRef(null);
   const roomRef = useRef(null);
   const sessionIdRef = useRef(null);
@@ -54,6 +46,8 @@ export default function OBSOutputPage() {
   const lastQueueIdRef = useRef("0");
   const mountedRef = useRef(true);
   const wsRef = useRef(null);
+  const pollCountRef = useRef(0);
+  const speakCountRef = useRef(0);
 
   const baseURL = import.meta.env.VITE_API_BASE_URL;
 
@@ -65,27 +59,22 @@ export default function OBSOutputPage() {
     transparent: "transparent",
     gray: "#1a1a2e",
   };
-
   const backgroundColor = bgMap[bgColor] || bgMap.green;
 
-  // ── Generate unique event ID ──
-  const generateEventId = useCallback(() => {
-    return `obs_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-  }, []);
-
-  // ── Send event to LiveKit data channel ──
-  const sendLiveKitEvent = useCallback((eventType, extraData = {}) => {
+  // ── Helper: Send event to LiveKit data channel ──
+  // This is a plain function, NOT useCallback. It reads roomRef.current directly.
+  function sendToLiveKit(text) {
     const room = roomRef.current;
     if (!room || !room.localParticipant || room.state !== "connected") {
-      console.warn("[OBS] Cannot send event: not connected");
-      return;
+      console.warn("[OBS] sendToLiveKit: room not connected. state=", room?.state);
+      return false;
     }
 
-    const eventId = generateEventId();
+    const eventId = `obs_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const livekitEvent = {
       event_id: eventId,
-      event_type: eventType,
-      ...extraData,
+      event_type: "avatar.speak_text",
+      text: text,
     };
 
     const encoder = new TextEncoder();
@@ -96,67 +85,77 @@ export default function OBSOutputPage() {
         reliable: true,
         topic: "agent-control",
       });
-      console.log("[OBS] Sent via LiveKit:", eventType, JSON.stringify(livekitEvent));
+      speakCountRef.current += 1;
+      console.log(`[OBS] ✅ Sent speakText to LiveKit (${speakCountRef.current}):`, text.substring(0, 60));
+      return true;
     } catch (err) {
-      console.error("[OBS] Failed to publish data:", err);
+      console.error("[OBS] ❌ Failed to publishData:", err);
+      return false;
     }
-  }, [generateEventId]);
+  }
 
-  // ── Create own LiveAvatar session ──
-  const createSession = useCallback(async () => {
-    setStatus("creating");
-    setError(null);
+  // ── Helper: Poll speak queue once ──
+  // Plain async function, reads refs directly.
+  async function pollQueueOnce() {
+    const room = roomRef.current;
+    if (!room || room.state !== "connected") {
+      return;
+    }
 
     try {
-      console.log("[OBS] Creating own LiveAvatar session...");
-      const resp = await axios.post(
-        `${baseURL}/api/v1/digital-human/liveavatar/streaming/start`,
+      const resp = await axios.get(
+        `${baseURL}/api/v1/digital-human/liveavatar/speak-queue/poll`,
         {
-          avatar_id: avatarIdParam || "",
-          language: language,
-          persona_prompt: "",
-          voice_id: null,
-          sandbox: false,
-        },
-        { headers: { "X-Admin-Key": ADMIN_KEY }, timeout: 60000 }
+          params: { after_id: lastQueueIdRef.current },
+          headers: { "X-Admin-Key": ADMIN_KEY },
+          timeout: 5000,
+        }
       );
 
-      if (!resp.data?.success) {
-        throw new Error(resp.data?.error || "Failed to create session");
-      }
+      pollCountRef.current += 1;
 
-      const { session_id, livekit_url, livekit_client_token, ws_url } = resp.data;
-      if (!livekit_url || !livekit_client_token) {
-        throw new Error("Backend did not return LiveKit credentials");
-      }
-
-      sessionIdRef.current = session_id;
-      console.log(`[OBS] Session created: ${session_id}`);
-
-      // Connect WebSocket if available (for interrupt etc.)
-      if (ws_url) {
-        try {
-          const ws = new WebSocket(ws_url);
-          ws.onopen = () => console.log("[OBS] WebSocket connected");
-          ws.onclose = () => console.log("[OBS] WebSocket closed");
-          ws.onerror = (e) => console.warn("[OBS] WebSocket error:", e);
-          wsRef.current = ws;
-        } catch (e) {
-          console.warn("[OBS] WebSocket connect failed:", e);
+      if (resp.data?.success && resp.data.items?.length > 0) {
+        for (const item of resp.data.items) {
+          console.log(`[OBS] 📨 Queue item #${item.id}: "${item.text.substring(0, 60)}"`);
+          const sent = sendToLiveKit(item.text);
+          console.log(`[OBS] → LiveKit send result: ${sent ? "SUCCESS" : "FAILED"}`);
         }
+        // Update last seen ID
+        const maxId = resp.data.items[resp.data.items.length - 1].id;
+        lastQueueIdRef.current = maxId;
       }
 
-      // Connect to LiveKit room
-      await connectToRoom(livekit_url, livekit_client_token);
+      // Update debug info
+      if (pollCountRef.current % 5 === 0) {
+        setDebugInfo(`Polls: ${pollCountRef.current} | Speaks: ${speakCountRef.current} | LastID: ${lastQueueIdRef.current}`);
+      }
     } catch (err) {
-      console.error("[OBS] Session creation error:", err);
-      setError(err.message || "Session creation failed");
-      setStatus("error");
+      console.debug("[OBS] Queue poll error:", err.message);
     }
-  }, [baseURL, avatarIdParam, language]);
+  }
+
+  // ── Start queue polling ──
+  function startQueuePolling() {
+    if (queuePollRef.current) {
+      clearInterval(queuePollRef.current);
+    }
+    console.log(`[OBS] 🔄 Starting queue polling (every ${QUEUE_POLL_INTERVAL}ms)`);
+    // Use arrow function in setInterval so it always calls the latest pollQueueOnce
+    queuePollRef.current = setInterval(() => {
+      pollQueueOnce();
+    }, QUEUE_POLL_INTERVAL);
+  }
+
+  function stopQueuePolling() {
+    if (queuePollRef.current) {
+      clearInterval(queuePollRef.current);
+      queuePollRef.current = null;
+      console.log("[OBS] Queue polling stopped");
+    }
+  }
 
   // ── Connect to LiveKit room ──
-  const connectToRoom = useCallback(async (livekitUrl, livekitToken) => {
+  async function connectToRoom(livekitUrl, livekitToken) {
     setStatus("connecting");
 
     try {
@@ -180,10 +179,9 @@ export default function OBSOutputPage() {
       // ║ See: SKILL.md → LiveAvatar Lip-Sync Rules                     ║
       // ╚══════════════════════════════════════════════════════════════════╝
       const room = new Room({
-        adaptiveStream: false,  // ⚠️ DO NOT CHANGE — breaks lip-sync
-        dynacast: false,        // ⚠️ DO NOT CHANGE — breaks lip-sync
+        adaptiveStream: false,
+        dynacast: false,
       });
-      roomRef.current = room;
 
       // Handle video tracks
       room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
@@ -199,7 +197,7 @@ export default function OBSOutputPage() {
             videoContainerRef.current.innerHTML = "";
             videoContainerRef.current.appendChild(element);
           }
-          console.log("[OBS] Video track attached");
+          console.log("[OBS] ✅ Video track attached");
         }
         if (track.kind === Track.Kind.Audio) {
           const element = track.attach();
@@ -207,7 +205,7 @@ export default function OBSOutputPage() {
           element.volume = 1.0;
           document.body.appendChild(element);
           audioElementsRef.current.push(element);
-          console.log("[OBS] Audio track attached");
+          console.log("[OBS] ✅ Audio track attached");
         }
       });
 
@@ -221,6 +219,7 @@ export default function OBSOutputPage() {
         try {
           const decoder = new TextDecoder();
           const event = JSON.parse(decoder.decode(payload));
+          console.log("[OBS] 📩 DataReceived:", event.event_type);
           switch (event.event_type) {
             case "avatar.speak_started":
               setIsSpeaking(true);
@@ -237,96 +236,107 @@ export default function OBSOutputPage() {
       });
 
       room.on(RoomEvent.Disconnected, () => {
-        console.log("[OBS] Disconnected from LiveKit room");
+        console.log("[OBS] ⚠️ Disconnected from LiveKit room");
+        stopQueuePolling();
         if (mountedRef.current) {
           setStatus("error");
           setError("Disconnected from LiveKit room");
         }
       });
 
-      // Connect
+      // Connect to room
       await room.connect(livekitUrl, livekitToken);
-      setStatus("connected");
-      console.log("[OBS] Connected to LiveKit room");
 
-      // Start speak-text queue polling
+      // IMPORTANT: Set roomRef AFTER successful connection
+      roomRef.current = room;
+      setStatus("connected");
+      console.log("[OBS] ✅ Connected to LiveKit room");
+      console.log("[OBS] Room state:", room.state);
+      console.log("[OBS] Local participant:", room.localParticipant?.identity);
+      console.log("[OBS] Permissions:", JSON.stringify(room.localParticipant?.permissions));
+
+      // Start queue polling AFTER room is connected and ref is set
       startQueuePolling();
 
     } catch (err) {
-      console.error("[OBS] LiveKit connection error:", err);
+      console.error("[OBS] ❌ LiveKit connection error:", err);
       setError(err.message);
       setStatus("error");
     }
-  }, []);
+  }
 
-  // ── Poll speak-text queue from backend ──
-  const pollSpeakQueue = useCallback(async () => {
-    if (!roomRef.current || roomRef.current.state !== "connected") return;
+  // ── Create own LiveAvatar session ──
+  async function createOwnSession() {
+    setStatus("creating");
+    setError(null);
 
     try {
-      const resp = await axios.get(
-        `${baseURL}/api/v1/digital-human/liveavatar/speak-queue/poll`,
+      console.log("[OBS] 🚀 Creating own LiveAvatar session...");
+      const resp = await axios.post(
+        `${baseURL}/api/v1/digital-human/liveavatar/streaming/start`,
         {
-          params: { after_id: lastQueueIdRef.current },
-          headers: { "X-Admin-Key": ADMIN_KEY },
-          timeout: 5000,
-        }
+          avatar_id: avatarIdParam || "",
+          language: language,
+          persona_prompt: "",
+          voice_id: null,
+          sandbox: false,
+        },
+        { headers: { "X-Admin-Key": ADMIN_KEY }, timeout: 60000 }
       );
 
-      if (resp.data?.success && resp.data.items?.length > 0) {
-        for (const item of resp.data.items) {
-          console.log(`[OBS] Received queued text #${item.id}: ${item.text.substring(0, 50)}...`);
-          // Send to our own LiveKit room
-          sendLiveKitEvent("avatar.speak_text", { text: item.text });
-        }
-        // Update last seen ID
-        const maxId = resp.data.items[resp.data.items.length - 1].id;
-        lastQueueIdRef.current = maxId;
-        setLastQueueId(maxId);
+      if (!resp.data?.success) {
+        throw new Error(resp.data?.error || "Failed to create session");
       }
 
-      setQueuePollCount((prev) => prev + 1);
+      const { session_id, livekit_url, livekit_client_token, ws_url } = resp.data;
+      if (!livekit_url || !livekit_client_token) {
+        throw new Error("Backend did not return LiveKit credentials");
+      }
+
+      sessionIdRef.current = session_id;
+      console.log(`[OBS] ✅ Session created: ${session_id}`);
+
+      // Connect WebSocket if available
+      if (ws_url) {
+        try {
+          const ws = new WebSocket(ws_url);
+          ws.onopen = () => console.log("[OBS] WebSocket connected");
+          ws.onclose = () => console.log("[OBS] WebSocket closed");
+          ws.onerror = (e) => console.warn("[OBS] WebSocket error:", e);
+          wsRef.current = ws;
+        } catch (e) {
+          console.warn("[OBS] WebSocket connect failed:", e);
+        }
+      }
+
+      // Connect to LiveKit room
+      await connectToRoom(livekit_url, livekit_client_token);
     } catch (err) {
-      console.debug("[OBS] Queue poll error:", err.message);
+      console.error("[OBS] ❌ Session creation error:", err);
+      setError(err.response?.data?.message || err.message || "Session creation failed");
+      setStatus("error");
     }
-  }, [baseURL, sendLiveKitEvent]);
-
-  const startQueuePolling = useCallback(() => {
-    if (queuePollRef.current) return;
-    console.log("[OBS] Starting speak-text queue polling (every 1.5s)");
-    queuePollRef.current = setInterval(pollSpeakQueue, 1500);
-  }, [pollSpeakQueue]);
-
-  const stopQueuePolling = useCallback(() => {
-    if (queuePollRef.current) {
-      clearInterval(queuePollRef.current);
-      queuePollRef.current = null;
-    }
-  }, []);
+  }
 
   // ── Stop session ──
-  const stopSession = useCallback(async () => {
+  async function stopSession() {
     stopQueuePolling();
 
-    // Close WebSocket
     if (wsRef.current) {
       try { wsRef.current.close(); } catch (e) {}
       wsRef.current = null;
     }
 
-    // Clean up audio
     audioElementsRef.current.forEach((el) => {
       try { el.remove(); } catch (e) {}
     });
     audioElementsRef.current = [];
 
-    // Disconnect LiveKit
     if (roomRef.current) {
       try { roomRef.current.disconnect(); } catch (e) {}
       roomRef.current = null;
     }
 
-    // Stop session on backend
     if (sessionIdRef.current) {
       try {
         await axios.post(
@@ -347,23 +357,31 @@ export default function OBSOutputPage() {
     setStatus("idle");
     setIsSpeaking(false);
     setSessionDuration(0);
-  }, [baseURL, stopQueuePolling]);
+    pollCountRef.current = 0;
+    speakCountRef.current = 0;
+  }
 
   // ── Auto-start session on mount ──
   useEffect(() => {
     mountedRef.current = true;
-    // Auto-start after a short delay
     const timer = setTimeout(() => {
       if (mountedRef.current) {
-        createSession();
+        createOwnSession();
       }
     }, 1000);
 
     return () => {
       mountedRef.current = false;
       clearTimeout(timer);
+      stopQueuePolling();
+      if (roomRef.current) {
+        try { roomRef.current.disconnect(); } catch (e) {}
+      }
+      audioElementsRef.current.forEach((el) => {
+        try { el.remove(); } catch (e) {}
+      });
     };
-  }, [createSession]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Session duration timer ──
   useEffect(() => {
@@ -382,20 +400,6 @@ export default function OBSOutputPage() {
       if (sessionTimerRef.current) clearInterval(sessionTimerRef.current);
     };
   }, [status]);
-
-  // ── Cleanup on unmount ──
-  useEffect(() => {
-    return () => {
-      mountedRef.current = false;
-      stopQueuePolling();
-      if (roomRef.current) {
-        try { roomRef.current.disconnect(); } catch (e) {}
-      }
-      audioElementsRef.current.forEach((el) => {
-        try { el.remove(); } catch (e) {}
-      });
-    };
-  }, [stopQueuePolling]);
 
   // ── Format time ──
   const formatTime = (seconds) => {
@@ -476,10 +480,11 @@ export default function OBSOutputPage() {
                       borderRadius: "50%",
                       backgroundColor: "#facc15",
                       animation: "pulse 1.5s infinite",
-                      marginRight: "6px",
                     }}
                   />
-                  <span style={{ fontSize: "11px", color: "#facc15" }}>Creating session...</span>
+                  <span style={{ fontSize: "11px", color: "#facc15", marginLeft: "6px" }}>
+                    Creating session...
+                  </span>
                 </div>
               </div>
             )}
@@ -497,7 +502,7 @@ export default function OBSOutputPage() {
                 </p>
                 <button
                   onClick={() => {
-                    stopSession().then(() => createSession());
+                    stopSession().then(() => createOwnSession());
                   }}
                   style={{
                     padding: "8px 20px",
@@ -524,7 +529,7 @@ export default function OBSOutputPage() {
         </div>
       )}
 
-      {/* Minimal status indicator during streaming */}
+      {/* Status indicator during streaming */}
       {status === "connected" && (
         <div
           style={{
@@ -533,28 +538,50 @@ export default function OBSOutputPage() {
             right: "8px",
             zIndex: 20,
             display: "flex",
-            alignItems: "center",
-            gap: "6px",
-            backgroundColor: "rgba(0,0,0,0.5)",
-            padding: "4px 10px",
-            borderRadius: "12px",
-            fontSize: "10px",
-            color: "#4ade80",
+            flexDirection: "column",
+            alignItems: "flex-end",
+            gap: "4px",
             fontFamily: "monospace",
           }}
         >
-          <span
+          <div
             style={{
-              width: "6px",
-              height: "6px",
-              borderRadius: "50%",
-              backgroundColor: "#4ade80",
-              animation: "pulse 2s infinite",
+              display: "flex",
+              alignItems: "center",
+              gap: "6px",
+              backgroundColor: "rgba(0,0,0,0.5)",
+              padding: "4px 10px",
+              borderRadius: "12px",
+              fontSize: "10px",
+              color: "#4ade80",
             }}
-          />
-          LIVE {formatTime(sessionDuration)}
-          {isSpeaking && (
-            <span style={{ color: "#38bdf8", marginLeft: "4px" }}>Speaking</span>
+          >
+            <span
+              style={{
+                width: "6px",
+                height: "6px",
+                borderRadius: "50%",
+                backgroundColor: "#4ade80",
+                animation: "pulse 2s infinite",
+              }}
+            />
+            LIVE {formatTime(sessionDuration)}
+            {isSpeaking && (
+              <span style={{ color: "#38bdf8", marginLeft: "4px" }}>Speaking</span>
+            )}
+          </div>
+          {debugInfo && (
+            <div
+              style={{
+                backgroundColor: "rgba(0,0,0,0.5)",
+                padding: "2px 8px",
+                borderRadius: "8px",
+                fontSize: "8px",
+                color: "#888",
+              }}
+            >
+              {debugInfo}
+            </div>
           )}
         </div>
       )}
