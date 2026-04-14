@@ -574,7 +574,7 @@ export default function LivePreviewPlayer({
             style={{ zIndex: liveAvatarConnected ? 10 : -1, opacity: liveAvatarConnected ? 1 : 0, transition: "opacity 0.3s ease" }}
             autoPlay
             playsInline
-            muted={false}
+            muted={isMuted}
           />
           {!liveAvatarConnected && (
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-gray-900 via-gray-800 to-black" style={{ zIndex: 1 }}>

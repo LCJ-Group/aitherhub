@@ -38,6 +38,7 @@ export default function OBSOutputPage() {
   const bgColor = searchParams.get("bg") || "green";
   const language = searchParams.get("language") || "ja";
   const avatarIdParam = searchParams.get("avatar_id") || "";
+  const muteParam = searchParams.get("mute") !== "false"; // default: muted (OBS should not output audio)
 
   // State
   const [status, setStatus] = useState("idle");
@@ -212,10 +213,10 @@ export default function OBSOutputPage() {
         if (track.kind === Track.Kind.Audio) {
           const element = track.attach();
           element.autoplay = true;
-          element.volume = 1.0;
+          element.volume = muteParam ? 0 : 1.0;
           document.body.appendChild(element);
           audioElementsRef.current.push(element);
-          console.log("[OBS] ✅ Audio track attached");
+          console.log(`[OBS] ✅ Audio track attached (muted: ${muteParam})`);
         }
       });
 
