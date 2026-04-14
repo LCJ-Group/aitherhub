@@ -137,6 +137,7 @@ export default function AiLiveCreatorPage() {
   const [liveAvatarConnected, setLiveAvatarConnected] = useState(false);
   const [obsUrlCopied, setObsUrlCopied] = useState(false);
   const obsWindowRef = useRef(null);
+  const livekitCredsRef = useRef(null); // { livekit_url, livekit_client_token, session_id }
 
   // ── AutoPilot State ──
   const [autoPilotActive, setAutoPilotActive] = useState(false);
@@ -170,6 +171,26 @@ export default function AiLiveCreatorPage() {
       const saved = localStorage.getItem("aiLiveCreator_jobs");
       if (saved) setJobHistory(JSON.parse(saved));
     } catch {}
+  }, []);
+
+  // ── Listen for OBS window messages (obs-ready = OBS loaded, send creds) ──
+  useEffect(() => {
+    const handleOBSMessage = (event) => {
+      if (!event.data || typeof event.data !== "object") return;
+      if (event.data.type === "obs-ready" && livekitCredsRef.current) {
+        // OBS window just loaded and is ready to receive credentials
+        const creds = livekitCredsRef.current;
+        if (obsWindowRef.current && !obsWindowRef.current.closed) {
+          obsWindowRef.current.postMessage(
+            { type: "obs-livekit-creds", ...creds },
+            "*"
+          );
+          console.log('[OBS] Responded to obs-ready with LiveKit credentials');
+        }
+      }
+    };
+    window.addEventListener("message", handleOBSMessage);
+    return () => window.removeEventListener("message", handleOBSMessage);
   }, []);
 
   // ── Poll job status ──
@@ -384,6 +405,24 @@ export default function AiLiveCreatorPage() {
       "aitherhub-obs-output",
       `width=${w},height=${h},left=${left},top=${top},resizable=yes,scrollbars=no,toolbar=no,menubar=no,location=no,status=no`
     );
+    // Send LiveKit credentials to OBS window once it's loaded
+    // so it can join the SAME LiveKit room (shared session = shared lip-sync)
+    if (livekitCredsRef.current) {
+      const creds = livekitCredsRef.current;
+      const sendCreds = () => {
+        if (obsWindowRef.current && !obsWindowRef.current.closed) {
+          obsWindowRef.current.postMessage(
+            { type: "obs-livekit-creds", ...creds },
+            "*"
+          );
+          console.log('[OBS] Sent LiveKit credentials to OBS window');
+        }
+      };
+      // Wait for OBS window to load, then send credentials
+      setTimeout(sendCreds, 2000);
+      setTimeout(sendCreds, 4000);
+      setTimeout(sendCreds, 6000);
+    }
   }, [getObsUrl]);
 
   const handleCopyObsUrl = useCallback(async () => {
@@ -1267,8 +1306,20 @@ export default function AiLiveCreatorPage() {
                       setLiveAvatarStream(null);
                       setLiveAvatarConnected(false);
                     }}
+                    onSessionCreated={({ session_id, livekit_url, livekit_client_token }) => {
+                      // Store LiveKit credentials so OBS can join the same room
+                      livekitCredsRef.current = { session_id, livekit_url, livekit_client_token };
+                      console.log('[LiveAvatar] Stored LiveKit creds for OBS sharing');
+                      // If OBS window is already open, send credentials immediately
+                      if (obsWindowRef.current && !obsWindowRef.current.closed) {
+                        obsWindowRef.current.postMessage(
+                          { type: "obs-livekit-creds", session_id, livekit_url, livekit_client_token },
+                          "*"
+                        );
+                      }
+                    }}
                     onTextSent={(text) => {
-                      // Forward speak text to OBS window so its session also speaks
+                      // Forward speak text to OBS window (fallback, not needed with shared session)
                       if (obsWindowRef.current && !obsWindowRef.current.closed) {
                         obsWindowRef.current.postMessage(
                           { type: "obs-speak", text },

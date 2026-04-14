@@ -1,50 +1,53 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Room, RoomEvent, Track } from "livekit-client";
-import aiLiveCreatorService from "../base/services/aiLiveCreatorService";
 
 /**
- * OBS Output Page — Minimal page for OBS Browser Source capture
+ * OBS Output Page — Shared Session Mode (方式A)
  *
- * URL: /ai-live-creator/obs?avatar_id=xxx&voice_id=yyy&bg=green
+ * URL: /ai-live-creator/obs?bg=green
  *
- * Features:
- *   - No UI chrome — only the avatar video fills the entire viewport
- *   - Configurable background color for chroma key (green, blue, black, transparent)
- *   - Auto-connects to LiveAvatar session on load
- *   - Supports URL parameters for avatar/voice selection
- *   - Designed to be added as OBS "Browser Source" (1080x1920 recommended)
+ * This page does NOT create its own LiveAvatar session.
+ * Instead, it receives LiveKit credentials from the main AiLiveCreatorPage
+ * via postMessage and joins the SAME LiveKit room as a receive-only client.
+ *
+ * This ensures:
+ *   - OBS sees the exact same avatar video + audio as the main page
+ *   - Lip-sync works perfectly because it's the same LiveKit stream
+ *   - No extra session costs (only one LiveAvatar session is active)
+ *   - Future comment responses automatically appear in OBS too
+ *
+ * Flow:
+ *   1. Main page creates LiveAvatar session → gets livekit_url + livekit_client_token
+ *   2. Main page sends credentials via postMessage({ type: "obs-livekit-creds", ... })
+ *   3. This page connects to the same LiveKit room using those credentials
+ *   4. Video/audio tracks are received and displayed (receive-only, no publishing)
  *
  * URL Parameters:
- *   - avatar_id: LiveAvatar avatar UUID
- *   - voice_id: ElevenLabs voice UUID
  *   - bg: Background color (green|blue|black|transparent) default: green
- *   - autostart: Auto-start session (true|false) default: false
- *   - language: Language code (ja|en|zh) default: ja
+ *   - avatar_id: (legacy, kept for URL compatibility)
+ *   - voice_id: (legacy, kept for URL compatibility)
+ *   - language: (legacy, kept for URL compatibility)
+ *   - autostart: (legacy, ignored — session is started by main page)
  */
 export default function OBSOutputPage() {
   const [searchParams] = useSearchParams();
 
   // URL params
-  const avatarId = searchParams.get("avatar_id") || "";
-  const voiceId = searchParams.get("voice_id") || "";
   const bgColor = searchParams.get("bg") || "green";
-  const autostart = searchParams.get("autostart") === "true";
-  const language = searchParams.get("language") || "ja";
 
   // State
-  const [status, setStatus] = useState("idle"); // idle | connecting | connected | error
+  const [status, setStatus] = useState("waiting"); // waiting | connecting | connected | error
   const [error, setError] = useState(null);
-  const [sessionId, setSessionId] = useState(null);
   const [sessionDuration, setSessionDuration] = useState(0);
   const [isSpeaking, setIsSpeaking] = useState(false);
 
   // Refs
   const videoContainerRef = useRef(null);
   const roomRef = useRef(null);
-  const sessionIdRef = useRef(null);
   const sessionTimerRef = useRef(null);
   const audioElementsRef = useRef([]);
+  const connectedRef = useRef(false); // prevent double-connect
 
   // Background color map
   const bgMap = {
@@ -57,158 +60,34 @@ export default function OBSOutputPage() {
 
   const backgroundColor = bgMap[bgColor] || bgMap.green;
 
-  // ── Auto-start on load ──
-  useEffect(() => {
-    if (autostart) {
-      startSession();
+  // ── Connect to LiveKit room using shared credentials ──
+  const connectToRoom = useCallback(async (livekitUrl, livekitToken) => {
+    if (connectedRef.current) {
+      console.log("[OBS] Already connected, ignoring duplicate credentials");
+      return;
     }
-    return () => {
-      stopSession();
-    };
-  }, []);
-
-  // ── Session duration timer ──
-  useEffect(() => {
-    if (status === "connected") {
-      sessionTimerRef.current = setInterval(() => {
-        setSessionDuration((prev) => prev + 1);
-      }, 1000);
-    } else {
-      if (sessionTimerRef.current) {
-        clearInterval(sessionTimerRef.current);
-        sessionTimerRef.current = null;
-      }
-      if (status === "idle") setSessionDuration(0);
-    }
-    return () => {
-      if (sessionTimerRef.current) clearInterval(sessionTimerRef.current);
-    };
-  }, [status]);
-
-  // ── Listen for parent window messages (for control from main page) ──
-  useEffect(() => {
-    const handleMessage = (event) => {
-      if (!event.data || typeof event.data !== "object") return;
-
-      switch (event.data.type) {
-        case "obs-speak":
-          if (event.data.text) {
-            sendSpeakEvent(event.data.text);
-          }
-          break;
-        case "obs-interrupt":
-          sendInterruptEvent();
-          break;
-        case "obs-stop":
-          stopSession();
-          break;
-        case "obs-start":
-          startSession();
-          break;
-        default:
-          break;
-      }
-    };
-
-    window.addEventListener("message", handleMessage);
-    return () => window.removeEventListener("message", handleMessage);
-  }, []);
-
-  // ── Generate event ID ──
-  const generateEventId = () =>
-    `evt_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-
-  // ── Send speak event via LiveKit data channel ──
-  const sendSpeakEvent = useCallback((text) => {
-    const room = roomRef.current;
-    if (!room || !room.localParticipant) return;
-
-    const event = {
-      event_id: generateEventId(),
-      event_type: "avatar.speak_text",
-      session_id: sessionIdRef.current || "",
-      text,
-    };
-
-    const encoder = new TextEncoder();
-    const data = encoder.encode(JSON.stringify(event));
-    room.localParticipant.publishData(data, {
-      reliable: true,
-      topic: "agent-control",
-    });
-  }, []);
-
-  // ── Send interrupt event ──
-  const sendInterruptEvent = useCallback(() => {
-    const room = roomRef.current;
-    if (!room || !room.localParticipant) return;
-
-    const event = {
-      event_id: generateEventId(),
-      event_type: "avatar.interrupt",
-      session_id: sessionIdRef.current || "",
-    };
-
-    const encoder = new TextEncoder();
-    const data = encoder.encode(JSON.stringify(event));
-    room.localParticipant.publishData(data, {
-      reliable: true,
-      topic: "agent-control",
-    });
-  }, []);
-
-  // ── Handle data received from avatar ──
-  const handleDataReceived = useCallback((payload, participant, kind, topic) => {
-    if (topic !== "agent-response") return;
-    try {
-      const decoder = new TextDecoder();
-      const event = JSON.parse(decoder.decode(payload));
-      switch (event.event_type) {
-        case "avatar.speak_started":
-          setIsSpeaking(true);
-          break;
-        case "avatar.speak_ended":
-          setIsSpeaking(false);
-          break;
-        case "session.stopped":
-          stopSession();
-          break;
-        default:
-          break;
-      }
-    } catch (e) {
-      // ignore parse errors
-    }
-  }, []);
-
-  // ── Start LiveAvatar Session ──
-  const startSession = useCallback(async () => {
-    if (status === "connecting" || status === "connected") return;
+    connectedRef.current = true;
 
     setStatus("connecting");
     setError(null);
 
     try {
-      const result = await aiLiveCreatorService.liveAvatarStreamingStart({
-        avatar_id: avatarId,
-        language,
-        voice_id: voiceId || null,
-        sandbox: false,
+      console.log("[OBS] Connecting to shared LiveKit room:", livekitUrl);
+
+      // Disconnect existing room if any
+      if (roomRef.current) {
+        try {
+          roomRef.current.disconnect();
+        } catch (e) {}
+        roomRef.current = null;
+      }
+
+      // Clean up existing audio elements
+      audioElementsRef.current.forEach((el) => {
+        try { el.remove(); } catch (e) {}
       });
+      audioElementsRef.current = [];
 
-      if (!result.success) {
-        throw new Error(result.error || "Failed to start session");
-      }
-
-      const { session_id, livekit_url, livekit_client_token } = result;
-      if (!livekit_url || !livekit_client_token) {
-        throw new Error("No LiveKit credentials returned");
-      }
-
-      setSessionId(session_id);
-      sessionIdRef.current = session_id;
-
-      // Connect to LiveKit
       // ╔══════════════════════════════════════════════════════════════════╗
       // ║ CRITICAL: DO NOT CHANGE adaptiveStream / dynacast to true!     ║
       // ║ adaptiveStream: true causes LiveAvatar video frames to STOP    ║
@@ -217,11 +96,12 @@ export default function OBSOutputPage() {
       // ║ See: SKILL.md → LiveAvatar Lip-Sync Rules                     ║
       // ╚══════════════════════════════════════════════════════════════════╝
       const room = new Room({
-        adaptiveStream: false,  // DO NOT CHANGE — breaks lip-sync
-        dynacast: false,        // DO NOT CHANGE — breaks lip-sync
+        adaptiveStream: false,  // ⚠️ DO NOT CHANGE — breaks lip-sync
+        dynacast: false,        // ⚠️ DO NOT CHANGE — breaks lip-sync
       });
       roomRef.current = room;
 
+      // Handle video tracks
       room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
         if (track.kind === Track.Kind.Video) {
           const element = track.attach();
@@ -235,11 +115,7 @@ export default function OBSOutputPage() {
             videoContainerRef.current.innerHTML = "";
             videoContainerRef.current.appendChild(element);
           }
-
-          // Notify parent window that stream is ready
-          if (window.opener) {
-            window.opener.postMessage({ type: "obs-stream-ready" }, "*");
-          }
+          console.log("[OBS] Video track attached");
         }
         if (track.kind === Track.Kind.Audio) {
           const element = track.attach();
@@ -247,6 +123,7 @@ export default function OBSOutputPage() {
           element.volume = 1.0;
           document.body.appendChild(element);
           audioElementsRef.current.push(element);
+          console.log("[OBS] Audio track attached");
         }
       });
 
@@ -254,25 +131,112 @@ export default function OBSOutputPage() {
         track.detach().forEach((el) => el.remove());
       });
 
-      room.on(RoomEvent.DataReceived, handleDataReceived);
-
-      room.on(RoomEvent.Disconnected, () => {
-        setStatus("idle");
-        setSessionId(null);
-        sessionIdRef.current = null;
+      // Handle data events from avatar (for speaking status)
+      room.on(RoomEvent.DataReceived, (payload, participant, kind, topic) => {
+        if (topic !== "agent-response") return;
+        try {
+          const decoder = new TextDecoder();
+          const event = JSON.parse(decoder.decode(payload));
+          switch (event.event_type) {
+            case "avatar.speak_started":
+              setIsSpeaking(true);
+              break;
+            case "avatar.speak_ended":
+              setIsSpeaking(false);
+              break;
+            default:
+              break;
+          }
+        } catch (e) {
+          // ignore parse errors
+        }
       });
 
-      await room.connect(livekit_url, livekit_client_token);
+      room.on(RoomEvent.Disconnected, () => {
+        console.log("[OBS] Disconnected from LiveKit room");
+        setStatus("waiting");
+        connectedRef.current = false;
+        if (videoContainerRef.current) {
+          videoContainerRef.current.innerHTML = "";
+        }
+      });
+
+      // Connect to the shared LiveKit room
+      await room.connect(livekitUrl, livekitToken);
       setStatus("connected");
+      console.log("[OBS] Successfully connected to shared LiveKit room");
+
+      // Notify parent window that OBS is connected
+      if (window.opener) {
+        window.opener.postMessage({ type: "obs-stream-ready" }, "*");
+      }
     } catch (err) {
-      console.error("[OBS Output] Error:", err);
+      console.error("[OBS] Connection error:", err);
       setError(err.message);
       setStatus("error");
+      connectedRef.current = false;
     }
-  }, [avatarId, voiceId, language, status, handleDataReceived]);
+  }, []);
 
-  // ── Stop Session ──
-  const stopSession = useCallback(async () => {
+  // ── Listen for postMessage from main page ──
+  useEffect(() => {
+    const handleMessage = (event) => {
+      if (!event.data || typeof event.data !== "object") return;
+
+      switch (event.data.type) {
+        case "obs-livekit-creds":
+          // Receive LiveKit credentials from main page
+          console.log("[OBS] Received LiveKit credentials from main page");
+          if (event.data.livekit_url && event.data.livekit_client_token) {
+            connectToRoom(event.data.livekit_url, event.data.livekit_client_token);
+          }
+          break;
+        case "obs-stop":
+          // Stop and disconnect
+          disconnectFromRoom();
+          break;
+        default:
+          break;
+      }
+    };
+
+    window.addEventListener("message", handleMessage);
+
+    // Also notify main page that OBS is ready to receive credentials
+    if (window.opener) {
+      window.opener.postMessage({ type: "obs-ready" }, "*");
+    }
+
+    return () => window.removeEventListener("message", handleMessage);
+  }, [connectToRoom]);
+
+  // ── Session duration timer ──
+  useEffect(() => {
+    if (status === "connected") {
+      sessionTimerRef.current = setInterval(() => {
+        setSessionDuration((prev) => prev + 1);
+      }, 1000);
+    } else {
+      if (sessionTimerRef.current) {
+        clearInterval(sessionTimerRef.current);
+        sessionTimerRef.current = null;
+      }
+      if (status === "waiting") setSessionDuration(0);
+    }
+    return () => {
+      if (sessionTimerRef.current) clearInterval(sessionTimerRef.current);
+    };
+  }, [status]);
+
+  // ── Cleanup on unmount ──
+  useEffect(() => {
+    return () => {
+      disconnectFromRoom();
+    };
+  }, []);
+
+  // ── Disconnect from room ──
+  const disconnectFromRoom = useCallback(() => {
     audioElementsRef.current.forEach((el) => {
       try { el.remove(); } catch (e) {}
     });
@@ -283,22 +247,14 @@ export default function OBSOutputPage() {
       roomRef.current = null;
     }
 
-    const sid = sessionIdRef.current || sessionId;
-    if (sid) {
-      try {
-        await aiLiveCreatorService.liveAvatarStreamingStop({ session_id: sid });
-      } catch (e) {}
-    }
-
-    setStatus("idle");
-    setSessionId(null);
-    sessionIdRef.current = null;
+    setStatus("waiting");
     setIsSpeaking(false);
+    connectedRef.current = false;
 
     if (videoContainerRef.current) {
       videoContainerRef.current.innerHTML = "";
     }
-  }, [sessionId]);
+  }, []);
 
   // ── Format time ──
   const formatTime = (seconds) => {
@@ -331,7 +287,7 @@ export default function OBSOutputPage() {
         }}
       />
 
-      {/* Minimal overlay — only shown when NOT connected (hidden during streaming for clean OBS capture) */}
+      {/* Minimal overlay — only shown when NOT connected */}
       {status !== "connected" && (
         <div
           style={{
@@ -355,33 +311,26 @@ export default function OBSOutputPage() {
               AitherHub OBS Output
             </h2>
             <p style={{ fontSize: "12px", color: "#888", marginBottom: "24px" }}>
-              LiveAvatar Streaming for OBS Browser Source
+              Shared Session Mode — Waiting for main page
             </p>
 
-            {status === "idle" && (
-              <button
-                onClick={startSession}
-                style={{
-                  padding: "12px 32px",
-                  fontSize: "14px",
-                  fontWeight: "bold",
-                  backgroundColor: "#22c55e",
-                  color: "white",
-                  border: "none",
-                  borderRadius: "8px",
-                  cursor: "pointer",
-                  marginBottom: "12px",
-                }}
-              >
-                Start Streaming
-              </button>
+            {status === "waiting" && (
+              <div style={{ color: "#facc15" }}>
+                <p style={{ fontSize: "14px" }}>Waiting for LiveKit credentials...</p>
+                <p style={{ fontSize: "11px", color: "#888", marginTop: "8px" }}>
+                  Start a LiveAvatar session on the main page, then open this OBS window.
+                </p>
+                <p style={{ fontSize: "11px", color: "#888", marginTop: "4px" }}>
+                  Credentials will be sent automatically via postMessage.
+                </p>
+              </div>
             )}
 
             {status === "connecting" && (
               <div style={{ color: "#facc15" }}>
-                <p style={{ fontSize: "14px" }}>Connecting...</p>
+                <p style={{ fontSize: "14px" }}>Connecting to shared LiveKit room...</p>
                 <p style={{ fontSize: "11px", color: "#888", marginTop: "4px" }}>
-                  Establishing LiveKit WebRTC session
+                  Joining the same session as the main page
                 </p>
               </div>
             )}
@@ -391,34 +340,21 @@ export default function OBSOutputPage() {
                 <p style={{ color: "#ef4444", fontSize: "13px", marginBottom: "12px" }}>
                   {error}
                 </p>
-                <button
-                  onClick={startSession}
-                  style={{
-                    padding: "10px 24px",
-                    fontSize: "13px",
-                    backgroundColor: "#22c55e",
-                    color: "white",
-                    border: "none",
-                    borderRadius: "8px",
-                    cursor: "pointer",
-                  }}
-                >
-                  Retry
-                </button>
+                <p style={{ fontSize: "11px", color: "#888" }}>
+                  Please restart the session from the main page.
+                </p>
               </div>
             )}
 
             <div style={{ marginTop: "20px", fontSize: "10px", color: "#666" }}>
-              <p>Avatar: {avatarId || "Default"}</p>
               <p>Background: {bgColor}</p>
-              <p>Language: {language}</p>
-              {autostart && <p>Auto-start: enabled</p>}
+              <p>Mode: Shared Session (receive-only)</p>
             </div>
           </div>
         </div>
       )}
 
-      {/* Minimal status indicator during streaming (small, unobtrusive) */}
+      {/* Minimal status indicator during streaming */}
       {status === "connected" && (
         <div
           style={{

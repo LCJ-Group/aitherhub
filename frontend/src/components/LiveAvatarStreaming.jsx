@@ -48,6 +48,7 @@ export default function LiveAvatarStreaming({
   onDisconnect,
   onError,
   onTextSent,
+  onSessionCreated,
   className = "",
 }) {
   // ── State ──
@@ -267,6 +268,11 @@ export default function LiveAvatarStreaming({
 
       console.log(`[LiveAvatar] Session created: ${session_id}, connecting to LiveKit: ${livekit_url}`);
       console.log(`[LiveAvatar] WebSocket URL: ${ws_url || 'not provided'}`);
+
+      // Notify parent with LiveKit credentials so OBS can join the same room
+      if (onSessionCreated) {
+        onSessionCreated({ session_id, livekit_url, livekit_client_token });
+      }
 
       // 2. Connect to LiveKit room using livekit_url + livekit_client_token
       // ╔══════════════════════════════════════════════════════════════════╗
