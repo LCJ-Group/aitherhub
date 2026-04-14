@@ -126,7 +126,8 @@ async def get_widget_config(
                    COALESCE(wca.product_name, vc.product_name) as product_name,
                    vc.transcript_text, vc.duration_sec, vc.liver_name,
                    wca.product_price, wca.product_image_url,
-                   wca.product_url, wca.product_cart_url
+                   wca.product_url, wca.product_cart_url,
+                   vc.captions
             FROM widget_clip_assignments wca
             LEFT JOIN video_clips vc ON vc.id::text = wca.clip_id
             WHERE wca.client_id = :cid AND wca.is_active = TRUE
@@ -138,6 +139,14 @@ async def get_widget_config(
 
     # Filter out clips without a playable clip_url
     clips = [c for c in clips if c.get("clip_url")]
+
+    # Parse captions JSON if stored as string
+    for clip in clips:
+        if clip.get("captions") and isinstance(clip["captions"], str):
+            try:
+                clip["captions"] = json.loads(clip["captions"])
+            except Exception:
+                clip["captions"] = None
 
     # Generate SAS URLs for clips if needed
     from app.services.storage_service import generate_read_sas_from_url
@@ -515,6 +524,84 @@ async def get_widget_analytics(
         "per_client": per_client,
         "top_pages": pages,
     }
+
+
+@router.get("/widget/admin/clips/search")
+async def search_clips_for_widget(
+    q: str = Query(default="", description="Search query (product_name, liver_name, transcript)"),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    x_admin_key: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Search video_clips for widget assignment. Returns clips with SAS URLs."""
+    if not _check_admin(x_admin_key):
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    from app.services.storage_service import generate_read_sas_from_url
+
+    if q.strip():
+        search_term = f"%{q.strip()}%"
+        result = await db.execute(
+            text("""
+                SELECT id, clip_url, thumbnail_url, product_name, liver_name,
+                       transcript_text, duration_sec, created_at,
+                       video_id
+                FROM video_clips
+                WHERE (product_name ILIKE :q OR liver_name ILIKE :q
+                       OR transcript_text ILIKE :q OR id::text ILIKE :q)
+                ORDER BY created_at DESC
+                LIMIT :lim OFFSET :off
+            """),
+            {"q": search_term, "lim": limit, "off": offset},
+        )
+    else:
+        result = await db.execute(
+            text("""
+                SELECT id, clip_url, thumbnail_url, product_name, liver_name,
+                       transcript_text, duration_sec, created_at,
+                       video_id
+                FROM video_clips
+                WHERE clip_url IS NOT NULL AND clip_url != ''
+                ORDER BY created_at DESC
+                LIMIT :lim OFFSET :off
+            """),
+            {"lim": limit, "off": offset},
+        )
+
+    clips = []
+    for row in result.mappings().all():
+        clip = dict(row)
+        # Generate SAS URLs
+        if clip.get("clip_url") and "blob.core.windows.net" in (clip["clip_url"] or ""):
+            try:
+                clip["clip_url"] = generate_read_sas_from_url(clip["clip_url"])
+            except Exception:
+                pass
+        if clip.get("thumbnail_url") and "blob.core.windows.net" in (clip["thumbnail_url"] or ""):
+            try:
+                clip["thumbnail_url"] = generate_read_sas_from_url(clip["thumbnail_url"])
+            except Exception:
+                pass
+        clips.append(clip)
+
+    # Get total count
+    if q.strip():
+        count_result = await db.execute(
+            text("""
+                SELECT COUNT(*) FROM video_clips
+                WHERE (product_name ILIKE :q OR liver_name ILIKE :q
+                       OR transcript_text ILIKE :q OR id::text ILIKE :q)
+            """),
+            {"q": search_term},
+        )
+    else:
+        count_result = await db.execute(
+            text("SELECT COUNT(*) FROM video_clips WHERE clip_url IS NOT NULL AND clip_url != ''")
+        )
+    total = count_result.scalar() or 0
+
+    return {"clips": clips, "total": total, "limit": limit, "offset": offset}
 
 
 @router.post("/widget/admin/clients/{client_id}/clips")

@@ -1,5 +1,5 @@
 /**
- * AitherHub Widget Loader v2.3 — TikTok-Style Fullscreen Feed + Product Card
+ * AitherHub Widget Loader v2.4 — TikTok-Style Fullscreen Feed + Product Card + Subtitles
  *
  * GTM経由で配信される軽量エントリーポイント。
  * 先方のECサイトに1行のタグを追加するだけで、
@@ -27,6 +27,12 @@
  *   - UTM parameters (utm_source=aitherhub, utm_medium=widget, utm_campaign=video_cta)
  *   - product_click / add_to_cart / purchase_click tracking events
  *   - Graceful fallback: no product info → single CTA button (v2.2 behavior)
+ *
+ * v2.4 Changes:
+ *   - Real-time subtitle display synced to video playback
+ *   - Priority: clip.captions (precise JSON) > clip.transcript_text (estimated timing)
+ *   - TikTok-style subtitle overlay with blur background
+ *   - Auto-hide when no caption available
  */
 (function () {
   "use strict";
@@ -575,6 +581,36 @@
         50% { transform: translateX(-50%) translateY(-8px); opacity: 1; }\
       }\
       \
+      /* ── Subtitle overlay ── */\
+      .ath-subtitle {\
+        position: absolute;\
+        bottom: 260px;\
+        left: 12px;\
+        right: 60px;\
+        z-index: 18;\
+        pointer-events: none;\
+        text-align: center;\
+        transition: opacity 0.25s ease;\
+      }\
+      .ath-subtitle-text {\
+        display: inline-block;\
+        max-width: 100%;\
+        padding: 6px 14px;\
+        border-radius: 8px;\
+        background: rgba(0,0,0,0.55);\
+        backdrop-filter: blur(6px);\
+        -webkit-backdrop-filter: blur(6px);\
+        color: #fff;\
+        font-size: 15px;\
+        font-weight: 600;\
+        line-height: 1.5;\
+        text-shadow: 0 1px 3px rgba(0,0,0,0.6);\
+        word-break: break-word;\
+        white-space: pre-wrap;\
+      }\
+      .ath-subtitle.hidden { opacity: 0; }\
+      .ath-subtitle.visible { opacity: 1; }\
+      \
       /* ── Powered by ── */\
       .ath-powered {\
         position: absolute;\
@@ -826,6 +862,14 @@
     swipeHint.style.display = "none";
     overlay.appendChild(swipeHint);
 
+    // Subtitle overlay
+    var subtitleEl = document.createElement("div");
+    subtitleEl.className = "ath-subtitle hidden";
+    var subtitleTextEl = document.createElement("span");
+    subtitleTextEl.className = "ath-subtitle-text";
+    subtitleEl.appendChild(subtitleTextEl);
+    overlay.appendChild(subtitleEl);
+
     // Powered by
     var powered = document.createElement("div");
     powered.className = "ath-powered";
@@ -833,6 +877,95 @@
     overlay.appendChild(powered);
 
     shadow.appendChild(overlay);
+
+    // ── Subtitle engine ──
+    // Builds a timed captions array from either:
+    //   1. clip.captions (JSON array with {start, end, text}) — precise
+    //   2. clip.transcript_text (plain string) — estimated timing
+    function buildCaptions(clip) {
+      // Priority 1: structured captions from backend
+      if (clip.captions && Array.isArray(clip.captions) && clip.captions.length > 0) {
+        return clip.captions.map(function (c) {
+          return { start: c.start || 0, end: c.end || (c.start + 3), text: c.text || "" };
+        });
+      }
+      // Priority 2: parse transcript_text into estimated segments
+      var text = clip.transcript_text;
+      if (!text || !text.trim()) return [];
+      var dur = clip.duration_sec || 60;
+      // Split by sentence-ending punctuation
+      var raw = text.replace(/([。！？!?.]+)/g, "$1\n").split("\n").filter(function (s) { return s.trim(); });
+      // If too few splits, chunk by ~20 chars
+      if (raw.length <= 1 && text.length > 30) {
+        raw = [];
+        var chunk = "";
+        for (var ci = 0; ci < text.length; ci++) {
+          chunk += text[ci];
+          if (chunk.length >= 20 && /[、。！？!?,. \u3000]/.test(text[ci])) {
+            raw.push(chunk.trim());
+            chunk = "";
+          }
+        }
+        if (chunk.trim()) raw.push(chunk.trim());
+      }
+      if (raw.length === 0) return [{ start: 0, end: dur, text: text.substring(0, 60) }];
+      // Distribute timing proportionally by character count
+      var totalChars = 0;
+      for (var ri = 0; ri < raw.length; ri++) totalChars += raw[ri].length;
+      var result = [];
+      var t = 0;
+      for (var ri2 = 0; ri2 < raw.length; ri2++) {
+        var segDur = (raw[ri2].length / totalChars) * dur;
+        if (segDur < 1) segDur = 1;
+        result.push({ start: t, end: t + segDur, text: raw[ri2] });
+        t += segDur;
+      }
+      return result;
+    }
+
+    // Cache built captions per clip index
+    var captionsCache = {};
+    function getCaptions(idx) {
+      if (captionsCache[idx] === undefined) {
+        captionsCache[idx] = buildCaptions(clips[idx]);
+      }
+      return captionsCache[idx];
+    }
+
+    // Find current caption for a given time
+    function findCaption(captions, time) {
+      var MIN_DISPLAY = 2;
+      for (var i = 0; i < captions.length; i++) {
+        var c = captions[i];
+        var end = Math.max(c.end, c.start + MIN_DISPLAY);
+        // Don't overlap with next
+        if (i + 1 < captions.length) {
+          end = Math.min(end, captions[i + 1].start);
+        }
+        if (time >= c.start && time < end) return c;
+      }
+      return null;
+    }
+
+    // Update subtitle display
+    var lastSubtitleText = "";
+    function updateSubtitle() {
+      var video = videoElements[currentIndex];
+      if (!video) { subtitleEl.className = "ath-subtitle hidden"; return; }
+      var captions = getCaptions(currentIndex);
+      if (!captions.length) { subtitleEl.className = "ath-subtitle hidden"; return; }
+      var cap = findCaption(captions, video.currentTime);
+      if (cap && cap.text) {
+        if (cap.text !== lastSubtitleText) {
+          subtitleTextEl.textContent = cap.text;
+          lastSubtitleText = cap.text;
+        }
+        subtitleEl.className = "ath-subtitle visible";
+      } else {
+        subtitleEl.className = "ath-subtitle hidden";
+        lastSubtitleText = "";
+      }
+    }
 
     // ── Helper: Check if clip has product info ──
     function hasProductInfo(clip) {
@@ -956,6 +1089,10 @@
       // Update product card and CTA buttons
       updateProductUI(clip);
 
+      // Reset subtitle for new clip
+      lastSubtitleText = "";
+      updateSubtitle();
+
       // Track
       trackEvent("video_play", { clip_id: clip.clip_id, clip_index: currentIndex });
 
@@ -994,7 +1131,10 @@
     // Attach timeupdate to all videos
     clips.forEach(function (clip, index) {
       videoElements[index].addEventListener("timeupdate", function () {
-        if (index === currentIndex) onTimeUpdate();
+        if (index === currentIndex) {
+          onTimeUpdate();
+          updateSubtitle();
+        }
       });
     });
 
@@ -1037,6 +1177,9 @@
       // Unlock body scroll
       document.body.style.overflow = "";
       document.documentElement.style.overflow = "";
+      // Hide subtitle
+      subtitleEl.className = "ath-subtitle hidden";
+      lastSubtitleText = "";
       // Pause all videos
       Object.keys(videoElements).forEach(function (key) {
         videoElements[key].pause();

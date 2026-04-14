@@ -14,18 +14,20 @@ export default function AdminWidgetManager({ adminKey }) {
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [selectedClientForClips, setSelectedClientForClips] = useState(null);
   const [clipAssignments, setClipAssignments] = useState([]);
-  const [newClipId, setNewClipId] = useState("");
-  const [newPagePattern, setNewPagePattern] = useState("");
   // Product info fields for clip assignment
-  const [newProductName, setNewProductName] = useState("");
-  const [newProductPrice, setNewProductPrice] = useState("");
-  const [newProductImageUrl, setNewProductImageUrl] = useState("");
-  const [newProductUrl, setNewProductUrl] = useState("");
-  const [newProductCartUrl, setNewProductCartUrl] = useState("");
   const [showProductFields, setShowProductFields] = useState(false);
   // Editing existing clip product info
   const [editingClipId, setEditingClipId] = useState(null);
   const [editProductForm, setEditProductForm] = useState({});
+  // Video preview modal
+  const [previewClip, setPreviewClip] = useState(null);
+  // Clip search/picker modal
+  const [showClipPicker, setShowClipPicker] = useState(false);
+  const [clipSearchQuery, setClipSearchQuery] = useState("");
+  const [clipSearchResults, setClipSearchResults] = useState([]);
+  const [clipSearchTotal, setClipSearchTotal] = useState(0);
+  const [clipSearchLoading, setClipSearchLoading] = useState(false);
+  const [clipSearchOffset, setClipSearchOffset] = useState(0);
 
   // Form state
   const [form, setForm] = useState({
@@ -54,9 +56,7 @@ export default function AdminWidgetManager({ adminKey }) {
     }
   }, [adminKey]);
 
-  useEffect(() => {
-    fetchClients();
-  }, [fetchClients]);
+  useEffect(() => { fetchClients(); }, [fetchClients]);
 
   // ── Fetch analytics ──
   const fetchAnalytics = useCallback(async () => {
@@ -71,9 +71,7 @@ export default function AdminWidgetManager({ adminKey }) {
     }
   }, [adminKey]);
 
-  useEffect(() => {
-    fetchAnalytics();
-  }, [fetchAnalytics]);
+  useEffect(() => { fetchAnalytics(); }, [fetchAnalytics]);
 
   // ── Create client ──
   const handleCreate = async () => {
@@ -122,29 +120,44 @@ export default function AdminWidgetManager({ adminKey }) {
     }
   };
 
-  // ── Assign clip (with product info) ──
-  const handleAssignClip = async () => {
-    if (!selectedClientForClips || !newClipId) return;
+  // ── Search clips for picker ──
+  const searchClips = async (query = "", offset = 0) => {
+    try {
+      setClipSearchLoading(true);
+      const res = await axios.get(`${API_BASE}/api/v1/widget/admin/clips/search`, {
+        headers,
+        params: { q: query, limit: 20, offset },
+      });
+      if (offset === 0) {
+        setClipSearchResults(res.data.clips || []);
+      } else {
+        setClipSearchResults(prev => [...prev, ...(res.data.clips || [])]);
+      }
+      setClipSearchTotal(res.data.total || 0);
+      setClipSearchOffset(offset);
+    } catch (err) {
+      console.error("Clip search failed:", err);
+    } finally {
+      setClipSearchLoading(false);
+    }
+  };
+
+  // ── Assign clip from picker (with optional product info) ──
+  const handleAssignClipFromPicker = async (clip, productInfo = {}) => {
+    if (!selectedClientForClips) return;
     try {
       setError(null);
       await axios.post(`${API_BASE}/api/v1/widget/admin/clients/${selectedClientForClips}/clips`, {
-        clip_id: newClipId,
-        page_url_pattern: newPagePattern || null,
-        product_name: newProductName || null,
-        product_price: newProductPrice || null,
-        product_image_url: newProductImageUrl || null,
-        product_url: newProductUrl || null,
-        product_cart_url: newProductCartUrl || null,
+        clip_id: clip.id,
+        page_url_pattern: null,
+        product_name: productInfo.product_name || clip.product_name || null,
+        product_price: productInfo.product_price || null,
+        product_image_url: productInfo.product_image_url || null,
+        product_url: productInfo.product_url || null,
+        product_cart_url: productInfo.product_cart_url || null,
       }, { headers });
-      setNewClipId("");
-      setNewPagePattern("");
-      setNewProductName("");
-      setNewProductPrice("");
-      setNewProductImageUrl("");
-      setNewProductUrl("");
-      setNewProductCartUrl("");
-      setShowProductFields(false);
       fetchClipAssignments(selectedClientForClips);
+      // Don't close picker — allow adding more
     } catch (err) {
       setError(`クリップ割当失敗: ${err.response?.data?.detail || err.message}`);
     }
@@ -200,6 +213,15 @@ export default function AdminWidgetManager({ adminKey }) {
     });
   };
 
+  // ── Open clip picker ──
+  const openClipPicker = () => {
+    setShowClipPicker(true);
+    setClipSearchQuery("");
+    setClipSearchResults([]);
+    setClipSearchOffset(0);
+    searchClips("", 0);
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -223,6 +245,7 @@ export default function AdminWidgetManager({ adminKey }) {
       {error && (
         <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
           {error}
+          <button onClick={() => setError(null)} className="ml-2 text-red-400 hover:text-red-600">✕</button>
         </div>
       )}
 
@@ -247,48 +270,22 @@ export default function AdminWidgetManager({ adminKey }) {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-600 mb-1">ブランド名 *</label>
-              <input
-                type="text"
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-                className="w-full px-3 py-2 border rounded-lg text-sm"
-                placeholder="例: KYOGOKU Professional"
-              />
+              <input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="w-full px-3 py-2 border rounded-lg text-sm" placeholder="例: KYOGOKU Professional" />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-600 mb-1">ドメイン *</label>
-              <input
-                type="text"
-                value={form.domain}
-                onChange={(e) => setForm({ ...form, domain: e.target.value })}
-                className="w-full px-3 py-2 border rounded-lg text-sm"
-                placeholder="例: kyogokupro.com"
-              />
+              <input type="text" value={form.domain} onChange={(e) => setForm({ ...form, domain: e.target.value })} className="w-full px-3 py-2 border rounded-lg text-sm" placeholder="例: kyogokupro.com" />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-600 mb-1">テーマカラー</label>
               <div className="flex gap-2 items-center">
-                <input
-                  type="color"
-                  value={form.theme_color}
-                  onChange={(e) => setForm({ ...form, theme_color: e.target.value })}
-                  className="w-10 h-10 rounded border cursor-pointer"
-                />
-                <input
-                  type="text"
-                  value={form.theme_color}
-                  onChange={(e) => setForm({ ...form, theme_color: e.target.value })}
-                  className="flex-1 px-3 py-2 border rounded-lg text-sm"
-                />
+                <input type="color" value={form.theme_color} onChange={(e) => setForm({ ...form, theme_color: e.target.value })} className="w-10 h-10 rounded border cursor-pointer" />
+                <input type="text" value={form.theme_color} onChange={(e) => setForm({ ...form, theme_color: e.target.value })} className="flex-1 px-3 py-2 border rounded-lg text-sm" />
               </div>
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-600 mb-1">表示位置</label>
-              <select
-                value={form.position}
-                onChange={(e) => setForm({ ...form, position: e.target.value })}
-                className="w-full px-3 py-2 border rounded-lg text-sm"
-              >
+              <select value={form.position} onChange={(e) => setForm({ ...form, position: e.target.value })} className="w-full px-3 py-2 border rounded-lg text-sm">
                 <option value="bottom-right">右下</option>
                 <option value="bottom-left">左下</option>
                 <option value="top-right">右上</option>
@@ -297,47 +294,23 @@ export default function AdminWidgetManager({ adminKey }) {
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-600 mb-1">CTAボタンテキスト</label>
-              <input
-                type="text"
-                value={form.cta_text}
-                onChange={(e) => setForm({ ...form, cta_text: e.target.value })}
-                className="w-full px-3 py-2 border rounded-lg text-sm"
-                placeholder="例: 購入する"
-              />
+              <input type="text" value={form.cta_text} onChange={(e) => setForm({ ...form, cta_text: e.target.value })} className="w-full px-3 py-2 border rounded-lg text-sm" placeholder="例: 購入する" />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-600 mb-1">カートセレクタ (CSS)</label>
-              <input
-                type="text"
-                value={form.cart_selector}
-                onChange={(e) => setForm({ ...form, cart_selector: e.target.value })}
-                className="w-full px-3 py-2 border rounded-lg text-sm"
-                placeholder="例: #add-to-cart, .btn-cart"
-              />
+              <input type="text" value={form.cart_selector} onChange={(e) => setForm({ ...form, cart_selector: e.target.value })} className="w-full px-3 py-2 border rounded-lg text-sm" placeholder="例: #add-to-cart, .btn-cart" />
             </div>
             <div className="col-span-2">
               <label className="block text-sm font-medium text-gray-600 mb-1">CTA URL テンプレート</label>
-              <input
-                type="text"
-                value={form.cta_url_template}
-                onChange={(e) => setForm({ ...form, cta_url_template: e.target.value })}
-                className="w-full px-3 py-2 border rounded-lg text-sm"
-                placeholder="例: https://example.com/cart?product={product}"
-              />
+              <input type="text" value={form.cta_url_template} onChange={(e) => setForm({ ...form, cta_url_template: e.target.value })} className="w-full px-3 py-2 border rounded-lg text-sm" placeholder="例: https://example.com/cart?product={product}" />
               <p className="text-xs text-gray-400 mt-1">{"{product}"} は商品名に置換されます</p>
             </div>
           </div>
           <div className="flex gap-2 pt-2">
-            <button
-              onClick={editingClient ? handleUpdate : handleCreate}
-              className="px-4 py-2 bg-pink-600 text-white rounded-lg hover:bg-pink-700 text-sm font-medium"
-            >
+            <button onClick={editingClient ? handleUpdate : handleCreate} className="px-4 py-2 bg-pink-600 text-white rounded-lg hover:bg-pink-700 text-sm font-medium">
               {editingClient ? "更新" : "作成"}
             </button>
-            <button
-              onClick={() => { setShowCreateForm(false); setEditingClient(null); }}
-              className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 text-sm"
-            >
+            <button onClick={() => { setShowCreateForm(false); setEditingClient(null); }} className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 text-sm">
               キャンセル
             </button>
           </div>
@@ -348,54 +321,23 @@ export default function AdminWidgetManager({ adminKey }) {
       {tagSnippet && (
         <div className="bg-gray-900 rounded-lg p-6 space-y-4">
           <div className="flex items-center justify-between">
-            <h3 className="font-semibold text-white flex items-center gap-2">
-              GTMタグ — {tagSnippet.client_name}
-            </h3>
-            <button
-              onClick={() => setTagSnippet(null)}
-              className="text-gray-400 hover:text-white"
-            >
-              ✕
-            </button>
+            <h3 className="font-semibold text-white flex items-center gap-2">GTMタグ — {tagSnippet.client_name}</h3>
+            <button onClick={() => setTagSnippet(null)} className="text-gray-400 hover:text-white">✕</button>
           </div>
           <div className="space-y-3">
             <div>
               <p className="text-xs text-gray-400 mb-1">GTM カスタムHTMLタグ（これをコピーして貼り付け）:</p>
               <div className="bg-black rounded-lg p-4 relative group">
-                <pre className="text-green-400 text-sm font-mono whitespace-pre-wrap break-all">
-                  {tagSnippet.gtm_custom_html}
-                </pre>
-                <button
-                  onClick={() => {
-                    navigator.clipboard.writeText(tagSnippet.gtm_custom_html);
-                  }}
-                  className="absolute top-2 right-2 px-3 py-1 bg-gray-700 text-gray-300 rounded text-xs hover:bg-gray-600 opacity-0 group-hover:opacity-100 transition-opacity"
-                >
-                  コピー
-                </button>
+                <pre className="text-green-400 text-sm font-mono whitespace-pre-wrap break-all">{tagSnippet.gtm_custom_html}</pre>
+                <button onClick={() => navigator.clipboard.writeText(tagSnippet.gtm_custom_html)} className="absolute top-2 right-2 px-3 py-1 bg-gray-700 text-gray-300 rounded text-xs hover:bg-gray-600 opacity-0 group-hover:opacity-100 transition-opacity">コピー</button>
               </div>
             </div>
             <div>
               <p className="text-xs text-gray-400 mb-1">直接埋め込み用（HTML）:</p>
               <div className="bg-black rounded-lg p-4 relative group">
-                <pre className="text-blue-400 text-sm font-mono whitespace-pre-wrap break-all">
-                  {tagSnippet.direct_embed}
-                </pre>
-                <button
-                  onClick={() => {
-                    navigator.clipboard.writeText(tagSnippet.direct_embed);
-                  }}
-                  className="absolute top-2 right-2 px-3 py-1 bg-gray-700 text-gray-300 rounded text-xs hover:bg-gray-600 opacity-0 group-hover:opacity-100 transition-opacity"
-                >
-                  コピー
-                </button>
+                <pre className="text-blue-400 text-sm font-mono whitespace-pre-wrap break-all">{tagSnippet.direct_embed}</pre>
+                <button onClick={() => navigator.clipboard.writeText(tagSnippet.direct_embed)} className="absolute top-2 right-2 px-3 py-1 bg-gray-700 text-gray-300 rounded text-xs hover:bg-gray-600 opacity-0 group-hover:opacity-100 transition-opacity">コピー</button>
               </div>
-            </div>
-            <div className="bg-yellow-900/30 rounded-lg p-3">
-              <p className="text-yellow-300 text-xs">
-                GTMで「カスタムHTML」タグを新規作成し、上のコードを貼り付けて「すべてのページ」トリガーで公開してください。
-                Facebookピクセルと同じ手順です。
-              </p>
             </div>
           </div>
         </div>
@@ -418,10 +360,7 @@ export default function AdminWidgetManager({ adminKey }) {
             <div key={client.client_id} className="bg-white rounded-lg border p-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <div
-                    className="w-4 h-4 rounded-full"
-                    style={{ backgroundColor: client.theme_color || "#FF2D55" }}
-                  />
+                  <div className="w-4 h-4 rounded-full" style={{ backgroundColor: client.theme_color || "#FF2D55" }} />
                   <div>
                     <h4 className="font-semibold text-gray-800">{client.name}</h4>
                     <p className="text-xs text-gray-500">{client.domain} — ID: {client.client_id}</p>
@@ -442,29 +381,29 @@ export default function AdminWidgetManager({ adminKey }) {
                     }}
                     className="px-3 py-1.5 bg-purple-100 text-purple-700 rounded-lg text-xs hover:bg-purple-200"
                   >
-                    クリップ
+                    クリップ管理
                   </button>
-                  <button
-                    onClick={() => handleGetTag(client.client_id)}
-                    className="px-3 py-1.5 bg-green-100 text-green-700 rounded-lg text-xs hover:bg-green-200"
-                  >
-                    GTMタグ
-                  </button>
-                  <button
-                    onClick={() => startEdit(client)}
-                    className="px-3 py-1.5 bg-blue-100 text-blue-700 rounded-lg text-xs hover:bg-blue-200"
-                  >
-                    編集
-                  </button>
+                  <button onClick={() => handleGetTag(client.client_id)} className="px-3 py-1.5 bg-green-100 text-green-700 rounded-lg text-xs hover:bg-green-200">GTMタグ</button>
+                  <button onClick={() => startEdit(client)} className="px-3 py-1.5 bg-blue-100 text-blue-700 rounded-lg text-xs hover:bg-blue-200">編集</button>
                 </div>
               </div>
 
               {/* Clip Assignment Panel */}
               {selectedClientForClips === client.client_id && (
                 <div className="mt-4 pt-4 border-t space-y-3">
-                  <h5 className="text-sm font-medium text-gray-600">割り当てクリップ</h5>
+                  <div className="flex items-center justify-between">
+                    <h5 className="text-sm font-medium text-gray-600">割り当てクリップ ({clipAssignments.length}本)</h5>
+                    <button
+                      onClick={openClipPicker}
+                      className="px-4 py-2 bg-purple-600 text-white rounded-lg text-sm hover:bg-purple-700 flex items-center gap-2"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
+                      クリップを追加
+                    </button>
+                  </div>
+
                   {clipAssignments.length > 0 ? (
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
                       {clipAssignments.map((clip, i) => (
                         <ClipCard
                           key={clip.clip_id || i}
@@ -476,107 +415,17 @@ export default function AdminWidgetManager({ adminKey }) {
                           onCancelEdit={() => { setEditingClipId(null); setEditProductForm({}); }}
                           onSaveEdit={() => handleUpdateClipProduct(clip.clip_id)}
                           onEditFormChange={(field, value) => setEditProductForm(prev => ({ ...prev, [field]: value }))}
+                          onPreview={() => setPreviewClip(clip)}
                         />
                       ))}
                     </div>
                   ) : (
-                    <p className="text-sm text-gray-400">クリップが割り当てられていません</p>
-                  )}
-
-                  {/* New clip assignment form */}
-                  <div className="bg-gray-50 rounded-lg p-4 space-y-3">
-                    <h6 className="text-xs font-semibold text-gray-600 uppercase tracking-wider">新規クリップ割当</h6>
-                    <div className="flex gap-2 items-end">
-                      <div className="flex-1">
-                        <label className="block text-xs text-gray-500 mb-1">クリップID *</label>
-                        <input
-                          type="text"
-                          value={newClipId}
-                          onChange={(e) => setNewClipId(e.target.value)}
-                          className="w-full px-3 py-2 border rounded-lg text-sm"
-                          placeholder="クリップDBからIDをコピー"
-                        />
-                      </div>
-                      <div className="flex-1">
-                        <label className="block text-xs text-gray-500 mb-1">ページURLパターン（任意）</label>
-                        <input
-                          type="text"
-                          value={newPagePattern}
-                          onChange={(e) => setNewPagePattern(e.target.value)}
-                          className="w-full px-3 py-2 border rounded-lg text-sm"
-                          placeholder="例: /products/*"
-                        />
-                      </div>
-                      <button
-                        onClick={() => setShowProductFields(!showProductFields)}
-                        className={`px-3 py-2 rounded-lg text-xs whitespace-nowrap ${showProductFields ? "bg-orange-100 text-orange-700" : "bg-gray-200 text-gray-600 hover:bg-gray-300"}`}
-                      >
-                        {showProductFields ? "商品情報 ▲" : "商品情報 ▼"}
-                      </button>
-                      <button
-                        onClick={handleAssignClip}
-                        className="px-4 py-2 bg-purple-600 text-white rounded-lg text-sm hover:bg-purple-700 whitespace-nowrap"
-                      >
-                        割当
-                      </button>
+                    <div className="text-center py-8 text-gray-400 bg-gray-50 rounded-lg">
+                      <svg className="w-12 h-12 mx-auto mb-2 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+                      <p className="text-sm">クリップが割り当てられていません</p>
+                      <p className="text-xs mt-1">「クリップを追加」ボタンから動画を検索して追加できます</p>
                     </div>
-
-                    {/* Product info fields (expandable) */}
-                    {showProductFields && (
-                      <div className="grid grid-cols-2 gap-3 pt-2 border-t border-gray-200">
-                        <div>
-                          <label className="block text-xs text-gray-500 mb-1">商品名</label>
-                          <input
-                            type="text"
-                            value={newProductName}
-                            onChange={(e) => setNewProductName(e.target.value)}
-                            className="w-full px-3 py-2 border rounded-lg text-sm"
-                            placeholder="例: KYOGOKUカラーシャンプー"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs text-gray-500 mb-1">価格（表示用テキスト）</label>
-                          <input
-                            type="text"
-                            value={newProductPrice}
-                            onChange={(e) => setNewProductPrice(e.target.value)}
-                            className="w-full px-3 py-2 border rounded-lg text-sm"
-                            placeholder="例: ¥3,980 / NT$1,280"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs text-gray-500 mb-1">商品画像URL</label>
-                          <input
-                            type="text"
-                            value={newProductImageUrl}
-                            onChange={(e) => setNewProductImageUrl(e.target.value)}
-                            className="w-full px-3 py-2 border rounded-lg text-sm"
-                            placeholder="https://..."
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs text-gray-500 mb-1">商品ページURL（購入ボタン遷移先）</label>
-                          <input
-                            type="text"
-                            value={newProductUrl}
-                            onChange={(e) => setNewProductUrl(e.target.value)}
-                            className="w-full px-3 py-2 border rounded-lg text-sm"
-                            placeholder="https://kyogokupro.com/products/..."
-                          />
-                        </div>
-                        <div className="col-span-2">
-                          <label className="block text-xs text-gray-500 mb-1">カートURL（カートに入れるボタン遷移先、任意）</label>
-                          <input
-                            type="text"
-                            value={newProductCartUrl}
-                            onChange={(e) => setNewProductCartUrl(e.target.value)}
-                            className="w-full px-3 py-2 border rounded-lg text-sm"
-                            placeholder="https://kyogokupro.com/cart/add?product_id=..."
-                          />
-                        </div>
-                      </div>
-                    )}
-                  </div>
+                  )}
                 </div>
               )}
             </div>
@@ -617,12 +466,232 @@ export default function AdminWidgetManager({ adminKey }) {
           </table>
         </div>
       )}
+
+      {/* ═══════════ Video Preview Modal ═══════════ */}
+      {previewClip && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80" onClick={() => setPreviewClip(null)}>
+          <div className="relative max-w-sm w-full mx-4" onClick={(e) => e.stopPropagation()}>
+            <button
+              onClick={() => setPreviewClip(null)}
+              className="absolute -top-10 right-0 text-white/80 hover:text-white text-sm flex items-center gap-1"
+            >
+              閉じる ✕
+            </button>
+            <div className="bg-black rounded-2xl overflow-hidden shadow-2xl" style={{ aspectRatio: "9/16" }}>
+              <video
+                src={previewClip.clip_url}
+                controls
+                autoPlay
+                playsInline
+                className="w-full h-full object-contain"
+              />
+            </div>
+            <div className="mt-3 text-white">
+              <p className="font-semibold text-sm">{previewClip.product_name || previewClip.liver_name || "動画プレビュー"}</p>
+              {previewClip.product_price && <p className="text-pink-400 font-bold text-sm mt-0.5">{previewClip.product_price}</p>}
+              {previewClip.transcript_text && (
+                <p className="text-white/60 text-xs mt-2 max-h-20 overflow-y-auto leading-relaxed">
+                  {previewClip.transcript_text}
+                </p>
+              )}
+              <p className="text-white/30 text-xs font-mono mt-2">{previewClip.clip_id}</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ═══════════ Clip Picker Modal ═══════════ */}
+      {showClipPicker && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setShowClipPicker(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl mx-4 max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            {/* Picker Header */}
+            <div className="p-5 border-b flex items-center justify-between flex-shrink-0">
+              <div>
+                <h3 className="font-bold text-gray-800 text-lg">クリップを選択して追加</h3>
+                <p className="text-xs text-gray-500 mt-0.5">動画をクリックでプレビュー、「追加」ボタンでウィジェットに割当</p>
+              </div>
+              <button onClick={() => setShowClipPicker(false)} className="text-gray-400 hover:text-gray-600 text-xl">✕</button>
+            </div>
+
+            {/* Search bar */}
+            <div className="p-4 border-b flex-shrink-0">
+              <div className="relative">
+                <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+                <input
+                  type="text"
+                  value={clipSearchQuery}
+                  onChange={(e) => setClipSearchQuery(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") { setClipSearchOffset(0); searchClips(clipSearchQuery, 0); } }}
+                  className="w-full pl-10 pr-24 py-2.5 border rounded-xl text-sm focus:ring-2 focus:ring-purple-300 focus:border-purple-400 outline-none"
+                  placeholder="商品名、配信者名、字幕テキストで検索..."
+                  autoFocus
+                />
+                <button
+                  onClick={() => { setClipSearchOffset(0); searchClips(clipSearchQuery, 0); }}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 px-4 py-1.5 bg-purple-600 text-white rounded-lg text-xs hover:bg-purple-700"
+                >
+                  検索
+                </button>
+              </div>
+              <p className="text-xs text-gray-400 mt-2">
+                {clipSearchTotal > 0 ? `${clipSearchTotal}件のクリップが見つかりました` : clipSearchLoading ? "検索中..." : ""}
+              </p>
+            </div>
+
+            {/* Results grid */}
+            <div className="flex-1 overflow-y-auto p-4">
+              {clipSearchLoading && clipSearchResults.length === 0 ? (
+                <div className="flex items-center justify-center py-16">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-500"></div>
+                </div>
+              ) : clipSearchResults.length === 0 ? (
+                <div className="text-center py-16 text-gray-400">
+                  <p className="text-sm">検索結果がありません</p>
+                  <p className="text-xs mt-1">キーワードを変えて検索してください</p>
+                </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                    {clipSearchResults.map((clip) => {
+                      const isAssigned = clipAssignments.some(a => a.clip_id === clip.id);
+                      return (
+                        <PickerClipCard
+                          key={clip.id}
+                          clip={clip}
+                          isAssigned={isAssigned}
+                          onPreview={() => setPreviewClip({ ...clip, clip_id: clip.id })}
+                          onAssign={() => handleAssignClipFromPicker(clip)}
+                        />
+                      );
+                    })}
+                  </div>
+                  {/* Load more */}
+                  {clipSearchResults.length < clipSearchTotal && (
+                    <div className="text-center mt-4">
+                      <button
+                        onClick={() => searchClips(clipSearchQuery, clipSearchOffset + 20)}
+                        disabled={clipSearchLoading}
+                        className="px-6 py-2 bg-gray-100 text-gray-600 rounded-lg text-sm hover:bg-gray-200 disabled:opacity-50"
+                      >
+                        {clipSearchLoading ? "読み込み中..." : `もっと見る (${clipSearchResults.length}/${clipSearchTotal})`}
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-/* ── ClipCard: サムネイル＋ホバー動画プレビュー付きカード（商品情報編集対応） ── */
-function ClipCard({ clip, index, isEditing, editForm, onStartEdit, onCancelEdit, onSaveEdit, onEditFormChange }) {
+/* ═══════════ PickerClipCard: クリップ検索結果のカード ═══════════ */
+function PickerClipCard({ clip, isAssigned, onPreview, onAssign }) {
+  const [hovering, setHovering] = useState(false);
+  const videoRef = useRef(null);
+
+  const formatDuration = (sec) => {
+    if (!sec) return "";
+    const m = Math.floor(sec / 60);
+    const s = Math.floor(sec % 60);
+    return `${m}:${s.toString().padStart(2, "0")}`;
+  };
+
+  const handleMouseEnter = () => {
+    setHovering(true);
+    if (videoRef.current && clip.clip_url) {
+      videoRef.current.currentTime = 0;
+      videoRef.current.play().catch(() => {});
+    }
+  };
+
+  const handleMouseLeave = () => {
+    setHovering(false);
+    if (videoRef.current) {
+      videoRef.current.pause();
+      videoRef.current.currentTime = 0;
+    }
+  };
+
+  const title = clip.product_name || clip.liver_name || "クリップ";
+
+  return (
+    <div
+      className={`relative rounded-xl border overflow-hidden transition-all ${isAssigned ? "border-green-300 bg-green-50/50" : "border-gray-200 bg-white hover:shadow-lg"}`}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+    >
+      {/* Video area */}
+      <div className="relative cursor-pointer" style={{ aspectRatio: "9/16", maxHeight: "200px" }} onClick={onPreview}>
+        {clip.clip_url ? (
+          <>
+            <video
+              ref={videoRef}
+              src={clip.clip_url}
+              muted
+              playsInline
+              loop
+              preload="metadata"
+              className="absolute inset-0 w-full h-full object-cover"
+              style={{ opacity: hovering ? 1 : 0, transition: "opacity 0.3s" }}
+            />
+            <video
+              src={clip.clip_url}
+              muted
+              playsInline
+              preload="metadata"
+              className="absolute inset-0 w-full h-full object-cover"
+              style={{ opacity: hovering ? 0 : 1, transition: "opacity 0.3s" }}
+            />
+            {!hovering && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/10">
+                <svg className="w-8 h-8 text-white/90 drop-shadow" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="absolute inset-0 bg-gray-200 flex items-center justify-center">
+            <span className="text-xs text-gray-400">動画なし</span>
+          </div>
+        )}
+        {clip.duration_sec && (
+          <div className="absolute bottom-1 right-1 bg-black/70 text-white text-[10px] px-1 py-0.5 rounded">
+            {formatDuration(clip.duration_sec)}
+          </div>
+        )}
+        {isAssigned && (
+          <div className="absolute top-1 left-1 bg-green-500 text-white text-[10px] px-1.5 py-0.5 rounded font-medium">
+            割当済
+          </div>
+        )}
+      </div>
+
+      {/* Info + action */}
+      <div className="p-2">
+        <p className="text-xs font-medium text-gray-700 truncate" title={title}>{title}</p>
+        {clip.transcript_text && (
+          <p className="text-[10px] text-gray-400 mt-0.5 truncate">{clip.transcript_text.slice(0, 50)}...</p>
+        )}
+        <button
+          onClick={(e) => { e.stopPropagation(); onAssign(); }}
+          disabled={isAssigned}
+          className={`mt-1.5 w-full py-1.5 rounded-lg text-xs font-medium transition-colors ${
+            isAssigned
+              ? "bg-green-100 text-green-600 cursor-default"
+              : "bg-purple-600 text-white hover:bg-purple-700"
+          }`}
+        >
+          {isAssigned ? "追加済み" : "+ 追加"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════ ClipCard: 割当済みクリップカード（プレビュー＋商品情報編集） ═══════════ */
+function ClipCard({ clip, index, isEditing, editForm, onStartEdit, onCancelEdit, onSaveEdit, onEditFormChange, onPreview }) {
   const videoRef = useRef(null);
   const [isHovering, setIsHovering] = useState(false);
   const [videoError, setVideoError] = useState(false);
@@ -660,11 +729,10 @@ function ClipCard({ clip, index, isEditing, editForm, onStartEdit, onCancelEdit,
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
     >
-      {/* Video / Thumbnail area */}
-      <div className="relative w-full" style={{ aspectRatio: "9/16", maxHeight: "240px" }}>
+      {/* Video / Thumbnail area — click to preview */}
+      <div className="relative w-full" style={{ aspectRatio: "9/16", maxHeight: "240px" }} onClick={onPreview}>
         {hasVideo && !videoError ? (
           <>
-            {/* Video element - plays on hover */}
             <video
               ref={videoRef}
               src={clip.clip_url}
@@ -676,7 +744,6 @@ function ClipCard({ clip, index, isEditing, editForm, onStartEdit, onCancelEdit,
               className="absolute inset-0 w-full h-full object-cover"
               style={{ opacity: isHovering ? 1 : 0, transition: "opacity 0.3s" }}
             />
-            {/* Poster / first frame - shown when not hovering */}
             <video
               src={clip.clip_url}
               muted
@@ -685,7 +752,6 @@ function ClipCard({ clip, index, isEditing, editForm, onStartEdit, onCancelEdit,
               className="absolute inset-0 w-full h-full object-cover"
               style={{ opacity: isHovering ? 0 : 1, transition: "opacity 0.3s" }}
             />
-            {/* Play icon overlay */}
             {!isHovering && (
               <div className="absolute inset-0 flex items-center justify-center">
                 <svg className="w-10 h-10 text-white/80 drop-shadow-lg" fill="currentColor" viewBox="0 0 24 24">
@@ -695,13 +761,8 @@ function ClipCard({ clip, index, isEditing, editForm, onStartEdit, onCancelEdit,
             )}
           </>
         ) : clip.thumbnail_url ? (
-          <img
-            src={clip.thumbnail_url}
-            alt={title}
-            className="absolute inset-0 w-full h-full object-cover"
-          />
+          <img src={clip.thumbnail_url} alt={title} className="absolute inset-0 w-full h-full object-cover" />
         ) : (
-          /* No video, no thumbnail - placeholder */
           <div className="absolute inset-0 w-full h-full bg-gradient-to-br from-gray-200 to-gray-300 flex items-center justify-center">
             <div className="text-center">
               <svg className="w-8 h-8 text-gray-400 mx-auto mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -712,56 +773,36 @@ function ClipCard({ clip, index, isEditing, editForm, onStartEdit, onCancelEdit,
           </div>
         )}
 
-        {/* Duration badge */}
         {clip.duration_sec && (
           <div className="absolute bottom-2 right-2 bg-black/70 text-white text-xs px-1.5 py-0.5 rounded">
             {formatDuration(clip.duration_sec)}
           </div>
         )}
-
-        {/* Status badge */}
-        <div className={`absolute top-2 left-2 px-1.5 py-0.5 rounded text-xs font-medium ${
-          hasVideo ? "bg-green-500/90 text-white" : "bg-red-500/90 text-white"
-        }`}>
+        <div className={`absolute top-2 left-2 px-1.5 py-0.5 rounded text-xs font-medium ${hasVideo ? "bg-green-500/90 text-white" : "bg-red-500/90 text-white"}`}>
           {hasVideo ? "配信中" : "動画なし"}
         </div>
-
-        {/* Product info badge */}
         {hasProductInfo && (
           <div className="absolute top-2 right-2 px-1.5 py-0.5 rounded text-xs font-medium bg-orange-500/90 text-white">
             商品設定済
+          </div>
+        )}
+        {/* Click hint on hover */}
+        {isHovering && (
+          <div className="absolute bottom-2 left-2 bg-black/60 text-white text-[10px] px-2 py-1 rounded backdrop-blur-sm">
+            クリックでプレビュー
           </div>
         )}
       </div>
 
       {/* Info area */}
       <div className="p-3">
-        <p className="text-sm font-medium text-gray-800 truncate" title={title}>
-          {title}
-        </p>
-        {clip.product_price && (
-          <p className="text-sm font-bold text-pink-600 mt-0.5">{clip.product_price}</p>
-        )}
-        <p className="text-xs text-gray-400 font-mono mt-1 truncate" title={clip.clip_id}>
-          {clip.clip_id?.slice(0, 8)}...
-        </p>
-        {clip.page_url_pattern && (
-          <p className="text-xs text-purple-500 mt-1 truncate" title={clip.page_url_pattern}>
-            {clip.page_url_pattern}
-          </p>
-        )}
-        {clip.product_url && (
-          <p className="text-xs text-blue-500 mt-1 truncate" title={clip.product_url}>
-            {clip.product_url}
-          </p>
-        )}
-        {clip.transcript_text && (
-          <p className="text-xs text-gray-500 mt-1 line-clamp-2" title={clip.transcript_text}>
-            {clip.transcript_text.slice(0, 60)}...
-          </p>
-        )}
+        <p className="text-sm font-medium text-gray-800 truncate" title={title}>{title}</p>
+        {clip.product_price && <p className="text-sm font-bold text-pink-600 mt-0.5">{clip.product_price}</p>}
+        <p className="text-xs text-gray-400 font-mono mt-1 truncate" title={clip.clip_id}>{clip.clip_id?.slice(0, 8)}...</p>
+        {clip.page_url_pattern && <p className="text-xs text-purple-500 mt-1 truncate" title={clip.page_url_pattern}>{clip.page_url_pattern}</p>}
+        {clip.product_url && <p className="text-xs text-blue-500 mt-1 truncate" title={clip.product_url}>{clip.product_url}</p>}
+        {clip.transcript_text && <p className="text-xs text-gray-500 mt-1 line-clamp-2" title={clip.transcript_text}>{clip.transcript_text.slice(0, 60)}...</p>}
 
-        {/* Edit product info button */}
         <button
           onClick={(e) => { e.stopPropagation(); onStartEdit(); }}
           className="mt-2 w-full px-2 py-1.5 bg-orange-50 text-orange-600 rounded text-xs hover:bg-orange-100 border border-orange-200"
@@ -773,79 +814,28 @@ function ClipCard({ clip, index, isEditing, editForm, onStartEdit, onCancelEdit,
       {/* Edit product info form (inline) */}
       {isEditing && (
         <div className="p-3 pt-0 space-y-2 border-t border-gray-200 bg-orange-50/50">
-          <div>
-            <label className="block text-xs text-gray-500 mb-0.5">商品名</label>
-            <input
-              type="text"
-              value={editForm.product_name || ""}
-              onChange={(e) => onEditFormChange("product_name", e.target.value)}
-              className="w-full px-2 py-1.5 border rounded text-xs"
-              placeholder="商品名"
-            />
-          </div>
-          <div>
-            <label className="block text-xs text-gray-500 mb-0.5">価格</label>
-            <input
-              type="text"
-              value={editForm.product_price || ""}
-              onChange={(e) => onEditFormChange("product_price", e.target.value)}
-              className="w-full px-2 py-1.5 border rounded text-xs"
-              placeholder="¥3,980"
-            />
-          </div>
-          <div>
-            <label className="block text-xs text-gray-500 mb-0.5">商品画像URL</label>
-            <input
-              type="text"
-              value={editForm.product_image_url || ""}
-              onChange={(e) => onEditFormChange("product_image_url", e.target.value)}
-              className="w-full px-2 py-1.5 border rounded text-xs"
-              placeholder="https://..."
-            />
-          </div>
-          <div>
-            <label className="block text-xs text-gray-500 mb-0.5">商品ページURL</label>
-            <input
-              type="text"
-              value={editForm.product_url || ""}
-              onChange={(e) => onEditFormChange("product_url", e.target.value)}
-              className="w-full px-2 py-1.5 border rounded text-xs"
-              placeholder="https://kyogokupro.com/products/..."
-            />
-          </div>
-          <div>
-            <label className="block text-xs text-gray-500 mb-0.5">カートURL（任意）</label>
-            <input
-              type="text"
-              value={editForm.product_cart_url || ""}
-              onChange={(e) => onEditFormChange("product_cart_url", e.target.value)}
-              className="w-full px-2 py-1.5 border rounded text-xs"
-              placeholder="https://..."
-            />
-          </div>
-          <div>
-            <label className="block text-xs text-gray-500 mb-0.5">ページURLパターン</label>
-            <input
-              type="text"
-              value={editForm.page_url_pattern || ""}
-              onChange={(e) => onEditFormChange("page_url_pattern", e.target.value)}
-              className="w-full px-2 py-1.5 border rounded text-xs"
-              placeholder="/products/*"
-            />
-          </div>
+          {[
+            { key: "product_name", label: "商品名", placeholder: "商品名" },
+            { key: "product_price", label: "価格", placeholder: "¥3,980" },
+            { key: "product_image_url", label: "商品画像URL", placeholder: "https://..." },
+            { key: "product_url", label: "商品ページURL", placeholder: "https://kyogokupro.com/products/..." },
+            { key: "product_cart_url", label: "カートURL（任意）", placeholder: "https://..." },
+            { key: "page_url_pattern", label: "ページURLパターン", placeholder: "/products/*" },
+          ].map(({ key, label, placeholder }) => (
+            <div key={key}>
+              <label className="block text-xs text-gray-500 mb-0.5">{label}</label>
+              <input
+                type="text"
+                value={editForm[key] || ""}
+                onChange={(e) => onEditFormChange(key, e.target.value)}
+                className="w-full px-2 py-1.5 border rounded text-xs"
+                placeholder={placeholder}
+              />
+            </div>
+          ))}
           <div className="flex gap-2 pt-1">
-            <button
-              onClick={(e) => { e.stopPropagation(); onSaveEdit(); }}
-              className="flex-1 px-2 py-1.5 bg-orange-600 text-white rounded text-xs hover:bg-orange-700"
-            >
-              保存
-            </button>
-            <button
-              onClick={(e) => { e.stopPropagation(); onCancelEdit(); }}
-              className="flex-1 px-2 py-1.5 bg-gray-200 text-gray-600 rounded text-xs hover:bg-gray-300"
-            >
-              キャンセル
-            </button>
+            <button onClick={(e) => { e.stopPropagation(); onSaveEdit(); }} className="flex-1 px-2 py-1.5 bg-orange-600 text-white rounded text-xs hover:bg-orange-700">保存</button>
+            <button onClick={(e) => { e.stopPropagation(); onCancelEdit(); }} className="flex-1 px-2 py-1.5 bg-gray-200 text-gray-600 rounded text-xs hover:bg-gray-300">キャンセル</button>
           </div>
         </div>
       )}
