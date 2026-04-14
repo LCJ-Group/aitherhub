@@ -330,16 +330,21 @@ async def create_widget_client(
     if not _check_admin(x_admin_key):
         raise HTTPException(status_code=403, detail="Admin access required")
 
+    import secrets as _secrets
     client_id = str(uuid.uuid4())[:8]  # Short ID for easy embedding
+    # Auto-generate brand portal password
+    brand_password = _secrets.token_urlsafe(12)  # e.g. "xK3m9Qw2pL1n"
+    from app.api.v1.endpoints.brand_portal import _hash_password
+    password_hash = _hash_password(brand_password)
 
     await db.execute(
         text("""
             INSERT INTO widget_clients
                 (client_id, name, domain, theme_color, position, cta_text,
-                 cta_url_template, cart_selector, is_active, created_at, updated_at)
+                 cta_url_template, cart_selector, is_active, created_at, updated_at, password_hash)
             VALUES
                 (:client_id, :name, :domain, :theme_color, :position, :cta_text,
-                 :cta_url_template, :cart_selector, TRUE, NOW(), NOW())
+                 :cta_url_template, :cart_selector, TRUE, NOW(), NOW(), :password_hash)
         """),
         {
             "client_id": client_id,
@@ -350,6 +355,7 @@ async def create_widget_client(
             "cta_text": payload.cta_text,
             "cta_url_template": payload.cta_url_template,
             "cart_selector": payload.cart_selector,
+            "password_hash": password_hash,
         },
     )
     await db.commit()
@@ -358,6 +364,8 @@ async def create_widget_client(
         "client_id": client_id,
         "name": payload.name,
         "domain": payload.domain,
+        "brand_password": brand_password,  # Show once on creation
+        "brand_portal_url": f"https://www.aitherhub.com/brand?id={client_id}",
         "gtm_tag": f'<script src="https://www.aitherhub.com/widget/loader.js" data-client-id="{client_id}" async></script>',
     }
 
@@ -602,6 +610,34 @@ async def search_clips_for_widget(
     total = count_result.scalar() or 0
 
     return {"clips": clips, "total": total, "limit": limit, "offset": offset}
+
+
+@router.post("/widget/admin/clients/{client_id}/reset-password")
+async def reset_brand_password(
+    client_id: str,
+    x_admin_key: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Reset brand portal password for a client."""
+    if not _check_admin(x_admin_key):
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    import secrets as _secrets
+    new_password = _secrets.token_urlsafe(12)
+    from app.api.v1.endpoints.brand_portal import _hash_password
+    password_hash = _hash_password(new_password)
+
+    await db.execute(
+        text("UPDATE widget_clients SET password_hash = :ph WHERE client_id = :cid"),
+        {"ph": password_hash, "cid": client_id},
+    )
+    await db.commit()
+
+    return {
+        "client_id": client_id,
+        "new_password": new_password,
+        "brand_portal_url": f"https://www.aitherhub.com/brand?id={client_id}",
+    }
 
 
 @router.post("/widget/admin/clients/{client_id}/clips")

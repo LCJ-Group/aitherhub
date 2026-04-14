@@ -875,6 +875,25 @@ async def ensure_widget_tables():
                 except Exception:
                     pass  # Column already exists
 
+        # ── Add brand portal columns ──
+            for alter_sql in [
+                "ALTER TABLE widget_clients ADD COLUMN IF NOT EXISTS password_hash TEXT",
+                "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS uploaded_by_brand VARCHAR(20)",
+            ]:
+                try:
+                    await conn.execute(_text(alter_sql))
+                except Exception as e:
+                    logger.warning(f"ALTER TABLE (brand portal): {e}")
+
+            # Create index for brand uploads
+            try:
+                await conn.execute(_text(
+                    "CREATE INDEX IF NOT EXISTS ix_video_clips_uploaded_by_brand ON video_clips (uploaded_by_brand) WHERE uploaded_by_brand IS NOT NULL"
+                ))
+            except Exception as e:
+                logger.warning(f"Index creation (brand portal): {e}")
+
+            await conn.commit()
         logger.info("Widget tables (widget_clients, widget_clip_assignments, widget_page_contexts, widget_tracking_events) verified/created")
     except asyncio.TimeoutError:
         logger.warning("Timeout (60s) while ensuring widget tables on startup")
