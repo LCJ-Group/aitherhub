@@ -43,12 +43,20 @@ LIVEAVATAR_BASE_URL = "https://api.liveavatar.com"
 # Default avatar: kyogokuryu custom avatar (kokumin1010)
 DEFAULT_AVATAR_ID = "d55f3fc1-372f-426e-8fcf-75f0da82a04a"
 
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║ PROTECTED VOICE SETTINGS — DO NOT CHANGE WITHOUT TESTING LIP-SYNC      ║
+# ║ These values were obtained by binding ElevenLabs voice to LiveAvatar    ║
+# ║ via the Bind Third Party Voice API. Changing them will break lip-sync.  ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+#
 # Default ElevenLabs voice connected to LiveAvatar
 # Bound from ElevenLabs voice_id: RJs5YoIcR2WzF8qHIg1q (japan kyogoku ryu)
-DEFAULT_VOICE_ID = "14efbcf8-d01b-425c-8b82-9d6802616997"
+# Created via: POST /v1/voices/bind { provider_voice_id, secret_id }
+DEFAULT_VOICE_ID = "14efbcf8-d01b-425c-8b82-9d6802616997"  # DO NOT CHANGE — breaks lip-sync
 
 # ElevenLabs voice_id → LiveAvatar UUID mapping
 # When frontend sends an ElevenLabs voice_id, we map it to the LiveAvatar UUID
+# To add new voices: use /api/v1/digital-human/liveavatar/voices/bind endpoint
 ELEVENLABS_TO_LIVEAVATAR_VOICE_MAP: Dict[str, str] = {
     "RJs5YoIcR2WzF8qHIg1q": "14efbcf8-d01b-425c-8b82-9d6802616997",  # japan kyogoku ryu
 }
