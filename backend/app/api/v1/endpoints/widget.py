@@ -133,6 +133,9 @@ async def get_widget_config(
     )
     clips = [dict(r) for r in clips_result.mappings().all()]
 
+    # Filter out clips without a playable clip_url
+    clips = [c for c in clips if c.get("clip_url")]
+
     # Generate SAS URLs for clips if needed
     from app.services.storage_service import generate_read_sas_from_url
     for clip in clips:
