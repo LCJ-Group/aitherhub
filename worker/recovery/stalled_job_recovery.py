@@ -18,6 +18,7 @@ Usage:
     # ...
     recovery.stop()
 """
+import asyncio
 import os
 import sys
 import json
@@ -41,6 +42,30 @@ STALE_THRESHOLD = int(os.getenv("WORKER_STALE_THRESHOLD", "120"))
 MAX_ATTEMPTS = int(os.getenv("WORKER_MAX_ATTEMPTS", "3"))
 
 
+def _create_thread_local_engine():
+    """Create a dedicated async engine for the daemon thread.
+    
+    This avoids sharing the main thread's event loop and connection pool,
+    which causes 'event loop is already running' or 'attached to a different loop' errors.
+    """
+    from shared.config import DATABASE_URL, prepare_database_url
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL is not set.")
+
+    cleaned_url, connect_args = prepare_database_url(DATABASE_URL)
+    return create_async_engine(
+        cleaned_url,
+        pool_pre_ping=True,
+        pool_size=2,
+        max_overflow=3,
+        pool_recycle=300,
+        echo=False,
+        connect_args=connect_args,
+    )
+
+
 class StalledJobRecovery:
     """Background thread that detects and recovers stalled clip jobs."""
 
@@ -48,6 +73,8 @@ class StalledJobRecovery:
         self._stop_event = Event()
         self._thread: Thread | None = None
         self._worker_id = worker_id
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._engine = None
 
     def start(self):
         """Start the recovery background thread."""
@@ -70,31 +97,50 @@ class StalledJobRecovery:
         self._stop_event.set()
         if self._thread:
             self._thread.join(timeout=10)
+        # Cleanup the dedicated engine
+        if self._engine and self._loop and not self._loop.is_closed():
+            try:
+                self._loop.run_until_complete(self._engine.dispose())
+            except Exception:
+                pass
+            self._loop.close()
         logger.info("[recovery] Stopped")
 
     def _recovery_loop(self):
-        """Background loop: check for stalled jobs and recover them."""
+        """Background loop: check for stalled jobs and recover them.
+        
+        Creates a dedicated event loop and DB engine for this thread.
+        """
+        # Create a dedicated event loop for this thread
+        self._loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self._loop)
+
+        try:
+            self._engine = _create_thread_local_engine()
+        except Exception as e:
+            logger.error("[recovery] Failed to create DB engine: %s", e)
+            return
+
         while not self._stop_event.is_set():
             self._stop_event.wait(timeout=RECOVERY_CHECK_INTERVAL)
             if self._stop_event.is_set():
                 break
 
             try:
-                self._check_and_recover()
+                self._loop.run_until_complete(self._check_and_recover())
             except Exception as e:
                 logger.error("[recovery] Unexpected error: %s", e)
 
-    def _check_and_recover(self):
+    async def _check_and_recover(self):
         """Find stalled jobs and take recovery action."""
-        try:
-            from shared.db.session import get_session
-            from shared.schemas.clip_job import get_stale_clip_jobs
-            from sqlalchemy import text
-            import asyncio
+        from sqlalchemy.ext.asyncio import AsyncSession
+        from sqlalchemy.orm import sessionmaker
+        from sqlalchemy import text
 
-            # Use asyncio.run() instead of run_sync() because this runs in a
-            # separate daemon thread that doesn't share the main event loop
-            stale_jobs = asyncio.run(self._fetch_stale_jobs())
+        factory = sessionmaker(bind=self._engine, class_=AsyncSession, expire_on_commit=False)
+
+        try:
+            stale_jobs = await self._fetch_stale_jobs(factory)
 
             if not stale_jobs:
                 return
@@ -111,14 +157,14 @@ class StalledJobRecovery:
 
                 if attempt_count >= MAX_ATTEMPTS:
                     # Mark as dead — no more retries
-                    asyncio.run(self._mark_dead(clip_id, attempt_count, old_worker))
+                    await self._mark_dead(factory, clip_id, attempt_count, old_worker)
                     logger.error(
                         "[recovery] DEAD: clip=%s video=%s attempts=%d/%d (was on worker=%s)",
                         clip_id, video_id, attempt_count, MAX_ATTEMPTS, old_worker,
                     )
                 else:
                     # Mark as retrying — will be picked up by queue again
-                    asyncio.run(self._mark_retrying(clip_id, attempt_count, old_worker))
+                    await self._mark_retrying(factory, clip_id, attempt_count, old_worker)
                     self._re_enqueue_clip(clip_id, video_id, job.get("job_payload"))
                     logger.warning(
                         "[recovery] RETRY: clip=%s video=%s attempt=%d/%d (was on worker=%s)",
@@ -128,12 +174,11 @@ class StalledJobRecovery:
         except Exception as e:
             logger.error("[recovery] Failed to check stale jobs: %s", e)
 
-    async def _fetch_stale_jobs(self) -> list:
+    async def _fetch_stale_jobs(self, factory) -> list:
         """Fetch stalled jobs from DB."""
-        from shared.db.session import get_session
         from sqlalchemy import text
 
-        async with get_session() as session:
+        async with factory() as session:
             result = await session.execute(
                 text("""
                     SELECT id, video_id, worker_id, status,
@@ -150,12 +195,11 @@ class StalledJobRecovery:
             )
             return [dict(row._mapping) for row in result.fetchall()]
 
-    async def _mark_dead(self, clip_id: str, attempt_count: int, old_worker: str):
+    async def _mark_dead(self, factory, clip_id: str, attempt_count: int, old_worker: str):
         """Mark a clip job as dead (exhausted all retries)."""
-        from shared.db.session import get_session
         from sqlalchemy import text
 
-        async with get_session() as session:
+        async with factory() as session:
             await session.execute(
                 text("""
                     UPDATE video_clips
@@ -172,13 +216,13 @@ class StalledJobRecovery:
                            f"Last worker: {old_worker}. Marked dead by recovery.",
                 },
             )
+            await session.commit()
 
-    async def _mark_retrying(self, clip_id: str, attempt_count: int, old_worker: str):
+    async def _mark_retrying(self, factory, clip_id: str, attempt_count: int, old_worker: str):
         """Mark a clip job as retrying."""
-        from shared.db.session import get_session
         from sqlalchemy import text
 
-        async with get_session() as session:
+        async with factory() as session:
             await session.execute(
                 text("""
                     UPDATE video_clips
@@ -196,6 +240,7 @@ class StalledJobRecovery:
                            f"Attempt {attempt_count}/{MAX_ATTEMPTS}. Retrying.",
                 },
             )
+            await session.commit()
 
     def _re_enqueue_clip(self, clip_id: str, video_id: str, job_payload: dict = None):
         """Re-enqueue a clip job to the queue for retry.
