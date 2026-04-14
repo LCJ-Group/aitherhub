@@ -26,6 +26,19 @@ async function clipDbFetch(path, params = {}) {
   return res.json();
 }
 
+// ─── English → Japanese tag label mapping ───
+const TAG_LABEL_MAP = {
+  HOOK: "フック", EMPATHY: "共感", PROBLEM: "問題提起",
+  EDUCATION: "教育", SOLUTION: "解決策", DEMONSTRATION: "実演",
+  COMPARISON: "比較", PROOF: "証拠", TRUST: "信頼",
+  SOCIAL_PROOF: "社会的証明", OBJECTION_HANDLING: "反論処理",
+  URGENCY: "緊急性", LIMITED_OFFER: "限定オファー", BONUS: "特典",
+  CTA: "行動喚起", PRICE: "価格訴求", STORY: "ストーリー",
+};
+function getTagLabel(tag) {
+  return TAG_LABEL_MAP[tag] || tag;
+}
+
 // ─── Tag color mapping ───
 const TAG_COLORS = {
   "共感": { bg: "#FEF3C7", text: "#92400E", border: "#FDE68A" },
@@ -40,6 +53,24 @@ const TAG_COLORS = {
   "価格訴求": { bg: "#ECFDF5", text: "#047857", border: "#6EE7B7" },
   "問題提起": { bg: "#FFF1F2", text: "#9F1239", border: "#FDA4AF" },
   "解決提示": { bg: "#F0F9FF", text: "#0C4A6E", border: "#7DD3FC" },
+  // English key aliases (same colors mapped via Japanese label)
+  HOOK: { bg: "#F5F3FF", text: "#6D28D9", border: "#C4B5FD" },
+  EMPATHY: { bg: "#FEF3C7", text: "#92400E", border: "#FDE68A" },
+  PROBLEM: { bg: "#FFF1F2", text: "#9F1239", border: "#FDA4AF" },
+  EDUCATION: { bg: "#DBEAFE", text: "#1E40AF", border: "#93C5FD" },
+  SOLUTION: { bg: "#D1FAE5", text: "#065F46", border: "#6EE7B7" },
+  DEMONSTRATION: { bg: "#CCFBF1", text: "#0F766E", border: "#5EEAD4" },
+  COMPARISON: { bg: "#E0E7FF", text: "#3730A3", border: "#A5B4FC" },
+  PROOF: { bg: "#CFFAFE", text: "#155E75", border: "#67E8F9" },
+  TRUST: { bg: "#D1FAE5", text: "#065F46", border: "#6EE7B7" },
+  SOCIAL_PROOF: { bg: "#F0FDF4", text: "#166534", border: "#86EFAC" },
+  OBJECTION_HANDLING: { bg: "#FEF3C7", text: "#92400E", border: "#FDE68A" },
+  URGENCY: { bg: "#FFF7ED", text: "#9A3412", border: "#FDBA74" },
+  LIMITED_OFFER: { bg: "#FCE7F3", text: "#9D174D", border: "#F9A8D4" },
+  BONUS: { bg: "#ECFCCB", text: "#3F6212", border: "#BEF264" },
+  CTA: { bg: "#FEE2E2", text: "#991B1B", border: "#FCA5A5" },
+  PRICE: { bg: "#ECFDF5", text: "#047857", border: "#6EE7B7" },
+  STORY: { bg: "#FEE2E2", text: "#991B1B", border: "#FCA5A5" },
 };
 function getTagColor(tag) {
   return TAG_COLORS[tag] || { bg: "#F3F4F6", text: "#374151", border: "#D1D5DB" };
@@ -170,7 +201,7 @@ function ClipCard({ clip, onPlay }) {
                   className="px-1.5 py-0.5 rounded text-[10px] font-medium border"
                   style={{ backgroundColor: c.bg, color: c.text, borderColor: c.border }}
                 >
-                  {tag}
+                  {getTagLabel(tag)}
                 </span>
               );
             })}
@@ -270,10 +301,11 @@ function TopTagsChart({ tags }) {
           return (
             <div key={i} className="flex items-center gap-2">
               <span
-                className="text-[11px] font-medium w-20 text-right px-1.5 py-0.5 rounded border shrink-0"
+                className="text-[11px] font-medium w-24 text-right px-1.5 py-0.5 rounded border shrink-0"
                 style={{ backgroundColor: c.bg, color: c.text, borderColor: c.border }}
+                title={t.tag}
               >
-                {t.tag}
+                {getTagLabel(t.tag)}
               </span>
               <div className="flex-1 h-5 bg-gray-100 rounded-full overflow-hidden">
                 <div
@@ -317,7 +349,7 @@ function VideoPlayerModal({ clip, onClose }) {
   if (!clip) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
-      <div className="relative max-w-sm w-full mx-4" onClick={(e) => e.stopPropagation()}>
+      <div className="relative max-w-md w-full mx-4" onClick={(e) => e.stopPropagation()}>
         <button
           onClick={onClose}
           className="absolute -top-10 right-0 text-white hover:text-gray-300 transition"
@@ -329,7 +361,8 @@ function VideoPlayerModal({ clip, onClose }) {
             src={clip.clip_url}
             controls
             autoPlay
-            className="w-full aspect-[9/16]"
+            playsInline
+            className="w-full aspect-[9/16] max-h-[80vh]"
           />
           <div className="p-3 bg-gray-900 text-white">
             <div className="flex items-center justify-between mb-1">
@@ -337,13 +370,13 @@ function VideoPlayerModal({ clip, onClose }) {
               <span className="text-sm font-bold text-green-400">{formatGMV(clip.gmv)}</span>
             </div>
             {clip.transcript_text && (
-              <p className="text-[11px] text-gray-400 line-clamp-3">{clip.transcript_text}</p>
+              <p className="text-[11px] text-gray-400 leading-relaxed">{clip.transcript_text}</p>
             )}
             {(clip.tags || []).length > 0 && (
               <div className="flex flex-wrap gap-1 mt-2">
                 {clip.tags.map((tag, i) => (
                   <span key={i} className="px-1.5 py-0.5 rounded text-[10px] bg-white/10 text-white/80">
-                    {tag}
+                    {getTagLabel(tag)}
                   </span>
                 ))}
               </div>

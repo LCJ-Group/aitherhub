@@ -1014,11 +1014,26 @@ function ClipDBStatsSection() {
 
   if (!clipStats) return null;
 
+  const TAG_LABEL_MAP = {
+    HOOK: 'フック', EMPATHY: '共感', PROBLEM: '問題提起',
+    EDUCATION: '教育', SOLUTION: '解決策', DEMONSTRATION: '実演',
+    COMPARISON: '比較', PROOF: '証拠', TRUST: '信頼',
+    SOCIAL_PROOF: '社会的証明', OBJECTION_HANDLING: '反論処理',
+    URGENCY: '緊急性', LIMITED_OFFER: '限定オファー', BONUS: '特典',
+    CTA: '行動喚起', PRICE: '価格訴求', STORY: 'ストーリー',
+  };
   const TAG_COLORS = {
     '共感': '#92400E', '権威': '#1E40AF', '限定性': '#9D174D',
     '実演': '#065F46', '比較': '#3730A3', 'ストーリー': '#991B1B',
     'テンション': '#9A3412', '緊急性': '#854D0E', '社会的証明': '#166534',
     '価格訴求': '#047857', '問題提起': '#9F1239', '解決提示': '#0C4A6E',
+    // English key aliases
+    HOOK: '#6D28D9', EMPATHY: '#92400E', PROBLEM: '#9F1239',
+    EDUCATION: '#1E40AF', SOLUTION: '#065F46', DEMONSTRATION: '#0F766E',
+    COMPARISON: '#3730A3', PROOF: '#155E75', TRUST: '#065F46',
+    SOCIAL_PROOF: '#166534', OBJECTION_HANDLING: '#92400E',
+    URGENCY: '#9A3412', LIMITED_OFFER: '#9D174D', BONUS: '#3F6212',
+    CTA: '#991B1B', PRICE: '#047857', STORY: '#991B1B',
   };
 
   return (
@@ -1048,7 +1063,7 @@ function ClipDBStatsSection() {
                   className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border"
                   style={{ color, backgroundColor: color + '12', borderColor: color + '30' }}
                 >
-                  {t.tag}
+                  {TAG_LABEL_MAP[t.tag] || t.tag}
                   <span className="text-[10px] opacity-60">{t.count}</span>
                 </span>
               );
