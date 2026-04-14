@@ -1,9 +1,9 @@
 /**
- * AitherHub Widget Loader v2.2 — TikTok-Style Fullscreen Feed
+ * AitherHub Widget Loader v2.3 — TikTok-Style Fullscreen Feed + Product Card
  *
  * GTM経由で配信される軽量エントリーポイント。
  * 先方のECサイトに1行のタグを追加するだけで、
- * TikTok風フルスクリーン縦型動画フィード + 3つの悪魔的ハックを展開する。
+ * TikTok風フルスクリーン縦型動画フィード + 商品カード + CTAボタンを展開する。
  *
  * Usage (GTM Custom HTML):
  *   <script src="https://www.aitherhub.com/widget/loader.js" data-client-id="YOUR_ID" async></script>
@@ -13,16 +13,20 @@
  *   - Tap → fullscreen TikTok-style vertical video feed overlay
  *   - Swipe up/down (touch) or scroll/arrow keys to navigate videos
  *   - Right-side action buttons (like, share, mute)
- *   - Bottom product info + CTA "購入する" button
+ *   - Bottom product info card with image, name, price
+ *   - Dual CTA: "カートに入れる" + "購入する" buttons
+ *   - UTM parameter tracking for GA4 conversion attribution
  *   - SaaS: brand name/logo/theme color from API config
  *   - Hack 1: DOM auto-parse (page scraping)
  *   - Hack 2: In-video CTA action
  *   - Hack 3: Shadow Tracking (localStorage session)
  *
- * v2.2 Changes:
- *   - Client-side filtering of clips without valid clip_url
- *   - FAB bubble shows auto-playing muted video preview
- *   - Improved mobile autoplay support (autoplay attr, touch fallback)
+ * v2.3 Changes:
+ *   - Product card with image, name, price overlay on fullscreen video
+ *   - Dual CTA buttons: "カートに入れる" + "購入する"
+ *   - UTM parameters (utm_source=aitherhub, utm_medium=widget, utm_campaign=video_cta)
+ *   - product_click / add_to_cart / purchase_click tracking events
+ *   - Graceful fallback: no product info → single CTA button (v2.2 behavior)
  */
 (function () {
   "use strict";
@@ -123,6 +127,16 @@
     });
   }
 
+  // ── UTM helper ──
+  function addUtmParams(url, clipId, action) {
+    if (!url) return url;
+    var sep = url.indexOf("?") === -1 ? "?" : "&";
+    return url + sep +
+      "utm_source=aitherhub&utm_medium=widget&utm_campaign=video_cta" +
+      "&utm_content=" + encodeURIComponent(clipId || "") +
+      "&utm_term=" + encodeURIComponent(action || "click");
+  }
+
   // ── Conversion detection ──
   function checkConversionPage() {
     var url = window.location.href.toLowerCase();
@@ -174,6 +188,7 @@
     volumeOn: '<svg viewBox="0 0 24 24" fill="white"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>',
     volumeOff: '<svg viewBox="0 0 24 24" fill="white"><path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/></svg>',
     cart: '<svg viewBox="0 0 24 24" fill="white"><path d="M7 18c-1.1 0-1.99.9-1.99 2S5.9 22 7 22s2-.9 2-2-.9-2-2-2zM1 2v2h2l3.6 7.59-1.35 2.45c-.16.28-.25.61-.25.96 0 1.1.9 2 2 2h12v-2H7.42c-.14 0-.25-.11-.25-.25l.03-.12.9-1.63h7.45c.75 0 1.41-.41 1.75-1.03l3.58-6.49c.08-.14.12-.31.12-.48 0-.55-.45-1-1-1H5.21l-.94-2H1zm16 16c-1.1 0-1.99.9-1.99 2s.89 2 1.99 2 2-.9 2-2-.9-2-2-2z"/></svg>',
+    bag: '<svg viewBox="0 0 24 24" fill="white"><path d="M18 6h-2c0-2.21-1.79-4-4-4S8 3.79 8 6H6c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-6-2c1.1 0 2 .9 2 2h-4c0-1.1.9-2 2-2zm6 16H6V8h2v2c0 .55.45 1 1 1s1-.45 1-1V8h4v2c0 .55.45 1 1 1s1-.45 1-1V8h2v12z"/></svg>',
     chevronUp: '<svg viewBox="0 0 24 24" fill="white"><path d="M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z"/></svg>',
     chevronDown: '<svg viewBox="0 0 24 24" fill="white"><path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6z"/></svg>',
   };
@@ -226,21 +241,19 @@
       .ath-fab video { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; pointer-events: none; }\
       .ath-fab-play-overlay {\
         position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);\
-        width: 22px; height: 22px; opacity: 0.85; pointer-events: none;\
+        width: 20px; height: 20px; opacity: 0.9; pointer-events: none;\
         filter: drop-shadow(0 1px 3px rgba(0,0,0,0.5));\
       }\
-      .ath-fab .ath-badge {\
+      .ath-badge {\
         position: absolute; top: -4px; right: -4px;\
-        min-width: 22px; height: 22px; padding: 0 6px;\
-        background: #FF3B30; border-radius: 11px;\
-        color: white; font-size: 11px; font-weight: 700;\
+        background: #FF3B30; color: white; font-size: 10px; font-weight: 700;\
+        min-width: 18px; height: 18px; border-radius: 9px;\
         display: flex; align-items: center; justify-content: center;\
-        font-family: "Noto Sans JP", -apple-system, sans-serif;\
-        border: 2px solid white;\
+        padding: 0 4px; border: 2px solid white;\
       }\
       @keyframes ath-pulse {\
         0%, 100% { box-shadow: 0 4px 24px rgba(0,0,0,0.35); }\
-        50% { box-shadow: 0 4px 24px rgba(0,0,0,0.35), 0 0 0 10px ' + themeColor + '30; }\
+        50% { box-shadow: 0 4px 24px rgba(0,0,0,0.35), 0 0 0 8px ' + themeColor + '33; }\
       }\
       \
       /* ── Fullscreen Overlay ── */\
@@ -248,191 +261,269 @@
         position: fixed;\
         top: 0; left: 0; right: 0; bottom: 0;\
         background: #000;\
+        z-index: 2147483647;\
         pointer-events: auto;\
         display: none;\
-        z-index: 2147483647;\
-        overflow: hidden;\
-        font-family: "Noto Sans JP", -apple-system, BlinkMacSystemFont, "Hiragino Sans", sans-serif;\
+        font-family: "Noto Sans JP", -apple-system, BlinkMacSystemFont, sans-serif;\
+        -webkit-font-smoothing: antialiased;\
+        user-select: none;\
+        -webkit-user-select: none;\
       }\
       .ath-overlay.active { display: block; }\
       \
-      /* ── Feed Container ── */\
+      /* ── Header ── */\
+      .ath-header {\
+        position: absolute;\
+        top: 0; left: 0; right: 0;\
+        height: 56px;\
+        display: flex;\
+        align-items: center;\
+        justify-content: space-between;\
+        padding: 0 16px;\
+        z-index: 20;\
+        background: linear-gradient(to bottom, rgba(0,0,0,0.5), transparent);\
+      }\
+      .ath-brand {\
+        display: flex;\
+        align-items: center;\
+        gap: 8px;\
+        color: white;\
+        font-size: 14px;\
+        font-weight: 700;\
+      }\
+      .ath-brand-logo { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; }\
+      .ath-close-btn {\
+        width: 36px; height: 36px;\
+        background: rgba(255,255,255,0.15);\
+        border: none; border-radius: 50%;\
+        cursor: pointer;\
+        display: flex; align-items: center; justify-content: center;\
+        backdrop-filter: blur(8px);\
+        -webkit-backdrop-filter: blur(8px);\
+        transition: background 0.2s;\
+      }\
+      .ath-close-btn:hover { background: rgba(255,255,255,0.25); }\
+      .ath-close-btn svg { width: 20px; height: 20px; }\
+      \
+      /* ── Feed ── */\
       .ath-feed {\
         position: absolute;\
         top: 0; left: 0; right: 0; bottom: 0;\
         overflow: hidden;\
+        z-index: 5;\
       }\
       .ath-slide {\
         position: absolute;\
         top: 0; left: 0;\
         width: 100%; height: 100%;\
-        will-change: transform;\
-      }\
-      .ath-slide-inner {\
-        width: 100%; height: 100%;\
-        position: relative;\
-        background: #000;\
         display: flex;\
         align-items: center;\
         justify-content: center;\
+        will-change: transform;\
       }\
-      \
-      /* ── Video ── */\
+      .ath-slide-inner {\
+        position: relative;\
+        width: 100%; height: 100%;\
+        display: flex;\
+        align-items: center;\
+        justify-content: center;\
+        background: #000;\
+      }\
       .ath-video {\
         width: 100%; height: 100%;\
         object-fit: contain;\
         background: #000;\
       }\
       \
-      /* ── Header ── */\
-      .ath-header {\
+      /* ── Play/Pause indicator ── */\
+      .ath-play-indicator {\
         position: absolute;\
-        top: 0; left: 0; right: 0;\
-        padding: 12px 16px;\
-        padding-top: max(env(safe-area-inset-top, 12px), 12px);\
-        display: flex;\
-        align-items: center;\
-        justify-content: space-between;\
-        z-index: 20;\
-        background: linear-gradient(to bottom, rgba(0,0,0,0.6) 0%, transparent 100%);\
-        pointer-events: none;\
-      }\
-      .ath-header > * { pointer-events: auto; }\
-      .ath-brand {\
-        display: flex;\
-        align-items: center;\
-        gap: 8px;\
-        color: white;\
-        font-weight: 700;\
-        font-size: 16px;\
-        text-shadow: 0 1px 4px rgba(0,0,0,0.5);\
-      }\
-      .ath-brand-logo {\
-        width: 32px; height: 32px;\
+        top: 50%; left: 50%;\
+        transform: translate(-50%, -50%) scale(0.5);\
+        width: 64px; height: 64px;\
+        background: rgba(0,0,0,0.5);\
         border-radius: 50%;\
-        object-fit: cover;\
-        border: 2px solid rgba(255,255,255,0.3);\
-      }\
-      .ath-close-btn {\
-        width: 40px; height: 40px;\
-        border-radius: 50%;\
-        background: rgba(255,255,255,0.15);\
-        backdrop-filter: blur(10px);\
-        -webkit-backdrop-filter: blur(10px);\
-        border: none;\
-        cursor: pointer;\
         display: flex;\
         align-items: center;\
         justify-content: center;\
-        transition: background 0.2s;\
+        opacity: 0;\
+        transition: opacity 0.2s, transform 0.2s;\
+        z-index: 15;\
+        pointer-events: none;\
       }\
-      .ath-close-btn:hover { background: rgba(255,255,255,0.3); }\
-      .ath-close-btn svg { width: 22px; height: 22px; }\
+      .ath-play-indicator svg { width: 32px; height: 32px; }\
+      .ath-play-indicator.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }\
       \
-      /* ── Right Action Buttons ── */\
+      /* ── Right-side actions ── */\
       .ath-actions {\
         position: absolute;\
         right: 12px;\
-        bottom: 160px;\
+        bottom: 260px;\
         display: flex;\
         flex-direction: column;\
-        align-items: center;\
-        gap: 20px;\
-        z-index: 15;\
+        gap: 16px;\
+        z-index: 20;\
+        pointer-events: auto;\
       }\
       .ath-action-btn {\
         display: flex;\
         flex-direction: column;\
         align-items: center;\
-        gap: 4px;\
-        cursor: pointer;\
-        border: none;\
+        gap: 2px;\
         background: none;\
-        padding: 0;\
+        border: none;\
+        cursor: pointer;\
+        color: white;\
+        filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));\
       }\
       .ath-action-icon {\
-        width: 48px; height: 48px;\
-        border-radius: 50%;\
-        background: rgba(0,0,0,0.3);\
-        backdrop-filter: blur(8px);\
-        -webkit-backdrop-filter: blur(8px);\
+        width: 36px; height: 36px;\
+        display: flex; align-items: center; justify-content: center;\
+        transition: transform 0.2s;\
+      }\
+      .ath-action-icon svg { width: 28px; height: 28px; }\
+      .ath-action-icon.liked { animation: ath-like-pop 0.4s ease; }\
+      @keyframes ath-like-pop {\
+        0% { transform: scale(1); }\
+        50% { transform: scale(1.4); }\
+        100% { transform: scale(1); }\
+      }\
+      .ath-action-label {\
+        font-size: 10px;\
+        color: rgba(255,255,255,0.8);\
+      }\
+      \
+      /* ── Video counter ── */\
+      .ath-counter {\
+        position: absolute;\
+        top: 60px; right: 16px;\
+        color: rgba(255,255,255,0.7);\
+        font-size: 12px;\
+        font-weight: 500;\
+        z-index: 20;\
+        pointer-events: none;\
+      }\
+      \
+      /* ── Bottom area (product card + CTA) ── */\
+      .ath-bottom {\
+        position: absolute;\
+        bottom: 0; left: 0; right: 0;\
+        padding: 0 12px 20px;\
+        z-index: 20;\
+        pointer-events: auto;\
+        background: linear-gradient(to top, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0.4) 60%, transparent 100%);\
+      }\
+      \
+      /* ── Product Card ── */\
+      .ath-product-card {\
+        display: flex;\
+        align-items: center;\
+        gap: 10px;\
+        background: rgba(255,255,255,0.12);\
+        backdrop-filter: blur(12px);\
+        -webkit-backdrop-filter: blur(12px);\
+        border-radius: 12px;\
+        padding: 10px;\
+        margin-bottom: 10px;\
+        border: 1px solid rgba(255,255,255,0.15);\
+        cursor: pointer;\
+        transition: background 0.2s;\
+      }\
+      .ath-product-card:active { background: rgba(255,255,255,0.2); }\
+      .ath-product-img {\
+        width: 56px; height: 56px;\
+        border-radius: 8px;\
+        object-fit: cover;\
+        flex-shrink: 0;\
+        background: rgba(255,255,255,0.1);\
+      }\
+      .ath-product-info {\
+        flex: 1;\
+        min-width: 0;\
+      }\
+      .ath-product-name {\
+        color: white;\
+        font-size: 13px;\
+        font-weight: 600;\
+        line-height: 1.3;\
+        display: -webkit-box;\
+        -webkit-line-clamp: 2;\
+        -webkit-box-orient: vertical;\
+        overflow: hidden;\
+      }\
+      .ath-product-price {\
+        color: ' + themeColor + ';\
+        font-size: 15px;\
+        font-weight: 900;\
+        margin-top: 2px;\
+      }\
+      \
+      /* ── CTA Buttons ── */\
+      .ath-cta-wrap {\
+        display: flex;\
+        gap: 8px;\
+        margin-bottom: 8px;\
+      }\
+      .ath-cta {\
+        flex: 1;\
+        height: 44px;\
+        border: none;\
+        border-radius: 22px;\
+        font-size: 14px;\
+        font-weight: 700;\
+        cursor: pointer;\
         display: flex;\
         align-items: center;\
         justify-content: center;\
-        transition: transform 0.2s, background 0.2s;\
-      }\
-      .ath-action-icon:active { transform: scale(0.9); }\
-      .ath-action-icon svg { width: 26px; height: 26px; }\
-      .ath-action-label {\
-        color: white;\
-        font-size: 11px;\
-        font-weight: 500;\
-        text-shadow: 0 1px 3px rgba(0,0,0,0.5);\
-      }\
-      .ath-action-icon.liked { background: rgba(255,45,85,0.8); }\
-      \
-      /* ── Bottom Info ── */\
-      .ath-bottom {\
-        position: absolute;\
-        bottom: 0; left: 0; right: 70px;\
-        padding: 0 16px 24px;\
-        padding-bottom: max(env(safe-area-inset-bottom, 24px), 24px);\
-        z-index: 15;\
-        background: linear-gradient(to top, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0.3) 60%, transparent 100%);\
-        pointer-events: none;\
-      }\
-      .ath-bottom > * { pointer-events: auto; }\
-      \
-      /* ── CTA Button ── */\
-      .ath-cta-wrap {\
-        margin-bottom: 12px;\
-      }\
-      .ath-cta {\
-        display: inline-flex;\
-        align-items: center;\
-        gap: 8px;\
-        padding: 10px 20px;\
-        border-radius: 24px;\
-        background: ' + themeColor + ';\
-        color: white;\
-        border: none;\
-        cursor: pointer;\
-        font-size: 15px;\
-        font-weight: 700;\
-        font-family: inherit;\
-        transition: transform 0.2s, opacity 0.2s;\
-        box-shadow: 0 4px 16px rgba(0,0,0,0.3);\
+        gap: 6px;\
+        transition: transform 0.15s, opacity 0.15s;\
         pointer-events: auto;\
       }\
       .ath-cta:active { transform: scale(0.96); }\
-      .ath-cta svg { width: 18px; height: 18px; flex-shrink: 0; }\
-      \
-      /* ── Video Info ── */\
-      .ath-info {\
+      .ath-cta svg { width: 18px; height: 18px; }\
+      .ath-cta-cart {\
+        background: rgba(255,255,255,0.2);\
         color: white;\
-        text-shadow: 0 1px 4px rgba(0,0,0,0.6);\
+        border: 1px solid rgba(255,255,255,0.3);\
+        backdrop-filter: blur(8px);\
+        -webkit-backdrop-filter: blur(8px);\
+      }\
+      .ath-cta-cart:hover { background: rgba(255,255,255,0.3); }\
+      .ath-cta-buy {\
+        background: ' + themeColor + ';\
+        color: white;\
+        box-shadow: 0 4px 16px ' + themeColor + '66;\
+      }\
+      .ath-cta-buy:hover { opacity: 0.9; }\
+      .ath-cta-single {\
+        background: ' + themeColor + ';\
+        color: white;\
+        box-shadow: 0 4px 16px ' + themeColor + '66;\
+      }\
+      .ath-cta-single:hover { opacity: 0.9; }\
+      \
+      /* ── Info (fallback when no product) ── */\
+      .ath-info {\
+        padding: 4px 0;\
       }\
       .ath-info-title {\
-        font-size: 15px;\
+        color: white;\
+        font-size: 14px;\
         font-weight: 700;\
-        line-height: 1.4;\
-        margin-bottom: 4px;\
-        display: -webkit-box;\
-        -webkit-line-clamp: 2;\
-        -webkit-box-orient: vertical;\
-        overflow: hidden;\
+        text-shadow: 0 1px 4px rgba(0,0,0,0.5);\
       }\
       .ath-info-desc {\
-        font-size: 13px;\
-        opacity: 0.85;\
-        line-height: 1.5;\
+        color: rgba(255,255,255,0.7);\
+        font-size: 12px;\
+        margin-top: 4px;\
         display: -webkit-box;\
         -webkit-line-clamp: 2;\
         -webkit-box-orient: vertical;\
         overflow: hidden;\
+        text-shadow: 0 1px 3px rgba(0,0,0,0.4);\
       }\
       \
-      /* ── Progress Bar ── */\
+      /* ── Progress bar ── */\
       .ath-progress-wrap {\
         position: absolute;\
         bottom: 0; left: 0; right: 0;\
@@ -440,64 +531,24 @@
         background: rgba(255,255,255,0.2);\
         z-index: 25;\
         cursor: pointer;\
-        transition: height 0.15s;\
+        pointer-events: auto;\
       }\
-      .ath-progress-wrap:hover { height: 6px; }\
       .ath-progress-bar {\
         height: 100%;\
         background: ' + themeColor + ';\
-        border-radius: 0 2px 2px 0;\
-        transition: width 0.1s linear;\
         width: 0%;\
+        transition: width 0.1s linear;\
       }\
-      \
-      /* ── Video Counter ── */\
-      .ath-counter {\
-        position: absolute;\
-        top: 50%;\
-        right: 12px;\
-        transform: translateY(80px);\
-        color: white;\
-        font-size: 12px;\
-        font-weight: 600;\
-        text-shadow: 0 1px 3px rgba(0,0,0,0.5);\
-        z-index: 15;\
-        text-align: center;\
-      }\
-      \
-      /* ── Play/Pause indicator ── */\
-      .ath-play-indicator {\
-        position: absolute;\
-        top: 50%; left: 50%;\
-        transform: translate(-50%, -50%) scale(0);\
-        width: 72px; height: 72px;\
-        border-radius: 50%;\
-        background: rgba(0,0,0,0.5);\
-        display: flex;\
-        align-items: center;\
-        justify-content: center;\
-        z-index: 30;\
-        pointer-events: none;\
-        opacity: 0;\
-        transition: transform 0.2s, opacity 0.2s;\
-      }\
-      .ath-play-indicator.show {\
-        transform: translate(-50%, -50%) scale(1);\
-        opacity: 1;\
-      }\
-      .ath-play-indicator svg { width: 36px; height: 36px; }\
       \
       /* ── Speed indicator ── */\
       .ath-speed-indicator {\
         position: absolute;\
-        top: 80px; left: 50%;\
+        top: 70px; left: 50%;\
         transform: translateX(-50%);\
         background: rgba(0,0,0,0.6);\
-        backdrop-filter: blur(10px);\
-        -webkit-backdrop-filter: blur(10px);\
-        border-radius: 20px;\
-        padding: 6px 16px;\
         color: white;\
+        padding: 6px 14px;\
+        border-radius: 20px;\
         font-size: 13px;\
         font-weight: 700;\
         z-index: 30;\
@@ -702,18 +753,53 @@
     counter.className = "ath-counter";
     overlay.appendChild(counter);
 
-    // Bottom info area
+    // Bottom area (product card + CTA)
     var bottom = document.createElement("div");
     bottom.className = "ath-bottom";
 
+    // Product card (will be shown/hidden per clip)
+    var productCard = document.createElement("div");
+    productCard.className = "ath-product-card";
+    productCard.style.display = "none";
+    var productImg = document.createElement("img");
+    productImg.className = "ath-product-img";
+    productCard.appendChild(productImg);
+    var productInfo = document.createElement("div");
+    productInfo.className = "ath-product-info";
+    var productName = document.createElement("div");
+    productName.className = "ath-product-name";
+    var productPrice = document.createElement("div");
+    productPrice.className = "ath-product-price";
+    productInfo.appendChild(productName);
+    productInfo.appendChild(productPrice);
+    productCard.appendChild(productInfo);
+    bottom.appendChild(productCard);
+
+    // CTA buttons wrap
     var ctaWrap = document.createElement("div");
     ctaWrap.className = "ath-cta-wrap";
-    var ctaBtn = document.createElement("button");
-    ctaBtn.className = "ath-cta";
-    ctaBtn.innerHTML = ICONS.cart + '<span>' + ctaText + '</span>';
-    ctaWrap.appendChild(ctaBtn);
+
+    // Cart button (shown when product_cart_url or product_url exists)
+    var cartBtn = document.createElement("button");
+    cartBtn.className = "ath-cta ath-cta-cart";
+    cartBtn.innerHTML = ICONS.cart + '<span>カートに入れる</span>';
+
+    // Buy button (shown when product_url exists)
+    var buyBtn = document.createElement("button");
+    buyBtn.className = "ath-cta ath-cta-buy";
+    buyBtn.innerHTML = ICONS.bag + '<span>' + ctaText + '</span>';
+
+    // Single CTA (fallback when no product info)
+    var singleCta = document.createElement("button");
+    singleCta.className = "ath-cta ath-cta-single";
+    singleCta.innerHTML = ICONS.cart + '<span>' + ctaText + '</span>';
+
+    ctaWrap.appendChild(cartBtn);
+    ctaWrap.appendChild(buyBtn);
+    ctaWrap.appendChild(singleCta);
     bottom.appendChild(ctaWrap);
 
+    // Info area (title + description, always shown)
     var info = document.createElement("div");
     info.className = "ath-info";
     var infoTitle = document.createElement("div");
@@ -747,6 +833,68 @@
     overlay.appendChild(powered);
 
     shadow.appendChild(overlay);
+
+    // ── Helper: Check if clip has product info ──
+    function hasProductInfo(clip) {
+      return clip.product_url || clip.product_cart_url || clip.product_name || clip.product_price;
+    }
+
+    // ── Helper: Update product card and CTA buttons for current clip ──
+    function updateProductUI(clip) {
+      var hasProd = hasProductInfo(clip);
+
+      if (hasProd) {
+        // Show product card if we have name or price
+        if (clip.product_name || clip.product_price) {
+          productCard.style.display = "flex";
+          productName.textContent = clip.product_name || "";
+          productPrice.textContent = clip.product_price || "";
+          if (clip.product_image_url) {
+            productImg.src = clip.product_image_url;
+            productImg.style.display = "block";
+          } else {
+            productImg.style.display = "none";
+          }
+        } else {
+          productCard.style.display = "none";
+        }
+
+        // Show dual CTA buttons
+        var cartUrl = clip.product_cart_url || clip.product_url;
+        var buyUrl = clip.product_url;
+
+        if (cartUrl && buyUrl && cartUrl !== buyUrl) {
+          // Both cart and buy URLs are different → show both
+          cartBtn.style.display = "flex";
+          buyBtn.style.display = "flex";
+          singleCta.style.display = "none";
+        } else {
+          // Only one URL → show single buy button
+          cartBtn.style.display = "none";
+          buyBtn.style.display = "flex";
+          singleCta.style.display = "none";
+          buyBtn.innerHTML = ICONS.bag + '<span>' + ctaText + (clip.product_name ? ' · ' + clip.product_name : '') + '</span>';
+        }
+
+        // Track product view
+        trackEvent("product_view", {
+          clip_id: clip.clip_id,
+          product_name: clip.product_name,
+          product_price: clip.product_price,
+        });
+      } else {
+        // No product info → hide product card, show single CTA (v2.2 behavior)
+        productCard.style.display = "none";
+        cartBtn.style.display = "none";
+        buyBtn.style.display = "none";
+        singleCta.style.display = "flex";
+        if (clip.product_name) {
+          singleCta.innerHTML = ICONS.cart + '<span>' + ctaText + ' · ' + clip.product_name + '</span>';
+        } else {
+          singleCta.innerHTML = ICONS.cart + '<span>' + ctaText + '</span>';
+        }
+      }
+    }
 
     // ── Helper: Update slide positions ──
     function updateSlidePositions(animate) {
@@ -805,12 +953,8 @@
       counter.textContent = (currentIndex + 1) + " / " + clips.length;
       progressBar.style.width = "0%";
 
-      // CTA text with product name
-      if (clip.product_name) {
-        ctaBtn.innerHTML = ICONS.cart + '<span>' + ctaText + ' \u00B7 ' + clip.product_name + '</span>';
-      } else {
-        ctaBtn.innerHTML = ICONS.cart + '<span>' + ctaText + '</span>';
-      }
+      // Update product card and CTA buttons
+      updateProductUI(clip);
 
       // Track
       trackEvent("video_play", { clip_id: clip.clip_id, clip_index: currentIndex });
@@ -944,7 +1088,7 @@
     feed.addEventListener("click", function (e) {
       if (isSpeedUp) return;
       // Ignore if clicking on buttons
-      if (e.target.closest && (e.target.closest(".ath-action-btn") || e.target.closest(".ath-cta") || e.target.closest(".ath-close-btn"))) return;
+      if (e.target.closest && (e.target.closest(".ath-action-btn") || e.target.closest(".ath-cta") || e.target.closest(".ath-close-btn") || e.target.closest(".ath-product-card"))) return;
 
       var video = videoElements[currentIndex];
       if (!video) return;
@@ -1072,8 +1216,78 @@
       updateMuteButton();
     });
 
-    // ── Hack 2: CTA Click ──
-    ctaBtn.addEventListener("click", function (e) {
+    // ── Product card click → navigate to product page ──
+    productCard.addEventListener("click", function (e) {
+      e.stopPropagation();
+      var clip = clips[currentIndex];
+      if (!clip.product_url) return;
+      trackEvent("product_click", {
+        clip_id: clip.clip_id,
+        product_name: clip.product_name,
+        product_price: clip.product_price,
+      });
+      var targetUrl = addUtmParams(clip.product_url, clip.clip_id, "product_card");
+      window.open(targetUrl, "_blank");
+    });
+
+    // ── CTA: Cart button ──
+    cartBtn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      var clip = clips[currentIndex];
+      trackEvent("add_to_cart", {
+        clip_id: clip.clip_id,
+        product_name: clip.product_name,
+        product_price: clip.product_price,
+        video_time: videoElements[currentIndex] ? videoElements[currentIndex].currentTime : 0,
+      });
+
+      // Strategy 1: DOM manipulation (add to cart via CSS selector)
+      if (config.cart_selector) {
+        try {
+          var domCartBtn = document.querySelector(config.cart_selector);
+          if (domCartBtn) {
+            domCartBtn.click();
+            cartBtn.innerHTML = '<span>&#10003; カートに追加しました</span>';
+            setTimeout(function () {
+              cartBtn.innerHTML = ICONS.cart + '<span>カートに入れる</span>';
+            }, 2000);
+            return;
+          }
+        } catch (err) { }
+      }
+
+      // Strategy 2: Navigate to cart URL
+      var cartUrl = clip.product_cart_url || clip.product_url;
+      if (cartUrl) {
+        var targetUrl = addUtmParams(cartUrl, clip.clip_id, "add_to_cart");
+        window.open(targetUrl, "_blank");
+      }
+    });
+
+    // ── CTA: Buy button ──
+    buyBtn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      var clip = clips[currentIndex];
+      trackEvent("purchase_click", {
+        clip_id: clip.clip_id,
+        product_name: clip.product_name,
+        product_price: clip.product_price,
+        video_time: videoElements[currentIndex] ? videoElements[currentIndex].currentTime : 0,
+      });
+
+      var targetUrl = clip.product_url;
+      if (targetUrl) {
+        targetUrl = addUtmParams(targetUrl, clip.clip_id, "purchase");
+        window.open(targetUrl, "_blank");
+      } else if (config.cta_url_template) {
+        targetUrl = config.cta_url_template.replace("{product}", encodeURIComponent(clip.product_name || ""));
+        targetUrl = addUtmParams(targetUrl, clip.clip_id, "purchase");
+        window.location.href = targetUrl;
+      }
+    });
+
+    // ── CTA: Single button (fallback, v2.2 behavior) ──
+    singleCta.addEventListener("click", function (e) {
       e.stopPropagation();
       var clip = clips[currentIndex];
       trackEvent("cta_click", {
@@ -1085,13 +1299,13 @@
       // Strategy 1: DOM manipulation (add to cart)
       if (config.cart_selector) {
         try {
-          var cartBtn = document.querySelector(config.cart_selector);
-          if (cartBtn) {
-            cartBtn.click();
-            ctaBtn.innerHTML = '<span>&#10003; カートに追加しました</span>';
+          var domCartBtn = document.querySelector(config.cart_selector);
+          if (domCartBtn) {
+            domCartBtn.click();
+            singleCta.innerHTML = '<span>&#10003; カートに追加しました</span>';
             setTimeout(function () {
               var clip2 = clips[currentIndex];
-              ctaBtn.innerHTML = ICONS.cart + '<span>' + ctaText + (clip2.product_name ? ' \u00B7 ' + clip2.product_name : '') + '</span>';
+              singleCta.innerHTML = ICONS.cart + '<span>' + ctaText + (clip2.product_name ? ' · ' + clip2.product_name : '') + '</span>';
             }, 2000);
             return;
           }
@@ -1103,6 +1317,7 @@
         ? config.cta_url_template.replace("{product}", encodeURIComponent(clip.product_name || ""))
         : (clip.product_url || window.location.href);
       if (targetUrl && targetUrl !== window.location.href) {
+        targetUrl = addUtmParams(targetUrl, clip.clip_id, "cta_click");
         window.location.href = targetUrl;
       }
     });

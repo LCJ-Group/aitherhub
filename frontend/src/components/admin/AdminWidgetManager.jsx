@@ -16,6 +16,16 @@ export default function AdminWidgetManager({ adminKey }) {
   const [clipAssignments, setClipAssignments] = useState([]);
   const [newClipId, setNewClipId] = useState("");
   const [newPagePattern, setNewPagePattern] = useState("");
+  // Product info fields for clip assignment
+  const [newProductName, setNewProductName] = useState("");
+  const [newProductPrice, setNewProductPrice] = useState("");
+  const [newProductImageUrl, setNewProductImageUrl] = useState("");
+  const [newProductUrl, setNewProductUrl] = useState("");
+  const [newProductCartUrl, setNewProductCartUrl] = useState("");
+  const [showProductFields, setShowProductFields] = useState(false);
+  // Editing existing clip product info
+  const [editingClipId, setEditingClipId] = useState(null);
+  const [editProductForm, setEditProductForm] = useState({});
 
   // Form state
   const [form, setForm] = useState({
@@ -112,7 +122,7 @@ export default function AdminWidgetManager({ adminKey }) {
     }
   };
 
-  // ── Assign clip ──
+  // ── Assign clip (with product info) ──
   const handleAssignClip = async () => {
     if (!selectedClientForClips || !newClipId) return;
     try {
@@ -120,12 +130,45 @@ export default function AdminWidgetManager({ adminKey }) {
       await axios.post(`${API_BASE}/api/v1/widget/admin/clients/${selectedClientForClips}/clips`, {
         clip_id: newClipId,
         page_url_pattern: newPagePattern || null,
+        product_name: newProductName || null,
+        product_price: newProductPrice || null,
+        product_image_url: newProductImageUrl || null,
+        product_url: newProductUrl || null,
+        product_cart_url: newProductCartUrl || null,
       }, { headers });
       setNewClipId("");
       setNewPagePattern("");
+      setNewProductName("");
+      setNewProductPrice("");
+      setNewProductImageUrl("");
+      setNewProductUrl("");
+      setNewProductCartUrl("");
+      setShowProductFields(false);
       fetchClipAssignments(selectedClientForClips);
     } catch (err) {
       setError(`クリップ割当失敗: ${err.response?.data?.detail || err.message}`);
+    }
+  };
+
+  // ── Update clip product info ──
+  const handleUpdateClipProduct = async (clipId) => {
+    if (!selectedClientForClips) return;
+    try {
+      setError(null);
+      await axios.post(`${API_BASE}/api/v1/widget/admin/clients/${selectedClientForClips}/clips`, {
+        clip_id: clipId,
+        page_url_pattern: editProductForm.page_url_pattern || null,
+        product_name: editProductForm.product_name || null,
+        product_price: editProductForm.product_price || null,
+        product_image_url: editProductForm.product_image_url || null,
+        product_url: editProductForm.product_url || null,
+        product_cart_url: editProductForm.product_cart_url || null,
+      }, { headers });
+      setEditingClipId(null);
+      setEditProductForm({});
+      fetchClipAssignments(selectedClientForClips);
+    } catch (err) {
+      setError(`商品情報更新失敗: ${err.response?.data?.detail || err.message}`);
     }
   };
 
@@ -144,13 +187,26 @@ export default function AdminWidgetManager({ adminKey }) {
     setShowCreateForm(false);
   };
 
+  // ── Start editing clip product info ──
+  const startEditClipProduct = (clip) => {
+    setEditingClipId(clip.clip_id);
+    setEditProductForm({
+      page_url_pattern: clip.page_url_pattern || "",
+      product_name: clip.product_name || "",
+      product_price: clip.product_price || "",
+      product_image_url: clip.product_image_url || "",
+      product_url: clip.product_url || "",
+      product_cart_url: clip.product_cart_url || "",
+    });
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
-            🎯 ウィジェット管理
+            ウィジェット管理
           </h2>
           <p className="text-sm text-gray-500 mt-1">
             GTM経由で配信するフローティング動画プレイヤーの設定
@@ -274,7 +330,7 @@ export default function AdminWidgetManager({ adminKey }) {
           <div className="flex gap-2 pt-2">
             <button
               onClick={editingClient ? handleUpdate : handleCreate}
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium"
+              className="px-4 py-2 bg-pink-600 text-white rounded-lg hover:bg-pink-700 text-sm font-medium"
             >
               {editingClient ? "更新" : "作成"}
             </button>
@@ -293,7 +349,7 @@ export default function AdminWidgetManager({ adminKey }) {
         <div className="bg-gray-900 rounded-lg p-6 space-y-4">
           <div className="flex items-center justify-between">
             <h3 className="font-semibold text-white flex items-center gap-2">
-              📋 GTMタグ — {tagSnippet.client_name}
+              GTMタグ — {tagSnippet.client_name}
             </h3>
             <button
               onClick={() => setTagSnippet(null)}
@@ -337,7 +393,7 @@ export default function AdminWidgetManager({ adminKey }) {
             </div>
             <div className="bg-yellow-900/30 rounded-lg p-3">
               <p className="text-yellow-300 text-xs">
-                💡 GTMで「カスタムHTML」タグを新規作成し、上のコードを貼り付けて「すべてのページ」トリガーで公開してください。
+                GTMで「カスタムHTML」タグを新規作成し、上のコードを貼り付けて「すべてのページ」トリガーで公開してください。
                 Facebookピクセルと同じ手順です。
               </p>
             </div>
@@ -386,13 +442,13 @@ export default function AdminWidgetManager({ adminKey }) {
                     }}
                     className="px-3 py-1.5 bg-purple-100 text-purple-700 rounded-lg text-xs hover:bg-purple-200"
                   >
-                    🎬 クリップ
+                    クリップ
                   </button>
                   <button
                     onClick={() => handleGetTag(client.client_id)}
                     className="px-3 py-1.5 bg-green-100 text-green-700 rounded-lg text-xs hover:bg-green-200"
                   >
-                    📋 GTMタグ
+                    GTMタグ
                   </button>
                   <button
                     onClick={() => startEdit(client)}
@@ -410,39 +466,116 @@ export default function AdminWidgetManager({ adminKey }) {
                   {clipAssignments.length > 0 ? (
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                       {clipAssignments.map((clip, i) => (
-                        <ClipCard key={clip.clip_id || i} clip={clip} index={i} />
+                        <ClipCard
+                          key={clip.clip_id || i}
+                          clip={clip}
+                          index={i}
+                          isEditing={editingClipId === clip.clip_id}
+                          editForm={editProductForm}
+                          onStartEdit={() => startEditClipProduct(clip)}
+                          onCancelEdit={() => { setEditingClipId(null); setEditProductForm({}); }}
+                          onSaveEdit={() => handleUpdateClipProduct(clip.clip_id)}
+                          onEditFormChange={(field, value) => setEditProductForm(prev => ({ ...prev, [field]: value }))}
+                        />
                       ))}
                     </div>
                   ) : (
                     <p className="text-sm text-gray-400">クリップが割り当てられていません</p>
                   )}
-                  <div className="flex gap-2 items-end">
-                    <div className="flex-1">
-                      <label className="block text-xs text-gray-500 mb-1">クリップID</label>
-                      <input
-                        type="text"
-                        value={newClipId}
-                        onChange={(e) => setNewClipId(e.target.value)}
-                        className="w-full px-3 py-2 border rounded-lg text-sm"
-                        placeholder="クリップDBからIDをコピー"
-                      />
+
+                  {/* New clip assignment form */}
+                  <div className="bg-gray-50 rounded-lg p-4 space-y-3">
+                    <h6 className="text-xs font-semibold text-gray-600 uppercase tracking-wider">新規クリップ割当</h6>
+                    <div className="flex gap-2 items-end">
+                      <div className="flex-1">
+                        <label className="block text-xs text-gray-500 mb-1">クリップID *</label>
+                        <input
+                          type="text"
+                          value={newClipId}
+                          onChange={(e) => setNewClipId(e.target.value)}
+                          className="w-full px-3 py-2 border rounded-lg text-sm"
+                          placeholder="クリップDBからIDをコピー"
+                        />
+                      </div>
+                      <div className="flex-1">
+                        <label className="block text-xs text-gray-500 mb-1">ページURLパターン（任意）</label>
+                        <input
+                          type="text"
+                          value={newPagePattern}
+                          onChange={(e) => setNewPagePattern(e.target.value)}
+                          className="w-full px-3 py-2 border rounded-lg text-sm"
+                          placeholder="例: /products/*"
+                        />
+                      </div>
+                      <button
+                        onClick={() => setShowProductFields(!showProductFields)}
+                        className={`px-3 py-2 rounded-lg text-xs whitespace-nowrap ${showProductFields ? "bg-orange-100 text-orange-700" : "bg-gray-200 text-gray-600 hover:bg-gray-300"}`}
+                      >
+                        {showProductFields ? "商品情報 ▲" : "商品情報 ▼"}
+                      </button>
+                      <button
+                        onClick={handleAssignClip}
+                        className="px-4 py-2 bg-purple-600 text-white rounded-lg text-sm hover:bg-purple-700 whitespace-nowrap"
+                      >
+                        割当
+                      </button>
                     </div>
-                    <div className="flex-1">
-                      <label className="block text-xs text-gray-500 mb-1">ページURLパターン（任意）</label>
-                      <input
-                        type="text"
-                        value={newPagePattern}
-                        onChange={(e) => setNewPagePattern(e.target.value)}
-                        className="w-full px-3 py-2 border rounded-lg text-sm"
-                        placeholder="例: /products/*"
-                      />
-                    </div>
-                    <button
-                      onClick={handleAssignClip}
-                      className="px-4 py-2 bg-purple-600 text-white rounded-lg text-sm hover:bg-purple-700 whitespace-nowrap"
-                    >
-                      割当
-                    </button>
+
+                    {/* Product info fields (expandable) */}
+                    {showProductFields && (
+                      <div className="grid grid-cols-2 gap-3 pt-2 border-t border-gray-200">
+                        <div>
+                          <label className="block text-xs text-gray-500 mb-1">商品名</label>
+                          <input
+                            type="text"
+                            value={newProductName}
+                            onChange={(e) => setNewProductName(e.target.value)}
+                            className="w-full px-3 py-2 border rounded-lg text-sm"
+                            placeholder="例: KYOGOKUカラーシャンプー"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-500 mb-1">価格（表示用テキスト）</label>
+                          <input
+                            type="text"
+                            value={newProductPrice}
+                            onChange={(e) => setNewProductPrice(e.target.value)}
+                            className="w-full px-3 py-2 border rounded-lg text-sm"
+                            placeholder="例: ¥3,980 / NT$1,280"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-500 mb-1">商品画像URL</label>
+                          <input
+                            type="text"
+                            value={newProductImageUrl}
+                            onChange={(e) => setNewProductImageUrl(e.target.value)}
+                            className="w-full px-3 py-2 border rounded-lg text-sm"
+                            placeholder="https://..."
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-500 mb-1">商品ページURL（購入ボタン遷移先）</label>
+                          <input
+                            type="text"
+                            value={newProductUrl}
+                            onChange={(e) => setNewProductUrl(e.target.value)}
+                            className="w-full px-3 py-2 border rounded-lg text-sm"
+                            placeholder="https://kyogokupro.com/products/..."
+                          />
+                        </div>
+                        <div className="col-span-2">
+                          <label className="block text-xs text-gray-500 mb-1">カートURL（カートに入れるボタン遷移先、任意）</label>
+                          <input
+                            type="text"
+                            value={newProductCartUrl}
+                            onChange={(e) => setNewProductCartUrl(e.target.value)}
+                            className="w-full px-3 py-2 border rounded-lg text-sm"
+                            placeholder="https://kyogokupro.com/cart/add?product_id=..."
+                          />
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -488,8 +621,8 @@ export default function AdminWidgetManager({ adminKey }) {
   );
 }
 
-/* ── ClipCard: サムネイル＋ホバー動画プレビュー付きカード ── */
-function ClipCard({ clip, index }) {
+/* ── ClipCard: サムネイル＋ホバー動画プレビュー付きカード（商品情報編集対応） ── */
+function ClipCard({ clip, index, isEditing, editForm, onStartEdit, onCancelEdit, onSaveEdit, onEditFormChange }) {
   const videoRef = useRef(null);
   const [isHovering, setIsHovering] = useState(false);
   const [videoError, setVideoError] = useState(false);
@@ -519,6 +652,7 @@ function ClipCard({ clip, index }) {
 
   const hasVideo = !!clip.clip_url;
   const title = clip.product_name || clip.liver_name || `クリップ #${index + 1}`;
+  const hasProductInfo = clip.product_name || clip.product_price || clip.product_url;
 
   return (
     <div
@@ -554,11 +688,9 @@ function ClipCard({ clip, index }) {
             {/* Play icon overlay */}
             {!isHovering && (
               <div className="absolute inset-0 flex items-center justify-center">
-                <div className="w-10 h-10 bg-black/40 rounded-full flex items-center justify-center backdrop-blur-sm">
-                  <svg className="w-5 h-5 text-white ml-0.5" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M8 5v14l11-7z" />
-                  </svg>
-                </div>
+                <svg className="w-10 h-10 text-white/80 drop-shadow-lg" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M8 5v14l11-7z" />
+                </svg>
               </div>
             )}
           </>
@@ -593,6 +725,13 @@ function ClipCard({ clip, index }) {
         }`}>
           {hasVideo ? "配信中" : "動画なし"}
         </div>
+
+        {/* Product info badge */}
+        {hasProductInfo && (
+          <div className="absolute top-2 right-2 px-1.5 py-0.5 rounded text-xs font-medium bg-orange-500/90 text-white">
+            商品設定済
+          </div>
+        )}
       </div>
 
       {/* Info area */}
@@ -600,20 +739,116 @@ function ClipCard({ clip, index }) {
         <p className="text-sm font-medium text-gray-800 truncate" title={title}>
           {title}
         </p>
+        {clip.product_price && (
+          <p className="text-sm font-bold text-pink-600 mt-0.5">{clip.product_price}</p>
+        )}
         <p className="text-xs text-gray-400 font-mono mt-1 truncate" title={clip.clip_id}>
           {clip.clip_id?.slice(0, 8)}...
         </p>
         {clip.page_url_pattern && (
           <p className="text-xs text-purple-500 mt-1 truncate" title={clip.page_url_pattern}>
-            📄 {clip.page_url_pattern}
+            {clip.page_url_pattern}
+          </p>
+        )}
+        {clip.product_url && (
+          <p className="text-xs text-blue-500 mt-1 truncate" title={clip.product_url}>
+            {clip.product_url}
           </p>
         )}
         {clip.transcript_text && (
           <p className="text-xs text-gray-500 mt-1 line-clamp-2" title={clip.transcript_text}>
-            💬 {clip.transcript_text.slice(0, 60)}...
+            {clip.transcript_text.slice(0, 60)}...
           </p>
         )}
+
+        {/* Edit product info button */}
+        <button
+          onClick={(e) => { e.stopPropagation(); onStartEdit(); }}
+          className="mt-2 w-full px-2 py-1.5 bg-orange-50 text-orange-600 rounded text-xs hover:bg-orange-100 border border-orange-200"
+        >
+          {hasProductInfo ? "商品情報を編集" : "商品情報を追加"}
+        </button>
       </div>
+
+      {/* Edit product info form (inline) */}
+      {isEditing && (
+        <div className="p-3 pt-0 space-y-2 border-t border-gray-200 bg-orange-50/50">
+          <div>
+            <label className="block text-xs text-gray-500 mb-0.5">商品名</label>
+            <input
+              type="text"
+              value={editForm.product_name || ""}
+              onChange={(e) => onEditFormChange("product_name", e.target.value)}
+              className="w-full px-2 py-1.5 border rounded text-xs"
+              placeholder="商品名"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-500 mb-0.5">価格</label>
+            <input
+              type="text"
+              value={editForm.product_price || ""}
+              onChange={(e) => onEditFormChange("product_price", e.target.value)}
+              className="w-full px-2 py-1.5 border rounded text-xs"
+              placeholder="¥3,980"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-500 mb-0.5">商品画像URL</label>
+            <input
+              type="text"
+              value={editForm.product_image_url || ""}
+              onChange={(e) => onEditFormChange("product_image_url", e.target.value)}
+              className="w-full px-2 py-1.5 border rounded text-xs"
+              placeholder="https://..."
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-500 mb-0.5">商品ページURL</label>
+            <input
+              type="text"
+              value={editForm.product_url || ""}
+              onChange={(e) => onEditFormChange("product_url", e.target.value)}
+              className="w-full px-2 py-1.5 border rounded text-xs"
+              placeholder="https://kyogokupro.com/products/..."
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-500 mb-0.5">カートURL（任意）</label>
+            <input
+              type="text"
+              value={editForm.product_cart_url || ""}
+              onChange={(e) => onEditFormChange("product_cart_url", e.target.value)}
+              className="w-full px-2 py-1.5 border rounded text-xs"
+              placeholder="https://..."
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-500 mb-0.5">ページURLパターン</label>
+            <input
+              type="text"
+              value={editForm.page_url_pattern || ""}
+              onChange={(e) => onEditFormChange("page_url_pattern", e.target.value)}
+              className="w-full px-2 py-1.5 border rounded text-xs"
+              placeholder="/products/*"
+            />
+          </div>
+          <div className="flex gap-2 pt-1">
+            <button
+              onClick={(e) => { e.stopPropagation(); onSaveEdit(); }}
+              className="flex-1 px-2 py-1.5 bg-orange-600 text-white rounded text-xs hover:bg-orange-700"
+            >
+              保存
+            </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); onCancelEdit(); }}
+              className="flex-1 px-2 py-1.5 bg-gray-200 text-gray-600 rounded text-xs hover:bg-gray-300"
+            >
+              キャンセル
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

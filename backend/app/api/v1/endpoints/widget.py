@@ -118,12 +118,15 @@ async def get_widget_config(
     if not row:
         raise HTTPException(status_code=404, detail="Widget client not found or inactive")
 
-    # Get assigned clips
+    # Get assigned clips (with product info from widget_clip_assignments)
     clips_result = await db.execute(
         text("""
             SELECT wca.clip_id, wca.sort_order, wca.page_url_pattern,
-                   vc.clip_url, vc.thumbnail_url, vc.product_name,
-                   vc.transcript_text, vc.duration_sec, vc.liver_name
+                   vc.clip_url, vc.thumbnail_url,
+                   COALESCE(wca.product_name, vc.product_name) as product_name,
+                   vc.transcript_text, vc.duration_sec, vc.liver_name,
+                   wca.product_price, wca.product_image_url,
+                   wca.product_url, wca.product_cart_url
             FROM widget_clip_assignments wca
             LEFT JOIN video_clips vc ON vc.id::text = wca.clip_id
             WHERE wca.client_id = :cid AND wca.is_active = TRUE
@@ -147,6 +150,11 @@ async def get_widget_config(
         if clip.get("thumbnail_url") and "blob.core.windows.net" in (clip["thumbnail_url"] or ""):
             try:
                 clip["thumbnail_url"] = generate_read_sas_from_url(clip["thumbnail_url"])
+            except Exception:
+                pass
+        if clip.get("product_image_url") and "blob.core.windows.net" in (clip["product_image_url"] or ""):
+            try:
+                clip["product_image_url"] = generate_read_sas_from_url(clip["product_image_url"])
             except Exception:
                 pass
 
@@ -370,14 +378,14 @@ async def update_widget_client(
         sql = f"UPDATE widget_clients SET {', '.join(updates)} WHERE client_id = :cid"
         await db.execute(text(sql), params)
 
-    # Handle clip assignments
+    # Handle clip assignments (preserves existing product info on re-assignment)
     if payload.assigned_clip_ids is not None:
         # Deactivate all existing
         await db.execute(
             text("UPDATE widget_clip_assignments SET is_active = FALSE WHERE client_id = :cid"),
             {"cid": client_id},
         )
-        # Insert new assignments
+        # Insert new assignments (ON CONFLICT preserves product info columns)
         for i, clip_id in enumerate(payload.assigned_clip_ids):
             await db.execute(
                 text("""
@@ -525,6 +533,11 @@ async def assign_clip_to_client(
         raise HTTPException(status_code=400, detail="clip_id is required")
 
     page_url_pattern = payload.get("page_url_pattern")
+    product_name = payload.get("product_name")
+    product_price = payload.get("product_price")
+    product_image_url = payload.get("product_image_url")
+    product_url = payload.get("product_url")
+    product_cart_url = payload.get("product_cart_url")
 
     # Get current max sort_order
     max_order_result = await db.execute(
@@ -535,10 +548,17 @@ async def assign_clip_to_client(
 
     await db.execute(
         text("""
-            INSERT INTO widget_clip_assignments (id, client_id, clip_id, page_url_pattern, sort_order, is_active, created_at)
-            VALUES (:id, :cid, :clip_id, :page_url_pattern, :sort_order, TRUE, NOW())
+            INSERT INTO widget_clip_assignments
+                (id, client_id, clip_id, page_url_pattern, sort_order, is_active, created_at,
+                 product_name, product_price, product_image_url, product_url, product_cart_url)
+            VALUES
+                (:id, :cid, :clip_id, :page_url_pattern, :sort_order, TRUE, NOW(),
+                 :product_name, :product_price, :product_image_url, :product_url, :product_cart_url)
             ON CONFLICT (client_id, clip_id) DO UPDATE
-            SET is_active = TRUE, page_url_pattern = :page_url_pattern, sort_order = :sort_order
+            SET is_active = TRUE, page_url_pattern = :page_url_pattern, sort_order = :sort_order,
+                product_name = :product_name, product_price = :product_price,
+                product_image_url = :product_image_url, product_url = :product_url,
+                product_cart_url = :product_cart_url
         """),
         {
             "id": str(uuid.uuid4()),
@@ -546,6 +566,11 @@ async def assign_clip_to_client(
             "clip_id": clip_id,
             "page_url_pattern": page_url_pattern,
             "sort_order": next_order,
+            "product_name": product_name,
+            "product_price": product_price,
+            "product_image_url": product_image_url,
+            "product_url": product_url,
+            "product_cart_url": product_cart_url,
         },
     )
     await db.commit()

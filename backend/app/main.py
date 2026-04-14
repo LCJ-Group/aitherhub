@@ -862,6 +862,19 @@ async def ensure_widget_tables():
                 ON widget_tracking_events (created_at DESC)
             """))
 
+            # ── Add product info columns to widget_clip_assignments (Phase 1: link-based product card) ──
+            for col_sql in [
+                "ALTER TABLE widget_clip_assignments ADD COLUMN IF NOT EXISTS product_name TEXT",
+                "ALTER TABLE widget_clip_assignments ADD COLUMN IF NOT EXISTS product_price TEXT",
+                "ALTER TABLE widget_clip_assignments ADD COLUMN IF NOT EXISTS product_image_url TEXT",
+                "ALTER TABLE widget_clip_assignments ADD COLUMN IF NOT EXISTS product_url TEXT",
+                "ALTER TABLE widget_clip_assignments ADD COLUMN IF NOT EXISTS product_cart_url TEXT",
+            ]:
+                try:
+                    await conn.execute(_text(col_sql))
+                except Exception:
+                    pass  # Column already exists
+
         logger.info("Widget tables (widget_clients, widget_clip_assignments, widget_page_contexts, widget_tracking_events) verified/created")
     except asyncio.TimeoutError:
         logger.warning("Timeout (60s) while ensuring widget tables on startup")
