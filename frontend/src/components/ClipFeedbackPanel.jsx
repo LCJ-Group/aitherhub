@@ -65,7 +65,7 @@ const ClipFeedbackPanel = ({
           }
         }
       } catch (e) {
-        // Ignore load errors
+        console.warn('[Feedback] Failed to load ratings from API:', e);
       }
       try {
         const salesResp = await VideoService.getSalesConfirmations(videoId);
@@ -79,7 +79,30 @@ const ClipFeedbackPanel = ({
           }
         }
       } catch (e) {
-        // Ignore load errors
+        console.warn('[Feedback] Failed to load sales confirmations from API:', e);
+      }
+      // Fallback: restore from localStorage if API returned nothing
+      const lsKey = `clipFeedback_${videoId}_${phaseIndex}`;
+      try {
+        const cached = localStorage.getItem(lsKey);
+        if (cached) {
+          const fb = JSON.parse(cached);
+          if (!rating && fb.rating) {
+            setRating(fb.rating);
+            setSelectedReasons(fb.selectedReasons || []);
+            setSubmitted(true);
+            loadedRef.current.rating = fb.rating;
+            loadedRef.current.reasons = fb.selectedReasons || [];
+          }
+          if (salesConfirm === null && fb.salesConfirm != null) {
+            setSalesConfirm(fb.salesConfirm);
+            if (fb.salesNote) setSalesNote(fb.salesNote);
+            setSalesSubmitted(true);
+            loadedRef.current.salesConfirm = fb.salesConfirm;
+          }
+        }
+      } catch (lsErr) {
+        // localStorage unavailable
       }
     };
     loadExisting();
@@ -164,6 +187,15 @@ const ClipFeedbackPanel = ({
     }
 
     setSubmitting(false);
+
+    // Backup to localStorage on successful save
+    if (ratingOk || salesOk) {
+      const lsKey = `clipFeedback_${videoId}_${phaseIndex}`;
+      try {
+        const fb = { rating, selectedReasons, salesConfirm, salesNote, savedAt: Date.now() };
+        localStorage.setItem(lsKey, JSON.stringify(fb));
+      } catch (lsErr) { /* ignore */ }
+    }
 
     if (ratingOk && salesOk) {
       setDirty(false);

@@ -248,6 +248,50 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
 
   const clipDur = trimEnd - trimStart;
 
+  // ─── Editor State Persistence (localStorage) ─────────────────
+  // Save/restore editing state so user doesn't lose work when navigating away
+  const storageKey = useMemo(() => videoId && clip?.phase_index != null
+    ? `clipEditor_${videoId}_${clip.phase_index}` : null, [videoId, clip?.phase_index]);
+
+  // Restore editor state from localStorage on mount
+  useEffect(() => {
+    if (!storageKey) return;
+    try {
+      const saved = localStorage.getItem(storageKey);
+      if (!saved) return;
+      const state = JSON.parse(saved);
+      if (state.deletedRanges?.length > 0) setDeletedRanges(state.deletedRanges);
+      if (state.splitPoints?.length > 0) setSplitPoints(state.splitPoints);
+      if (state.captionOffset != null && state.captionOffset !== 0) setCaptionOffset(state.captionOffset);
+      if (state.subtitleFontSize != null) setSubtitleFontSize(state.subtitleFontSize);
+      if (state.subtitleFeedback) setSubtitleFeedback(state.subtitleFeedback);
+      if (state.feedbackTags?.length > 0) setFeedbackTags(state.feedbackTags);
+      console.log('[ClipEditor] Restored editor state from localStorage');
+    } catch (e) {
+      console.warn('[ClipEditor] Failed to restore editor state:', e);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storageKey]);
+
+  // Auto-save editor state to localStorage on changes
+  useEffect(() => {
+    if (!storageKey) return;
+    const state = {
+      deletedRanges,
+      splitPoints,
+      captionOffset,
+      subtitleFontSize,
+      subtitleFeedback,
+      feedbackTags,
+      savedAt: Date.now(),
+    };
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(state));
+    } catch (e) {
+      // localStorage full or unavailable - ignore
+    }
+  }, [storageKey, deletedRanges, splitPoints, captionOffset, subtitleFontSize, subtitleFeedback, feedbackTags]);
+
   // Determine if we're playing a clip_url (local time 0-based) or full video
   const isClipVideo = !!(clip?.clip_url);
 
@@ -1706,7 +1750,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                         return !deletedRanges.some(dr => cStart >= dr.start && cEnd <= dr.end);
                       })
                     : captions;
-                  const res = await VideoService.exportSubtitledClip(videoId, {
+                  const exportPayload = {
                     clip_url: clip.clip_url,
                     captions: exportCaptions.map(c => ({
                       start: c.start,
@@ -1732,17 +1776,36 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                         })),
                       ]
                     } : {}),
-                  }, {
+                  };
+                  const progressCb = {
                     onProgress: (st, pct) => {
                       if (pct === -1) {
-                        // Indeterminate: poll timed out, retrying
                         setStatus({ ok: true, msg: '接続を再試行中...' });
                       } else {
                         setExportProgress(Math.max(0, Math.min(100, pct || 0)));
                         setStatus({ ok: true, msg: statusLabels[st] || `処理中 (${st})...` });
                       }
                     },
-                  });
+                  };
+                  // Auto-retry up to 3 times on failure (Azure cold-start can cause timeouts)
+                  let res = null;
+                  let lastErr = null;
+                  for (let attempt = 1; attempt <= 3; attempt++) {
+                    try {
+                      res = await VideoService.exportSubtitledClip(videoId, exportPayload, progressCb);
+                      lastErr = null;
+                      break; // success
+                    } catch (retryErr) {
+                      lastErr = retryErr;
+                      console.warn(`[Export] Attempt ${attempt}/3 failed:`, retryErr.message);
+                      if (attempt < 3) {
+                        setStatus({ ok: true, msg: `エクスポートを再試行中... (${attempt}/3)` });
+                        setExportProgress(0);
+                        await new Promise(r => setTimeout(r, 2000)); // wait 2s before retry
+                      }
+                    }
+                  }
+                  if (lastErr) throw lastErr;
                   if (res?.download_url) {
                     // Use <a> tag download to avoid popup blockers
                     const a = document.createElement('a');
