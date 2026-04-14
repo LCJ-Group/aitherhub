@@ -327,14 +327,30 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
   // or for a minimum of 3 seconds, whichever is longer.
   // captionOffset: positive = delay subtitle display (subtitle appears later),
   //                negative = advance subtitle display (subtitle appears earlier)
+  //
+  // ⚠️ PROTECTED: deletedRanges-aware caption matching.
+  // When segments are deleted, captions inside deleted ranges are hidden,
+  // and captions AFTER deleted ranges are NOT shown during the skip gap.
+  // This prevents subtitle desync when scenes are removed.
   const currentCaption = useMemo(() => {
     if (!captions.length) return null;
     const t = currentTime;
     const MIN_DISPLAY = 3; // minimum display duration in seconds
+    // Check if current time falls inside a deleted range - if so, show no caption
+    if (deletedRanges.length > 0) {
+      for (const dr of deletedRanges) {
+        if (t >= dr.start && t < dr.end) return null;
+      }
+    }
     for (let i = 0; i < captions.length; i++) {
       const c = captions[i];
       const localStart = toLocalTime(c.start || 0) + captionOffset;
       const rawEnd = toLocalTime(c.end || (c.start + 5)) + captionOffset;
+      // Skip captions that fall entirely within a deleted range
+      if (deletedRanges.length > 0) {
+        const capInDeleted = deletedRanges.some(dr => localStart >= dr.start && rawEnd <= dr.end);
+        if (capInDeleted) continue;
+      }
       // Extend end to at least MIN_DISPLAY seconds after start
       let extendedEnd = Math.max(rawEnd, localStart + MIN_DISPLAY);
       // But don't overlap with next caption's start
@@ -345,7 +361,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
       if (t >= localStart && t < extendedEnd) return c;
     }
     return null;
-  }, [captions, currentTime, toLocalTime, captionOffset]);
+  }, [captions, currentTime, toLocalTime, captionOffset, deletedRanges]);
 
   const currentPhase = useMemo(() => {
     if (!segments.length) return null;
@@ -391,17 +407,85 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
     });
 
     // Helper: split text into chunks of MAX_CHARS with proportional timestamps
+    // ⚠️ PROTECTED: Japanese word-boundary-aware text splitting.
+    // DO NOT revert to simple character-count splitting — it breaks Japanese words mid-token.
+    // Splits at particles (は,が,を,に,で,と,も,や,か,ね,よ,な), punctuation (、,。), and
+    // conjunctions (して,って,ので,から,けど,ても,たら,ながら) to keep subtitles readable.
     const splitTextChunks = (txt, start, end) => {
       const chars = [...txt];
       const dur = end - start;
+      if (chars.length <= MAX_CHARS) {
+        return [{ start: Math.round(start * 100) / 100, end: Math.round(end * 100) / 100, text: txt, source: 'master_transcript' }];
+      }
+      // Find natural break points in Japanese text
+      // Priority: punctuation > conjunctions > particles
+      const breakPoints = [];
+      const PARTICLES = new Set(['は','が','を','に','で','と','も','や','か','ね','よ','な','へ','の','て','た']);
+      const CONJUNCTIONS = ['して','って','ので','から','けど','ても','たら','ながら','だけど','ですが'];
+      for (let i = 1; i < chars.length - 1; i++) {
+        // After punctuation: highest priority
+        if ('、。！？，'.includes(chars[i])) {
+          breakPoints.push({ pos: i + 1, priority: 3 });
+          continue;
+        }
+        // After conjunction patterns
+        let foundConj = false;
+        for (const conj of CONJUNCTIONS) {
+          const conjChars = [...conj];
+          if (i + conjChars.length <= chars.length) {
+            const slice = chars.slice(i, i + conjChars.length).join('');
+            if (slice === conj) {
+              breakPoints.push({ pos: i + conjChars.length, priority: 2 });
+              foundConj = true;
+              break;
+            }
+          }
+        }
+        if (foundConj) continue;
+        // After particles (only if followed by non-particle)
+        if (PARTICLES.has(chars[i]) && !PARTICLES.has(chars[i + 1])) {
+          breakPoints.push({ pos: i + 1, priority: 1 });
+        }
+      }
+      // Select break points that create chunks close to MAX_CHARS
       const numChunks = Math.max(1, Math.ceil(chars.length / MAX_CHARS));
-      const charsPerChunk = Math.ceil(chars.length / numChunks);
+      const idealChunkSize = Math.ceil(chars.length / numChunks);
+      const selectedBreaks = [0];
+      let lastBreak = 0;
+      for (let target = idealChunkSize; target < chars.length; target += idealChunkSize) {
+        // Find the best break point near the target position
+        let bestBp = null;
+        let bestDist = Infinity;
+        const searchRange = Math.floor(idealChunkSize * 0.4); // Search within 40% of ideal size
+        for (const bp of breakPoints) {
+          if (bp.pos <= lastBreak) continue;
+          if (bp.pos >= chars.length - 2) continue; // Don't break too close to end
+          const dist = Math.abs(bp.pos - target);
+          if (dist <= searchRange) {
+            // Prefer higher priority breaks, then closer distance
+            if (!bestBp || bp.priority > bestBp.priority || (bp.priority === bestBp.priority && dist < bestDist)) {
+              bestBp = bp;
+              bestDist = dist;
+            }
+          }
+        }
+        if (bestBp) {
+          selectedBreaks.push(bestBp.pos);
+          lastBreak = bestBp.pos;
+        } else {
+          // Fallback: break at target position (character-based)
+          selectedBreaks.push(target);
+          lastBreak = target;
+        }
+      }
+      selectedBreaks.push(chars.length);
+      // Build chunks from selected break points
       const chunks = [];
-      for (let c = 0; c < numChunks; c++) {
-        const chunkText = chars.slice(c * charsPerChunk, (c + 1) * charsPerChunk).join('');
+      for (let i = 0; i < selectedBreaks.length - 1; i++) {
+        const chunkText = chars.slice(selectedBreaks[i], selectedBreaks[i + 1]).join('');
         if (!chunkText.trim()) continue;
-        const ratioStart = c * charsPerChunk / chars.length;
-        const ratioEnd = Math.min((c + 1) * charsPerChunk / chars.length, 1.0);
+        const ratioStart = selectedBreaks[i] / chars.length;
+        const ratioEnd = selectedBreaks[i + 1] / chars.length;
         chunks.push({
           start: Math.round((start + dur * ratioStart) * 100) / 100,
           end: Math.round((start + dur * ratioEnd) * 100) / 100,
@@ -1612,9 +1696,19 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                   done: '完了！',
                 };
                 try {
+                  // ⚠️ PROTECTED: Filter out captions inside deleted ranges before export.
+                  // Without this, subtitles from deleted scenes appear in the exported video
+                  // with wrong timing (because the video is shorter after concat).
+                  const exportCaptions = deletedRanges.length > 0
+                    ? captions.filter(c => {
+                        const cStart = toLocalTime(c.start || 0);
+                        const cEnd = toLocalTime(c.end || (c.start + 5));
+                        return !deletedRanges.some(dr => cStart >= dr.start && cEnd <= dr.end);
+                      })
+                    : captions;
                   const res = await VideoService.exportSubtitledClip(videoId, {
                     clip_url: clip.clip_url,
-                    captions: captions.map(c => ({
+                    captions: exportCaptions.map(c => ({
                       start: c.start,
                       end: c.end,
                       text: c.text,
