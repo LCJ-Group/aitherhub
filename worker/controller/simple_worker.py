@@ -40,7 +40,7 @@ sys.path.insert(0, BATCH_DIR)
 MAX_WORKERS = int(os.getenv("WORKER_MAX_CONCURRENT", "2"))
 
 # Maximum retry attempts before moving message to dead-letter queue
-MAX_DEQUEUE_COUNT = int(os.getenv("WORKER_MAX_RETRIES", "3"))
+MAX_DEQUEUE_COUNT = int(os.getenv("WORKER_MAX_RETRIES", "6"))  # Increased from 3: 2 workers share queue
 
 # Visibility timeout: 15 minutes (renewed every 5 min while job is active)
 VISIBILITY_TIMEOUT = 15 * 60  # 900 seconds
