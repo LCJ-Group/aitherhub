@@ -24,10 +24,13 @@ WorkingDirectory=/opt/aitherhub
 EnvironmentFile=/opt/aitherhub/.env
 ExecStart=/opt/aitherhub/.venv/bin/python -m worker.entrypoints.queue_worker
 
+# ⚠️ PROTECTED — DO NOT CHANGE these 3 lines (commits 225cbd1, a75622b)
 # Graceful shutdown: only send SIGTERM to the main Python process,
 # NOT to child processes (FFmpeg, process_video.py, generate_clip.py).
 # The main process handles SIGTERM by stopping new job acceptance and
 # waiting for active jobs to finish via executor.shutdown(wait=True).
+# Removing KillMode=process causes FFmpeg children to be killed immediately,
+# leading to POISON_MAX_RETRY false positives.
 KillSignal=SIGTERM
 KillMode=process
 TimeoutStopSec=300

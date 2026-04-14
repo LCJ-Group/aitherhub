@@ -16,6 +16,33 @@ Design:
     - Crash guard for orphaned ffmpeg processes
     - File lock to prevent duplicate instances
     - Graceful shutdown on SIGTERM/SIGINT
+
+⚠️ PROTECTED CODE — READ BEFORE MODIFYING ⚠️
+================================================
+The following components are stability-critical and MUST NOT be changed
+without understanding the root causes they fix (commits 225cbd1, a75622b):
+
+1. _get_fallback_engine() — Dedicated async engine for main-thread DB ops.
+   DO NOT replace with shared engine (run_sync/get_session).
+   Reason: asyncio 'attached to a different loop' errors.
+
+2. signal_handler() — Forwards SIGINT to child processes.
+   DO NOT remove SIGINT forwarding or add sys.exit().
+   Reason: FFmpeg needs graceful shutdown to avoid corrupt output.
+
+3. poll_and_process() — Priority sort (video_analysis before generate_clip).
+   DO NOT remove the _priority_key sort.
+   Reason: generate_clip floods cause video_analysis queue starvation.
+
+4. _is_video_retried() — Stale message detection.
+   DO NOT simplify to only check dequeue_count==0.
+   Reason: After retry, new message increments count, breaking the check.
+
+5. poll_pending_clips_from_db() — Uses _get_fallback_engine.
+   DO NOT switch to shared engine.
+   Reason: Same as #1.
+
+See: aitherhub skill DB (dangers/checklists/lessons) for full details.
 """
 import os
 import sys
@@ -1168,6 +1195,8 @@ def poll_and_process(executor: ThreadPoolExecutor):
         visibility_timeout=VISIBILITY_TIMEOUT,
     ))
 
+    # ⚠️ PROTECTED: Priority sort MUST remain. Removing it causes queue starvation.
+    # See: commit 225cbd1, danger: "NEVER remove video_analysis priority sorting"
     # ── Priority sort: high-priority job types first ──
     def _priority_key(m):
         try:
@@ -1335,6 +1364,9 @@ _fallback_loop = None
 
 
 def _get_fallback_engine():
+    # ⚠️ PROTECTED: This MUST remain a DEDICATED engine, separate from shared/db/session.py.
+    # DO NOT replace with get_session()/run_sync() — causes asyncio loop conflicts.
+    # See: commit 225cbd1, danger: "NEVER replace _fallback_engine"
     """Lazy-init a dedicated async engine for poll_pending_clips_from_db.
 
     This engine is ONLY used by the main thread's DB fallback polling,
