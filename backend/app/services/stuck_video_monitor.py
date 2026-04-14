@@ -12,6 +12,11 @@ are also detected and re-enqueued.
 The monitor runs every CHECK_INTERVAL_MINUTES and requeues stuck videos
 by generating a fresh SAS URL and pushing a new job to the Azure queue.
 Each video is retried at most MAX_AUTO_RETRIES times to avoid infinite loops.
+
+=== Stability improvements (2026-04-15) ===
+- LIMIT 10 → 50 to handle large backlogs faster
+- Health logging to monitor_health_logs table for observability
+- Better error isolation per-video (one failure doesn't stop the batch)
 """
 
 import asyncio
@@ -39,8 +44,80 @@ WORKER_GUARD_HOURS = 4            # Hours since worker_claimed_at to consider st
 NEVER_ENQUEUED_THRESHOLD_MINUTES = 10  # Minutes after creation to detect never-enqueued videos
 SAS_RETRY_COUNT = 3               # Number of retries for SAS URL generation
 SAS_RETRY_DELAY_SECONDS = 5       # Delay between SAS retries
+BATCH_LIMIT = 50                  # Max videos to process per cycle (was 10)
 
 _monitor_task = None
+
+
+async def _ensure_health_table(db):
+    """Create monitor_health_logs table if it doesn't exist."""
+    try:
+        await db.execute(text("""
+            CREATE TABLE IF NOT EXISTS monitor_health_logs (
+                id BIGSERIAL PRIMARY KEY,
+                checked_at TIMESTAMPTZ DEFAULT NOW(),
+                stuck_found INT DEFAULT 0,
+                stuck_retried INT DEFAULT 0,
+                never_enqueued_found INT DEFAULT 0,
+                never_enqueued_retried INT DEFAULT 0,
+                deploy_interrupted_found INT DEFAULT 0,
+                deploy_interrupted_retried INT DEFAULT 0,
+                errors TEXT
+            )
+        """))
+        await db.commit()
+    except Exception as e:
+        logger.warning(f"[stuck-monitor] Failed to create health table: {e}")
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+
+
+async def _record_health(db, stuck_found, stuck_retried, never_enqueued_found,
+                         never_enqueued_retried, deploy_interrupted_found,
+                         deploy_interrupted_retried, errors=None):
+    """Record a health check entry to monitor_health_logs."""
+    try:
+        await db.execute(
+            text("""
+                INSERT INTO monitor_health_logs
+                    (stuck_found, stuck_retried, never_enqueued_found,
+                     never_enqueued_retried, deploy_interrupted_found,
+                     deploy_interrupted_retried, errors)
+                VALUES
+                    (:sf, :sr, :nf, :nr, :df, :dr, :errors)
+            """),
+            {
+                "sf": stuck_found, "sr": stuck_retried,
+                "nf": never_enqueued_found, "nr": never_enqueued_retried,
+                "df": deploy_interrupted_found, "dr": deploy_interrupted_retried,
+                "errors": (errors or "")[:2000] if errors else None,
+            },
+        )
+        await db.commit()
+        # Prune old logs (keep last 500)
+        try:
+            await db.execute(text("""
+                DELETE FROM monitor_health_logs
+                WHERE id NOT IN (
+                    SELECT id FROM monitor_health_logs
+                    ORDER BY checked_at DESC
+                    LIMIT 500
+                )
+            """))
+            await db.commit()
+        except Exception:
+            try:
+                await db.rollback()
+            except Exception:
+                pass
+    except Exception as e:
+        logger.warning(f"[stuck-monitor] Failed to record health: {e}")
+        try:
+            await db.rollback()
+        except Exception:
+            pass
 
 
 async def _generate_sas_with_retry(email, video_id, filename, retries=SAS_RETRY_COUNT):
@@ -191,8 +268,8 @@ async def _requeue_video(db, row, video_id, old_status, current_retries, reason_
         # Step 2: Update video status and increment retry counter
         # Keep current STEP_* status for resume, only reset
         # step_progress and increment retry counter.
-        # For 'uploaded' or ERROR status, set to 'uploaded' so worker starts from step 0.
-        new_status = old_status if old_status.startswith("STEP_") else "uploaded"
+        # NEVER use 'uploaded' as fallback — use STEP_0_EXTRACT_FRAMES per danger rules
+        new_status = old_status if old_status.startswith("STEP_") else "STEP_0_EXTRACT_FRAMES"
         await db.execute(
             text("""
                 UPDATE videos
@@ -264,7 +341,8 @@ async def _requeue_video(db, row, video_id, old_status, current_retries, reason_
                         "code": "STUCK_REQUEUE" if "stuck" in reason_prefix.lower() else "NEVER_ENQUEUED_REQUEUE",
                         "step": old_status or "UNKNOWN",
                         "msg": f"{reason_prefix}: video was {old_status}. "
-                               f"Auto-requeued (retry {current_retries + 1}/{MAX_AUTO_RETRIES}).",
+                               f"Requeued as {new_status}. "
+                               f"retry={current_retries + 1}/{MAX_AUTO_RETRIES}",
                     },
                 )
                 await db.commit()
@@ -334,11 +412,28 @@ async def _check_and_requeue_stuck_videos():
     """
     Core loop: every CHECK_INTERVAL_MINUTES, query for stuck videos and requeue.
     Also detects never-enqueued videos (batch upload failures) and requeues them.
+    Records health status to DB every cycle for observability.
     """
     # Wait a bit after startup before first check
     await asyncio.sleep(60)
 
+    # Ensure health table exists
+    try:
+        from app.core.db import AsyncSessionLocal
+        async with AsyncSessionLocal() as db:
+            await _ensure_health_table(db)
+    except Exception as e:
+        logger.warning(f"[stuck-monitor] Failed to ensure health table on startup: {e}")
+
     while True:
+        # Health tracking for this cycle
+        health = {
+            "stuck_found": 0, "stuck_retried": 0,
+            "never_enqueued_found": 0, "never_enqueued_retried": 0,
+            "deploy_interrupted_found": 0, "deploy_interrupted_retried": 0,
+            "errors": [],
+        }
+
         try:
             from app.core.db import AsyncSessionLocal
 
@@ -355,20 +450,22 @@ async def _check_and_requeue_stuck_videos():
                     FROM videos v
                     LEFT JOIN users u ON v.user_id = u.id
                     WHERE (v.status IN ('uploaded', 'QUEUED')
-                           OR v.status LIKE 'STEP_%')
+                           OR v.status LIKE 'STEP_%%')
                       AND v.updated_at < :threshold
                       AND (v.worker_claimed_at IS NULL
                            OR v.worker_claimed_at < :worker_guard)
                       AND COALESCE(v.dequeue_count, 0) < :max_retries
                     ORDER BY v.updated_at ASC
-                    LIMIT 10
+                    LIMIT :batch_limit
                 """)
                 result = await db.execute(sql, {
                     "threshold": threshold,
                     "worker_guard": worker_guard,
                     "max_retries": MAX_AUTO_RETRIES,
+                    "batch_limit": BATCH_LIMIT,
                 })
                 stuck_videos = result.fetchall()
+                health["stuck_found"] = len(stuck_videos)
 
                 if stuck_videos:
                     logger.info(
@@ -380,10 +477,12 @@ async def _check_and_requeue_stuck_videos():
                     video_id = str(row.id)
                     old_status = row.status
                     current_retries = row.dequeue_count or 0
-                    await _requeue_video(
+                    success = await _requeue_video(
                         db, row, video_id, old_status, current_retries,
                         f"Stuck at {old_status} for >{STUCK_THRESHOLD_MINUTES}min"
                     )
+                    if success:
+                        health["stuck_retried"] += 1
 
                 # ── Part 1b: Deploy-interrupted videos ─────────────────────
                 # Videos that were interrupted by SIGTERM during deployment.
@@ -400,12 +499,14 @@ async def _check_and_requeue_stuck_videos():
                       AND v.status NOT IN ('ERROR', 'completed')
                       AND COALESCE(v.dequeue_count, 0) < :max_retries
                     ORDER BY v.updated_at ASC
-                    LIMIT 10
+                    LIMIT :batch_limit
                 """)
                 result_deploy = await db.execute(sql_deploy_interrupted, {
                     "max_retries": MAX_AUTO_RETRIES,
+                    "batch_limit": BATCH_LIMIT,
                 })
                 deploy_interrupted = result_deploy.fetchall()
+                health["deploy_interrupted_found"] = len(deploy_interrupted)
 
                 if deploy_interrupted:
                     logger.info(
@@ -416,10 +517,12 @@ async def _check_and_requeue_stuck_videos():
                     video_id = str(row.id)
                     old_status = row.status
                     current_retries = row.dequeue_count or 0
-                    await _requeue_video(
+                    success = await _requeue_video(
                         db, row, video_id, old_status, current_retries,
                         f"Deploy-interrupted (SIGTERM) at {old_status}"
                     )
+                    if success:
+                        health["deploy_interrupted_retried"] += 1
 
                 # ── Part 2: Never-enqueued videos (batch upload failures) ────
                 # These are ERROR videos where enqueue_status='FAILED' or
@@ -443,13 +546,15 @@ async def _check_and_requeue_stuck_videos():
                       AND v.created_at < :threshold
                       AND COALESCE(v.dequeue_count, 0) < :max_retries
                     ORDER BY v.created_at ASC
-                    LIMIT 10
+                    LIMIT :batch_limit
                 """)
                 result2 = await db.execute(sql_never_enqueued, {
                     "threshold": never_enqueued_threshold,
                     "max_retries": MAX_AUTO_RETRIES,
+                    "batch_limit": BATCH_LIMIT,
                 })
                 never_enqueued = result2.fetchall()
+                health["never_enqueued_found"] = len(never_enqueued)
 
                 if never_enqueued:
                     logger.info(
@@ -460,13 +565,42 @@ async def _check_and_requeue_stuck_videos():
                     video_id = str(row.id)
                     old_status = row.status
                     current_retries = row.dequeue_count or 0
-                    await _requeue_video(
+                    success = await _requeue_video(
                         db, row, video_id, old_status, current_retries,
                         f"Never enqueued (enqueue_status={row.enqueue_status})"
                     )
+                    if success:
+                        health["never_enqueued_retried"] += 1
+
+                # ── Record health ──────────────────────────────────────────
+                errors_str = "; ".join(health["errors"]) if health["errors"] else None
+                await _record_health(
+                    db,
+                    health["stuck_found"], health["stuck_retried"],
+                    health["never_enqueued_found"], health["never_enqueued_retried"],
+                    health["deploy_interrupted_found"], health["deploy_interrupted_retried"],
+                    errors_str,
+                )
+
+                # Log summary
+                total_found = health["stuck_found"] + health["never_enqueued_found"] + health["deploy_interrupted_found"]
+                total_retried = health["stuck_retried"] + health["never_enqueued_retried"] + health["deploy_interrupted_retried"]
+                logger.info(
+                    f"[stuck-monitor] Cycle complete: found={total_found} retried={total_retried} "
+                    f"(stuck={health['stuck_found']}/{health['stuck_retried']}, "
+                    f"never_enqueued={health['never_enqueued_found']}/{health['never_enqueued_retried']}, "
+                    f"deploy_interrupted={health['deploy_interrupted_found']}/{health['deploy_interrupted_retried']})"
+                )
 
         except Exception as e:
             logger.warning(f"[stuck-monitor] Check cycle error: {e}")
+            # Try to record the error even if the cycle failed
+            try:
+                from app.core.db import AsyncSessionLocal
+                async with AsyncSessionLocal() as db:
+                    await _record_health(db, 0, 0, 0, 0, 0, 0, f"Cycle error: {e}")
+            except Exception:
+                pass
 
         # Sleep until next check
         await asyncio.sleep(CHECK_INTERVAL_MINUTES * 60)
@@ -479,7 +613,8 @@ def start_stuck_video_monitor():
         _monitor_task = asyncio.create_task(_check_and_requeue_stuck_videos())
         logger.info(
             f"[stuck-monitor] Started (check every {CHECK_INTERVAL_MINUTES}min, "
-            f"threshold {STUCK_THRESHOLD_MINUTES}min, max retries {MAX_AUTO_RETRIES})"
+            f"threshold {STUCK_THRESHOLD_MINUTES}min, max retries {MAX_AUTO_RETRIES}, "
+            f"batch limit {BATCH_LIMIT})"
         )
 
 

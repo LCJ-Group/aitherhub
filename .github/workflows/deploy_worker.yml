@@ -289,15 +289,45 @@ jobs:
           SSH_USER: ${{ secrets.WORKER_SSH_USER }}
           COMMIT_SHA: ${{ github.sha }}
         run: |
-          DEPLOYED=$(ssh -i ~/.ssh/worker_key -o StrictHostKeyChecking=no ${SSH_USER}@${SSH_HOST} \
-            "cd /opt/aitherhub && git rev-parse HEAD")
-          echo "Expected: ${COMMIT_SHA}"
-          echo "Deployed: ${DEPLOYED}"
-          if [ "${DEPLOYED}" = "${COMMIT_SHA}" ]; then
-            echo "SUCCESS: Commit matches"
+          # Check both /opt/aitherhub and /var/www/aitherhub for commit match
+          DEPLOYED_OPT=$(ssh -i ~/.ssh/worker_key -o StrictHostKeyChecking=no ${SSH_USER}@${SSH_HOST} \
+            "cd /opt/aitherhub && git rev-parse HEAD 2>/dev/null || echo 'NOT_FOUND'")
+          DEPLOYED_WWW=$(ssh -i ~/.ssh/worker_key -o StrictHostKeyChecking=no ${SSH_USER}@${SSH_HOST} \
+            "cd /var/www/aitherhub && git rev-parse HEAD 2>/dev/null || echo 'NOT_A_GIT_REPO'")
+          echo "Expected:       ${COMMIT_SHA}"
+          echo "Deployed (opt): ${DEPLOYED_OPT}"
+          echo "Deployed (www): ${DEPLOYED_WWW}"
+          
+          # Primary check: /opt/aitherhub must match (this is the git source)
+          if [ "${DEPLOYED_OPT}" = "${COMMIT_SHA}" ]; then
+            echo "SUCCESS: /opt/aitherhub commit matches"
           else
-            echo "WARNING: Commit mismatch"
-            exit 1
+            echo "ERROR: /opt/aitherhub commit mismatch!"
+            echo "Attempting force reset..."
+            ssh -i ~/.ssh/worker_key -o StrictHostKeyChecking=no ${SSH_USER}@${SSH_HOST} \
+              "cd /opt/aitherhub && git fetch origin master --force && git reset --hard origin/master && echo FIXED: \$(git rev-parse HEAD)"
+            # Re-check after fix
+            DEPLOYED_FIXED=$(ssh -i ~/.ssh/worker_key -o StrictHostKeyChecking=no ${SSH_USER}@${SSH_HOST} \
+              "cd /opt/aitherhub && git rev-parse HEAD")
+            if [ "${DEPLOYED_FIXED}" = "${COMMIT_SHA}" ]; then
+              echo "RECOVERED: Commit now matches after force reset"
+              # Re-sync to /var/www/aitherhub
+              ssh -i ~/.ssh/worker_key -o StrictHostKeyChecking=no ${SSH_USER}@${SSH_HOST} \
+                "sudo rsync -a --delete --exclude='.git' --exclude='.venv' --exclude='.env' --exclude='__pycache__' --exclude='*.pyc' --exclude='worker/batch/uploadedvideo/' --exclude='worker/batch/output/' --exclude='worker/batch/splitvideo/' --exclude='worker/batch/artifacts/' /opt/aitherhub/ /var/www/aitherhub/ 2>/dev/null || true"
+              # Restart workers with new code
+              ssh -i ~/.ssh/worker_key -o StrictHostKeyChecking=no ${SSH_USER}@${SSH_HOST} \
+                "sudo systemctl restart aither-worker 2>/dev/null || true; sudo systemctl restart simple-worker 2>/dev/null || true"
+            else
+              echo "FAILED: Could not fix commit mismatch"
+              exit 1
+            fi
+          fi
+          
+          # /var/www/aitherhub is rsync'd (not a git repo), so NOT_A_GIT_REPO is expected
+          if [ "${DEPLOYED_WWW}" != "NOT_A_GIT_REPO" ] && [ "${DEPLOYED_WWW}" != "${COMMIT_SHA}" ]; then
+            echo "WARNING: /var/www/aitherhub has stale git metadata, cleaning..."
+            ssh -i ~/.ssh/worker_key -o StrictHostKeyChecking=no ${SSH_USER}@${SSH_HOST} \
+              "sudo rm -rf /var/www/aitherhub/.git 2>/dev/null || true"
           fi
 
       - name: Health check

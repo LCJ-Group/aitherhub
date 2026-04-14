@@ -493,6 +493,44 @@ function UploadHealthSection({ data, loading }) {
 
   const { overall, last_24h, last_7d, stuck_videos, status_distribution, recent_uploads, recent_errors, enqueue_stats, pipeline_stages, retry_candidates, recent_stage_events, failed_stage_videos } = data;
 
+  // Batch retry all stuck videos
+  const [batchRetrying, setBatchRetrying] = useState(false);
+  const [batchResult, setBatchResult] = useState(null);
+  const [monitorHealth, setMonitorHealth] = useState(null);
+
+  const handleBatchRetry = async () => {
+    if (!window.confirm(`スタック中の全動画(${stuck_videos}件)を一括リトライしますか？`)) return;
+    setBatchRetrying(true);
+    setBatchResult(null);
+    try {
+      const baseURL = import.meta.env.VITE_API_BASE_URL;
+      const res = await axios.post(`${baseURL}/api/v1/admin/batch-retry-stuck`, {}, {
+        headers: { "X-Admin-Key": "aither:hub" },
+      });
+      setBatchResult(res.data);
+    } catch (e) {
+      setBatchResult({ error: e.message });
+    } finally {
+      setBatchRetrying(false);
+    }
+  };
+
+  // Fetch monitor health on mount
+  useEffect(() => {
+    const fetchMonitorHealth = async () => {
+      try {
+        const baseURL = import.meta.env.VITE_API_BASE_URL;
+        const res = await axios.get(`${baseURL}/api/v1/admin/monitor-health`, {
+          headers: { "X-Admin-Key": "aither:hub" },
+        });
+        setMonitorHealth(res.data);
+      } catch (e) {
+        console.warn("Monitor health fetch failed:", e);
+      }
+    };
+    fetchMonitorHealth();
+  }, []);
+
   const statusColor = (status) => {
     const map = { DONE: "text-green-600 bg-green-50", ERROR: "text-red-600 bg-red-50", uploaded: "text-blue-600 bg-blue-50", NEW: "text-gray-600 bg-gray-50" };
     return map[status] || "text-yellow-600 bg-yellow-50";
@@ -517,6 +555,45 @@ function UploadHealthSection({ data, loading }) {
           <StatCard label="エラー率" value={`${overall.error_rate_pct}%`} color="red" />
           <StatCard label="スタック" value={stuck_videos} unit="件" color={stuck_videos > 0 ? "red" : "gray"} />
         </div>
+
+        {/* Batch Retry + Monitor Health */}
+        {stuck_videos > 0 && (
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <button
+              onClick={handleBatchRetry}
+              disabled={batchRetrying}
+              className="px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {batchRetrying ? "リトライ中..." : `全${stuck_videos}件を一括リトライ`}
+            </button>
+            {batchResult && !batchResult.error && (
+              <span className="text-sm text-green-600">
+                成功: {batchResult.success}/{batchResult.total} 件 | 失敗: {batchResult.failed} | スキップ: {batchResult.skipped}
+              </span>
+            )}
+            {batchResult?.error && (
+              <span className="text-sm text-red-600">エラー: {batchResult.error}</span>
+            )}
+          </div>
+        )}
+
+        {/* Monitor Health */}
+        {monitorHealth && (
+          <div className="mt-3 p-3 rounded-lg border border-gray-200 bg-gray-50">
+            <div className="flex items-center gap-2 mb-1">
+              <span className={`w-2 h-2 rounded-full ${monitorHealth.status === 'healthy' ? 'bg-green-500' : monitorHealth.status === 'warning' ? 'bg-yellow-500' : 'bg-red-500'}`}></span>
+              <span className="text-xs font-medium text-gray-600">Monitor: {monitorHealth.status}</span>
+              {monitorHealth.last_run_at && (
+                <span className="text-xs text-gray-400">最終実行: {new Date(monitorHealth.last_run_at).toLocaleString('ja-JP')}</span>
+              )}
+            </div>
+            {monitorHealth.last_result && (
+              <div className="text-xs text-gray-500">
+                検出: {monitorHealth.last_result.found || 0}件 | リキュー: {monitorHealth.last_result.requeued || 0}件 | 失敗: {monitorHealth.last_result.failed || 0}件
+              </div>
+            )}
+          </div>
+        )}
       </section>
 
       {/* Time-based */}

@@ -1,5 +1,6 @@
 import json
 import os
+import time
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict
@@ -13,6 +14,12 @@ if not logger.handlers:
     logging.basicConfig(level=logging.INFO)
 logger.setLevel(logging.INFO)
 
+# ── Enqueue retry configuration ──────────────────────────────────────────────
+# Azure Storage Queue can have transient network errors. Retrying immediately
+# prevents a single hiccup from permanently failing the video enqueue.
+ENQUEUE_MAX_RETRIES = 3           # Total attempts (1 initial + 2 retries)
+ENQUEUE_RETRY_DELAY_SECONDS = 2   # Delay between retries (exponential backoff)
+
 
 @dataclass
 class EnqueueResult:
@@ -21,6 +28,7 @@ class EnqueueResult:
     message_id: str | None = None
     enqueued_at: datetime | None = None
     error: str | None = None
+    attempts: int = 1  # How many attempts were made
 
 
 def _get_queue_client() -> QueueClient:
@@ -46,31 +54,60 @@ def _get_queue_client() -> QueueClient:
 
 
 async def enqueue_job(payload: Dict[str, Any]) -> EnqueueResult:
-    """Push a job message to Azure Storage Queue.
+    """Push a job message to Azure Storage Queue with automatic retry.
 
+    Retries up to ENQUEUE_MAX_RETRIES times with exponential backoff.
     Returns EnqueueResult with message_id and enqueued_at on success,
     or error details on failure. Never raises — caller checks result.success.
     """
-    try:
-        client = _get_queue_client()
-        message = json.dumps(payload, ensure_ascii=False)
-        logger.info(f"[queue] enqueue len={len(message)} payload_keys={list(payload.keys())}")
-        resp = client.send_message(message)
+    last_error = None
 
-        # Extract evidence from Azure response
-        message_id = resp.get("id") if isinstance(resp, dict) else getattr(resp, "id", None)
-        inserted_on = resp.get("inserted_on") if isinstance(resp, dict) else getattr(resp, "inserted_on", None)
-        enqueued_at = inserted_on if inserted_on else datetime.now(timezone.utc)
+    for attempt in range(1, ENQUEUE_MAX_RETRIES + 1):
+        try:
+            client = _get_queue_client()
+            message = json.dumps(payload, ensure_ascii=False)
+            logger.info(
+                f"[queue] enqueue attempt={attempt}/{ENQUEUE_MAX_RETRIES} "
+                f"len={len(message)} payload_keys={list(payload.keys())}"
+            )
+            resp = client.send_message(message)
 
-        logger.info(f"[queue] enqueue OK message_id={message_id} enqueued_at={enqueued_at}")
-        return EnqueueResult(
-            success=True,
-            message_id=str(message_id) if message_id else None,
-            enqueued_at=enqueued_at,
-        )
-    except Exception as e:
-        logger.error(f"[queue] enqueue FAILED: {e}")
-        return EnqueueResult(
-            success=False,
-            error=str(e),
-        )
+            # Extract evidence from Azure response
+            message_id = resp.get("id") if isinstance(resp, dict) else getattr(resp, "id", None)
+            inserted_on = resp.get("inserted_on") if isinstance(resp, dict) else getattr(resp, "inserted_on", None)
+            enqueued_at = inserted_on if inserted_on else datetime.now(timezone.utc)
+
+            if attempt > 1:
+                logger.info(
+                    f"[queue] enqueue OK on attempt {attempt}/{ENQUEUE_MAX_RETRIES} "
+                    f"message_id={message_id}"
+                )
+            else:
+                logger.info(f"[queue] enqueue OK message_id={message_id} enqueued_at={enqueued_at}")
+
+            return EnqueueResult(
+                success=True,
+                message_id=str(message_id) if message_id else None,
+                enqueued_at=enqueued_at,
+                attempts=attempt,
+            )
+        except Exception as e:
+            last_error = e
+            logger.warning(
+                f"[queue] enqueue attempt {attempt}/{ENQUEUE_MAX_RETRIES} FAILED: {e}"
+            )
+            if attempt < ENQUEUE_MAX_RETRIES:
+                # Exponential backoff: 2s, 4s
+                delay = ENQUEUE_RETRY_DELAY_SECONDS * (2 ** (attempt - 1))
+                logger.info(f"[queue] retrying in {delay}s...")
+                time.sleep(delay)
+
+    # All retries exhausted
+    logger.error(
+        f"[queue] enqueue FAILED after {ENQUEUE_MAX_RETRIES} attempts: {last_error}"
+    )
+    return EnqueueResult(
+        success=False,
+        error=f"Failed after {ENQUEUE_MAX_RETRIES} attempts: {last_error}",
+        attempts=ENQUEUE_MAX_RETRIES,
+    )

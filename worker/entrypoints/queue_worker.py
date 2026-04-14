@@ -1575,6 +1575,17 @@ def main():
     # Initial disk cleanup
     periodic_disk_cleanup()
 
+    # ── Task 6: Startup Stuck Video Recovery ──
+    # On worker startup, detect videos that were stuck (STEP_* with no
+    # worker_claimed_at or stale worker_claimed_at) and notify the API
+    # server to re-enqueue them. This catches videos that fell through
+    # the cracks when the monitor was not running or SAS generation failed.
+    try:
+        from worker.recovery.startup_stuck_recovery import recover_stuck_on_startup
+        recover_stuck_on_startup()
+    except Exception as e:
+        print(f"[worker] Warning: Startup stuck recovery failed: {e}")
+
     executor = ThreadPoolExecutor(max_workers=MAX_WORKERS)
     executor_ref[0] = executor  # Set reference for DB fallback
 

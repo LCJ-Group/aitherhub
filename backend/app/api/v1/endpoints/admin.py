@@ -4031,3 +4031,229 @@ async def generate_data_driven_script_endpoint(
     except Exception as e:
         logger.exception(f"Data-driven script generation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# Batch Retry Stuck Videos API (施策1: 一括再投入)
+# =============================================================================
+@router.post("/batch-retry-stuck")
+async def batch_retry_stuck_videos(
+    x_admin_key: str = Header(...),
+    db: AsyncSession = Depends(get_db),
+    max_videos: int = Query(50, ge=1, le=200),
+    threshold_minutes: int = Query(120, ge=10, le=1440),
+):
+    """Batch retry all stuck videos in one API call.
+    Detects videos stuck at STEP_* or 'uploaded' status for longer than
+    threshold_minutes, generates fresh SAS URLs, and re-enqueues them.
+    Also retries ERROR videos that were never enqueued.
+    Returns summary of results."""
+    if x_admin_key != f"{ADMIN_ID}:{ADMIN_PASS}":
+        raise HTTPException(status_code=403, detail="Forbidden")
+    from app.services.storage_service import generate_download_sas
+    from app.services.queue_service import enqueue_job
+    from datetime import datetime, timezone, timedelta
+
+    threshold = datetime.now(timezone.utc) - timedelta(minutes=threshold_minutes)
+    results = {"total_found": 0, "retried": 0, "failed": 0, "skipped": 0, "details": []}
+
+    try:
+        # Part 1: Stuck processing videos (STEP_* or uploaded, not updated recently)
+        sql_stuck = text("""
+            SELECT v.id, v.original_filename, v.status, v.user_id,
+                   v.dequeue_count, v.upload_type,
+                   u.email as user_email
+            FROM videos v
+            LEFT JOIN users u ON v.user_id = u.id
+            WHERE (v.status IN ('uploaded', 'QUEUED') OR v.status LIKE 'STEP_%%')
+              AND v.status != 'completed'
+              AND v.updated_at < :threshold
+              AND COALESCE(v.dequeue_count, 0) < 10
+            ORDER BY v.updated_at ASC
+            LIMIT :max_videos
+        """)
+        result = await db.execute(sql_stuck, {
+            "threshold": threshold,
+            "max_videos": max_videos,
+        })
+        stuck_rows = result.fetchall()
+
+        # Part 2: Never-enqueued ERROR videos
+        sql_never_enqueued = text("""
+            SELECT v.id, v.original_filename, v.status, v.user_id,
+                   v.dequeue_count, v.upload_type,
+                   u.email as user_email
+            FROM videos v
+            LEFT JOIN users u ON v.user_id = u.id
+            WHERE v.status = 'ERROR'
+              AND (v.enqueue_status = 'FAILED' OR v.enqueue_status IS NULL)
+              AND v.worker_claimed_at IS NULL
+              AND COALESCE(v.dequeue_count, 0) < 10
+            ORDER BY v.created_at ASC
+            LIMIT :max_videos
+        """)
+        result2 = await db.execute(sql_never_enqueued, {"max_videos": max_videos})
+        never_enqueued_rows = result2.fetchall()
+
+        all_rows = list(stuck_rows) + list(never_enqueued_rows)
+        # Deduplicate by video_id
+        seen_ids = set()
+        unique_rows = []
+        for row in all_rows:
+            vid = str(row.id)
+            if vid not in seen_ids:
+                seen_ids.add(vid)
+                unique_rows.append(row)
+        results["total_found"] = len(unique_rows)
+
+        for row in unique_rows:
+            video_id = str(row.id)
+            upload_type = row.upload_type or ""
+            detail = {"video_id": video_id, "filename": row.original_filename, "old_status": row.status}
+
+            # Skip live_boost videos (different pipeline)
+            if upload_type == "live_boost":
+                detail["result"] = "skipped_live_boost"
+                results["skipped"] += 1
+                results["details"].append(detail)
+                continue
+
+            try:
+                # Generate fresh SAS URL
+                download_url, expiry = await generate_download_sas(
+                    email=row.user_email or "unknown@unknown.com",
+                    video_id=video_id,
+                    filename=row.original_filename,
+                    expires_in_minutes=1440,
+                )
+                # Reset status to STEP_0 (NEVER use 'uploaded' as fallback per danger rules)
+                resume_status = row.status if row.status.startswith("STEP_") else "STEP_0_EXTRACT_FRAMES"
+                await db.execute(
+                    text("""
+                        UPDATE videos
+                        SET status = :status,
+                            step_progress = 0,
+                            error_message = NULL,
+                            enqueue_status = NULL,
+                            enqueue_error = NULL,
+                            last_error_code = NULL,
+                            last_error_message = NULL,
+                            worker_claimed_at = NULL,
+                            dequeue_count = COALESCE(dequeue_count, 0) + 1,
+                            updated_at = NOW()
+                        WHERE id = :vid
+                    """),
+                    {"vid": video_id, "status": resume_status},
+                )
+                await db.commit()
+
+                # Enqueue job
+                enqueue_result = await enqueue_job({
+                    "video_id": video_id,
+                    "blob_url": download_url,
+                    "original_filename": row.original_filename,
+                })
+                if enqueue_result.success:
+                    # Update enqueue evidence
+                    try:
+                        await db.execute(
+                            text("""
+                                UPDATE videos
+                                SET enqueue_status = 'OK',
+                                    queue_message_id = :msg_id,
+                                    queue_enqueued_at = :enqueued_at,
+                                    enqueue_error = NULL
+                                WHERE id = :vid
+                            """),
+                            {
+                                "vid": video_id,
+                                "msg_id": enqueue_result.message_id,
+                                "enqueued_at": enqueue_result.enqueued_at,
+                            },
+                        )
+                        await db.commit()
+                    except Exception:
+                        try:
+                            await db.rollback()
+                        except Exception:
+                            pass
+                    detail["result"] = "retried_ok"
+                    detail["resume_from"] = resume_status
+                    results["retried"] += 1
+                else:
+                    detail["result"] = f"enqueue_failed: {enqueue_result.error}"
+                    results["failed"] += 1
+            except Exception as e:
+                detail["result"] = f"error: {str(e)[:200]}"
+                results["failed"] += 1
+                try:
+                    await db.rollback()
+                except Exception:
+                    pass
+            results["details"].append(detail)
+
+        # Record to video_error_logs for observability
+        try:
+            await db.execute(
+                text("""
+                    INSERT INTO video_error_logs
+                        (video_id, error_code, error_step, error_message, source)
+                    VALUES
+                        ('00000000-0000-0000-0000-000000000000', 'BATCH_RETRY',
+                         'ADMIN_API', :msg, 'admin')
+                """),
+                {"msg": f"Batch retry: found={results['total_found']} retried={results['retried']} failed={results['failed']} skipped={results['skipped']}"},
+            )
+            await db.commit()
+        except Exception:
+            try:
+                await db.rollback()
+            except Exception:
+                pass
+
+        return results
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Batch retry stuck videos failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# Monitor Health API (施策2: monitor健全性確認)
+# =============================================================================
+@router.get("/monitor-health")
+async def get_monitor_health(
+    x_admin_key: str = Header(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get stuck video monitor health status.
+    Returns the last N health log entries so admin can verify the monitor is running."""
+    if x_admin_key != f"{ADMIN_ID}:{ADMIN_PASS}":
+        raise HTTPException(status_code=403, detail="Forbidden")
+    try:
+        result = await db.execute(
+            text("""
+                SELECT * FROM monitor_health_logs
+                ORDER BY checked_at DESC
+                LIMIT 20
+            """)
+        )
+        rows = result.fetchall()
+        logs = []
+        for row in rows:
+            logs.append({
+                "id": row.id,
+                "checked_at": str(row.checked_at),
+                "stuck_found": row.stuck_found,
+                "stuck_retried": row.stuck_retried,
+                "never_enqueued_found": row.never_enqueued_found,
+                "never_enqueued_retried": row.never_enqueued_retried,
+                "deploy_interrupted_found": row.deploy_interrupted_found,
+                "deploy_interrupted_retried": row.deploy_interrupted_retried,
+                "errors": row.errors,
+            })
+        return {"monitor_health_logs": logs}
+    except Exception as e:
+        # Table might not exist yet
+        return {"monitor_health_logs": [], "error": str(e)}
