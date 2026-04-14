@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AitherHub Widget — セットアップガイド</title>
+  <link rel="icon" href="/favicon.ico">
+  <style>
+    :root {
+      --primary: #FF2D55;
+      --primary-light: #FF2D5515;
+      --dark: #0f172a;
+      --gray: #64748b;
+      --light: #f8fafc;
+      --border: #e2e8f0;
+      --radius: 12px;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Hiragino Sans', 'Noto Sans JP', sans-serif;
+      color: var(--dark);
+      background: var(--light);
+      line-height: 1.7;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── Header ── */
+    .header {
+      background: var(--dark);
+      color: #fff;
+      padding: 60px 24px 48px;
+      text-align: center;
+    }
+    .header-logo {
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      opacity: 0.6;
+      margin-bottom: 16px;
+    }
+    .header h1 {
+      font-size: clamp(28px, 5vw, 42px);
+      font-weight: 800;
+      margin-bottom: 12px;
+    }
+    .header p {
+      font-size: 17px;
+      opacity: 0.7;
+      max-width: 520px;
+      margin: 0 auto;
+    }
+
+    /* ── Container ── */
+    .container {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    /* ── Time Badge ── */
+    .time-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--primary-light);
+      color: var(--primary);
+      font-size: 14px;
+      font-weight: 600;
+      padding: 8px 16px;
+      border-radius: 100px;
+      margin: 32px auto 40px;
+    }
+    .time-badge svg { flex-shrink: 0; }
+
+    /* ── Steps ── */
+    .step {
+      background: #fff;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 32px;
+      margin-bottom: 24px;
+      position: relative;
+    }
+    .step-number {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 36px;
+      height: 36px;
+      background: var(--primary);
+      color: #fff;
+      font-size: 16px;
+      font-weight: 700;
+      border-radius: 50%;
+      margin-bottom: 16px;
+    }
+    .step h2 {
+      font-size: 20px;
+      font-weight: 700;
+      margin-bottom: 12px;
+    }
+    .step p {
+      color: var(--gray);
+      font-size: 15px;
+      margin-bottom: 16px;
+    }
+
+    /* ── Code Block ── */
+    .code-block {
+      position: relative;
+      background: #1e293b;
+      color: #e2e8f0;
+      border-radius: 8px;
+      padding: 20px;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: 13px;
+      line-height: 1.6;
+      overflow-x: auto;
+      margin: 16px 0;
+    }
+    .code-block .tag { color: #f472b6; }
+    .code-block .attr { color: #7dd3fc; }
+    .code-block .val { color: #86efac; }
+    .code-block .comment { color: #64748b; }
+    .copy-btn {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      background: rgba(255,255,255,0.1);
+      border: 1px solid rgba(255,255,255,0.2);
+      color: #fff;
+      padding: 6px 14px;
+      border-radius: 6px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .copy-btn:hover { background: rgba(255,255,255,0.2); }
+    .copy-btn.copied { background: #22c55e; border-color: #22c55e; }
+
+    /* ── Screenshots ── */
+    .screenshots {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin: 20px 0;
+    }
+    .screenshot {
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      position: relative;
+    }
+    .screenshot img {
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+    .screenshot-label {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: linear-gradient(transparent, rgba(0,0,0,0.7));
+      color: #fff;
+      padding: 24px 12px 10px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    /* ── GTM Steps ── */
+    .gtm-steps {
+      counter-reset: gtm;
+      list-style: none;
+      padding: 0;
+    }
+    .gtm-steps li {
+      counter-increment: gtm;
+      padding: 12px 0 12px 40px;
+      position: relative;
+      color: var(--dark);
+      font-size: 15px;
+      border-bottom: 1px solid var(--border);
+    }
+    .gtm-steps li:last-child { border-bottom: none; }
+    .gtm-steps li::before {
+      content: counter(gtm);
+      position: absolute;
+      left: 0;
+      top: 12px;
+      width: 26px;
+      height: 26px;
+      background: var(--primary-light);
+      color: var(--primary);
+      font-size: 13px;
+      font-weight: 700;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .gtm-steps li strong { color: var(--dark); }
+
+    /* ── Info Box ── */
+    .info-box {
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      border-radius: 8px;
+      padding: 16px 20px;
+      font-size: 14px;
+      color: #1e40af;
+      margin: 16px 0;
+      display: flex;
+      gap: 10px;
+    }
+    .info-box.warning {
+      background: #fef3c7;
+      border-color: #fde68a;
+      color: #92400e;
+    }
+    .info-box svg { flex-shrink: 0; margin-top: 2px; }
+
+    /* ── Method Toggle ── */
+    .method-tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 24px;
+    }
+    .method-tab {
+      flex: 1;
+      padding: 12px;
+      text-align: center;
+      border: 2px solid var(--border);
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      background: #fff;
+    }
+    .method-tab.active {
+      border-color: var(--primary);
+      background: var(--primary-light);
+      color: var(--primary);
+    }
+    .method-tab .badge {
+      display: inline-block;
+      background: #22c55e;
+      color: #fff;
+      font-size: 10px;
+      padding: 2px 8px;
+      border-radius: 100px;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+    .method-content { display: none; }
+    .method-content.active { display: block; }
+
+    /* ── Features ── */
+    .features {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin: 16px 0;
+    }
+    .feature {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 14px;
+      color: var(--gray);
+    }
+    .feature svg { color: #22c55e; flex-shrink: 0; }
+
+    /* ── CTA Section ── */
+    .cta-section {
+      background: linear-gradient(135deg, var(--dark) 0%, #1e293b 100%);
+      color: #fff;
+      border-radius: var(--radius);
+      padding: 40px 32px;
+      text-align: center;
+      margin: 40px 0;
+    }
+    .cta-section h2 {
+      font-size: 22px;
+      margin-bottom: 12px;
+    }
+    .cta-section p {
+      opacity: 0.7;
+      font-size: 15px;
+      margin-bottom: 24px;
+    }
+    .cta-btn {
+      display: inline-block;
+      background: var(--primary);
+      color: #fff;
+      padding: 14px 32px;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: 600;
+      text-decoration: none;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .cta-btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(255,45,85,0.3);
+    }
+
+    /* ── Footer ── */
+    .footer {
+      text-align: center;
+      padding: 32px 24px;
+      color: var(--gray);
+      font-size: 13px;
+    }
+
+    /* ── Responsive ── */
+    @media (max-width: 600px) {
+      .screenshots { grid-template-columns: 1fr; }
+      .features { grid-template-columns: 1fr; }
+      .step { padding: 24px 20px; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-logo">AitherHub</div>
+    <h1>ウィジェット セットアップガイド</h1>
+    <p>あなたのECサイトにTikTok風の動画フィードを追加して、コンバージョンを最大化しましょう。</p>
+  </div>
+
+  <div class="container">
+
+    <!-- Time Badge -->
+    <div style="text-align:center;">
+      <div class="time-badge">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+        セットアップ所要時間：約3分
+      </div>
+    </div>
+
+    <!-- What You Get -->
+    <div class="step">
+      <h2>AitherHub ウィジェットとは？</h2>
+      <p>あなたのECサイトにワンタグで埋め込める、TikTok風のショッパブル動画フィードです。サイト訪問者は動画を見ながらそのまま商品を購入できます。</p>
+      <div class="screenshots">
+        <div class="screenshot">
+          <img src="/widget/docs/fab-bubble.webp" alt="フローティングバブル">
+          <div class="screenshot-label">フローティングバブル</div>
+        </div>
+        <div class="screenshot">
+          <img src="/widget/docs/feed-fullscreen.webp" alt="フルスクリーンフィード">
+          <div class="screenshot-label">フルスクリーンフィード</div>
+        </div>
+      </div>
+      <div class="features">
+        <div class="feature">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>
+          TikTok風縦スワイプ
+        </div>
+        <div class="feature">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>
+          自動再生・ループ
+        </div>
+        <div class="feature">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>
+          購入ボタン付き
+        </div>
+        <div class="feature">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>
+          ブランドカラー自動反映
+        </div>
+        <div class="feature">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>
+          モバイル完全対応
+        </div>
+        <div class="feature">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>
+          サイト速度に影響なし
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 1: Your Tag -->
+    <div class="step">
+      <div class="step-number">1</div>
+      <h2>あなた専用のタグを確認</h2>
+      <p>以下があなたのサイト専用のウィジェットタグです。このタグ1つで全ての機能が動作します。</p>
+      <div class="code-block" id="widget-tag">
+        <button class="copy-btn" onclick="copyCode(this, 'widget-tag-raw')">コピー</button>
+        <span class="comment">&lt;!-- AitherHub Widget --&gt;</span><br>
+        <span class="tag">&lt;script</span>
+        <span class="attr"> src</span>=<span class="val">"https://www.aitherhub.com/widget/loader.js"</span><br>
+        <span class="attr">  data-client-id</span>=<span class="val">"<span id="client-id-display">cab30223</span>"</span>
+        <span class="attr"> async</span><span class="tag">&gt;&lt;/script&gt;</span>
+      </div>
+      <textarea id="widget-tag-raw" style="position:absolute;left:-9999px;"><!-- AitherHub Widget -->
+<script src="https://www.aitherhub.com/widget/loader.js" data-client-id="cab30223" async></script></textarea>
+    </div>
+
+    <!-- Step 2: Choose Method -->
+    <div class="step">
+      <div class="step-number">2</div>
+      <h2>埋め込み方法を選択</h2>
+      <p>お好みの方法でタグをサイトに追加してください。</p>
+
+      <div class="method-tabs">
+        <div class="method-tab active" onclick="switchMethod('gtm')">
+          GTM（推奨）<span class="badge">簡単</span>
+        </div>
+        <div class="method-tab" onclick="switchMethod('direct')">
+          HTML直接埋め込み
+        </div>
+      </div>
+
+      <!-- GTM Method -->
+      <div class="method-content active" id="method-gtm">
+        <div class="info-box">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+          <div>Google Tag Manager を使えば、サイトのコードを一切変更せずにウィジェットを追加・削除できます。エンジニアの作業は不要です。</div>
+        </div>
+        <ol class="gtm-steps">
+          <li><a href="https://tagmanager.google.com/" target="_blank"><strong>Google Tag Manager</strong></a> にログインします</li>
+          <li>対象のコンテナを選択し、<strong>「タグ」→「新規」</strong>をクリック</li>
+          <li>タグの設定で<strong>「カスタム HTML」</strong>を選択</li>
+          <li>上記のタグ（Step 1）をそのまま<strong>貼り付け</strong></li>
+          <li>トリガーで<strong>「All Pages」</strong>を選択</li>
+          <li><strong>「保存」</strong>→ 右上の<strong>「公開」</strong>ボタンを押す</li>
+        </ol>
+        <div class="info-box warning">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0zM12 9v4M12 17h.01"/></svg>
+          <div>GTMがまだサイトに導入されていない場合は、先にGTMのコンテナスニペットをサイトに追加する必要があります。<a href="https://support.google.com/tagmanager/answer/6103696" target="_blank" style="color:inherit;font-weight:600;">GTM導入ガイド</a></div>
+        </div>
+      </div>
+
+      <!-- Direct Method -->
+      <div class="method-content" id="method-direct">
+        <p style="color:var(--gray);font-size:14px;margin-bottom:16px;">サイトのHTMLテンプレートに直接タグを追加する方法です。</p>
+        <ol class="gtm-steps">
+          <li>サイトの<strong>共通テンプレート</strong>（header.php, layout.twig 等）を開く</li>
+          <li><strong>&lt;/body&gt;</strong> タグの直前に、Step 1のタグを貼り付け</li>
+          <li>ファイルを保存してデプロイ</li>
+        </ol>
+        <div class="code-block">
+          <span class="comment">&lt;!-- サイトのHTML --&gt;</span><br>
+          <span class="tag">&lt;body&gt;</span><br>
+          <span class="comment">  ... サイトのコンテンツ ...</span><br><br>
+          <span class="comment">  &lt;!-- AitherHub Widget（&lt;/body&gt;の直前に追加） --&gt;</span><br>
+          <span class="tag">  &lt;script</span> <span class="attr">src</span>=<span class="val">"https://www.aitherhub.com/widget/loader.js"</span><br>
+          <span class="attr">    data-client-id</span>=<span class="val">"cab30223"</span> <span class="attr">async</span><span class="tag">&gt;&lt;/script&gt;</span><br>
+          <span class="tag">&lt;/body&gt;</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 3: Verify -->
+    <div class="step">
+      <div class="step-number">3</div>
+      <h2>動作確認</h2>
+      <p>タグを追加したら、サイトにアクセスして以下を確認してください。</p>
+      <ol class="gtm-steps">
+        <li>ページ右下に<strong>ピンク色の丸いボタン（バブル）</strong>が表示される</li>
+        <li>バブルをクリックすると<strong>フルスクリーンの動画フィード</strong>が開く</li>
+        <li>動画が<strong>自動再生</strong>され、上下スワイプで次の動画に切り替わる</li>
+        <li><strong>「購入する」ボタン</strong>が表示され、クリックで商品ページに遷移する</li>
+      </ol>
+      <div class="info-box">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+        <div>GTM経由の場合、<strong>「プレビューモード」</strong>で公開前にテストすることもできます。</div>
+      </div>
+    </div>
+
+    <!-- FAQ -->
+    <div class="step">
+      <h2>よくある質問</h2>
+      <details style="border-bottom:1px solid var(--border);padding:16px 0;">
+        <summary style="cursor:pointer;font-weight:600;font-size:15px;">サイトの表示速度に影響はありますか？</summary>
+        <p style="margin-top:12px;">ありません。ウィジェットは <code>async</code> 属性で非同期読み込みされるため、サイトの表示を一切ブロックしません。</p>
+      </details>
+      <details style="border-bottom:1px solid var(--border);padding:16px 0;">
+        <summary style="cursor:pointer;font-weight:600;font-size:15px;">動画の追加・変更はどうすればいいですか？</summary>
+        <p style="margin-top:12px;">AitherHub管理画面からクリップを追加・削除できます。変更は即座にウィジェットに反映されます。サイト側の作業は不要です。</p>
+      </details>
+      <details style="border-bottom:1px solid var(--border);padding:16px 0;">
+        <summary style="cursor:pointer;font-weight:600;font-size:15px;">ウィジェットのデザインをカスタマイズできますか？</summary>
+        <p style="margin-top:12px;">テーマカラー、CTAボタンの文言、ブランド名はAitherHub側で設定可能です。お客様のブランドに合わせた表示になります。</p>
+      </details>
+      <details style="padding:16px 0;">
+        <summary style="cursor:pointer;font-weight:600;font-size:15px;">ウィジェットを一時的に非表示にしたい場合は？</summary>
+        <p style="margin-top:12px;">GTM経由の場合はタグを「一時停止」にするだけです。HTML直接の場合はタグを削除またはコメントアウトしてください。</p>
+      </details>
+    </div>
+
+    <!-- CTA -->
+    <div class="cta-section">
+      <h2>サポートが必要ですか？</h2>
+      <p>セットアップで困ったことがあれば、お気軽にお問い合わせください。</p>
+      <a href="mailto:support@aitherhub.com" class="cta-btn">サポートに連絡する</a>
+    </div>
+
+  </div>
+
+  <!-- Footer -->
+  <div class="footer">
+    &copy; 2026 AitherHub. All rights reserved.
+  </div>
+
+  <script>
+    // Copy code
+    function copyCode(btn, textareaId) {
+      var ta = document.getElementById(textareaId);
+      if (ta) {
+        navigator.clipboard.writeText(ta.value).then(function() {
+          btn.textContent = 'コピー済み';
+          btn.classList.add('copied');
+          setTimeout(function() {
+            btn.textContent = 'コピー';
+            btn.classList.remove('copied');
+          }, 2000);
+        });
+      }
+    }
+
+    // Method toggle
+    function switchMethod(method) {
+      document.querySelectorAll('.method-tab').forEach(function(t) { t.classList.remove('active'); });
+      document.querySelectorAll('.method-content').forEach(function(c) { c.classList.remove('active'); });
+      if (method === 'gtm') {
+        document.querySelectorAll('.method-tab')[0].classList.add('active');
+        document.getElementById('method-gtm').classList.add('active');
+      } else {
+        document.querySelectorAll('.method-tab')[1].classList.add('active');
+        document.getElementById('method-direct').classList.add('active');
+      }
+    }
+
+    // Read client_id from URL params if provided
+    var params = new URLSearchParams(window.location.search);
+    var cid = params.get('client_id');
+    if (cid) {
+      document.getElementById('client-id-display').textContent = cid;
+      document.getElementById('widget-tag-raw').value =
+        '<!-- AitherHub Widget -->\n<script src="https://www.aitherhub.com/widget/loader.js" data-client-id="' + cid + '" async><\/script>';
+    }
+  </script>
+
+</body>
+</html>
