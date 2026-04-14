@@ -187,11 +187,20 @@ function ClipCard({ clip, onAssign, onRemove, onEdit, isWidget }) {
             style={{ width: '100%', height: '100%', objectFit: 'cover' }}
             onEnded={() => setPlaying(false)} />
         ) : (
-          <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#111' }}>
+          <div style={{ width: '100%', height: '100%', position: 'relative', background: '#111' }}>
             {clip.thumbnail_url ? (
               <img src={clip.thumbnail_url} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt="" />
+            ) : clip.clip_url ? (
+              <video src={clip.clip_url} preload="metadata" muted playsInline
+                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                onLoadedData={(e) => { e.target.currentTime = 0.5; }} />
             ) : (
-              <div style={{ fontSize: 48, opacity: 0.5 }}>▶</div>
+              <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <div style={{ fontSize: 48, opacity: 0.5 }}>▶</div>
+              </div>
+            )}
+            {!playing && (
+              <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', fontSize: 36, color: 'rgba(255,255,255,0.8)', textShadow: '0 2px 8px rgba(0,0,0,0.5)', pointerEvents: 'none' }}>▶</div>
             )}
           </div>
         )}
