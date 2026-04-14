@@ -79,6 +79,8 @@ from app.services.liveavatar_service import (
     LiveAvatarError,
     get_liveavatar_service,
 )
+# ── OBS WebSocket Manager (for real-time speak-text push) ──
+from app.services.obs_ws_manager import get_obs_ws_manager
 from app.services.hybrid_livestream_service import HybridLivestreamService
 from app.services.script_generator_service import (
     generate_liveroom_scripts,
@@ -4132,7 +4134,45 @@ async def liveavatar_speak_queue_push(
 ):
     service = get_liveavatar_service()
     item = service.push_speak_text(text)
+    # Broadcast to OBS WebSocket clients for instant delivery (no polling delay)
+    obs_ws = get_obs_ws_manager()
+    if obs_ws.client_count > 0:
+        await obs_ws.broadcast_speak_text(item)
     return {"success": True, "item": item}
+
+
+# ── OBS WebSocket endpoint for real-time speak-text delivery ──
+from fastapi import WebSocket as FastAPIWebSocket
+import asyncio
+
+
+@router.websocket("/liveavatar/obs-ws")
+async def liveavatar_obs_websocket(websocket: FastAPIWebSocket):
+    """
+    WebSocket endpoint for OBS Browser Source.
+    OBS connects here to receive speak-text items in real-time
+    instead of polling every 1.5 seconds.
+    """
+    obs_ws = get_obs_ws_manager()
+    await obs_ws.connect(websocket)
+    try:
+        # Keep connection alive — listen for pings/messages
+        while True:
+            try:
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=60)
+                # Client can send "ping" to keep alive
+                if data == "ping":
+                    await websocket.send_text('{"type": "pong"}')
+            except asyncio.TimeoutError:
+                # Send keepalive ping
+                try:
+                    await websocket.send_text('{"type": "ping"}')
+                except Exception:
+                    break
+    except Exception:
+        pass
+    finally:
+        obs_ws.disconnect(websocket)
 
 
 @router.get(

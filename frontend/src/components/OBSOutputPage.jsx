@@ -4,10 +4,14 @@ import { Room, RoomEvent, Track } from "livekit-client";
 import axios from "axios";
 
 const ADMIN_KEY = "aither:hub";
-const QUEUE_POLL_INTERVAL = 1500; // 1.5 seconds
+const QUEUE_POLL_INTERVAL = 5000; // 5 seconds (fallback only — WebSocket is primary)
+const WS_RECONNECT_DELAY = 2000; // 2 seconds
 
 // Generate UUID-style event ID (matching LiveAvatar SDK format)
-// LiveAvatar server validates event_id format — non-UUID IDs are silently ignored.
+// ╔══════════════════════════════════════════════════════════════════╗
+// ║ DO NOT CHANGE: LiveAvatar server validates event_id format.     ║
+// ║ Non-UUID IDs are silently ignored. See Lesson #273, Danger #275 ║
+// ╚══════════════════════════════════════════════════════════════════╝
 function generateEventId() {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
     const r = (Math.random() * 16) | 0;
@@ -17,16 +21,16 @@ function generateEventId() {
 }
 
 /**
- * OBS Output Page — Independent Session + SpeakText Queue Relay
+ * OBS Output Page — Independent Session + WebSocket Real-Time Relay
  *
  * URL: /ai-live-creator/obs?bg=green&language=ja
  *
- * Architecture:
+ * Architecture (v2 — WebSocket):
  *   1. OBS creates its OWN LiveAvatar session (independent from main page)
- *   2. OBS polls the backend speak-text queue every 1.5 seconds
- *   3. When main page sends speakText, it also pushes to the backend queue
- *   4. OBS receives the text from the queue and sends it to its own LiveKit room
- *   5. Both avatars speak the same text simultaneously
+ *   2. OBS connects to backend WebSocket for INSTANT speak-text delivery
+ *   3. When main page sends speakText, backend broadcasts via WebSocket
+ *   4. OBS receives the text instantly and sends it to its own LiveKit room
+ *   5. Fallback: HTTP polling every 5s if WebSocket disconnects
  *
  * IMPORTANT: All functions use refs directly (no useCallback chains) to avoid
  * stale closure issues. setInterval callbacks always read the latest roomRef.current.
@@ -46,6 +50,7 @@ export default function OBSOutputPage() {
   const [sessionDuration, setSessionDuration] = useState(0);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [debugInfo, setDebugInfo] = useState("");
+  const [wsConnected, setWsConnected] = useState(false);
 
   // Refs — used by interval callbacks to avoid stale closures
   const videoContainerRef = useRef(null);
@@ -56,9 +61,11 @@ export default function OBSOutputPage() {
   const queuePollRef = useRef(null);
   const lastQueueIdRef = useRef("0");
   const mountedRef = useRef(true);
-  const wsRef = useRef(null);
+  const obsWsRef = useRef(null);
+  const wsReconnectTimerRef = useRef(null);
   const pollCountRef = useRef(0);
   const speakCountRef = useRef(0);
+  const processedIdsRef = useRef(new Set()); // Dedup: track processed item IDs
 
   const baseURL = import.meta.env.VITE_API_BASE_URL;
 
@@ -73,7 +80,9 @@ export default function OBSOutputPage() {
   const backgroundColor = bgMap[bgColor] || bgMap.green;
 
   // ── Helper: Send event to LiveKit data channel ──
-  // This is a plain function, NOT useCallback. It reads roomRef.current directly.
+  // ╔══════════════════════════════════════════════════════════════════╗
+  // ║ DO NOT CHANGE JSON structure: See Danger #276                   ║
+  // ╚══════════════════════════════════════════════════════════════════╝
   function sendToLiveKit(text) {
     const room = roomRef.current;
     if (!room || !room.localParticipant || room.state !== "connected") {
@@ -105,13 +114,108 @@ export default function OBSOutputPage() {
     }
   }
 
-  // ── Helper: Poll speak queue once ──
-  // Plain async function, reads refs directly.
-  async function pollQueueOnce() {
-    const room = roomRef.current;
-    if (!room || room.state !== "connected") {
+  // ── Helper: Process a speak-text item (with dedup) ──
+  function processItem(item) {
+    const itemId = String(item.id);
+    if (processedIdsRef.current.has(itemId)) {
+      console.debug(`[OBS] Skipping duplicate item #${itemId}`);
       return;
     }
+    processedIdsRef.current.add(itemId);
+    // Keep set size bounded
+    if (processedIdsRef.current.size > 200) {
+      const arr = Array.from(processedIdsRef.current);
+      processedIdsRef.current = new Set(arr.slice(-100));
+    }
+
+    console.log(`[OBS] 📨 Item #${itemId}: "${item.text.substring(0, 60)}"`);
+    const sent = sendToLiveKit(item.text);
+    console.log(`[OBS] → LiveKit send result: ${sent ? "SUCCESS" : "FAILED"}`);
+
+    // Update last seen ID for polling fallback
+    if (parseInt(itemId) > parseInt(lastQueueIdRef.current || "0")) {
+      lastQueueIdRef.current = itemId;
+    }
+
+    setDebugInfo(`WS: ${wsConnected ? "✓" : "✗"} | Speaks: ${speakCountRef.current} | LastID: ${lastQueueIdRef.current}`);
+  }
+
+  // ── WebSocket: Connect to backend OBS-WS endpoint ──
+  function connectObsWebSocket() {
+    if (obsWsRef.current?.readyState === WebSocket.OPEN) return;
+
+    // Build WebSocket URL from baseURL
+    const wsProtocol = baseURL.startsWith("https") ? "wss" : "ws";
+    const wsHost = baseURL.replace(/^https?:\/\//, "");
+    const wsUrl = `${wsProtocol}://${wsHost}/api/v1/digital-human/liveavatar/obs-ws`;
+
+    console.log(`[OBS] 🔌 Connecting WebSocket: ${wsUrl}`);
+
+    try {
+      const ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        console.log("[OBS] ✅ WebSocket connected — real-time mode active");
+        setWsConnected(true);
+        setDebugInfo(`WS: ✓ | Speaks: ${speakCountRef.current} | LastID: ${lastQueueIdRef.current}`);
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === "speak_text" && msg.item) {
+            console.log(`[OBS] ⚡ WebSocket received speak_text #${msg.item.id}`);
+            processItem(msg.item);
+          } else if (msg.type === "ping") {
+            ws.send("ping"); // respond to server ping
+          }
+        } catch (e) {
+          console.debug("[OBS] WebSocket message parse error:", e);
+        }
+      };
+
+      ws.onclose = () => {
+        console.log("[OBS] ⚠️ WebSocket disconnected");
+        setWsConnected(false);
+        obsWsRef.current = null;
+        // Auto-reconnect
+        if (mountedRef.current && status === "connected") {
+          console.log(`[OBS] 🔄 Reconnecting WebSocket in ${WS_RECONNECT_DELAY}ms...`);
+          wsReconnectTimerRef.current = setTimeout(() => {
+            if (mountedRef.current) connectObsWebSocket();
+          }, WS_RECONNECT_DELAY);
+        }
+      };
+
+      ws.onerror = (e) => {
+        console.warn("[OBS] WebSocket error:", e);
+      };
+
+      obsWsRef.current = ws;
+    } catch (e) {
+      console.warn("[OBS] WebSocket connect failed:", e);
+      setWsConnected(false);
+    }
+  }
+
+  function disconnectObsWebSocket() {
+    if (wsReconnectTimerRef.current) {
+      clearTimeout(wsReconnectTimerRef.current);
+      wsReconnectTimerRef.current = null;
+    }
+    if (obsWsRef.current) {
+      try { obsWsRef.current.close(); } catch (e) {}
+      obsWsRef.current = null;
+    }
+    setWsConnected(false);
+  }
+
+  // ── Fallback: Poll speak queue once (only when WebSocket is down) ──
+  async function pollQueueOnce() {
+    const room = roomRef.current;
+    if (!room || room.state !== "connected") return;
+    // Skip polling if WebSocket is connected
+    if (obsWsRef.current?.readyState === WebSocket.OPEN) return;
 
     try {
       const resp = await axios.get(
@@ -127,31 +231,20 @@ export default function OBSOutputPage() {
 
       if (resp.data?.success && resp.data.items?.length > 0) {
         for (const item of resp.data.items) {
-          console.log(`[OBS] 📨 Queue item #${item.id}: "${item.text.substring(0, 60)}"`);
-          const sent = sendToLiveKit(item.text);
-          console.log(`[OBS] → LiveKit send result: ${sent ? "SUCCESS" : "FAILED"}`);
+          processItem(item);
         }
-        // Update last seen ID
-        const maxId = resp.data.items[resp.data.items.length - 1].id;
-        lastQueueIdRef.current = maxId;
-      }
-
-      // Update debug info
-      if (pollCountRef.current % 5 === 0) {
-        setDebugInfo(`Polls: ${pollCountRef.current} | Speaks: ${speakCountRef.current} | LastID: ${lastQueueIdRef.current}`);
       }
     } catch (err) {
       console.debug("[OBS] Queue poll error:", err.message);
     }
   }
 
-  // ── Start queue polling ──
+  // ── Start queue polling (fallback) ──
   function startQueuePolling() {
     if (queuePollRef.current) {
       clearInterval(queuePollRef.current);
     }
-    console.log(`[OBS] 🔄 Starting queue polling (every ${QUEUE_POLL_INTERVAL}ms)`);
-    // Use arrow function in setInterval so it always calls the latest pollQueueOnce
+    console.log(`[OBS] 🔄 Starting fallback polling (every ${QUEUE_POLL_INTERVAL}ms)`);
     queuePollRef.current = setInterval(() => {
       pollQueueOnce();
     }, QUEUE_POLL_INTERVAL);
@@ -249,6 +342,7 @@ export default function OBSOutputPage() {
       room.on(RoomEvent.Disconnected, () => {
         console.log("[OBS] ⚠️ Disconnected from LiveKit room");
         stopQueuePolling();
+        disconnectObsWebSocket();
         if (mountedRef.current) {
           setStatus("error");
           setError("Disconnected from LiveKit room");
@@ -266,7 +360,10 @@ export default function OBSOutputPage() {
       console.log("[OBS] Local participant:", room.localParticipant?.identity);
       console.log("[OBS] Permissions:", JSON.stringify(room.localParticipant?.permissions));
 
-      // Start queue polling AFTER room is connected and ref is set
+      // Connect WebSocket for real-time speak-text delivery
+      connectObsWebSocket();
+
+      // Start fallback polling (only activates when WebSocket is down)
       startQueuePolling();
 
     } catch (err) {
@@ -299,7 +396,7 @@ export default function OBSOutputPage() {
         throw new Error(resp.data?.error || "Failed to create session");
       }
 
-      const { session_id, livekit_url, livekit_client_token, ws_url } = resp.data;
+      const { session_id, livekit_url, livekit_client_token } = resp.data;
       if (!livekit_url || !livekit_client_token) {
         throw new Error("Backend did not return LiveKit credentials");
       }
@@ -307,20 +404,7 @@ export default function OBSOutputPage() {
       sessionIdRef.current = session_id;
       console.log(`[OBS] ✅ Session created: ${session_id}`);
 
-      // Connect WebSocket if available
-      if (ws_url) {
-        try {
-          const ws = new WebSocket(ws_url);
-          ws.onopen = () => console.log("[OBS] WebSocket connected");
-          ws.onclose = () => console.log("[OBS] WebSocket closed");
-          ws.onerror = (e) => console.warn("[OBS] WebSocket error:", e);
-          wsRef.current = ws;
-        } catch (e) {
-          console.warn("[OBS] WebSocket connect failed:", e);
-        }
-      }
-
-      // Connect to LiveKit room
+      // Connect to LiveKit room (WebSocket will be connected after room is ready)
       await connectToRoom(livekit_url, livekit_client_token);
     } catch (err) {
       console.error("[OBS] ❌ Session creation error:", err);
@@ -332,11 +416,7 @@ export default function OBSOutputPage() {
   // ── Stop session ──
   async function stopSession() {
     stopQueuePolling();
-
-    if (wsRef.current) {
-      try { wsRef.current.close(); } catch (e) {}
-      wsRef.current = null;
-    }
+    disconnectObsWebSocket();
 
     audioElementsRef.current.forEach((el) => {
       try { el.remove(); } catch (e) {}
@@ -370,6 +450,7 @@ export default function OBSOutputPage() {
     setSessionDuration(0);
     pollCountRef.current = 0;
     speakCountRef.current = 0;
+    processedIdsRef.current.clear();
   }
 
   // ── Auto-start session on mount ──
@@ -385,6 +466,7 @@ export default function OBSOutputPage() {
       mountedRef.current = false;
       clearTimeout(timer);
       stopQueuePolling();
+      disconnectObsWebSocket();
       if (roomRef.current) {
         try { roomRef.current.disconnect(); } catch (e) {}
       }
@@ -467,7 +549,7 @@ export default function OBSOutputPage() {
               AitherHub OBS Output
             </h2>
             <p style={{ fontSize: "12px", color: "#888", marginBottom: "24px" }}>
-              Independent Session + SpeakText Queue Relay
+              Independent Session + WebSocket Real-Time Relay
             </p>
 
             {status === "idle" && (
@@ -534,7 +616,7 @@ export default function OBSOutputPage() {
             <div style={{ marginTop: "20px", fontSize: "10px", color: "#666" }}>
               <p>Background: {bgColor}</p>
               <p>Language: {language}</p>
-              <p>Mode: Independent Session + Queue Relay</p>
+              <p>Mode: WebSocket Real-Time + Polling Fallback</p>
             </div>
           </div>
         </div>
@@ -572,7 +654,7 @@ export default function OBSOutputPage() {
                 width: "6px",
                 height: "6px",
                 borderRadius: "50%",
-                backgroundColor: "#4ade80",
+                backgroundColor: wsConnected ? "#4ade80" : "#facc15",
                 animation: "pulse 2s infinite",
               }}
             />
