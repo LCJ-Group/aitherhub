@@ -287,6 +287,14 @@ async def brand_list_clips(
     db: AsyncSession = Depends(get_db),
 ):
     """List all clips available to this brand (uploaded by brand + assigned to widget)."""
+    try:
+        return await _brand_list_clips_impl(client_id, limit, offset, db)
+    except Exception as e:
+        logger.exception(f"brand_list_clips error for {client_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def _brand_list_clips_impl(client_id: str, limit: int, offset: int, db: AsyncSession):
 
     # Get clips uploaded by this brand
     result = await db.execute(
@@ -482,7 +490,14 @@ async def brand_list_widget_clips(
     db: AsyncSession = Depends(get_db),
 ):
     """List clips currently assigned to the brand's widget."""
+    try:
+        return await _brand_list_widget_clips_impl(client_id, db)
+    except Exception as e:
+        logger.exception(f"brand_list_widget_clips error for {client_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
+
+async def _brand_list_widget_clips_impl(client_id: str, db: AsyncSession):
     result = await db.execute(
         text("""
             SELECT wca.clip_id, wca.sort_order, wca.page_url_pattern,
