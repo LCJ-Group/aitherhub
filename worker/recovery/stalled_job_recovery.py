@@ -87,11 +87,14 @@ class StalledJobRecovery:
     def _check_and_recover(self):
         """Find stalled jobs and take recovery action."""
         try:
-            from shared.db.session import get_session, run_sync
+            from shared.db.session import get_session
             from shared.schemas.clip_job import get_stale_clip_jobs
             from sqlalchemy import text
+            import asyncio
 
-            stale_jobs = run_sync(self._fetch_stale_jobs())
+            # Use asyncio.run() instead of run_sync() because this runs in a
+            # separate daemon thread that doesn't share the main event loop
+            stale_jobs = asyncio.run(self._fetch_stale_jobs())
 
             if not stale_jobs:
                 return
@@ -108,14 +111,14 @@ class StalledJobRecovery:
 
                 if attempt_count >= MAX_ATTEMPTS:
                     # Mark as dead — no more retries
-                    run_sync(self._mark_dead(clip_id, attempt_count, old_worker))
+                    asyncio.run(self._mark_dead(clip_id, attempt_count, old_worker))
                     logger.error(
                         "[recovery] DEAD: clip=%s video=%s attempts=%d/%d (was on worker=%s)",
                         clip_id, video_id, attempt_count, MAX_ATTEMPTS, old_worker,
                     )
                 else:
                     # Mark as retrying — will be picked up by queue again
-                    run_sync(self._mark_retrying(clip_id, attempt_count, old_worker))
+                    asyncio.run(self._mark_retrying(clip_id, attempt_count, old_worker))
                     self._re_enqueue_clip(clip_id, video_id, job.get("job_payload"))
                     logger.warning(
                         "[recovery] RETRY: clip=%s video=%s attempt=%d/%d (was on worker=%s)",

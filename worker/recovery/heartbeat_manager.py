@@ -133,7 +133,10 @@ class HeartbeatManager:
                             {"clip_ids": clip_ids},
                         )
 
-            run_sync(_batch_update())
+            # Use asyncio.run() instead of run_sync() because this runs in a
+            # separate daemon thread that doesn't share the main event loop
+            import asyncio
+            asyncio.run(_batch_update())
             logger.info(
                 "[heartbeat] Updated %d job(s): %s",
                 len(clip_ids),
