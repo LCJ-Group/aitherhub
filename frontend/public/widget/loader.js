@@ -1,5 +1,5 @@
 /**
- * AitherHub Widget Loader v2.1 — TikTok-Style Fullscreen Feed
+ * AitherHub Widget Loader v2.1a — TikTok-Style Fullscreen Feed
  *
  * GTM経由で配信される軽量エントリーポイント。
  * 先方のECサイトに1行のタグを追加するだけで、
@@ -9,7 +9,7 @@
  *   <script src="https://www.aitherhub.com/widget/loader.js" data-client-id="YOUR_ID" async></script>
  *
  * Features:
- *   - Floating bubble with auto-playing video preview (muted)
+ *   - Floating bubble icon (bottom-right) with pulse animation
  *   - Tap → fullscreen TikTok-style vertical video feed overlay
  *   - Swipe up/down (touch) or scroll/arrow keys to navigate videos
  *   - Right-side action buttons (like, share, mute)
@@ -19,10 +19,8 @@
  *   - Hack 2: In-video CTA action
  *   - Hack 3: Shadow Tracking (localStorage session)
  *
- * v2.1 Changes:
- *   - FAB bubble now shows auto-playing video preview instead of static icon
+ * v2.1a Changes:
  *   - Client-side filtering of clips without valid clip_url
- *   - Improved empty state handling
  */
 (function () {
   "use strict";
@@ -181,17 +179,16 @@
   // ── Build TikTok-Style Feed Widget ──
   function buildWidget(shadow, config) {
     var rawClips = config.clips || [];
-
     // Filter out clips without a valid clip_url (safety net)
     var clips = [];
-    for (var i = 0; i < rawClips.length; i++) {
-      if (rawClips[i].clip_url) clips.push(rawClips[i]);
+    for (var ci = 0; ci < rawClips.length; ci++) {
+      if (rawClips[ci].clip_url) clips.push(rawClips[ci]);
     }
     if (clips.length === 0) return;
 
     var themeColor = config.theme_color || "#FF2D55";
     var position = config.position || "bottom-right";
-    var ctaText = config.cta_text || "\u8CFC\u5165\u3059\u308B";
+    var ctaText = config.cta_text || "購入する";
     var brandName = config.name || "";
 
     // ── CSS ──
@@ -204,10 +201,10 @@
         position: fixed;\
         ' + (position.indexOf("right") !== -1 ? "right: 16px;" : "left: 16px;") + '\
         ' + (position.indexOf("top") !== -1 ? "top: 16px;" : "bottom: 16px;") + '\
-        width: 68px;\
-        height: 68px;\
+        width: 60px;\
+        height: 60px;\
         border-radius: 50%;\
-        background: #000;\
+        background: ' + themeColor + ';\
         cursor: pointer;\
         pointer-events: auto;\
         box-shadow: 0 4px 24px rgba(0,0,0,0.35);\
@@ -224,21 +221,6 @@
       .ath-fab:active { transform: scale(0.95); }\
       .ath-fab img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }\
       .ath-fab-icon { width: 28px; height: 28px; }\
-      .ath-fab-video {\
-        width: 100%; height: 100%;\
-        object-fit: cover;\
-        border-radius: 50%;\
-        pointer-events: none;\
-      }\
-      .ath-fab-play-overlay {\
-        position: absolute;\
-        top: 50%; left: 50%;\
-        transform: translate(-50%, -50%);\
-        width: 24px; height: 24px;\
-        opacity: 0.9;\
-        pointer-events: none;\
-        filter: drop-shadow(0 1px 3px rgba(0,0,0,0.5));\
-      }\
       .ath-fab .ath-badge {\
         position: absolute; top: -4px; right: -4px;\
         min-width: 22px; height: 22px; padding: 0 6px;\
@@ -247,7 +229,6 @@
         display: flex; align-items: center; justify-content: center;\
         font-family: "Noto Sans JP", -apple-system, sans-serif;\
         border: 2px solid white;\
-        z-index: 2;\
       }\
       @keyframes ath-pulse {\
         0%, 100% { box-shadow: 0 4px 24px rgba(0,0,0,0.35); }\
@@ -328,8 +309,8 @@
         width: 40px; height: 40px;\
         border-radius: 50%;\
         background: rgba(255,255,255,0.15);\
-        backdrop-filter: blur(8px);\
-        -webkit-backdrop-filter: blur(8px);\
+        backdrop-filter: blur(10px);\
+        -webkit-backdrop-filter: blur(10px);\
         border: none;\
         cursor: pointer;\
         display: flex;\
@@ -337,35 +318,34 @@
         justify-content: center;\
         transition: background 0.2s;\
       }\
-      .ath-close-btn:hover { background: rgba(255,255,255,0.25); }\
+      .ath-close-btn:hover { background: rgba(255,255,255,0.3); }\
       .ath-close-btn svg { width: 22px; height: 22px; }\
       \
-      /* ── Right-side Actions ── */\
+      /* ── Right Action Buttons ── */\
       .ath-actions {\
         position: absolute;\
         right: 12px;\
-        bottom: 180px;\
+        bottom: 160px;\
         display: flex;\
         flex-direction: column;\
+        align-items: center;\
         gap: 20px;\
         z-index: 15;\
-        pointer-events: auto;\
       }\
       .ath-action-btn {\
         display: flex;\
         flex-direction: column;\
         align-items: center;\
         gap: 4px;\
-        background: none;\
-        border: none;\
         cursor: pointer;\
-        color: white;\
+        border: none;\
+        background: none;\
         padding: 0;\
       }\
       .ath-action-icon {\
-        width: 44px; height: 44px;\
+        width: 48px; height: 48px;\
         border-radius: 50%;\
-        background: rgba(255,255,255,0.12);\
+        background: rgba(0,0,0,0.3);\
         backdrop-filter: blur(8px);\
         -webkit-backdrop-filter: blur(8px);\
         display: flex;\
@@ -374,80 +354,74 @@
         transition: transform 0.2s, background 0.2s;\
       }\
       .ath-action-icon:active { transform: scale(0.9); }\
-      .ath-action-icon svg { width: 24px; height: 24px; }\
-      .ath-action-icon.liked { background: rgba(255,45,85,0.3); }\
+      .ath-action-icon svg { width: 26px; height: 26px; }\
       .ath-action-label {\
-        font-size: 10px;\
+        color: white;\
+        font-size: 11px;\
         font-weight: 500;\
         text-shadow: 0 1px 3px rgba(0,0,0,0.5);\
       }\
+      .ath-action-icon.liked { background: rgba(255,45,85,0.8); }\
       \
-      /* ── Video Counter ── */\
-      .ath-counter {\
-        position: absolute;\
-        top: 60px; left: 50%;\
-        transform: translateX(-50%);\
-        color: rgba(255,255,255,0.7);\
-        font-size: 13px;\
-        font-weight: 500;\
-        z-index: 15;\
-        pointer-events: none;\
-        text-shadow: 0 1px 3px rgba(0,0,0,0.5);\
-      }\
-      \
-      /* ── Bottom Info + CTA ── */\
+      /* ── Bottom Info ── */\
       .ath-bottom {\
         position: absolute;\
-        bottom: 0; left: 0; right: 0;\
-        padding: 16px;\
-        padding-bottom: max(env(safe-area-inset-bottom, 16px), 16px);\
-        background: linear-gradient(to top, rgba(0,0,0,0.8) 0%, transparent 100%);\
+        bottom: 0; left: 0; right: 70px;\
+        padding: 0 16px 24px;\
+        padding-bottom: max(env(safe-area-inset-bottom, 24px), 24px);\
         z-index: 15;\
+        background: linear-gradient(to top, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0.3) 60%, transparent 100%);\
         pointer-events: none;\
       }\
       .ath-bottom > * { pointer-events: auto; }\
-      .ath-cta-wrap { margin-bottom: 12px; }\
+      \
+      /* ── CTA Button ── */\
+      .ath-cta-wrap {\
+        margin-bottom: 12px;\
+      }\
       .ath-cta {\
-        display: flex;\
+        display: inline-flex;\
         align-items: center;\
-        justify-content: center;\
         gap: 8px;\
-        width: 100%;\
-        padding: 14px 20px;\
-        border-radius: 12px;\
+        padding: 10px 20px;\
+        border-radius: 24px;\
         background: ' + themeColor + ';\
         color: white;\
-        font-size: 16px;\
-        font-weight: 700;\
         border: none;\
         cursor: pointer;\
+        font-size: 15px;\
+        font-weight: 700;\
+        font-family: inherit;\
         transition: transform 0.2s, opacity 0.2s;\
-        font-family: "Noto Sans JP", -apple-system, sans-serif;\
-        box-shadow: 0 4px 16px ' + themeColor + '60;\
+        box-shadow: 0 4px 16px rgba(0,0,0,0.3);\
+        pointer-events: auto;\
       }\
-      .ath-cta:hover { opacity: 0.9; }\
-      .ath-cta:active { transform: scale(0.98); }\
-      .ath-cta svg { width: 20px; height: 20px; flex-shrink: 0; }\
-      .ath-info { color: white; }\
+      .ath-cta:active { transform: scale(0.96); }\
+      .ath-cta svg { width: 18px; height: 18px; flex-shrink: 0; }\
+      \
+      /* ── Video Info ── */\
+      .ath-info {\
+        color: white;\
+        text-shadow: 0 1px 4px rgba(0,0,0,0.6);\
+      }\
       .ath-info-title {\
         font-size: 15px;\
         font-weight: 700;\
+        line-height: 1.4;\
         margin-bottom: 4px;\
-        text-shadow: 0 1px 4px rgba(0,0,0,0.5);\
         display: -webkit-box;\
-        -webkit-line-clamp: 1;\
+        -webkit-line-clamp: 2;\
         -webkit-box-orient: vertical;\
         overflow: hidden;\
       }\
       .ath-info-desc {\
         font-size: 13px;\
-        color: rgba(255,255,255,0.8);\
-        line-height: 1.4;\
+        opacity: 0.85;\
+        line-height: 1.5;\
         display: -webkit-box;\
         -webkit-line-clamp: 2;\
         -webkit-box-orient: vertical;\
         overflow: hidden;\
-        text-shadow: 0 1px 3px rgba(0,0,0,0.5);\
       }\
       \
       /* ── Progress Bar ── */\
@@ -456,66 +430,82 @@
         bottom: 0; left: 0; right: 0;\
         height: 3px;\
         background: rgba(255,255,255,0.2);\
-        z-index: 20;\
+        z-index: 25;\
         cursor: pointer;\
-        pointer-events: auto;\
+        transition: height 0.15s;\
       }\
+      .ath-progress-wrap:hover { height: 6px; }\
       .ath-progress-bar {\
         height: 100%;\
         background: ' + themeColor + ';\
-        width: 0%;\
+        border-radius: 0 2px 2px 0;\
         transition: width 0.1s linear;\
+        width: 0%;\
       }\
       \
-      /* ── Play/Pause Indicator ── */\
+      /* ── Video Counter ── */\
+      .ath-counter {\
+        position: absolute;\
+        top: 50%;\
+        right: 12px;\
+        transform: translateY(80px);\
+        color: white;\
+        font-size: 12px;\
+        font-weight: 600;\
+        text-shadow: 0 1px 3px rgba(0,0,0,0.5);\
+        z-index: 15;\
+        text-align: center;\
+      }\
+      \
+      /* ── Play/Pause indicator ── */\
       .ath-play-indicator {\
         position: absolute;\
         top: 50%; left: 50%;\
         transform: translate(-50%, -50%) scale(0);\
-        width: 64px; height: 64px;\
-        background: rgba(0,0,0,0.5);\
+        width: 72px; height: 72px;\
         border-radius: 50%;\
+        background: rgba(0,0,0,0.5);\
         display: flex;\
         align-items: center;\
         justify-content: center;\
+        z-index: 30;\
+        pointer-events: none;\
         opacity: 0;\
         transition: transform 0.2s, opacity 0.2s;\
-        pointer-events: none;\
-        z-index: 10;\
       }\
       .ath-play-indicator.show {\
         transform: translate(-50%, -50%) scale(1);\
         opacity: 1;\
       }\
-      .ath-play-indicator svg { width: 32px; height: 32px; }\
+      .ath-play-indicator svg { width: 36px; height: 36px; }\
       \
-      /* ── Speed Indicator ── */\
+      /* ── Speed indicator ── */\
       .ath-speed-indicator {\
         position: absolute;\
-        top: 50%; left: 50%;\
-        transform: translate(-50%, -50%);\
-        background: rgba(0,0,0,0.7);\
-        color: white;\
-        padding: 8px 16px;\
+        top: 80px; left: 50%;\
+        transform: translateX(-50%);\
+        background: rgba(0,0,0,0.6);\
+        backdrop-filter: blur(10px);\
+        -webkit-backdrop-filter: blur(10px);\
         border-radius: 20px;\
-        font-size: 14px;\
+        padding: 6px 16px;\
+        color: white;\
+        font-size: 13px;\
         font-weight: 700;\
-        z-index: 25;\
-        opacity: 0;\
-        transition: opacity 0.2s;\
+        z-index: 30;\
         pointer-events: none;\
+        display: none;\
       }\
-      .ath-speed-indicator.show { opacity: 1; }\
+      .ath-speed-indicator.show { display: flex; align-items: center; gap: 6px; }\
       \
-      /* ── Swipe Hint ── */\
+      /* ── Swipe hint ── */\
       .ath-swipe-hint {\
         position: absolute;\
-        bottom: 200px; left: 50%;\
+        bottom: 100px; left: 50%;\
         transform: translateX(-50%);\
-        color: rgba(255,255,255,0.8);\
+        color: rgba(255,255,255,0.7);\
         font-size: 13px;\
-        font-weight: 500;\
-        z-index: 15;\
+        z-index: 30;\
         pointer-events: none;\
         animation: ath-hint-bounce 2s ease-in-out infinite;\
         text-align: center;\
@@ -552,37 +542,11 @@
     var longPressTimer = null;
     var isSpeedUp = false;
     var hintShown = false;
-    var fabVideo = null;
 
-    // ── FAB (Floating Action Button) with Video Preview ──
+    // ── FAB (Floating Action Button) ──
     var fab = document.createElement("div");
     fab.className = "ath-fab";
-
-    // Create video element for FAB bubble preview
-    if (clips[0] && clips[0].clip_url) {
-      fabVideo = document.createElement("video");
-      fabVideo.className = "ath-fab-video";
-      fabVideo.setAttribute("playsinline", "");
-      fabVideo.setAttribute("webkit-playsinline", "");
-      fabVideo.setAttribute("preload", "auto");
-      fabVideo.setAttribute("loop", "");
-      fabVideo.muted = true;
-      fabVideo.src = clips[0].clip_url;
-      fab.appendChild(fabVideo);
-
-      // Small play icon overlay on the video bubble
-      var fabPlayOverlay = document.createElement("div");
-      fabPlayOverlay.className = "ath-fab-play-overlay";
-      fabPlayOverlay.innerHTML = ICONS.play;
-      fab.appendChild(fabPlayOverlay);
-
-      // Auto-play the FAB video when it's ready
-      fabVideo.addEventListener("loadeddata", function () {
-        fabVideo.play().catch(function () { });
-      });
-      // Also try to play immediately (in case loadeddata already fired)
-      try { fabVideo.play().catch(function () { }); } catch (e) { }
-    } else if (clips[0] && clips[0].thumbnail_url) {
+    if (clips[0] && clips[0].thumbnail_url) {
       var fabImg = document.createElement("img");
       fabImg.src = clips[0].thumbnail_url;
       fabImg.alt = "Watch video";
@@ -590,7 +554,6 @@
     } else {
       fab.innerHTML = '<div class="ath-fab-icon">' + ICONS.play + '</div>';
     }
-
     if (clips.length > 1) {
       var badge = document.createElement("span");
       badge.className = "ath-badge";
@@ -646,7 +609,7 @@
       video.setAttribute("preload", index <= 2 ? "auto" : "metadata");
       video.setAttribute("loop", "");
       video.muted = true;
-      video.src = clip.clip_url;
+      video.src = clip.clip_url || "";
       inner.appendChild(video);
       videoElements[index] = video;
 
@@ -665,7 +628,7 @@
     // Speed indicator
     var speedIndicator = document.createElement("div");
     speedIndicator.className = "ath-speed-indicator";
-    speedIndicator.innerHTML = '&#9889; 2x \u901F\u5EA6';
+    speedIndicator.innerHTML = '&#9889; 2x 速度';
     overlay.appendChild(speedIndicator);
 
     // Right-side action buttons
@@ -675,19 +638,19 @@
     // Like button
     var likeBtn = document.createElement("button");
     likeBtn.className = "ath-action-btn";
-    likeBtn.innerHTML = '<div class="ath-action-icon">' + ICONS.heart + '</div><span class="ath-action-label">\u3044\u3044\u306D</span>';
+    likeBtn.innerHTML = '<div class="ath-action-icon">' + ICONS.heart + '</div><span class="ath-action-label">いいね</span>';
     actions.appendChild(likeBtn);
 
     // Share button
     var shareBtn = document.createElement("button");
     shareBtn.className = "ath-action-btn";
-    shareBtn.innerHTML = '<div class="ath-action-icon">' + ICONS.share + '</div><span class="ath-action-label">\u30B7\u30A7\u30A2</span>';
+    shareBtn.innerHTML = '<div class="ath-action-icon">' + ICONS.share + '</div><span class="ath-action-label">シェア</span>';
     actions.appendChild(shareBtn);
 
     // Mute button
     var muteBtn = document.createElement("button");
     muteBtn.className = "ath-action-btn";
-    muteBtn.innerHTML = '<div class="ath-action-icon">' + ICONS.volumeOff + '</div><span class="ath-action-label">\u97F3\u58F0</span>';
+    muteBtn.innerHTML = '<div class="ath-action-icon">' + ICONS.volumeOff + '</div><span class="ath-action-label">音声</span>';
     actions.appendChild(muteBtn);
 
     overlay.appendChild(actions);
@@ -731,7 +694,7 @@
     // Swipe hint (shown once)
     var swipeHint = document.createElement("div");
     swipeHint.className = "ath-swipe-hint";
-    swipeHint.innerHTML = ICONS.chevronUp + '\u4E0A\u306B\u30B9\u30EF\u30A4\u30D7';
+    swipeHint.innerHTML = ICONS.chevronUp + '上にスワイプ';
     swipeHint.style.display = "none";
     overlay.appendChild(swipeHint);
 
@@ -863,8 +826,6 @@
       isOpen = true;
       overlay.classList.add("active");
       fab.style.display = "none";
-      // Pause FAB video when overlay opens
-      if (fabVideo) { try { fabVideo.pause(); } catch (e) { } }
       // Lock body scroll
       document.body.style.overflow = "hidden";
       document.documentElement.style.overflow = "hidden";
@@ -883,8 +844,6 @@
       isOpen = false;
       overlay.classList.remove("active");
       fab.style.display = "flex";
-      // Resume FAB video when overlay closes
-      if (fabVideo) { try { fabVideo.play().catch(function () { }); } catch (e) { } }
       // Unlock body scroll
       document.body.style.overflow = "";
       document.documentElement.style.overflow = "";
@@ -1052,8 +1011,8 @@
         navigator.clipboard.writeText(shareUrl);
         // Visual feedback
         var label = shareBtn.querySelector(".ath-action-label");
-        label.textContent = "\u30B3\u30D4\u30FC!";
-        setTimeout(function () { label.textContent = "\u30B7\u30A7\u30A2"; }, 2000);
+        label.textContent = "コピー!";
+        setTimeout(function () { label.textContent = "シェア"; }, 2000);
       }
       trackEvent("share", { clip_id: clip.clip_id });
     });
@@ -1083,7 +1042,7 @@
           var cartBtn = document.querySelector(config.cart_selector);
           if (cartBtn) {
             cartBtn.click();
-            ctaBtn.innerHTML = '<span>&#10003; \u30AB\u30FC\u30C8\u306B\u8FFD\u52A0\u3057\u307E\u3057\u305F</span>';
+            ctaBtn.innerHTML = '<span>&#10003; カートに追加しました</span>';
             setTimeout(function () {
               var clip2 = clips[currentIndex];
               ctaBtn.innerHTML = ICONS.cart + '<span>' + ctaText + (clip2.product_name ? ' \u00B7 ' + clip2.product_name : '') + '</span>';
