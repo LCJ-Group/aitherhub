@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import axios from "axios";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
@@ -408,17 +408,9 @@ export default function AdminWidgetManager({ adminKey }) {
                 <div className="mt-4 pt-4 border-t space-y-3">
                   <h5 className="text-sm font-medium text-gray-600">割り当てクリップ</h5>
                   {clipAssignments.length > 0 ? (
-                    <div className="space-y-2">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                       {clipAssignments.map((clip, i) => (
-                        <div key={i} className="flex items-center gap-3 bg-gray-50 rounded-lg p-3">
-                          {clip.thumbnail_url && (
-                            <img src={clip.thumbnail_url} alt="" className="w-12 h-16 object-cover rounded" />
-                          )}
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm font-medium text-gray-700 truncate">{clip.product_name || clip.liver_name || "Untitled"}</p>
-                            <p className="text-xs text-gray-400">ID: {clip.clip_id}</p>
-                          </div>
-                        </div>
+                        <ClipCard key={clip.clip_id || i} clip={clip} index={i} />
                       ))}
                     </div>
                   ) : (
@@ -492,6 +484,136 @@ export default function AdminWidgetManager({ adminKey }) {
           </table>
         </div>
       )}
+    </div>
+  );
+}
+
+/* ── ClipCard: サムネイル＋ホバー動画プレビュー付きカード ── */
+function ClipCard({ clip, index }) {
+  const videoRef = useRef(null);
+  const [isHovering, setIsHovering] = useState(false);
+  const [videoError, setVideoError] = useState(false);
+
+  const formatDuration = (sec) => {
+    if (!sec) return "--:--";
+    const m = Math.floor(sec / 60);
+    const s = Math.floor(sec % 60);
+    return `${m}:${s.toString().padStart(2, "0")}`;
+  };
+
+  const handleMouseEnter = () => {
+    setIsHovering(true);
+    if (videoRef.current && clip.clip_url && !videoError) {
+      videoRef.current.currentTime = 0;
+      videoRef.current.play().catch(() => {});
+    }
+  };
+
+  const handleMouseLeave = () => {
+    setIsHovering(false);
+    if (videoRef.current) {
+      videoRef.current.pause();
+      videoRef.current.currentTime = 0;
+    }
+  };
+
+  const hasVideo = !!clip.clip_url;
+  const title = clip.product_name || clip.liver_name || `クリップ #${index + 1}`;
+
+  return (
+    <div
+      className="relative bg-gray-50 rounded-xl border border-gray-200 overflow-hidden group cursor-pointer transition-shadow hover:shadow-lg"
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+    >
+      {/* Video / Thumbnail area */}
+      <div className="relative w-full" style={{ aspectRatio: "9/16", maxHeight: "240px" }}>
+        {hasVideo && !videoError ? (
+          <>
+            {/* Video element - plays on hover */}
+            <video
+              ref={videoRef}
+              src={clip.clip_url}
+              muted
+              playsInline
+              loop
+              preload="metadata"
+              onError={() => setVideoError(true)}
+              className="absolute inset-0 w-full h-full object-cover"
+              style={{ opacity: isHovering ? 1 : 0, transition: "opacity 0.3s" }}
+            />
+            {/* Poster / first frame - shown when not hovering */}
+            <video
+              src={clip.clip_url}
+              muted
+              playsInline
+              preload="metadata"
+              className="absolute inset-0 w-full h-full object-cover"
+              style={{ opacity: isHovering ? 0 : 1, transition: "opacity 0.3s" }}
+            />
+            {/* Play icon overlay */}
+            {!isHovering && (
+              <div className="absolute inset-0 flex items-center justify-center">
+                <div className="w-10 h-10 bg-black/40 rounded-full flex items-center justify-center backdrop-blur-sm">
+                  <svg className="w-5 h-5 text-white ml-0.5" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M8 5v14l11-7z" />
+                  </svg>
+                </div>
+              </div>
+            )}
+          </>
+        ) : clip.thumbnail_url ? (
+          <img
+            src={clip.thumbnail_url}
+            alt={title}
+            className="absolute inset-0 w-full h-full object-cover"
+          />
+        ) : (
+          /* No video, no thumbnail - placeholder */
+          <div className="absolute inset-0 w-full h-full bg-gradient-to-br from-gray-200 to-gray-300 flex items-center justify-center">
+            <div className="text-center">
+              <svg className="w-8 h-8 text-gray-400 mx-auto mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+              </svg>
+              <span className="text-xs text-gray-400">動画なし</span>
+            </div>
+          </div>
+        )}
+
+        {/* Duration badge */}
+        {clip.duration_sec && (
+          <div className="absolute bottom-2 right-2 bg-black/70 text-white text-xs px-1.5 py-0.5 rounded">
+            {formatDuration(clip.duration_sec)}
+          </div>
+        )}
+
+        {/* Status badge */}
+        <div className={`absolute top-2 left-2 px-1.5 py-0.5 rounded text-xs font-medium ${
+          hasVideo ? "bg-green-500/90 text-white" : "bg-red-500/90 text-white"
+        }`}>
+          {hasVideo ? "配信中" : "動画なし"}
+        </div>
+      </div>
+
+      {/* Info area */}
+      <div className="p-3">
+        <p className="text-sm font-medium text-gray-800 truncate" title={title}>
+          {title}
+        </p>
+        <p className="text-xs text-gray-400 font-mono mt-1 truncate" title={clip.clip_id}>
+          {clip.clip_id?.slice(0, 8)}...
+        </p>
+        {clip.page_url_pattern && (
+          <p className="text-xs text-purple-500 mt-1 truncate" title={clip.page_url_pattern}>
+            📄 {clip.page_url_pattern}
+          </p>
+        )}
+        {clip.transcript_text && (
+          <p className="text-xs text-gray-500 mt-1 line-clamp-2" title={clip.transcript_text}>
+            💬 {clip.transcript_text.slice(0, 60)}...
+          </p>
+        )}
+      </div>
     </div>
   );
 }
