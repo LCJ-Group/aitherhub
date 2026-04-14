@@ -13,6 +13,8 @@
 [Unit]
 Description=AitherHub Worker Service
 After=network.target
+StartLimitBurst=5
+StartLimitIntervalSec=300
 
 [Service]
 Type=simple
@@ -33,8 +35,6 @@ TimeoutStopSec=300
 # Auto-restart on failure
 Restart=always
 RestartSec=10
-StartLimitBurst=5
-StartLimitIntervalSec=300
 
 # Logging
 StandardOutput=journal

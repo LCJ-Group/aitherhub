@@ -268,26 +268,46 @@ def visibility_renewal_loop():
 # DB Status Helpers (using shared.db)
 # =============================================================================
 
-def _is_video_retried(video_id: str) -> bool:
-    """Check if a video was retried (DB dequeue_count reset to 0 and status
-    is not ERROR).  Used to detect stale queue messages that should be
-    silently discarded instead of triggering POISON_MAX_RETRY."""
+def _is_video_retried(video_id: str, queue_dequeue_count: int = 0) -> bool:
+    """Check if a video was retried via admin API.
+
+    A stale queue message should be discarded (not POISON'd) when:
+    - The DB dequeue_count is lower than the queue message's dequeue_count
+      (meaning retry-video reset it), OR
+    - The video status indicates active processing (not ERROR/QUEUED)
+      which means a newer message already started processing.
+
+    Uses the dedicated fallback engine to avoid asyncio event-loop conflicts.
+    """
     try:
-        from shared.db.session import get_session, run_sync
         from sqlalchemy import text
+
+        engine, loop = _get_fallback_engine()
+        from sqlalchemy.ext.asyncio import AsyncSession
+        from sqlalchemy.orm import sessionmaker
+        factory = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 
         result = {"retried": False}
 
         async def _check():
-            async with get_session() as session:
-                row = (await session.execute(
-                    text("SELECT status, dequeue_count FROM videos WHERE id = :vid"),
-                    {"vid": video_id},
-                )).first()
-                if row and row.dequeue_count == 0 and row.status != "ERROR":
-                    result["retried"] = True
+            async with factory() as session:
+                try:
+                    row = (await session.execute(
+                        text("SELECT status, dequeue_count FROM videos WHERE id = :vid"),
+                        {"vid": video_id},
+                    )).first()
+                    if row:
+                        db_dq = row.dequeue_count or 0
+                        # Case 1: DB dequeue_count was reset (retry-video sets it to 0)
+                        if db_dq < queue_dequeue_count:
+                            result["retried"] = True
+                        # Case 2: Video is actively processing (a newer message started it)
+                        elif row.status not in ("ERROR", "QUEUED", None):
+                            result["retried"] = True
+                finally:
+                    await session.close()
 
-        run_sync(_check())
+        loop.run_until_complete(_check())
         return result["retried"]
     except Exception as e:
         print(f"[worker] _is_video_retried check failed: {e}")
@@ -1171,7 +1191,7 @@ def poll_and_process(executor: ThreadPoolExecutor):
                     # (retry-video resets DB dequeue_count to 0 and enqueues a NEW message,
                     #  but the OLD message with high dequeue_count remains in the queue)
                     if job_type in ("video_analysis", None) and job_id != "unknown":
-                        if _is_video_retried(job_id):
+                        if _is_video_retried(job_id, msg.dequeue_count):
                             print(f"[worker] STALE msg: job={job_id} dequeue={msg.dequeue_count}"
                                   f" but DB shows retry — deleting old message")
                             delete_message_safe(msg.id, msg.pop_receipt)
