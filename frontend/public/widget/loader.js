@@ -1,5 +1,5 @@
 /**
- * AitherHub Widget Loader v2.1a — TikTok-Style Fullscreen Feed
+ * AitherHub Widget Loader v2.1b — TikTok-Style Fullscreen Feed
  *
  * GTM経由で配信される軽量エントリーポイント。
  * 先方のECサイトに1行のタグを追加するだけで、
@@ -19,8 +19,9 @@
  *   - Hack 2: In-video CTA action
  *   - Hack 3: Shadow Tracking (localStorage session)
  *
- * v2.1a Changes:
+ * v2.1b Changes:
  *   - Client-side filtering of clips without valid clip_url
+ *   - FAB bubble shows auto-playing muted video preview
  */
 (function () {
   "use strict";
@@ -221,6 +222,12 @@
       .ath-fab:active { transform: scale(0.95); }\
       .ath-fab img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }\
       .ath-fab-icon { width: 28px; height: 28px; }\
+      .ath-fab video { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; pointer-events: none; }\
+      .ath-fab-play-overlay {\
+        position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);\
+        width: 22px; height: 22px; opacity: 0.85; pointer-events: none;\
+        filter: drop-shadow(0 1px 3px rgba(0,0,0,0.5));\
+      }\
       .ath-fab .ath-badge {\
         position: absolute; top: -4px; right: -4px;\
         min-width: 22px; height: 22px; padding: 0 6px;\
@@ -542,11 +549,31 @@
     var longPressTimer = null;
     var isSpeedUp = false;
     var hintShown = false;
+    var fabVideo = null;
 
-    // ── FAB (Floating Action Button) ──
+    // ── FAB (Floating Action Button) with Video Preview ──
     var fab = document.createElement("div");
     fab.className = "ath-fab";
-    if (clips[0] && clips[0].thumbnail_url) {
+    if (clips[0] && clips[0].clip_url) {
+      fabVideo = document.createElement("video");
+      fabVideo.setAttribute("playsinline", "");
+      fabVideo.setAttribute("webkit-playsinline", "");
+      fabVideo.setAttribute("preload", "auto");
+      fabVideo.setAttribute("loop", "");
+      fabVideo.muted = true;
+      fabVideo.src = clips[0].clip_url;
+      fab.appendChild(fabVideo);
+      // Small play icon overlay
+      var fabPlayOverlay = document.createElement("div");
+      fabPlayOverlay.className = "ath-fab-play-overlay";
+      fabPlayOverlay.innerHTML = ICONS.play;
+      fab.appendChild(fabPlayOverlay);
+      // Auto-play when ready
+      fabVideo.addEventListener("loadeddata", function () {
+        fabVideo.play().catch(function () { });
+      });
+      try { fabVideo.play().catch(function () { }); } catch (e) { }
+    } else if (clips[0] && clips[0].thumbnail_url) {
       var fabImg = document.createElement("img");
       fabImg.src = clips[0].thumbnail_url;
       fabImg.alt = "Watch video";
@@ -826,6 +853,8 @@
       isOpen = true;
       overlay.classList.add("active");
       fab.style.display = "none";
+      // Pause FAB video when overlay opens
+      if (fabVideo) { try { fabVideo.pause(); } catch (e) { } }
       // Lock body scroll
       document.body.style.overflow = "hidden";
       document.documentElement.style.overflow = "hidden";
@@ -844,6 +873,8 @@
       isOpen = false;
       overlay.classList.remove("active");
       fab.style.display = "flex";
+      // Resume FAB video
+      if (fabVideo) { try { fabVideo.play().catch(function () { }); } catch (e) { } }
       // Unlock body scroll
       document.body.style.overflow = "";
       document.documentElement.style.overflow = "";
