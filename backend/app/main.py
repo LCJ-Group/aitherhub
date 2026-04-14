@@ -879,6 +879,8 @@ async def ensure_widget_tables():
             for alter_sql in [
                 "ALTER TABLE widget_clients ADD COLUMN IF NOT EXISTS password_hash TEXT",
                 "ALTER TABLE widget_clients ADD COLUMN IF NOT EXISTS brand_keywords TEXT",
+                "ALTER TABLE widget_clients ADD COLUMN IF NOT EXISTS lcj_brand_id INTEGER",
+                "ALTER TABLE widget_clients ADD COLUMN IF NOT EXISTS logo_url TEXT",
                 "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS uploaded_by_brand VARCHAR(20)",
                 "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS product_price TEXT",
                 "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'processed'",
@@ -895,6 +897,14 @@ async def ensure_widget_tables():
                 ))
             except Exception as e:
                 logger.warning(f"Index creation (brand portal): {e}")
+
+            # Create unique index for LCJ brand sync
+            try:
+                await conn.execute(_text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS ix_widget_clients_lcj_brand_id ON widget_clients (lcj_brand_id) WHERE lcj_brand_id IS NOT NULL"
+                ))
+            except Exception as e:
+                logger.warning(f"Index creation (lcj_brand_id): {e}")
 
             await conn.commit()
         logger.info("Widget tables (widget_clients, widget_clip_assignments, widget_page_contexts, widget_tracking_events) verified/created")
