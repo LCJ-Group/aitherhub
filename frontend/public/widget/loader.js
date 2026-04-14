@@ -885,9 +885,32 @@
     function buildCaptions(clip) {
       // Priority 1: structured captions from backend
       if (clip.captions && Array.isArray(clip.captions) && clip.captions.length > 0) {
-        return clip.captions.map(function (c) {
-          return { start: c.start || 0, end: c.end || (c.start + 3), text: c.text || "" };
-        });
+        var rawCaps = clip.captions;
+        var dur = clip.duration_sec || 60;
+        // Auto-detect: are captions in absolute (source video) or local (0-based) time?
+        // If max start time > clip duration, they're absolute and need offset subtraction
+        var maxStart = 0;
+        for (var mi = 0; mi < rawCaps.length; mi++) {
+          if ((rawCaps[mi].start || 0) > maxStart) maxStart = rawCaps[mi].start || 0;
+        }
+        var offset = 0;
+        if (maxStart > dur * 1.5) {
+          // Absolute timestamps — extract offset from clip_url filename (clip_START_END.mp4)
+          var urlMatch = (clip.clip_url || "").match(/clip_(\d+)_(\d+)/);
+          if (urlMatch) {
+            offset = parseInt(urlMatch[1], 10);
+          } else {
+            // Fallback: use first caption's start as offset
+            offset = rawCaps[0].start || 0;
+          }
+        }
+        return rawCaps.map(function (c) {
+          var s = (c.start || 0) - offset;
+          var e = (c.end || (c.start + 3)) - offset;
+          if (s < 0) s = 0;
+          if (e < 0) e = 0;
+          return { start: s, end: e, text: c.text || "" };
+        }).filter(function (c) { return c.text.trim(); });
       }
       // Priority 2: parse transcript_text into estimated segments
       var text = clip.transcript_text;
