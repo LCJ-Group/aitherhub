@@ -320,8 +320,12 @@ async def sync_brands_bulk(
             # Auto-assign clips for this brand
             await _auto_assign_clips(db, client_id, keywords)
 
+            # Commit after each successful brand
+            await db.commit()
+
         except Exception as e:
             logger.error(f"Bulk sync error for brand {brand.lcj_brand_id}: {e}")
+            await db.rollback()  # Rollback failed transaction before continuing
             errors += 1
             results.append({
                 "lcj_brand_id": brand.lcj_brand_id,
@@ -329,8 +333,6 @@ async def sync_brands_bulk(
                 "action": "error",
                 "error": str(e),
             })
-
-    await db.commit()
 
     return {
         "success": True,
