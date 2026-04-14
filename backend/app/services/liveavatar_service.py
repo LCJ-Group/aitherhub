@@ -89,6 +89,11 @@ class LiveAvatarService:
         # Active session store — allows OBS Browser Source to retrieve
         # LiveKit credentials without postMessage (direct URL access)
         self._active_session: Optional[Dict[str, Any]] = None
+
+        # Speak-text queue — main page pushes text, OBS polls and pops
+        # Each item: {"text": str, "timestamp": float, "id": str}
+        self._speak_queue: List[Dict[str, Any]] = []
+        self._speak_queue_counter: int = 0
         if not self.api_key:
             logger.warning(
                 "LIVEAVATAR_API_KEY not set — LiveAvatar streaming will not work. "
@@ -401,6 +406,47 @@ class LiveAvatarService:
             return None
 
         return self._active_session
+
+    # ──────────────────────────────────────────
+    # Speak-Text Queue (for OBS Browser Source)
+    # ──────────────────────────────────────────
+    def push_speak_text(self, text: str) -> Dict[str, Any]:
+        """
+        Push a speak-text command to the queue.
+        Called by the main page when it sends speakText to its own LiveKit room.
+        OBS polls this queue and sends the text to its own LiveKit room.
+        """
+        self._speak_queue_counter += 1
+        item = {
+            "id": str(self._speak_queue_counter),
+            "text": text,
+            "timestamp": time.time(),
+        }
+        self._speak_queue.append(item)
+        # Keep only last 100 items to prevent memory leak
+        if len(self._speak_queue) > 100:
+            self._speak_queue = self._speak_queue[-50:]
+        logger.info(f"[LiveAvatar] Queued speak text #{item['id']}: {text[:50]}...")
+        return item
+
+    def pop_speak_texts(self, after_id: str = "0") -> List[Dict[str, Any]]:
+        """
+        Pop all speak-text items after the given ID.
+        OBS calls this every 1-2 seconds to get new texts.
+        Returns items with id > after_id.
+        """
+        try:
+            after_num = int(after_id)
+        except (ValueError, TypeError):
+            after_num = 0
+
+        results = [item for item in self._speak_queue if int(item["id"]) > after_num]
+
+        # Clean up old items (older than 5 minutes)
+        cutoff = time.time() - 300
+        self._speak_queue = [item for item in self._speak_queue if item["timestamp"] > cutoff]
+
+        return results
 
     # ──────────────────────────────────────────
     # Voice Management

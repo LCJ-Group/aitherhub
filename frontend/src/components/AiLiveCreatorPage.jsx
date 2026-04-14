@@ -1319,13 +1319,16 @@ export default function AiLiveCreatorPage() {
                       }
                     }}
                     onTextSent={(text) => {
-                      // Forward speak text to OBS window (fallback, not needed with shared session)
+                      // Push speak text to backend queue for OBS to poll
+                      aiLiveCreatorService.liveAvatarSpeakQueuePush(text)
+                        .then(() => console.log('[LiveAvatar] Pushed speak text to OBS queue:', text.substring(0, 50)))
+                        .catch((err) => console.warn('[LiveAvatar] Failed to push to OBS queue:', err));
+                      // Also forward via postMessage (for Pop-out window)
                       if (obsWindowRef.current && !obsWindowRef.current.closed) {
                         obsWindowRef.current.postMessage(
                           { type: "obs-speak", text },
                           "*"
                         );
-                        console.log('[LiveAvatar] Forwarded speak text to OBS window:', text);
                       }
                     }}
                   />

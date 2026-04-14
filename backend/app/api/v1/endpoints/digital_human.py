@@ -4118,6 +4118,41 @@ async def liveavatar_get_active_session(
 
 
 @router.post(
+    "/liveavatar/speak-queue/push",
+    summary="Push speak text to OBS queue",
+    description=(
+        "Push a speak-text command to the queue. Called by the main page "
+        "when it sends speakText to its own LiveKit room. OBS polls this "
+        "queue to get the same text and send it to its own session."
+    ),
+)
+async def liveavatar_speak_queue_push(
+    text: str = Body(..., embed=True, description="Text to speak"),
+    _auth: bool = Depends(verify_admin_key),
+):
+    service = get_liveavatar_service()
+    item = service.push_speak_text(text)
+    return {"success": True, "item": item}
+
+
+@router.get(
+    "/liveavatar/speak-queue/poll",
+    summary="Poll speak text queue for OBS",
+    description=(
+        "Poll the speak-text queue for new items. OBS calls this every 1-2 seconds "
+        "with the last seen item ID. Returns all items after that ID."
+    ),
+)
+async def liveavatar_speak_queue_poll(
+    after_id: str = Query("0", description="Return items with ID greater than this"),
+    _auth: bool = Depends(verify_admin_key),
+):
+    service = get_liveavatar_service()
+    items = service.pop_speak_texts(after_id=after_id)
+    return {"success": True, "items": items}
+
+
+@router.post(
     "/liveavatar/streaming/stop",
     summary="Stop a LiveAvatar streaming session",
     description="Stop and close an active LiveAvatar streaming session.",

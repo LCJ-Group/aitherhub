@@ -454,6 +454,20 @@ class AiLiveCreatorService {
     );
     return res.data;
   }
+
+  /**
+   * Push speak text to the OBS relay queue.
+   * Called by the main page when it sends speakText to its own LiveKit room.
+   * OBS polls this queue and sends the text to its own session.
+   */
+  async liveAvatarSpeakQueuePush(text) {
+    const res = await axios.post(
+      `${this.baseURL}/api/v1/digital-human/liveavatar/speak-queue/push`,
+      { text },
+      { headers: this._headers(), timeout: 5000 }
+    );
+    return res.data;
+  }
 }
 
 const aiLiveCreatorService = new AiLiveCreatorService();
