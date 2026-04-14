@@ -1267,6 +1267,16 @@ export default function AiLiveCreatorPage() {
                       setLiveAvatarStream(null);
                       setLiveAvatarConnected(false);
                     }}
+                    onTextSent={(text) => {
+                      // Forward speak text to OBS window so its session also speaks
+                      if (obsWindowRef.current && !obsWindowRef.current.closed) {
+                        obsWindowRef.current.postMessage(
+                          { type: "obs-speak", text },
+                          "*"
+                        );
+                        console.log('[LiveAvatar] Forwarded speak text to OBS window:', text);
+                      }
+                    }}
                   />
                 )}
 

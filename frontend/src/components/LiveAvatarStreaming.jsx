@@ -47,6 +47,7 @@ export default function LiveAvatarStreaming({
   onStreamReady,
   onDisconnect,
   onError,
+  onTextSent,
   className = "",
 }) {
   // ── State ──
@@ -268,12 +269,18 @@ export default function LiveAvatarStreaming({
       console.log(`[LiveAvatar] WebSocket URL: ${ws_url || 'not provided'}`);
 
       // 2. Connect to LiveKit room using livekit_url + livekit_client_token
-      // IMPORTANT: Do NOT enable adaptiveStream or dynacast.
-      // LiveAvatar SDK uses default Room() settings.
-      // adaptiveStream causes video frames to stop when element is not visible.
+      // ╔══════════════════════════════════════════════════════════════════╗
+      // ║ CRITICAL: DO NOT CHANGE adaptiveStream / dynacast to true!     ║
+      // ║ adaptiveStream: true causes LiveAvatar video frames to STOP    ║
+      // ║ rendering (frameRate drops to 0) because LiveKit pauses the    ║
+      // ║ video track when the element is not visible or not properly    ║
+      // ║ attached to the DOM. This breaks lip-sync completely.          ║
+      // ║ LiveAvatar official SDK uses default Room() (both false).      ║
+      // ║ See: SKILL.md → LiveAvatar Lip-Sync Rules                     ║
+      // ╚══════════════════════════════════════════════════════════════════╝
       const room = new Room({
-        adaptiveStream: false,
-        dynacast: false,
+        adaptiveStream: false,  // DO NOT CHANGE — breaks lip-sync
+        dynacast: false,        // DO NOT CHANGE — breaks lip-sync
       });
       roomRef.current = room;
 
@@ -473,6 +480,9 @@ export default function LiveAvatarStreaming({
 
     // Send via LiveKit data channel
     sendEvent("avatar.speak_text", { text });
+
+    // Notify parent (used to forward to OBS window)
+    if (onTextSent) onTextSent(text);
 
     // Add to history
     setSpeakHistory((prev) => [
