@@ -6,6 +6,16 @@ import axios from "axios";
 const ADMIN_KEY = "aither:hub";
 const QUEUE_POLL_INTERVAL = 1500; // 1.5 seconds
 
+// Generate UUID-style event ID (matching LiveAvatar SDK format)
+// LiveAvatar server validates event_id format — non-UUID IDs are silently ignored.
+function generateEventId() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
 /**
  * OBS Output Page — Independent Session + SpeakText Queue Relay
  *
@@ -70,7 +80,7 @@ export default function OBSOutputPage() {
       return false;
     }
 
-    const eventId = `obs_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const eventId = generateEventId();
     const livekitEvent = {
       event_id: eventId,
       event_type: "avatar.speak_text",
