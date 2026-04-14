@@ -47,7 +47,7 @@
     .header p {
       font-size: 17px;
       opacity: 0.7;
-      max-width: 520px;
+      max-width: 560px;
       margin: 0 auto;
     }
 
@@ -100,7 +100,7 @@
       font-weight: 700;
       margin-bottom: 12px;
     }
-    .step p {
+    .step p, .step .desc {
       color: var(--gray);
       font-size: 15px;
       margin-bottom: 16px;
@@ -169,28 +169,28 @@
       font-weight: 600;
     }
 
-    /* ── GTM Steps ── */
-    .gtm-steps {
-      counter-reset: gtm;
+    /* ── Numbered Steps ── */
+    .num-steps {
+      counter-reset: ns;
       list-style: none;
       padding: 0;
     }
-    .gtm-steps li {
-      counter-increment: gtm;
-      padding: 12px 0 12px 40px;
+    .num-steps li {
+      counter-increment: ns;
+      padding: 14px 0 14px 44px;
       position: relative;
       color: var(--dark);
       font-size: 15px;
       border-bottom: 1px solid var(--border);
     }
-    .gtm-steps li:last-child { border-bottom: none; }
-    .gtm-steps li::before {
-      content: counter(gtm);
+    .num-steps li:last-child { border-bottom: none; }
+    .num-steps li::before {
+      content: counter(ns);
       position: absolute;
       left: 0;
-      top: 12px;
-      width: 26px;
-      height: 26px;
+      top: 14px;
+      width: 28px;
+      height: 28px;
       background: var(--primary-light);
       color: var(--primary);
       font-size: 13px;
@@ -200,7 +200,13 @@
       align-items: center;
       justify-content: center;
     }
-    .gtm-steps li strong { color: var(--dark); }
+    .num-steps li strong { color: var(--dark); }
+    .num-steps li .sub {
+      display: block;
+      color: var(--gray);
+      font-size: 13px;
+      margin-top: 4px;
+    }
 
     /* ── Info Box ── */
     .info-box {
@@ -214,6 +220,11 @@
       display: flex;
       gap: 10px;
     }
+    .info-box.success {
+      background: #f0fdf4;
+      border-color: #bbf7d0;
+      color: #166534;
+    }
     .info-box.warning {
       background: #fef3c7;
       border-color: #fde68a;
@@ -221,41 +232,25 @@
     }
     .info-box svg { flex-shrink: 0; margin-top: 2px; }
 
-    /* ── Method Toggle ── */
-    .method-tabs {
-      display: flex;
-      gap: 8px;
-      margin-bottom: 24px;
-    }
-    .method-tab {
-      flex: 1;
-      padding: 12px;
-      text-align: center;
-      border: 2px solid var(--border);
+    /* ── Ref Image ── */
+    .ref-img {
       border-radius: 8px;
-      font-size: 14px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: all 0.2s;
-      background: #fff;
+      border: 1px solid var(--border);
+      overflow: hidden;
+      margin: 16px 0;
     }
-    .method-tab.active {
-      border-color: var(--primary);
-      background: var(--primary-light);
-      color: var(--primary);
+    .ref-img img {
+      width: 100%;
+      height: auto;
+      display: block;
     }
-    .method-tab .badge {
-      display: inline-block;
-      background: #22c55e;
-      color: #fff;
-      font-size: 10px;
-      padding: 2px 8px;
-      border-radius: 100px;
-      margin-left: 6px;
-      vertical-align: middle;
+    .ref-img-caption {
+      background: #f1f5f9;
+      padding: 8px 12px;
+      font-size: 12px;
+      color: var(--gray);
+      text-align: center;
     }
-    .method-content { display: none; }
-    .method-content.active { display: block; }
 
     /* ── Features ── */
     .features {
@@ -273,6 +268,60 @@
     }
     .feature svg { color: #22c55e; flex-shrink: 0; }
 
+    /* ── Accordion ── */
+    .accordion { border-bottom: 1px solid var(--border); padding: 16px 0; }
+    .accordion:last-child { border-bottom: none; }
+    .accordion summary {
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 15px;
+      list-style: none;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .accordion summary::before {
+      content: '+';
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 22px;
+      height: 22px;
+      background: var(--primary-light);
+      color: var(--primary);
+      border-radius: 50%;
+      font-size: 14px;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+    .accordion[open] summary::before { content: '−'; }
+    .accordion summary::-webkit-details-marker { display: none; }
+    .accordion .answer {
+      margin-top: 12px;
+      padding-left: 30px;
+      color: var(--gray);
+      font-size: 14px;
+    }
+
+    /* ── Divider ── */
+    .section-divider {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin: 40px 0 24px;
+      color: var(--gray);
+      font-size: 13px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    .section-divider::before, .section-divider::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: var(--border);
+    }
+
     /* ── CTA Section ── */
     .cta-section {
       background: linear-gradient(135deg, var(--dark) 0%, #1e293b 100%);
@@ -282,15 +331,8 @@
       text-align: center;
       margin: 40px 0;
     }
-    .cta-section h2 {
-      font-size: 22px;
-      margin-bottom: 12px;
-    }
-    .cta-section p {
-      opacity: 0.7;
-      font-size: 15px;
-      margin-bottom: 24px;
-    }
+    .cta-section h2 { font-size: 22px; margin-bottom: 12px; }
+    .cta-section p { opacity: 0.7; font-size: 15px; margin-bottom: 24px; }
     .cta-btn {
       display: inline-block;
       background: var(--primary);
@@ -315,6 +357,19 @@
       font-size: 13px;
     }
 
+    /* ── Skip Link ── */
+    .skip-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--primary);
+      font-size: 14px;
+      font-weight: 600;
+      text-decoration: none;
+      margin-top: 8px;
+    }
+    .skip-link:hover { text-decoration: underline; }
+
     /* ── Responsive ── */
     @media (max-width: 600px) {
       .screenshots { grid-template-columns: 1fr; }
@@ -338,11 +393,13 @@
     <div style="text-align:center;">
       <div class="time-badge">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
-        セットアップ所要時間：約3分
+        セットアップ所要時間：約5分
       </div>
     </div>
 
-    <!-- What You Get -->
+    <!-- ═══════════════════════════════════════ -->
+    <!-- What You Get                            -->
+    <!-- ═══════════════════════════════════════ -->
     <div class="step">
       <h2>AitherHub ウィジェットとは？</h2>
       <p>あなたのECサイトにワンタグで埋め込める、TikTok風のショッパブル動画フィードです。サイト訪問者は動画を見ながらそのまま商品を購入できます。</p>
@@ -384,7 +441,9 @@
       </div>
     </div>
 
-    <!-- Step 1: Your Tag -->
+    <!-- ═══════════════════════════════════════ -->
+    <!-- Step 1: Your Tag                        -->
+    <!-- ═══════════════════════════════════════ -->
     <div class="step">
       <div class="step-number">1</div>
       <h2>あなた専用のタグを確認</h2>
@@ -399,98 +458,205 @@
       </div>
       <textarea id="widget-tag-raw" style="position:absolute;left:-9999px;"><!-- AitherHub Widget -->
 <script src="https://www.aitherhub.com/widget/loader.js" data-client-id="cab30223" async></script></textarea>
+      <div class="info-box success">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>
+        <div>このタグをコピーしておいてください。Step 2 で使用します。</div>
+      </div>
     </div>
 
-    <!-- Step 2: Choose Method -->
+    <!-- ═══════════════════════════════════════ -->
+    <!-- Step 2: GTM Setup (from scratch)        -->
+    <!-- ═══════════════════════════════════════ -->
     <div class="step">
       <div class="step-number">2</div>
-      <h2>埋め込み方法を選択</h2>
-      <p>お好みの方法でタグをサイトに追加してください。</p>
+      <h2>Google Tag Manager（GTM）でサイトに追加</h2>
+      <p>GTMを使えば、サイトのコードを直接編集せずにウィジェットを追加・管理できます。エンジニア不要で、いつでもON/OFFが可能です。</p>
 
-      <div class="method-tabs">
-        <div class="method-tab active" onclick="switchMethod('gtm')">
-          GTM（推奨）<span class="badge">簡単</span>
-        </div>
-        <div class="method-tab" onclick="switchMethod('direct')">
-          HTML直接埋め込み
+      <!-- ── 2-A: GTM Account ── -->
+      <div style="background:var(--light);border-radius:8px;padding:20px;margin:16px 0;">
+        <h3 style="font-size:16px;font-weight:700;margin-bottom:12px;">
+          <span style="color:var(--primary);">2-A.</span> GTMアカウントを作成する
+          <span style="font-size:12px;color:var(--gray);font-weight:400;margin-left:8px;">（既にGTMをお持ちの方は <a href="#step-2b" class="skip-link" style="font-size:12px;">2-Bへスキップ →</a>）</span>
+        </h3>
+        <ol class="num-steps">
+          <li>
+            <a href="https://tagmanager.google.com/" target="_blank" style="color:var(--primary);font-weight:600;">tagmanager.google.com</a> にアクセスし、Googleアカウントでログイン
+          </li>
+          <li>
+            <strong>「アカウントを作成」</strong>ボタンをクリック
+          </li>
+          <li>
+            以下の情報を入力：
+            <span class="sub">
+              <strong>アカウント名</strong>：会社名またはブランド名（例：KYOGOKU Professional）<br>
+              <strong>国</strong>：日本
+            </span>
+          </li>
+          <li>
+            コンテナの設定を入力：
+            <span class="sub">
+              <strong>コンテナ名</strong>：サイトのドメイン（例：kyogokupro.com）<br>
+              <strong>ターゲットプラットフォーム</strong>：<strong>「ウェブ」</strong>を選択
+            </span>
+          </li>
+          <li>
+            <strong>「作成」</strong>をクリック → 利用規約に同意
+          </li>
+        </ol>
+
+        <div class="ref-img">
+          <img src="/widget/docs/gtm-create-account.jpg" alt="GTMアカウント作成画面">
+          <div class="ref-img-caption">GTMアカウント作成画面（参考）</div>
         </div>
       </div>
 
-      <!-- GTM Method -->
-      <div class="method-content active" id="method-gtm">
-        <div class="info-box">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
-          <div>Google Tag Manager を使えば、サイトのコードを一切変更せずにウィジェットを追加・削除できます。エンジニアの作業は不要です。</div>
-        </div>
-        <ol class="gtm-steps">
-          <li><a href="https://tagmanager.google.com/" target="_blank"><strong>Google Tag Manager</strong></a> にログインします</li>
-          <li>対象のコンテナを選択し、<strong>「タグ」→「新規」</strong>をクリック</li>
-          <li>タグの設定で<strong>「カスタム HTML」</strong>を選択</li>
-          <li>上記のタグ（Step 1）をそのまま<strong>貼り付け</strong></li>
-          <li>トリガーで<strong>「All Pages」</strong>を選択</li>
-          <li><strong>「保存」</strong>→ 右上の<strong>「公開」</strong>ボタンを押す</li>
+      <!-- ── 2-B: Install GTM Snippet ── -->
+      <div id="step-2b" style="background:var(--light);border-radius:8px;padding:20px;margin:16px 0;">
+        <h3 style="font-size:16px;font-weight:700;margin-bottom:12px;">
+          <span style="color:var(--primary);">2-B.</span> GTMのコードをサイトに設置する
+          <span style="font-size:12px;color:var(--gray);font-weight:400;margin-left:8px;">（既に設置済みの方は <a href="#step-2c" class="skip-link" style="font-size:12px;">2-Cへスキップ →</a>）</span>
+        </h3>
+        <p class="desc">アカウント作成後、GTMから2つのコードスニペットが表示されます。これをサイトに1回だけ設置します。</p>
+        <ol class="num-steps">
+          <li>
+            GTMが表示する<strong>1つ目のコード</strong>（<code>&lt;script&gt;...&lt;/script&gt;</code>）を、サイトの <strong>&lt;head&gt;</strong> タグ内のなるべく上部に貼り付け
+          </li>
+          <li>
+            GTMが表示する<strong>2つ目のコード</strong>（<code>&lt;noscript&gt;...&lt;/noscript&gt;</code>）を、<strong>&lt;body&gt;</strong> タグの直後に貼り付け
+          </li>
+          <li>
+            ファイルを保存してサイトをデプロイ（公開）
+          </li>
         </ol>
+
+        <div class="ref-img">
+          <img src="/widget/docs/gtm-install-snippet.webp" alt="GTMスニペット設置">
+          <div class="ref-img-caption">GTMスニペットの設置場所（参考）</div>
+        </div>
+
         <div class="info-box warning">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0zM12 9v4M12 17h.01"/></svg>
-          <div>GTMがまだサイトに導入されていない場合は、先にGTMのコンテナスニペットをサイトに追加する必要があります。<a href="https://support.google.com/tagmanager/answer/6103696" target="_blank" style="color:inherit;font-weight:600;">GTM導入ガイド</a></div>
+          <div>この作業はサイトのHTMLを1回だけ編集する必要があります。EC-CUBEの場合は <code>default_frame.twig</code>、Shopifyの場合は <code>theme.liquid</code> に追加します。不明な場合はサポートにお問い合わせください。</div>
         </div>
       </div>
 
-      <!-- Direct Method -->
-      <div class="method-content" id="method-direct">
-        <p style="color:var(--gray);font-size:14px;margin-bottom:16px;">サイトのHTMLテンプレートに直接タグを追加する方法です。</p>
-        <ol class="gtm-steps">
-          <li>サイトの<strong>共通テンプレート</strong>（header.php, layout.twig 等）を開く</li>
-          <li><strong>&lt;/body&gt;</strong> タグの直前に、Step 1のタグを貼り付け</li>
-          <li>ファイルを保存してデプロイ</li>
+      <!-- ── 2-C: Add Widget Tag via GTM ── -->
+      <div id="step-2c" style="background:var(--light);border-radius:8px;padding:20px;margin:16px 0;">
+        <h3 style="font-size:16px;font-weight:700;margin-bottom:12px;">
+          <span style="color:var(--primary);">2-C.</span> GTMでAitherHubウィジェットタグを追加する
+        </h3>
+        <p class="desc">ここからが本題です。GTMの管理画面からウィジェットタグを追加します。</p>
+        <ol class="num-steps">
+          <li>
+            <a href="https://tagmanager.google.com/" target="_blank" style="color:var(--primary);font-weight:600;">GTM管理画面</a>を開き、対象のコンテナを選択
+          </li>
+          <li>
+            左メニューの<strong>「タグ」</strong>をクリック → 右上の<strong>「新規」</strong>をクリック
+          </li>
+          <li>
+            タグに名前を付ける（例：<strong>AitherHub Widget</strong>）
+          </li>
+          <li>
+            <strong>「タグの設定」</strong>をクリック → <strong>「カスタム HTML」</strong>を選択
+          </li>
+          <li>
+            Step 1 でコピーしたタグをそのまま<strong>貼り付け</strong>
+            <span class="sub">（下の「HTMLを入力」欄に貼り付けてください）</span>
+          </li>
+          <li>
+            <strong>「トリガー」</strong>をクリック → <strong>「All Pages」</strong>を選択
+          </li>
+          <li>
+            右上の<strong>「保存」</strong>をクリック
+          </li>
+          <li>
+            GTM画面右上の<strong>「公開」</strong>ボタンをクリック → バージョン名を入力して<strong>「公開」</strong>
+          </li>
         </ol>
-        <div class="code-block">
-          <span class="comment">&lt;!-- サイトのHTML --&gt;</span><br>
-          <span class="tag">&lt;body&gt;</span><br>
-          <span class="comment">  ... サイトのコンテンツ ...</span><br><br>
-          <span class="comment">  &lt;!-- AitherHub Widget（&lt;/body&gt;の直前に追加） --&gt;</span><br>
-          <span class="tag">  &lt;script</span> <span class="attr">src</span>=<span class="val">"https://www.aitherhub.com/widget/loader.js"</span><br>
-          <span class="attr">    data-client-id</span>=<span class="val">"cab30223"</span> <span class="attr">async</span><span class="tag">&gt;&lt;/script&gt;</span><br>
-          <span class="tag">&lt;/body&gt;</span>
+
+        <div class="ref-img">
+          <img src="/widget/docs/gtm-custom-html.jpg" alt="GTMカスタムHTMLタグ設定">
+          <div class="ref-img-caption">GTMでカスタムHTMLタグを追加する画面（参考）</div>
+        </div>
+
+        <div class="info-box success">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>
+          <div>これで完了です！ サイトにアクセスすると、右下にウィジェットのバブルが表示されます。</div>
         </div>
       </div>
     </div>
 
-    <!-- Step 3: Verify -->
+    <!-- ═══════════════════════════════════════ -->
+    <!-- Step 3: Verify                          -->
+    <!-- ═══════════════════════════════════════ -->
     <div class="step">
       <div class="step-number">3</div>
       <h2>動作確認</h2>
-      <p>タグを追加したら、サイトにアクセスして以下を確認してください。</p>
-      <ol class="gtm-steps">
-        <li>ページ右下に<strong>ピンク色の丸いボタン（バブル）</strong>が表示される</li>
+      <p>タグを公開したら、サイトにアクセスして以下を確認してください。</p>
+      <ol class="num-steps">
+        <li>ページ右下に<strong>丸いボタン（バブル）</strong>が表示される</li>
         <li>バブルをクリックすると<strong>フルスクリーンの動画フィード</strong>が開く</li>
         <li>動画が<strong>自動再生</strong>され、上下スワイプで次の動画に切り替わる</li>
         <li><strong>「購入する」ボタン</strong>が表示され、クリックで商品ページに遷移する</li>
       </ol>
       <div class="info-box">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
-        <div>GTM経由の場合、<strong>「プレビューモード」</strong>で公開前にテストすることもできます。</div>
+        <div>GTMの<strong>「プレビューモード」</strong>を使えば、公開前にテストすることもできます。GTM画面右上の「プレビュー」ボタンから利用できます。</div>
       </div>
     </div>
 
-    <!-- FAQ -->
+    <!-- ═══════════════════════════════════════ -->
+    <!-- Alternative: Direct Embed               -->
+    <!-- ═══════════════════════════════════════ -->
+    <div class="section-divider">GTMを使わない場合</div>
+
+    <div class="step">
+      <h2>代替方法：HTML直接埋め込み</h2>
+      <p>GTMを使わずに、サイトのHTMLに直接タグを追加する方法です。</p>
+      <ol class="num-steps">
+        <li>サイトの<strong>共通テンプレート</strong>（EC-CUBEの場合：<code>default_frame.twig</code>）を開く</li>
+        <li><strong>&lt;/body&gt;</strong> タグの直前に、Step 1 のタグを貼り付け</li>
+        <li>ファイルを保存してデプロイ</li>
+      </ol>
+      <div class="code-block">
+        <span class="comment">&lt;!-- サイトのHTML --&gt;</span><br>
+        <span class="tag">&lt;body&gt;</span><br>
+        <span class="comment">  ... サイトのコンテンツ ...</span><br><br>
+        <span class="comment">  &lt;!-- AitherHub Widget（&lt;/body&gt;の直前に追加） --&gt;</span><br>
+        <span class="tag">  &lt;script</span> <span class="attr">src</span>=<span class="val">"https://www.aitherhub.com/widget/loader.js"</span><br>
+        <span class="attr">    data-client-id</span>=<span class="val">"<span class="cid-replace">cab30223</span>"</span> <span class="attr">async</span><span class="tag">&gt;&lt;/script&gt;</span><br>
+        <span class="tag">&lt;/body&gt;</span>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════ -->
+    <!-- FAQ                                     -->
+    <!-- ═══════════════════════════════════════ -->
     <div class="step">
       <h2>よくある質問</h2>
-      <details style="border-bottom:1px solid var(--border);padding:16px 0;">
-        <summary style="cursor:pointer;font-weight:600;font-size:15px;">サイトの表示速度に影響はありますか？</summary>
-        <p style="margin-top:12px;">ありません。ウィジェットは <code>async</code> 属性で非同期読み込みされるため、サイトの表示を一切ブロックしません。</p>
+      <details class="accordion">
+        <summary>サイトの表示速度に影響はありますか？</summary>
+        <div class="answer">ありません。ウィジェットは <code>async</code> 属性で非同期読み込みされるため、サイトの表示を一切ブロックしません。</div>
       </details>
-      <details style="border-bottom:1px solid var(--border);padding:16px 0;">
-        <summary style="cursor:pointer;font-weight:600;font-size:15px;">動画の追加・変更はどうすればいいですか？</summary>
-        <p style="margin-top:12px;">AitherHub管理画面からクリップを追加・削除できます。変更は即座にウィジェットに反映されます。サイト側の作業は不要です。</p>
+      <details class="accordion">
+        <summary>動画の追加・変更はどうすればいいですか？</summary>
+        <div class="answer">AitherHub管理画面からクリップを追加・削除できます。変更は即座にウィジェットに反映されます。サイト側の作業は不要です。</div>
       </details>
-      <details style="border-bottom:1px solid var(--border);padding:16px 0;">
-        <summary style="cursor:pointer;font-weight:600;font-size:15px;">ウィジェットのデザインをカスタマイズできますか？</summary>
-        <p style="margin-top:12px;">テーマカラー、CTAボタンの文言、ブランド名はAitherHub側で設定可能です。お客様のブランドに合わせた表示になります。</p>
+      <details class="accordion">
+        <summary>ウィジェットのデザインをカスタマイズできますか？</summary>
+        <div class="answer">テーマカラー、CTAボタンの文言、ブランド名はAitherHub側で設定可能です。お客様のブランドに合わせた表示になります。</div>
       </details>
-      <details style="padding:16px 0;">
-        <summary style="cursor:pointer;font-weight:600;font-size:15px;">ウィジェットを一時的に非表示にしたい場合は？</summary>
-        <p style="margin-top:12px;">GTM経由の場合はタグを「一時停止」にするだけです。HTML直接の場合はタグを削除またはコメントアウトしてください。</p>
+      <details class="accordion">
+        <summary>ウィジェットを一時的に非表示にしたい場合は？</summary>
+        <div class="answer">GTM経由の場合はタグを「一時停止」にするだけです。HTML直接の場合はタグを削除またはコメントアウトしてください。</div>
+      </details>
+      <details class="accordion">
+        <summary>GTMとHTML直接、どちらがおすすめですか？</summary>
+        <div class="answer">GTMを強く推奨します。GTMなら管理画面からいつでもタグのON/OFF、更新ができ、サイトのコードを触る必要がありません。複数のタグ（GA4、Facebook Pixel等）も一元管理できます。</div>
+      </details>
+      <details class="accordion">
+        <summary>複数のページにウィジェットを表示できますか？</summary>
+        <div class="answer">はい。GTMのトリガーを「All Pages」にすれば全ページに表示されます。特定のページだけに表示したい場合は、GTMのトリガー条件でURLを指定できます。</div>
       </details>
     </div>
 
@@ -524,27 +690,23 @@
       }
     }
 
-    // Method toggle
-    function switchMethod(method) {
-      document.querySelectorAll('.method-tab').forEach(function(t) { t.classList.remove('active'); });
-      document.querySelectorAll('.method-content').forEach(function(c) { c.classList.remove('active'); });
-      if (method === 'gtm') {
-        document.querySelectorAll('.method-tab')[0].classList.add('active');
-        document.getElementById('method-gtm').classList.add('active');
-      } else {
-        document.querySelectorAll('.method-tab')[1].classList.add('active');
-        document.getElementById('method-direct').classList.add('active');
-      }
-    }
-
     // Read client_id from URL params if provided
-    var params = new URLSearchParams(window.location.search);
-    var cid = params.get('client_id');
-    if (cid) {
-      document.getElementById('client-id-display').textContent = cid;
-      document.getElementById('widget-tag-raw').value =
-        '<!-- AitherHub Widget -->\n<script src="https://www.aitherhub.com/widget/loader.js" data-client-id="' + cid + '" async><\/script>';
-    }
+    (function() {
+      var params = new URLSearchParams(window.location.search);
+      var cid = params.get('client_id');
+      if (cid) {
+        // Update display
+        var display = document.getElementById('client-id-display');
+        if (display) display.textContent = cid;
+        // Update hidden textarea
+        var raw = document.getElementById('widget-tag-raw');
+        if (raw) raw.value = '<!-- AitherHub Widget -->\n<script src="https://www.aitherhub.com/widget/loader.js" data-client-id="' + cid + '" async><\/script>';
+        // Update all inline code displays
+        document.querySelectorAll('.cid-replace').forEach(function(el) {
+          el.textContent = cid;
+        });
+      }
+    })();
   </script>
 
 </body>
