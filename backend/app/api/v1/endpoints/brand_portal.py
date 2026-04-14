@@ -40,6 +40,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
 
+try:
+    from app.services.storage_service import generate_read_sas_from_url, generate_upload_sas
+except ImportError:
+    generate_read_sas_from_url = None
+    generate_upload_sas = None
+
 logger = logging.getLogger("brand_portal")
 router = APIRouter()
 
@@ -215,7 +221,6 @@ async def brand_upload_sas(
     db: AsyncSession = Depends(get_db),
 ):
     """Generate SAS URL for direct video upload to Azure Blob."""
-    from app.services.storage_service import generate_upload_sas
 
     filename = payload.get("filename", "video.mp4")
     # Use brand-specific folder: brand_{client_id}/{uuid}/filename
@@ -282,7 +287,6 @@ async def brand_list_clips(
     db: AsyncSession = Depends(get_db),
 ):
     """List all clips available to this brand (uploaded by brand + assigned to widget)."""
-    from app.services.storage_service import generate_read_sas_from_url
 
     # Get clips uploaded by this brand
     result = await db.execute(
@@ -314,16 +318,17 @@ async def brand_list_clips(
     for row in result.mappings().all():
         clip = dict(row)
         # Generate SAS URLs
-        if clip.get("clip_url") and "blob.core.windows.net" in (clip["clip_url"] or ""):
-            try:
-                clip["clip_url"] = generate_read_sas_from_url(clip["clip_url"])
-            except Exception:
-                pass
-        if clip.get("thumbnail_url") and "blob.core.windows.net" in (clip["thumbnail_url"] or ""):
-            try:
-                clip["thumbnail_url"] = generate_read_sas_from_url(clip["thumbnail_url"])
-            except Exception:
-                pass
+        if generate_read_sas_from_url:
+            if clip.get("clip_url") and "blob.core.windows.net" in (clip["clip_url"] or ""):
+                try:
+                    clip["clip_url"] = generate_read_sas_from_url(clip["clip_url"])
+                except Exception:
+                    pass
+            if clip.get("thumbnail_url") and "blob.core.windows.net" in (clip["thumbnail_url"] or ""):
+                try:
+                    clip["thumbnail_url"] = generate_read_sas_from_url(clip["thumbnail_url"])
+                except Exception:
+                    pass
         clips.append(clip)
 
     # Total count
@@ -477,7 +482,6 @@ async def brand_list_widget_clips(
     db: AsyncSession = Depends(get_db),
 ):
     """List clips currently assigned to the brand's widget."""
-    from app.services.storage_service import generate_read_sas_from_url
 
     result = await db.execute(
         text("""
@@ -497,16 +501,17 @@ async def brand_list_widget_clips(
     clips = []
     for row in result.mappings().all():
         clip = dict(row)
-        if clip.get("clip_url") and "blob.core.windows.net" in (clip["clip_url"] or ""):
-            try:
-                clip["clip_url"] = generate_read_sas_from_url(clip["clip_url"])
-            except Exception:
-                pass
-        if clip.get("thumbnail_url") and "blob.core.windows.net" in (clip["thumbnail_url"] or ""):
-            try:
-                clip["thumbnail_url"] = generate_read_sas_from_url(clip["thumbnail_url"])
-            except Exception:
-                pass
+        if generate_read_sas_from_url:
+            if clip.get("clip_url") and "blob.core.windows.net" in (clip["clip_url"] or ""):
+                try:
+                    clip["clip_url"] = generate_read_sas_from_url(clip["clip_url"])
+                except Exception:
+                    pass
+            if clip.get("thumbnail_url") and "blob.core.windows.net" in (clip["thumbnail_url"] or ""):
+                try:
+                    clip["thumbnail_url"] = generate_read_sas_from_url(clip["thumbnail_url"])
+                except Exception:
+                    pass
         clips.append(clip)
 
     return {"clips": clips}
