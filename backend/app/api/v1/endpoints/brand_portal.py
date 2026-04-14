@@ -596,6 +596,177 @@ async def brand_analytics(
     }
 
 
+# ─── Recommended Clips Endpoint (auto-match by brand keywords + product exposures) ───
+
+@router.get("/brand/recommended-clips")
+async def brand_recommended_clips(
+    client_id: str = Depends(_get_brand_client_id),
+    q: Optional[str] = Query(default=None, description="Additional search query"),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get recommended clips for this brand based on:
+    1. video_product_exposures.brand_name matching brand keywords
+    2. transcript_text containing brand keywords
+    3. Additional search query (optional)
+    """
+    try:
+        # Get brand keywords
+        kw_result = await db.execute(
+            text("SELECT brand_keywords FROM widget_clients WHERE client_id = :cid"),
+            {"cid": client_id},
+        )
+        kw_row = kw_result.mappings().first()
+        brand_keywords = []
+        if kw_row and kw_row["brand_keywords"]:
+            brand_keywords = [k.strip() for k in kw_row["brand_keywords"].split(",") if k.strip()]
+
+        if q:
+            brand_keywords.append(q.strip())
+
+        if not brand_keywords:
+            return {"clips": [], "total": 0, "message": "ブランドキーワードが設定されていません。設定タブでキーワードを追加してください。"}
+
+        # Build ILIKE conditions for transcript_text
+        conditions = []
+        params = {"cid": client_id, "lim": limit, "off": offset}
+        for i, kw in enumerate(brand_keywords):
+            conditions.append(f"vc.transcript_text ILIKE :kw{i}")
+            params[f"kw{i}"] = f"%{kw}%"
+
+        # Also match via video_product_exposures
+        vpe_conditions = []
+        for i, kw in enumerate(brand_keywords):
+            vpe_conditions.append(f"vpe.brand_name ILIKE :bkw{i} OR vpe.product_name ILIKE :bkw{i}")
+            params[f"bkw{i}"] = f"%{kw}%"
+
+        where_transcript = " OR ".join(conditions)
+        where_vpe = " OR ".join(vpe_conditions)
+
+        # Get clips already assigned to this brand's widget (to mark them)
+        assigned_result = await db.execute(
+            text("SELECT clip_id FROM widget_clip_assignments WHERE client_id = :cid AND is_active = TRUE"),
+            {"cid": client_id},
+        )
+        assigned_ids = {str(r["clip_id"]) for r in assigned_result.mappings().all()}
+
+        # Main query: find clips matching keywords via transcript OR product exposures
+        result = await db.execute(
+            text(f"""
+                SELECT DISTINCT vc.id as clip_id, vc.clip_url, vc.thumbnail_url,
+                       vc.product_name, vc.product_price, vc.transcript_text,
+                       vc.duration_sec, vc.liver_name, vc.created_at,
+                       vc.video_id
+                FROM video_clips vc
+                LEFT JOIN video_product_exposures vpe ON vpe.video_id = vc.video_id
+                WHERE vc.clip_url IS NOT NULL
+                  AND vc.status != 'deleted'
+                  AND (({where_transcript}) OR ({where_vpe}))
+                ORDER BY vc.created_at DESC
+                LIMIT :lim OFFSET :off
+            """),
+            params,
+        )
+
+        clips = []
+        for row in result.mappings().all():
+            clip = dict(row)
+            clip["is_assigned"] = str(clip["clip_id"]) in assigned_ids
+            # Generate SAS URLs
+            if generate_read_sas_from_url:
+                if clip.get("clip_url") and "blob.core.windows.net" in (clip["clip_url"] or ""):
+                    try:
+                        clip["clip_url"] = generate_read_sas_from_url(clip["clip_url"])
+                    except Exception:
+                        pass
+                if clip.get("thumbnail_url") and "blob.core.windows.net" in (clip["thumbnail_url"] or ""):
+                    try:
+                        clip["thumbnail_url"] = generate_read_sas_from_url(clip["thumbnail_url"])
+                    except Exception:
+                        pass
+            clips.append(clip)
+
+        # Total count
+        count_result = await db.execute(
+            text(f"""
+                SELECT COUNT(DISTINCT vc.id)
+                FROM video_clips vc
+                LEFT JOIN video_product_exposures vpe ON vpe.video_id = vc.video_id
+                WHERE vc.clip_url IS NOT NULL
+                  AND vc.status != 'deleted'
+                  AND (({where_transcript}) OR ({where_vpe}))
+            """),
+            params,
+        )
+        total = count_result.scalar() or 0
+
+        return {
+            "clips": clips,
+            "total": total,
+            "keywords": brand_keywords,
+        }
+    except Exception as e:
+        logger.exception(f"brand_recommended_clips error for {client_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── Download Endpoint ───
+
+@router.get("/brand/clips/{clip_id}/download")
+async def brand_download_clip(
+    clip_id: str,
+    client_id: str = Depends(_get_brand_client_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get a download URL for a clip (SAS URL with longer expiry for download)."""
+    # Verify clip exists
+    result = await db.execute(
+        text("SELECT clip_url, product_name, thumbnail_url FROM video_clips WHERE id = :id"),
+        {"id": clip_id},
+    )
+    row = result.mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Clip not found")
+
+    clip_url = row["clip_url"]
+    if not clip_url:
+        raise HTTPException(status_code=404, detail="No video URL available")
+
+    # Generate SAS URL with longer expiry for download
+    download_url = clip_url
+    if generate_read_sas_from_url and "blob.core.windows.net" in clip_url:
+        try:
+            download_url = generate_read_sas_from_url(clip_url)
+        except Exception:
+            pass
+
+    return {
+        "clip_id": clip_id,
+        "download_url": download_url,
+        "product_name": row["product_name"],
+        "filename": f"{row['product_name'] or 'clip'}_{clip_id[:8]}.mp4",
+    }
+
+
+# ─── Brand Keywords Update Endpoint ───
+
+@router.put("/brand/keywords")
+async def brand_update_keywords(
+    payload: dict,
+    client_id: str = Depends(_get_brand_client_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update brand keywords for recommended clip matching."""
+    keywords = payload.get("keywords", "")
+    await db.execute(
+        text("UPDATE widget_clients SET brand_keywords = :kw WHERE client_id = :cid"),
+        {"cid": client_id, "kw": keywords},
+    )
+    await db.commit()
+    return {"status": "updated", "keywords": keywords}
+
+
 # ─── GTM Tag Endpoint ───
 
 @router.get("/brand/gtm-tag")

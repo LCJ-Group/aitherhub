@@ -878,6 +878,7 @@ async def ensure_widget_tables():
         # ── Add brand portal columns ──
             for alter_sql in [
                 "ALTER TABLE widget_clients ADD COLUMN IF NOT EXISTS password_hash TEXT",
+                "ALTER TABLE widget_clients ADD COLUMN IF NOT EXISTS brand_keywords TEXT",
                 "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS uploaded_by_brand VARCHAR(20)",
                 "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS product_price TEXT",
                 "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'processed'",

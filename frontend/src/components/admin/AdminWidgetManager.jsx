@@ -38,6 +38,7 @@ export default function AdminWidgetManager({ adminKey }) {
     cta_text: "購入する",
     cta_url_template: "",
     cart_selector: "",
+    brand_keywords: "",
   });
 
   const headers = { "X-Admin-Key": adminKey };
@@ -79,7 +80,7 @@ export default function AdminWidgetManager({ adminKey }) {
       setError(null);
       await axios.post(`${API_BASE}/api/v1/widget/admin/clients`, form, { headers });
       setShowCreateForm(false);
-      setForm({ name: "", domain: "", theme_color: "#FF2D55", position: "bottom-right", cta_text: "購入する", cta_url_template: "", cart_selector: "" });
+      setForm({ name: "", domain: "", theme_color: "#FF2D55", position: "bottom-right", cta_text: "購入する", cta_url_template: "", cart_selector: "", brand_keywords: "" });
       fetchClients();
     } catch (err) {
       setError(`作成失敗: ${err.response?.data?.detail || err.message}`);
@@ -93,7 +94,7 @@ export default function AdminWidgetManager({ adminKey }) {
       setError(null);
       await axios.put(`${API_BASE}/api/v1/widget/admin/clients/${editingClient}`, form, { headers });
       setEditingClient(null);
-      setForm({ name: "", domain: "", theme_color: "#FF2D55", position: "bottom-right", cta_text: "購入する", cta_url_template: "", cart_selector: "" });
+      setForm({ name: "", domain: "", theme_color: "#FF2D55", position: "bottom-right", cta_text: "購入する", cta_url_template: "", cart_selector: "", brand_keywords: "" });
       fetchClients();
     } catch (err) {
       setError(`更新失敗: ${err.response?.data?.detail || err.message}`);
@@ -196,6 +197,7 @@ export default function AdminWidgetManager({ adminKey }) {
       cta_text: client.cta_text || "購入する",
       cta_url_template: client.cta_url_template || "",
       cart_selector: client.cart_selector || "",
+      brand_keywords: client.brand_keywords || "",
     });
     setShowCreateForm(false);
   };
@@ -235,7 +237,7 @@ export default function AdminWidgetManager({ adminKey }) {
           </p>
         </div>
         <button
-          onClick={() => { setShowCreateForm(!showCreateForm); setEditingClient(null); setForm({ name: "", domain: "", theme_color: "#FF2D55", position: "bottom-right", cta_text: "購入する", cta_url_template: "", cart_selector: "" }); }}
+          onClick={() => { setShowCreateForm(!showCreateForm); setEditingClient(null); setForm({ name: "", domain: "", theme_color: "#FF2D55", position: "bottom-right", cta_text: "購入する", cta_url_template: "", cart_selector: "", brand_keywords: "" }); }}
           className="px-4 py-2 bg-pink-600 text-white rounded-lg hover:bg-pink-700 transition-colors text-sm font-medium"
         >
           + 新規クライアント
@@ -303,7 +305,12 @@ export default function AdminWidgetManager({ adminKey }) {
             <div className="col-span-2">
               <label className="block text-sm font-medium text-gray-600 mb-1">CTA URL テンプレート</label>
               <input type="text" value={form.cta_url_template} onChange={(e) => setForm({ ...form, cta_url_template: e.target.value })} className="w-full px-3 py-2 border rounded-lg text-sm" placeholder="例: https://example.com/cart?product={product}" />
-              <p className="text-xs text-gray-400 mt-1">{"{product}"} は商品名に置換されます</p>
+              <p className="text-xs text-gray-400 mt-1">{"{"}product{"}"}  は商品名に置換されます</p>
+            </div>
+            <div className="col-span-2">
+              <label className="block text-sm font-medium text-gray-600 mb-1">ブランドキーワード（おすすめクリップ用）</label>
+              <input type="text" value={form.brand_keywords} onChange={(e) => setForm({ ...form, brand_keywords: e.target.value })} className="w-full px-3 py-2 border rounded-lg text-sm" placeholder="例: KYOGOKU, 京極, ケラチン, シャンプー" />
+              <p className="text-xs text-gray-400 mt-1">カンマ区切りで複数入力可。ブランドポータルの「おすすめ」タブで自動マッチングに使用されます</p>
             </div>
           </div>
           <div className="flex gap-2 pt-2">
@@ -644,6 +651,7 @@ function PickerClipCard({ clip, isAssigned, onPreview, onAssign }) {
               preload="metadata"
               className="absolute inset-0 w-full h-full object-cover"
               style={{ opacity: hovering ? 0 : 1, transition: "opacity 0.3s" }}
+              onLoadedData={(e) => { e.target.currentTime = 0.5; }}
             />
             {!hovering && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/10">

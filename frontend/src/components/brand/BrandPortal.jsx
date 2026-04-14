@@ -24,6 +24,7 @@ const colors = {
   accent: '#a855f7', accentHover: '#9333ea', accentLight: 'rgba(168,85,247,0.1)',
   text: '#ffffff', textSecondary: '#a1a1aa', textMuted: '#71717a',
   success: '#22c55e', danger: '#ef4444', warning: '#f59e0b',
+  info: '#3b82f6',
 };
 
 const baseCard = {
@@ -38,7 +39,6 @@ function LoginPage({ onLogin }) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Pre-fill from URL param
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get('id')) setClientId(params.get('id'));
@@ -107,13 +107,10 @@ function VideoUploader({ onUploaded }) {
     if (!file || !file.type.startsWith('video/')) { alert('動画ファイルを選択してください'); return; }
     setUploading(true); setProgress(0);
     try {
-      // 1. Get SAS URL
       const sasRes = await brandFetch('/brand/upload/sas', {
         method: 'POST', body: JSON.stringify({ filename: file.name }),
       });
       const sasData = await sasRes.json();
-
-      // 2. Upload directly to Azure Blob
       const xhr = new XMLHttpRequest();
       xhr.upload.onprogress = (e) => { if (e.lengthComputable) setProgress(Math.round(e.loaded / e.total * 100)); };
       await new Promise((resolve, reject) => {
@@ -124,8 +121,6 @@ function VideoUploader({ onUploaded }) {
         xhr.setRequestHeader('Content-Type', file.type);
         xhr.send(file);
       });
-
-      // 3. Register clip in DB
       const regRes = await brandFetch('/brand/clips', {
         method: 'POST', body: JSON.stringify({ blob_url: sasData.blob_url, title: file.name }),
       });
@@ -173,9 +168,23 @@ function VideoUploader({ onUploaded }) {
 }
 
 // ─── Clip Card Component ───
-function ClipCard({ clip, onAssign, onRemove, onEdit, isWidget }) {
+function ClipCard({ clip, onAssign, onRemove, onEdit, onDownload, isWidget, isRecommended }) {
   const [playing, setPlaying] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const videoRef = useRef(null);
+
+  const handleDownload = async (e) => {
+    e.stopPropagation();
+    if (downloading) return;
+    setDownloading(true);
+    try {
+      if (onDownload) {
+        await onDownload(clip.clip_id);
+      }
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   return (
     <div style={{ ...baseCard, padding: 0, overflow: 'hidden', position: 'relative' }}>
@@ -214,13 +223,18 @@ function ClipCard({ clip, onAssign, onRemove, onEdit, isWidget }) {
             配信中
           </span>
         )}
+        {isRecommended && clip.is_assigned && (
+          <span style={{ position: 'absolute', top: 8, left: 8, background: colors.info, color: '#fff', padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600 }}>
+            追加済み
+          </span>
+        )}
       </div>
       {/* Info */}
       <div style={{ padding: 12 }}>
         <p style={{ color: colors.text, fontSize: 13, margin: '0 0 4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {clip.product_name || clip.widget_product_name || clip.liver_name || 'クリップ'}
         </p>
-        {(clip.product_price || clip.widget_product_price) && (
+        {(clip.widget_product_price || clip.product_price) && (
           <p style={{ color: colors.accent, fontSize: 13, fontWeight: 600, margin: '0 0 4px' }}>
             {clip.widget_product_price || clip.product_price}
           </p>
@@ -229,7 +243,7 @@ function ClipCard({ clip, onAssign, onRemove, onEdit, isWidget }) {
           {clip.transcript_text?.slice(0, 50) || clip.clip_id?.slice(0, 8) || ''}
         </p>
         {/* Actions */}
-        <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
+        <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap' }}>
           {isWidget ? (
             <>
               <button onClick={() => onEdit && onEdit(clip)}
@@ -241,11 +255,30 @@ function ClipCard({ clip, onAssign, onRemove, onEdit, isWidget }) {
                 削除
               </button>
             </>
+          ) : isRecommended ? (
+            <>
+              {!clip.is_assigned && (
+                <button onClick={() => onAssign && onAssign(clip.clip_id)}
+                  style={{ flex: 1, padding: '6px 0', background: colors.accent, color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                  ＋ 追加
+                </button>
+              )}
+              <button onClick={handleDownload} disabled={downloading}
+                style={{ flex: 1, padding: '6px 0', background: 'rgba(59,130,246,0.1)', color: colors.info, border: `1px solid ${colors.info}`, borderRadius: 6, fontSize: 12, cursor: 'pointer', opacity: downloading ? 0.6 : 1 }}>
+                {downloading ? '...' : '↓ DL'}
+              </button>
+            </>
           ) : (
-            <button onClick={() => onAssign && onAssign(clip.clip_id)}
-              style={{ flex: 1, padding: '8px 0', background: colors.accent, color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
-              ＋ ウィジェットに追加
-            </button>
+            <>
+              <button onClick={() => onAssign && onAssign(clip.clip_id)}
+                style={{ flex: 1, padding: '6px 0', background: colors.accent, color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                ＋ 追加
+              </button>
+              <button onClick={handleDownload} disabled={downloading}
+                style={{ flex: 0, minWidth: 40, padding: '6px 8px', background: 'rgba(59,130,246,0.1)', color: colors.info, border: `1px solid ${colors.info}`, borderRadius: 6, fontSize: 12, cursor: 'pointer', opacity: downloading ? 0.6 : 1 }}>
+                {downloading ? '...' : '↓'}
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -371,15 +404,62 @@ function GtmTagPanel({ tagData }) {
   );
 }
 
+// ─── Keywords Settings Component ───
+function KeywordsSettings({ initialKeywords, onSaved }) {
+  const [keywords, setKeywords] = useState(initialKeywords || '');
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await brandFetch('/brand/keywords', {
+        method: 'PUT', body: JSON.stringify({ keywords }),
+      });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+      if (onSaved) onSaved(keywords);
+    } catch (err) {
+      alert('保存に失敗しました');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div style={baseCard}>
+      <h3 style={{ color: colors.text, margin: '0 0 8px', fontSize: 16 }}>ブランドキーワード</h3>
+      <p style={{ color: colors.textSecondary, fontSize: 13, margin: '0 0 16px' }}>
+        おすすめクリップの自動マッチングに使用されます。カンマ区切りで複数入力できます。
+      </p>
+      <div style={{ display: 'flex', gap: 10 }}>
+        <input value={keywords} onChange={e => setKeywords(e.target.value)}
+          placeholder="例: KYOGOKU, 京極, ケラチン, シャンプー"
+          style={{ flex: 1, padding: '10px 14px', background: colors.bg, border: `1px solid ${colors.border}`, borderRadius: 8, color: colors.text, fontSize: 14, outline: 'none', boxSizing: 'border-box' }} />
+        <button onClick={handleSave} disabled={saving}
+          style={{ padding: '10px 20px', background: saved ? colors.success : colors.accent, color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer', opacity: saving ? 0.6 : 1, whiteSpace: 'nowrap' }}>
+          {saving ? '保存中...' : saved ? '保存済み' : '保存'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Dashboard ───
 function BrandDashboard({ brandInfo, onLogout }) {
-  const [tab, setTab] = useState('widget'); // widget, upload, analytics, settings
+  const [tab, setTab] = useState('widget');
   const [clips, setClips] = useState([]);
   const [widgetClips, setWidgetClips] = useState([]);
+  const [recommendedClips, setRecommendedClips] = useState([]);
+  const [recommendedTotal, setRecommendedTotal] = useState(0);
+  const [recommendedKeywords, setRecommendedKeywords] = useState([]);
+  const [recommendedSearch, setRecommendedSearch] = useState('');
+  const [recommendedLoading, setRecommendedLoading] = useState(false);
   const [analytics, setAnalytics] = useState(null);
   const [tagData, setTagData] = useState(null);
   const [editClip, setEditClip] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [brandKeywords, setBrandKeywords] = useState('');
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -401,11 +481,36 @@ function BrandDashboard({ brandInfo, onLogout }) {
     }
   }, []);
 
+  const loadRecommended = useCallback(async (searchQuery) => {
+    setRecommendedLoading(true);
+    try {
+      const params = new URLSearchParams({ limit: '50', offset: '0' });
+      if (searchQuery) params.set('q', searchQuery);
+      const res = await brandFetch(`/brand/recommended-clips?${params}`);
+      if (res) {
+        const data = await res.json();
+        setRecommendedClips(data.clips || []);
+        setRecommendedTotal(data.total || 0);
+        setRecommendedKeywords(data.keywords || []);
+        if (data.message && !data.clips?.length) {
+          // No keywords set
+          setBrandKeywords('');
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load recommended clips:', err);
+    } finally {
+      setRecommendedLoading(false);
+    }
+  }, []);
+
   useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => { if (tab === 'recommended') loadRecommended(recommendedSearch); }, [tab]);
 
   const handleAssign = async (clipId) => {
     await brandFetch('/brand/widget/clips', { method: 'POST', body: JSON.stringify({ clip_id: clipId }) });
     loadData();
+    if (tab === 'recommended') loadRecommended(recommendedSearch);
   };
 
   const handleRemove = async (clipId) => {
@@ -414,15 +519,40 @@ function BrandDashboard({ brandInfo, onLogout }) {
     loadData();
   };
 
+  const handleDownload = async (clipId) => {
+    try {
+      const res = await brandFetch(`/brand/clips/${clipId}/download`);
+      if (res) {
+        const data = await res.json();
+        if (data.download_url) {
+          // Open download URL in new tab
+          const a = document.createElement('a');
+          a.href = data.download_url;
+          a.download = data.filename || 'clip.mp4';
+          a.target = '_blank';
+          a.rel = 'noopener noreferrer';
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+        }
+      }
+    } catch (err) {
+      alert('ダウンロードに失敗しました');
+    }
+  };
+
+  const handleRecommendedSearch = (e) => {
+    e.preventDefault();
+    loadRecommended(recommendedSearch);
+  };
+
   const tabs = [
     { id: 'widget', label: 'ウィジェット', icon: '📺' },
+    { id: 'recommended', label: 'おすすめ', icon: '✨' },
     { id: 'upload', label: '動画管理', icon: '📹' },
     { id: 'analytics', label: 'アナリティクス', icon: '📊' },
     { id: 'settings', label: '設定', icon: '⚙' },
   ];
-
-  // Clips not yet assigned to widget
-  const unassignedClips = clips.filter(c => !c.widget_active);
 
   return (
     <div style={{ minHeight: '100vh', background: colors.bg }}>
@@ -442,13 +572,13 @@ function BrandDashboard({ brandInfo, onLogout }) {
       </header>
 
       {/* Tab Navigation */}
-      <nav style={{ background: colors.card, borderBottom: `1px solid ${colors.border}`, padding: '0 24px', display: 'flex', gap: 0 }}>
+      <nav style={{ background: colors.card, borderBottom: `1px solid ${colors.border}`, padding: '0 24px', display: 'flex', gap: 0, overflowX: 'auto' }}>
         {tabs.map(t => (
           <button key={t.id} onClick={() => setTab(t.id)}
             style={{
-              padding: '14px 20px', background: 'transparent', color: tab === t.id ? colors.accent : colors.textMuted,
+              padding: '14px 16px', background: 'transparent', color: tab === t.id ? colors.accent : colors.textMuted,
               border: 'none', borderBottom: tab === t.id ? `2px solid ${colors.accent}` : '2px solid transparent',
-              fontSize: 14, cursor: 'pointer', fontWeight: tab === t.id ? 600 : 400,
+              fontSize: 13, cursor: 'pointer', fontWeight: tab === t.id ? 600 : 400, whiteSpace: 'nowrap',
             }}>
             {t.icon} {t.label}
           </button>
@@ -468,14 +598,77 @@ function BrandDashboard({ brandInfo, onLogout }) {
             {widgetClips.length === 0 ? (
               <div style={{ ...baseCard, textAlign: 'center', padding: 40 }}>
                 <p style={{ color: colors.textMuted, fontSize: 15 }}>まだクリップが割り当てられていません</p>
-                <p style={{ color: colors.textMuted, fontSize: 13 }}>「動画管理」タブから動画をアップロードして追加してください</p>
+                <p style={{ color: colors.textMuted, fontSize: 13 }}>「おすすめ」タブからクリップを追加してください</p>
+                <button onClick={() => setTab('recommended')}
+                  style={{ marginTop: 16, padding: '10px 24px', background: colors.accent, color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>
+                  おすすめクリップを見る
+                </button>
               </div>
             ) : (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 16 }}>
                 {widgetClips.map(c => (
-                  <ClipCard key={c.clip_id} clip={c} isWidget onRemove={handleRemove} onEdit={setEditClip} />
+                  <ClipCard key={c.clip_id} clip={c} isWidget onRemove={handleRemove} onEdit={setEditClip} onDownload={handleDownload} />
                 ))}
               </div>
+            )}
+          </div>
+        )}
+
+        {/* Recommended Tab */}
+        {tab === 'recommended' && (
+          <div>
+            <h2 style={{ color: colors.text, fontSize: 20, fontWeight: 600, margin: '0 0 8px' }}>
+              おすすめクリップ
+            </h2>
+            <p style={{ color: colors.textSecondary, fontSize: 13, margin: '0 0 20px' }}>
+              あなたのブランドに関連するライブ配信の切り抜き動画です。ウィジェットに追加したり、ダウンロードしてSNSで使えます。
+            </p>
+
+            {/* Search */}
+            <form onSubmit={handleRecommendedSearch} style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
+              <input value={recommendedSearch} onChange={e => setRecommendedSearch(e.target.value)}
+                placeholder="追加キーワードで絞り込み..."
+                style={{ flex: 1, padding: '10px 14px', background: colors.card, border: `1px solid ${colors.border}`, borderRadius: 8, color: colors.text, fontSize: 14, outline: 'none', boxSizing: 'border-box' }} />
+              <button type="submit"
+                style={{ padding: '10px 20px', background: colors.accent, color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>
+                検索
+              </button>
+            </form>
+
+            {/* Keywords info */}
+            {recommendedKeywords.length > 0 && (
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 16 }}>
+                <span style={{ color: colors.textMuted, fontSize: 12, lineHeight: '24px' }}>マッチキーワード:</span>
+                {recommendedKeywords.map((kw, i) => (
+                  <span key={i} style={{ padding: '2px 10px', background: colors.accentLight, color: colors.accent, borderRadius: 12, fontSize: 12, lineHeight: '20px' }}>
+                    {kw}
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {recommendedLoading ? (
+              <p style={{ color: colors.textMuted, textAlign: 'center', padding: 40 }}>検索中...</p>
+            ) : recommendedClips.length === 0 ? (
+              <div style={{ ...baseCard, textAlign: 'center', padding: 40 }}>
+                <p style={{ color: colors.textMuted, fontSize: 15 }}>おすすめクリップが見つかりません</p>
+                <p style={{ color: colors.textMuted, fontSize: 13 }}>「設定」タブでブランドキーワードを設定してください</p>
+                <button onClick={() => setTab('settings')}
+                  style={{ marginTop: 16, padding: '10px 24px', background: colors.accent, color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>
+                  キーワードを設定
+                </button>
+              </div>
+            ) : (
+              <>
+                <p style={{ color: colors.textMuted, fontSize: 13, marginBottom: 16 }}>
+                  {recommendedTotal}件のクリップが見つかりました
+                </p>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 16 }}>
+                  {recommendedClips.map(c => (
+                    <ClipCard key={c.clip_id} clip={c} isRecommended onAssign={handleAssign} onDownload={handleDownload} />
+                  ))}
+                </div>
+              </>
             )}
           </div>
         )}
@@ -500,7 +693,8 @@ function BrandDashboard({ brandInfo, onLogout }) {
                       isWidget={c.widget_active}
                       onAssign={handleAssign}
                       onRemove={handleRemove}
-                      onEdit={setEditClip} />
+                      onEdit={setEditClip}
+                      onDownload={handleDownload} />
                   ))}
                 </div>
               )}
@@ -548,7 +742,13 @@ function BrandDashboard({ brandInfo, onLogout }) {
         {tab === 'settings' && !loading && (
           <div>
             <h2 style={{ color: colors.text, fontSize: 20, fontWeight: 600, margin: '0 0 20px' }}>設定</h2>
-            <GtmTagPanel tagData={tagData} />
+            <KeywordsSettings
+              initialKeywords={brandKeywords}
+              onSaved={(kw) => { setBrandKeywords(kw); }}
+            />
+            <div style={{ marginTop: 20 }}>
+              <GtmTagPanel tagData={tagData} />
+            </div>
             <div style={{ ...baseCard, marginTop: 20 }}>
               <h3 style={{ color: colors.text, fontSize: 16, margin: '0 0 12px' }}>アカウント情報</h3>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>

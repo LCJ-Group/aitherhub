@@ -63,6 +63,7 @@ class WidgetClientCreate(BaseModel):
     cta_text: str = Field(default="購入する", description="CTA button text")
     cta_url_template: Optional[str] = Field(default=None, description="CTA URL template")
     cart_selector: Optional[str] = Field(default=None, description="CSS selector for add-to-cart button (Hack 2)")
+    brand_keywords: Optional[str] = Field(default=None, description="Comma-separated brand keywords for recommended clips")
 
 
 class WidgetClientUpdate(BaseModel):
@@ -74,6 +75,7 @@ class WidgetClientUpdate(BaseModel):
     cta_text: Optional[str] = None
     cta_url_template: Optional[str] = None
     cart_selector: Optional[str] = None
+    brand_keywords: Optional[str] = None
     assigned_clip_ids: Optional[List[str]] = None
 
 
@@ -341,10 +343,10 @@ async def create_widget_client(
         text("""
             INSERT INTO widget_clients
                 (client_id, name, domain, theme_color, position, cta_text,
-                 cta_url_template, cart_selector, is_active, created_at, updated_at, password_hash)
+                 cta_url_template, cart_selector, brand_keywords, is_active, created_at, updated_at, password_hash)
             VALUES
                 (:client_id, :name, :domain, :theme_color, :position, :cta_text,
-                 :cta_url_template, :cart_selector, TRUE, NOW(), NOW(), :password_hash)
+                 :cta_url_template, :cart_selector, :brand_keywords, TRUE, NOW(), NOW(), :password_hash)
         """),
         {
             "client_id": client_id,
@@ -355,6 +357,7 @@ async def create_widget_client(
             "cta_text": payload.cta_text,
             "cta_url_template": payload.cta_url_template,
             "cart_selector": payload.cart_selector,
+            "brand_keywords": payload.brand_keywords,
             "password_hash": password_hash,
         },
     )
