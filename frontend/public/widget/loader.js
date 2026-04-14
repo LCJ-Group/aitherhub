@@ -1,5 +1,5 @@
 /**
- * AitherHub Widget Loader v2.1b — TikTok-Style Fullscreen Feed
+ * AitherHub Widget Loader v2.2 — TikTok-Style Fullscreen Feed
  *
  * GTM経由で配信される軽量エントリーポイント。
  * 先方のECサイトに1行のタグを追加するだけで、
@@ -19,9 +19,10 @@
  *   - Hack 2: In-video CTA action
  *   - Hack 3: Shadow Tracking (localStorage session)
  *
- * v2.1b Changes:
+ * v2.2 Changes:
  *   - Client-side filtering of clips without valid clip_url
  *   - FAB bubble shows auto-playing muted video preview
+ *   - Improved mobile autoplay support (autoplay attr, touch fallback)
  */
 (function () {
   "use strict";
@@ -560,6 +561,7 @@
       fabVideo.setAttribute("webkit-playsinline", "");
       fabVideo.setAttribute("preload", "auto");
       fabVideo.setAttribute("loop", "");
+      fabVideo.setAttribute("autoplay", "");
       fabVideo.muted = true;
       fabVideo.src = clips[0].clip_url;
       fab.appendChild(fabVideo);
@@ -572,7 +574,20 @@
       fabVideo.addEventListener("loadeddata", function () {
         fabVideo.play().catch(function () { });
       });
+      fabVideo.addEventListener("canplay", function () {
+        fabVideo.play().catch(function () { });
+      });
       try { fabVideo.play().catch(function () { }); } catch (e) { }
+      // iOS fallback: try play on first user touch anywhere on page
+      var fabPlayOnTouch = function () {
+        if (fabVideo && fabVideo.paused) {
+          fabVideo.play().catch(function () { });
+        }
+        document.removeEventListener("touchstart", fabPlayOnTouch);
+        document.removeEventListener("click", fabPlayOnTouch);
+      };
+      document.addEventListener("touchstart", fabPlayOnTouch, { once: true, passive: true });
+      document.addEventListener("click", fabPlayOnTouch, { once: true });
     } else if (clips[0] && clips[0].thumbnail_url) {
       var fabImg = document.createElement("img");
       fabImg.src = clips[0].thumbnail_url;
