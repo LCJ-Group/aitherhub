@@ -439,8 +439,11 @@ async def _check_and_requeue_stuck_videos():
 
             async with AsyncSessionLocal() as db:
                 # ── Part 1: Stuck processing videos ──────────────────────────
-                threshold = datetime.now(timezone.utc) - timedelta(minutes=STUCK_THRESHOLD_MINUTES)
-                worker_guard = datetime.now(timezone.utc) - timedelta(hours=WORKER_GUARD_HOURS)
+                # Use naive datetimes to avoid asyncpg offset-naive vs offset-aware mismatch.
+                # The DB columns (updated_at, worker_claimed_at) may be stored as
+                # timestamp without time zone, so we must pass naive UTC datetimes.
+                threshold = datetime.utcnow() - timedelta(minutes=STUCK_THRESHOLD_MINUTES)
+                worker_guard = datetime.utcnow() - timedelta(hours=WORKER_GUARD_HOURS)
 
                 sql = text("""
                     SELECT v.id, v.original_filename, v.status, v.user_id,
@@ -529,7 +532,7 @@ async def _check_and_requeue_stuck_videos():
                 # enqueue_status IS NULL, meaning the worker queue never received them.
                 # They were set to ERROR by a previous monitor cycle or by the
                 # batch_upload_complete cascade failure.
-                never_enqueued_threshold = datetime.now(timezone.utc) - timedelta(
+                never_enqueued_threshold = datetime.utcnow() - timedelta(
                     minutes=NEVER_ENQUEUED_THRESHOLD_MINUTES
                 )
 

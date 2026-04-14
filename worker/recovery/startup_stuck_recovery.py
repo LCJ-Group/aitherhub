@@ -93,7 +93,8 @@ async def _async_recover():
 
     try:
         async with factory() as db:
-            threshold = datetime.now(timezone.utc) - timedelta(hours=STUCK_THRESHOLD_HOURS)
+            # Use naive datetime to avoid asyncpg offset-naive vs offset-aware mismatch
+            threshold = datetime.utcnow() - timedelta(hours=STUCK_THRESHOLD_HOURS)
 
             # Find stuck videos: STEP_* or uploaded, not updated recently,
             # no active worker, under retry limit

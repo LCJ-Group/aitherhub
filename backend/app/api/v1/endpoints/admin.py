@@ -4054,7 +4054,9 @@ async def batch_retry_stuck_videos(
     from app.services.queue_service import enqueue_job
     from datetime import datetime, timezone, timedelta
 
-    threshold = datetime.now(timezone.utc) - timedelta(minutes=threshold_minutes)
+    # Use naive datetime to avoid asyncpg offset-naive vs offset-aware mismatch
+    # DB columns may be stored as timestamp without time zone
+    threshold = datetime.utcnow() - timedelta(minutes=threshold_minutes)
     results = {"total_found": 0, "retried": 0, "failed": 0, "skipped": 0, "details": []}
 
     try:
