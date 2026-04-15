@@ -19,13 +19,14 @@ FFMPEG_BIN = env("FFMPEG_PATH", "ffmpeg")
 # compare every Nth frame (720 for 5s interval at fps=1)
 SCORE_SAMPLE_INTERVAL = int(env("SCORE_SAMPLE_INTERVAL", "3"))
 
-# v5: Frame extraction resolution and quality
-# 640px is sufficient for phase detection (histogram/absdiff), GPT Vision,
-# and product detection. Reduces disk usage by ~75% (120KB→30KB per frame).
-FRAME_SCALE_WIDTH = int(env("FRAME_SCALE_WIDTH", "640"))
+# v6: Frame extraction resolution and quality
+# 320px is sufficient for phase detection (histogram/absdiff) and product detection.
+# GPT Vision works well at 320px. Reduces disk usage by ~87% vs original (120KB→15KB per frame).
+# Also reduces GPU VRAM usage during NVDEC decode and speeds up extraction.
+FRAME_SCALE_WIDTH = int(env("FRAME_SCALE_WIDTH", "320"))
 FRAME_JPEG_QUALITY = int(env("FRAME_JPEG_QUALITY", "8"))  # 2=best, 31=worst
 # Estimated bytes per frame at current settings (for disk space pre-check)
-FRAME_ESTIMATED_BYTES = int(env("FRAME_ESTIMATED_BYTES", "30000"))  # ~30KB at 640px q8
+FRAME_ESTIMATED_BYTES = int(env("FRAME_ESTIMATED_BYTES", "15000"))  # ~15KB at 320px q8
 
 # ======================================================
 # STEP 0 – EXTRACT FRAMES

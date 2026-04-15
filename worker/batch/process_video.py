@@ -94,7 +94,7 @@ from excel_parser import load_excel_data, match_sales_to_phase, build_phase_stat
 from csv_slot_filter import get_important_time_ranges, filter_phases_by_importance, detect_sales_moments
 from screen_moment_extractor import detect_screen_moments
 from video_status import VideoStatus
-from video_compressor import compress_and_replace, generate_analysis_video
+from video_compressor import compress_and_replace  # v6: generate_analysis_video removed (direct frame extraction)
 from product_detection_pipeline import detect_product_timeline
 
 
@@ -673,57 +673,17 @@ def main():
             os.makedirs(my_art_dir, exist_ok=True)
 
         # =========================
-        # BACKGROUND COMPRESSION (non-blocking)
+        # v6: SKIP analysis video generation entirely.
+        # GPU NVDEC extracts frames directly from RAW video at near-realtime speed.
+        # This eliminates the biggest bottleneck (analysis.mp4 generation took 30-60min).
+        # Background compression is DEFERRED to after frame extraction to avoid GPU contention.
         # =========================
-        if start_step <= 0:
-            blob_url_for_compress = args.blob_url if getattr(args, "blob_url", None) else None
-            logger.info("=== FIRE BACKGROUND COMPRESSION (non-blocking) ===")
-            fire_compress_async(video_path, blob_url_for_compress, video_id)
+        blob_url_for_compress = args.blob_url if getattr(args, "blob_url", None) else None
 
-        # =========================
-        # STEP 0-PRE: GENERATE ANALYSIS VIDEO (lightweight)
-        # Update status to STEP_0 immediately so frontend shows progress
-        # =========================
-        analysis_video_path = None
         if start_step <= 0:
             _current_step_name = VideoStatus.STEP_0_EXTRACT_FRAMES
             update_video_status_sync(video_id, VideoStatus.STEP_0_EXTRACT_FRAMES)
-            logger.info("=== STEP 0-PRE: GENERATE ANALYSIS VIDEO ===")
-            _analysis_out = os.path.join(os.path.dirname(video_path), "analysis.mp4")
-            # Dynamic timeout: scale with video size (min 10min, max 90min)
-            # For 11h video, ~40000 frames at fps=1, needs more time
-            try:
-                import subprocess as _sp
-                _probe = _sp.run(
-                    ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-                     "-of", "default=noprint_wrappers=1:nokey=1", video_path],
-                    capture_output=True, text=True, timeout=30
-                )
-                _vid_duration = float(_probe.stdout.strip())
-            except Exception:
-                _vid_duration = 0
-            # Scale timeout: GPU is ~10x faster than CPU, so reduce max timeout
-            # Analysis video is optional — if it times out, we fall back to raw video.
-            # With GPU (NVENC): ~0.05x realtime; CPU: ~0.5x realtime
-            _analysis_timeout = max(600, min(int(_vid_duration * 0.15) + 600, 3600))  # 10min-1h
-            logger.info("[ANALYSIS_VIDEO] video_duration=%.0fs, timeout=%ds", _vid_duration, _analysis_timeout)
-            try:
-                analysis_video_path = generate_analysis_video(
-                    input_path=video_path,
-                    output_path=_analysis_out,
-                    fps=1,
-                    scale_width=640,  # v5: match frame extraction resolution
-                    crf=28,
-                    preset="veryfast",
-                    timeout=_analysis_timeout,
-                )
-            except Exception as e:
-                logger.warning("[ANALYSIS_VIDEO] Failed with error: %s", e)
-                analysis_video_path = None
-            if analysis_video_path:
-                logger.info("[ANALYSIS_VIDEO] Created: %s", analysis_video_path)
-            else:
-                logger.warning("[ANALYSIS_VIDEO] Failed or timed out, falling back to RAW video for frames")
+            logger.info("=== v6: DIRECT FRAME EXTRACTION (no analysis video) ===")
 
         # =========================
         # STEP 0 + STEP 3 – PARALLEL: EXTRACT FRAMES & AUDIO TRANSCRIPTION
@@ -732,13 +692,13 @@ def main():
         ad = audio_dir(video_id)
         atd = audio_text_dir(video_id)
 
-        # Use analysis video for frame extraction if available, RAW for audio
-        _frames_source = analysis_video_path if analysis_video_path else video_path
+        # v6: Always use RAW video directly (GPU NVDEC handles it efficiently)
+        _frames_source = video_path
 
         if start_step <= 0:
             # Status already updated to STEP_0 before analysis video generation
             logger.info("=== STEP 0+3 PARALLEL – EXTRACT FRAMES & AUDIO TRANSCRIPTION ===")
-            logger.info("[FRAMES] Source: %s (analysis=%s)", _frames_source, bool(analysis_video_path))
+            logger.info("[FRAMES] Source: %s (direct RAW, v6)", _frames_source)
 
             # Combined progress: frames=50%, audio=50%
             _parallel_progress = {"frames": 0, "audio": 0}
@@ -809,13 +769,11 @@ def main():
             update_video_step_progress_sync(video_id, 100)
             logger.info("=== STEP 0+3 PARALLEL COMPLETE ===")
 
-            # Clean up analysis video to reclaim disk space
-            if analysis_video_path and os.path.exists(analysis_video_path):
-                try:
-                    os.remove(analysis_video_path)
-                    logger.info("[ANALYSIS_VIDEO] Cleaned up: %s", analysis_video_path)
-                except Exception as e:
-                    logger.warning("[ANALYSIS_VIDEO] Cleanup failed: %s", e)
+            # v6: Fire background compression AFTER frame extraction completes
+            # This avoids GPU contention during the critical extraction phase
+            if blob_url_for_compress:
+                logger.info("=== FIRE BACKGROUND COMPRESSION (deferred, non-blocking) ===")
+                fire_compress_async(video_path, blob_url_for_compress, video_id)
 
         elif start_step <= 1:
             # Only frames needed (audio already done in previous run)
@@ -827,37 +785,13 @@ def main():
                     update_video_step_progress_sync(video_id, pct)
                 except Exception as _e:
                     logger.debug(f"Suppressed: {_e}")
-            # Try to generate analysis video for faster extraction (with timeout)
-            _analysis_out_resume = os.path.join(os.path.dirname(video_path), "analysis.mp4")
-            try:
-                import subprocess as _sp2
-                _probe2 = _sp2.run(
-                    ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-                     "-of", "default=noprint_wrappers=1:nokey=1", video_path],
-                    capture_output=True, text=True, timeout=30
-                )
-                _vid_dur2 = float(_probe2.stdout.strip())
-            except Exception:
-                _vid_dur2 = 0
-            _resume_timeout = max(600, min(int(_vid_dur2 * 0.15) + 600, 3600))
-            _resume_source = generate_analysis_video(
-                input_path=video_path,
-                output_path=_analysis_out_resume,
-                fps=1, scale_width=1280, crf=28, preset="veryfast",
-                timeout=_resume_timeout,
-            ) or video_path
+            # v6: Extract frames directly from RAW video (no analysis video needed)
             extract_frames(
-                video_path=_resume_source,
+                video_path=video_path,
                 fps=1,
                 frames_root=video_root(video_id),
                 on_progress=_on_frames_only_progress,
             )
-            # Clean up analysis video
-            if _resume_source != video_path and os.path.exists(_resume_source):
-                try:
-                    os.remove(_resume_source)
-                except Exception as _e:
-                    logger.debug(f"Suppressed: {_e}")
         else:
             logger.info("[SKIP] STEP 0")
 
