@@ -438,3 +438,94 @@ async def _auto_assign_clips(db: AsyncSession, client_id: str, keywords: str) ->
         logger.error(f"Auto-assign clips error for {client_id}: {e}")
         await db.rollback()
         return 0
+
+
+# ─── Brand Clips API (for LCJ Mall to display clips in brand detail page) ───
+
+@router.get("/sync/brand/{lcj_brand_id}/clips")
+async def get_brand_clips(
+    lcj_brand_id: int,
+    limit: int = 50,
+    offset: int = 0,
+    db: AsyncSession = Depends(get_db),
+    _auth: bool = Depends(_verify_sync_secret),
+):
+    """
+    Get clips assigned to a brand (identified by lcj_brand_id).
+    Returns clip list with SAS URLs for display in LCJ Mall brand detail page.
+    """
+    try:
+        from app.services.storage_service import generate_read_sas_from_url
+    except ImportError:
+        generate_read_sas_from_url = None
+
+    # Find widget_client by lcj_brand_id
+    client_result = await db.execute(
+        text("SELECT client_id, name, brand_keywords FROM widget_clients WHERE lcj_brand_id = :bid AND is_active = TRUE"),
+        {"bid": lcj_brand_id}
+    )
+    client_row = client_result.mappings().first()
+    if not client_row:
+        return {
+            "success": True,
+            "client_id": None,
+            "brand_name": None,
+            "clips": [],
+            "total": 0,
+            "message": "ブランドがAitherHubに同期されていません"
+        }
+
+    client_id = client_row["client_id"]
+
+    # Get assigned clips with video info
+    clips_result = await db.execute(
+        text("""
+            SELECT wca.clip_id, wca.sort_order,
+                   COALESCE(wca.product_name, vc.product_name) as product_name,
+                   wca.product_price, wca.product_image_url,
+                   wca.product_url, wca.product_cart_url,
+                   vc.clip_url, vc.thumbnail_url, vc.transcript_text,
+                   vc.duration_sec, vc.liver_name, vc.created_at,
+                   wca.is_active
+            FROM widget_clip_assignments wca
+            LEFT JOIN video_clips vc ON vc.id::text = wca.clip_id
+            WHERE wca.client_id = :cid AND wca.is_active = TRUE
+            ORDER BY wca.sort_order ASC
+            LIMIT :lim OFFSET :off
+        """),
+        {"cid": client_id, "lim": limit, "off": offset}
+    )
+
+    clips = []
+    for row in clips_result.mappings().all():
+        clip = dict(row)
+        # Generate SAS URLs
+        if generate_read_sas_from_url:
+            if clip.get("clip_url") and "blob.core.windows.net" in (clip["clip_url"] or ""):
+                try:
+                    clip["clip_url"] = generate_read_sas_from_url(clip["clip_url"])
+                except Exception:
+                    pass
+            if clip.get("thumbnail_url") and "blob.core.windows.net" in (clip["thumbnail_url"] or ""):
+                try:
+                    clip["thumbnail_url"] = generate_read_sas_from_url(clip["thumbnail_url"])
+                except Exception:
+                    pass
+        clips.append(clip)
+
+    # Get total count
+    count_result = await db.execute(
+        text("SELECT COUNT(*) FROM widget_clip_assignments WHERE client_id = :cid AND is_active = TRUE"),
+        {"cid": client_id}
+    )
+    total = count_result.scalar() or 0
+
+    return {
+        "success": True,
+        "client_id": client_id,
+        "brand_name": client_row["name"],
+        "brand_keywords": client_row["brand_keywords"],
+        "clips": clips,
+        "total": total,
+        "portal_url": f"https://www.aitherhub.com/brand?id={client_id}",
+    }
