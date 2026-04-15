@@ -746,59 +746,64 @@ async def reassign_clip_to_client(
     if not to_client_id:
         raise HTTPException(status_code=400, detail="to_client_id is required")
 
-    # Get existing assignment data (product info etc.)
-    existing = None
-    if from_client_id:
-        row = await db.execute(
-            text("""SELECT product_name, product_price, product_image_url, product_url, product_cart_url, page_url_pattern
-                    FROM widget_clip_assignments WHERE client_id = :cid AND clip_id = :clip_id"""),
-            {"cid": from_client_id, "clip_id": clip_id},
-        )
-        existing = row.mappings().first()
+    try:
+        # Get existing assignment data (product info etc.)
+        existing = None
+        if from_client_id:
+            row = await db.execute(
+                text("""SELECT product_name, product_price, product_image_url, product_url, product_cart_url, page_url_pattern
+                        FROM widget_clip_assignments WHERE client_id = :cid AND clip_id = :clip_id"""),
+                {"cid": from_client_id, "clip_id": clip_id},
+            )
+            existing = row.mappings().first()
 
-        # Remove from old client
+            # Remove from old client
+            await db.execute(
+                text("DELETE FROM widget_clip_assignments WHERE client_id = :cid AND clip_id = :clip_id"),
+                {"cid": from_client_id, "clip_id": clip_id},
+            )
+
+        # Get next sort_order for target client
+        max_order_result = await db.execute(
+            text("SELECT COALESCE(MAX(sort_order), -1) + 1 as next_order FROM widget_clip_assignments WHERE client_id = :cid"),
+            {"cid": to_client_id},
+        )
+        next_order = max_order_result.scalar() or 0
+
+        # Insert into new client
         await db.execute(
-            text("DELETE FROM widget_clip_assignments WHERE client_id = :cid AND clip_id = :clip_id"),
-            {"cid": from_client_id, "clip_id": clip_id},
+            text("""
+                INSERT INTO widget_clip_assignments
+                    (id, client_id, clip_id, page_url_pattern, sort_order, is_active, created_at,
+                     product_name, product_price, product_image_url, product_url, product_cart_url)
+                VALUES
+                    (:id, :cid, :clip_id, :page_url_pattern, :sort_order, TRUE, NOW(),
+                     :product_name, :product_price, :product_image_url, :product_url, :product_cart_url)
+                ON CONFLICT (client_id, clip_id) DO UPDATE
+                SET is_active = TRUE, sort_order = :sort_order,
+                    product_name = COALESCE(:product_name, widget_clip_assignments.product_name),
+                    product_price = COALESCE(:product_price, widget_clip_assignments.product_price),
+                    product_image_url = COALESCE(:product_image_url, widget_clip_assignments.product_image_url),
+                    product_url = COALESCE(:product_url, widget_clip_assignments.product_url),
+                    product_cart_url = COALESCE(:product_cart_url, widget_clip_assignments.product_cart_url)
+            """),
+            {
+                "id": str(uuid.uuid4()),
+                "cid": to_client_id,
+                "clip_id": clip_id,
+                "page_url_pattern": existing["page_url_pattern"] if existing else None,
+                "sort_order": next_order,
+                "product_name": existing["product_name"] if existing else None,
+                "product_price": existing["product_price"] if existing else None,
+                "product_image_url": existing["product_image_url"] if existing else None,
+                "product_url": existing["product_url"] if existing else None,
+                "product_cart_url": existing["product_cart_url"] if existing else None,
+            },
         )
+        await db.commit()
 
-    # Get next sort_order for target client
-    max_order_result = await db.execute(
-        text("SELECT COALESCE(MAX(sort_order), -1) + 1 as next_order FROM widget_clip_assignments WHERE client_id = :cid"),
-        {"cid": to_client_id},
-    )
-    next_order = max_order_result.scalar() or 0
-
-    # Insert into new client
-    await db.execute(
-        text("""
-            INSERT INTO widget_clip_assignments
-                (id, client_id, clip_id, page_url_pattern, sort_order, is_active, created_at,
-                 product_name, product_price, product_image_url, product_url, product_cart_url)
-            VALUES
-                (:id, :cid, :clip_id, :page_url_pattern, :sort_order, TRUE, NOW(),
-                 :product_name, :product_price, :product_image_url, :product_url, :product_cart_url)
-            ON CONFLICT (client_id, clip_id) DO UPDATE
-            SET is_active = TRUE, sort_order = :sort_order,
-                product_name = COALESCE(:product_name, widget_clip_assignments.product_name),
-                product_price = COALESCE(:product_price, widget_clip_assignments.product_price),
-                product_image_url = COALESCE(:product_image_url, widget_clip_assignments.product_image_url),
-                product_url = COALESCE(:product_url, widget_clip_assignments.product_url),
-                product_cart_url = COALESCE(:product_cart_url, widget_clip_assignments.product_cart_url)
-        """),
-        {
-            "id": str(uuid.uuid4()),
-            "cid": to_client_id,
-            "clip_id": clip_id,
-            "page_url_pattern": existing["page_url_pattern"] if existing else None,
-            "sort_order": next_order,
-            "product_name": existing["product_name"] if existing else None,
-            "product_price": existing["product_price"] if existing else None,
-            "product_image_url": existing["product_image_url"] if existing else None,
-            "product_url": existing["product_url"] if existing else None,
-            "product_cart_url": existing["product_cart_url"] if existing else None,
-        },
-    )
-    await db.commit()
-
-    return {"status": "reassigned", "clip_id": clip_id, "from_client_id": from_client_id, "to_client_id": to_client_id}
+        return {"status": "reassigned", "clip_id": clip_id, "from_client_id": from_client_id, "to_client_id": to_client_id}
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Reassign clip error: {e}")
+        raise HTTPException(status_code=500, detail=f"Reassign failed: {str(e)}")
