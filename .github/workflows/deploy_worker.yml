@@ -32,7 +32,7 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.WORKER_SSH_KEY }}" > ~/.ssh/worker_key
           chmod 600 ~/.ssh/worker_key
-          ssh-keyscan -H ${{ secrets.WORKER_SSH_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+          ssh-keyscan -H ${{ secrets.WORKER_SSH_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
 
       - name: Deploy to Worker VM
         env:
