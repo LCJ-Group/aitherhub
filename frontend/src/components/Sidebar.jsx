@@ -162,9 +162,11 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
   const [showBackButton, setShowBackButton] = useState(false);
 
   // ===== user fallback =====
-  const effectiveUser =
-    user ??
-    (() => {
+  // Use prop user if available, otherwise fall back to localStorage.
+  // Additionally, verify that the stored token's user_id matches the user's id
+  // to prevent mismatched token/user scenarios (e.g., after switching accounts).
+  const effectiveUser = (() => {
+    const u = user ?? (() => {
       try {
         const s = localStorage.getItem("user");
         return s ? JSON.parse(s) : { isLoggedIn: false };
@@ -172,6 +174,27 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
         return { isLoggedIn: false };
       }
     })();
+
+    // Safety check: if user is logged in, verify token matches user id
+    if (u?.isLoggedIn && u?.id) {
+      try {
+        const token = localStorage.getItem('app_access_token');
+        if (token) {
+          const payload = JSON.parse(atob(token.split('.')[1]));
+          const tokenUserId = payload?.sub;
+          if (tokenUserId && String(tokenUserId) !== String(u.id)) {
+            // Token belongs to a different user - treat as not logged in
+            // This prevents 403 errors from mismatched token/userId
+            console.warn('[Sidebar] Token user mismatch: token.sub=', tokenUserId, 'user.id=', u.id);
+            return { isLoggedIn: false };
+          }
+        }
+      } catch {
+        // Ignore JWT parse errors
+      }
+    }
+    return u;
+  })();
 
   // ===== fetch videos =====
   const fetchVideosRef = useRef(null);

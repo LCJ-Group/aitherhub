@@ -1,6 +1,15 @@
 const TOKEN_KEY = 'app_access_token';
 const REFRESH_KEY = 'app_refresh_token';
 
+// Legacy keys from older versions of the app
+const LEGACY_KEYS = [
+  'aitherhub_token',
+  'aitherhub_refresh_token',
+  'token',
+  'refresh_token',
+  'access_token',
+];
+
 function setToken(token) {
   try {
     localStorage.setItem(TOKEN_KEY, token);
@@ -29,9 +38,46 @@ function getRefreshToken() {
   return localStorage.getItem(REFRESH_KEY);
 }
 
+/**
+ * Clear all auth-related data from localStorage and sessionStorage.
+ * This includes current tokens, legacy token keys, user data, and API cache.
+ */
 function clearTokens() {
+  // Clear current token keys
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(REFRESH_KEY);
+
+  // Clear legacy token keys from older app versions
+  LEGACY_KEYS.forEach(key => {
+    try { localStorage.removeItem(key); } catch (e) { /* ignore */ }
+  });
+
+  // Clear user data
+  localStorage.removeItem('user');
+
+  // Clear API response cache from sessionStorage to prevent stale data
+  // after user switch
+  _clearApiCache();
+}
+
+/**
+ * Clear all api_cache: entries from sessionStorage.
+ * This prevents stale cached responses from a previous user session
+ * being served after login/logout.
+ */
+function _clearApiCache() {
+  try {
+    const keysToRemove = [];
+    for (let i = 0; i < sessionStorage.length; i++) {
+      const key = sessionStorage.key(i);
+      if (key && key.startsWith('api_cache:')) {
+        keysToRemove.push(key);
+      }
+    }
+    keysToRemove.forEach(key => sessionStorage.removeItem(key));
+  } catch (e) {
+    // sessionStorage might not be available in some contexts
+  }
 }
 
 function _parseJwt(token) {
@@ -59,6 +105,16 @@ function isValidJWT(token) {
   return !!_parseJwt(token);
 }
 
+/**
+ * Get the user ID (sub claim) from the current access token.
+ * Returns null if no token or invalid.
+ */
+function getTokenUserId() {
+  const token = getToken();
+  const payload = _parseJwt(token);
+  return payload?.sub || null;
+}
+
 export default {
   setToken,
   getToken,
@@ -67,4 +123,5 @@ export default {
   clearTokens,
   isTokenExpired,
   isValidJWT,
+  getTokenUserId,
 };

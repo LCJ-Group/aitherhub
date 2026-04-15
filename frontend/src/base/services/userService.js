@@ -8,6 +8,12 @@ class AuthService extends BaseApiService {
   }
 
   async login(email, password) {
+    // CRITICAL: Clear ALL previous auth state before login.
+    // This prevents stale tokens from a previous user session from
+    // interfering with the new login (e.g., axios interceptor using
+    // old token for refresh, or cached user data being served).
+    TokenManager.clearTokens();
+
     const resp = await this.post(URL_CONSTANTS.LOGIN, {
       email,
       password,
@@ -27,6 +33,9 @@ class AuthService extends BaseApiService {
   }
 
   async register(email, password) {
+    // Clear previous auth state before registration too
+    TokenManager.clearTokens();
+
     const resp = await this.post(URL_CONSTANTS.REGISTER, { email, password });
     
     // store tokens if returned
@@ -48,7 +57,8 @@ class AuthService extends BaseApiService {
 
   logout() {
     TokenManager.clearTokens();
-    localStorage.removeItem("user");
+    // Note: clearTokens() already removes 'user' from localStorage
+    // and clears sessionStorage API cache
   }
 
   async changePassword(currentPassword, newPassword, confirmPassword) {
