@@ -81,12 +81,6 @@ jobs:
             sudo find /var/log -name "*.1" -delete 2>/dev/null || true
             sudo find /tmp -type f -mmin +30 -delete 2>/dev/null || true
 
-            # v6: Remove legacy /var/www/aitherhub entirely (no longer needed)
-            if [ -d "/var/www/aitherhub" ]; then
-              echo "Removing legacy /var/www/aitherhub (all paths now use /opt/aitherhub)..."
-              sudo rm -rf /var/www/aitherhub
-            fi
-
             echo "=== Disk status (after cleanup) ==="
             df -h / | tail -1
 
@@ -128,6 +122,18 @@ jobs:
             # Reset failure counters (prevents StartLimitBurst lockout)
             sudo systemctl reset-failed aither-worker 2>/dev/null || true
             sudo systemctl reset-failed simple-worker 2>/dev/null || true
+
+            # v6: Remove legacy /var/www/aitherhub AFTER workers are stopped
+            # (workers may hold file locks on files in this directory)
+            if [ -d "/var/www/aitherhub" ]; then
+              echo "Removing legacy /var/www/aitherhub (all paths now use /opt/aitherhub)..."
+              sudo rm -rf /var/www/aitherhub 2>/dev/null || true
+              if [ -d "/var/www/aitherhub" ]; then
+                echo "WARNING: Could not fully remove /var/www/aitherhub (will retry next deploy)"
+              else
+                echo "Legacy /var/www/aitherhub removed successfully"
+              fi
+            fi
 
             # ============================================================
             # 2. REPO UPDATE (workers are stopped, safe to update code)
