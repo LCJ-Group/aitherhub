@@ -20,9 +20,10 @@ Wants=worker-health.service
 Type=simple
 User=azureuser
 Group=azureuser
-WorkingDirectory=/var/www/aitherhub/worker/batch
-Environment=PYTHONPATH=/var/www/aitherhub:/var/www/aitherhub/worker/batch
-EnvironmentFile=/var/www/aitherhub/.env
+# v6: ALL paths unified to /opt/aitherhub (was /var/www/aitherhub — stale copy, not a git repo)
+WorkingDirectory=/opt/aitherhub/worker/batch
+Environment=PYTHONPATH=/opt/aitherhub:/opt/aitherhub/worker/batch
+EnvironmentFile=/opt/aitherhub/.env
 
 # Use the NEW independent entrypoint
 ExecStart=/opt/aitherhub/.venv/bin/python -m worker.entrypoints.queue_worker

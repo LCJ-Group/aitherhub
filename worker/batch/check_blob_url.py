@@ -38,9 +38,9 @@ async def check():
     # Check local files
     print("=== Local Excel files ===")
     patterns = [
-        "/var/www/aitherhub/data/**/*.xlsx",
+        "/opt/aitherhub/data/**/*.xlsx",
         "/tmp/**/*.xlsx",
-        "/var/www/aitherhub/**/*.xlsx",
+        "/opt/aitherhub/**/*.xlsx",
     ]
     for pat in patterns:
         files = glob.glob(pat, recursive=True)
@@ -51,7 +51,7 @@ async def check():
 
     # Check video dirs
     print("\n=== Video processing dirs ===")
-    base = "/var/www/aitherhub/data"
+    base = "/opt/aitherhub/data"
     if os.path.exists(base):
         dirs = os.listdir(base)[:5]
         for d in dirs:

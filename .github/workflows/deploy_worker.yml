@@ -46,7 +46,7 @@ jobs:
             echo "Time: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
             # ============================================================
-            # 0. DISK CLEANUP — run FIRST to ensure space for pip/rsync
+            # 0. DISK CLEANUP — run FIRST to ensure space for pip
             # ============================================================
             echo ""
             echo "=== Disk status (before cleanup) ==="
@@ -54,14 +54,8 @@ jobs:
 
             echo "=== Disk investigation (top-level dirs) ==="
             sudo du -sh /opt/aitherhub 2>/dev/null || true
-            sudo du -sh /var/www/aitherhub 2>/dev/null || true
             sudo du -sh /tmp 2>/dev/null || true
             sudo du -sh /var/log 2>/dev/null || true
-            sudo du -sh /var/cache 2>/dev/null || true
-            sudo du -sh /home 2>/dev/null || true
-            sudo du -sh /root 2>/dev/null || true
-            sudo du -sh /snap 2>/dev/null || true
-            sudo du -sh /usr 2>/dev/null || true
             echo "=== Worker batch dirs ==="
             sudo du -sh /opt/aitherhub/worker/batch/uploadedvideo 2>/dev/null || true
             sudo du -sh /opt/aitherhub/worker/batch/output 2>/dev/null || true
@@ -71,43 +65,26 @@ jobs:
             sudo du -sh /opt/aitherhub/.git 2>/dev/null || true
             echo "=== Top 20 largest files on disk ==="
             sudo find / -xdev -type f -size +50M -exec ls -lh {} \; 2>/dev/null | sort -k5 -h -r | head -20 || true
-            echo "=== /var/www/aitherhub batch dirs ==="
-            sudo du -sh /var/www/aitherhub/worker/batch/uploadedvideo 2>/dev/null || true
-            sudo du -sh /var/www/aitherhub/worker/batch/output 2>/dev/null || true
-            sudo du -sh /var/www/aitherhub/worker/batch/splitvideo 2>/dev/null || true
-            sudo du -sh /var/www/aitherhub/worker/batch/artifacts 2>/dev/null || true
             echo "=== Aggressive disk cleanup ==="
             # Remove ALL old files (no age limit for batch dirs)
             sudo rm -rf /opt/aitherhub/worker/batch/uploadedvideo/* 2>/dev/null || true
             sudo rm -rf /opt/aitherhub/worker/batch/output/* 2>/dev/null || true
             sudo rm -rf /opt/aitherhub/worker/batch/splitvideo/* 2>/dev/null || true
             sudo rm -rf /opt/aitherhub/worker/batch/artifacts/* 2>/dev/null || true
-            sudo rm -rf /var/www/aitherhub/worker/batch/uploadedvideo/* 2>/dev/null || true
-            sudo rm -rf /var/www/aitherhub/worker/batch/output/* 2>/dev/null || true
-            sudo rm -rf /var/www/aitherhub/worker/batch/splitvideo/* 2>/dev/null || true
-            sudo rm -rf /var/www/aitherhub/worker/batch/artifacts/* 2>/dev/null || true
             sudo rm -rf /tmp/aitherhub/* 2>/dev/null || true
             sudo rm -rf /root/.cache 2>/dev/null || true
             sudo rm -rf /home/*/.cache 2>/dev/null || true
             sudo apt-get clean -y 2>/dev/null || true
             sudo journalctl --vacuum-time=1d 2>/dev/null || true
             sudo find /opt/aitherhub -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
-            sudo find /var/www/aitherhub -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
             sudo find /var/log -name "*.gz" -delete 2>/dev/null || true
             sudo find /var/log -name "*.1" -delete 2>/dev/null || true
             sudo find /tmp -type f -mmin +30 -delete 2>/dev/null || true
-            # Remove legacy .venv and .git from /var/www/aitherhub (rsync excludes them but old copies remain)
-            if [ -d "/var/www/aitherhub/.venv" ]; then
-              echo "Removing legacy /var/www/aitherhub/.venv..."
-              sudo find /var/www/aitherhub/.venv -delete 2>/dev/null || true
-            fi
-            if [ -d "/var/www/aitherhub/worker/.venv" ]; then
-              echo "Removing legacy /var/www/aitherhub/worker/.venv..."
-              sudo find /var/www/aitherhub/worker/.venv -delete 2>/dev/null || true
-            fi
-            if [ -d "/var/www/aitherhub/.git" ]; then
-              echo "Removing legacy /var/www/aitherhub/.git..."
-              sudo find /var/www/aitherhub/.git -delete 2>/dev/null || true
+
+            # v6: Remove legacy /var/www/aitherhub entirely (no longer needed)
+            if [ -d "/var/www/aitherhub" ]; then
+              echo "Removing legacy /var/www/aitherhub (all paths now use /opt/aitherhub)..."
+              sudo rm -rf /var/www/aitherhub
             fi
 
             echo "=== Disk status (after cleanup) ==="
@@ -117,7 +94,7 @@ jobs:
             # 1. STOP WORKERS FIRST (before code update)
             #    This prevents crash loops when new code has breaking
             #    changes and systemd Restart=always triggers restarts
-            #    during the git reset / rsync window.
+            #    during the git reset window.
             # ============================================================
             echo ""
             echo "=== Stopping workers (graceful) ==="
@@ -164,35 +141,7 @@ jobs:
             echo "After:  $(git rev-parse HEAD)"
 
             # ============================================================
-            # 3. SYNC to /var/www/aitherhub (legacy path)
-            # ============================================================
-            echo ""
-            echo "=== Syncing to /var/www/aitherhub ==="
-            if [ -d "/var/www/aitherhub" ]; then
-              sudo rsync -a --delete \
-                --exclude='.git' \
-                --exclude='.venv' \
-                --exclude='.env' \
-                --exclude='__pycache__' \
-                --exclude='*.pyc' \
-                --exclude='worker/batch/uploadedvideo/' \
-                --exclude='worker/batch/output/' \
-                --exclude='worker/batch/splitvideo/' \
-                --exclude='worker/batch/artifacts/' \
-                /opt/aitherhub/ /var/www/aitherhub/
-              RSYNC_EXIT=$?
-              if [ $RSYNC_EXIT -eq 0 ] || [ $RSYNC_EXIT -eq 24 ]; then
-                echo "Synced OK (exit=$RSYNC_EXIT)"
-              else
-                echo "rsync failed with exit code $RSYNC_EXIT"
-                exit $RSYNC_EXIT
-              fi
-            else
-              echo "/var/www/aitherhub does not exist — skipping"
-            fi
-
-            # ============================================================
-            # 4. STALE LOCK CLEANUP
+            # 3. STALE LOCK CLEANUP
             # ============================================================
             LOCK_FILE="/tmp/simple_worker.lock"
             if [ -f "$LOCK_FILE" ]; then
@@ -204,7 +153,7 @@ jobs:
             fi
 
             # ============================================================
-            # 5. VENV + DEPENDENCIES
+            # 4. VENV + DEPENDENCIES
             # ============================================================
             echo ""
             echo "=== Installing dependencies ==="
@@ -215,11 +164,11 @@ jobs:
             echo "Dependencies OK"
 
             # ============================================================
-            # 6. START WORKERS (code is fully updated and synced)
+            # 5. START WORKERS (code is fully updated)
             # ============================================================
             echo ""
             echo "=== Starting workers ==="
-            # Install/update simple-worker service (KillMode=process for graceful shutdown)
+            # Install/update simple-worker service
             if [ -f deploy/simple-worker.service ]; then
               if [ ! -f /etc/systemd/system/simple-worker.service ] || \
                  ! diff -q deploy/simple-worker.service /etc/systemd/system/simple-worker.service >/dev/null 2>&1; then
@@ -227,6 +176,17 @@ jobs:
                 sudo cp deploy/simple-worker.service /etc/systemd/system/
                 sudo systemctl daemon-reload
                 sudo systemctl enable simple-worker
+              fi
+            fi
+
+            # Install/update worker-health service
+            if [ -f deploy/worker-health.service ]; then
+              if [ ! -f /etc/systemd/system/worker-health.service ] || \
+                 ! diff -q deploy/worker-health.service /etc/systemd/system/worker-health.service >/dev/null 2>&1; then
+                echo "Installing/updating worker-health service..."
+                sudo cp deploy/worker-health.service /etc/systemd/system/
+                sudo systemctl daemon-reload
+                sudo systemctl enable worker-health
               fi
             fi
 
@@ -255,6 +215,7 @@ jobs:
             sudo systemctl start aither-worker 2>/dev/null || true
             sudo systemctl start simple-worker 2>/dev/null || true
             sudo systemctl restart aither-encoding-api 2>/dev/null || true
+            sudo systemctl restart worker-health 2>/dev/null || true
             sleep 10
 
             for i in 1 2 3 4 5 6; do
@@ -274,7 +235,7 @@ jobs:
             done
 
             # ============================================================
-            # 7. VERIFY
+            # 6. VERIFY
             # ============================================================
             echo ""
             echo "=== Disk status (final) ==="
@@ -289,16 +250,12 @@ jobs:
           SSH_USER: ${{ secrets.WORKER_SSH_USER }}
           COMMIT_SHA: ${{ github.sha }}
         run: |
-          # Check both /opt/aitherhub and /var/www/aitherhub for commit match
+          # v6: Only check /opt/aitherhub (single source of truth)
           DEPLOYED_OPT=$(ssh -i ~/.ssh/worker_key -o StrictHostKeyChecking=no ${SSH_USER}@${SSH_HOST} \
             "cd /opt/aitherhub && git rev-parse HEAD 2>/dev/null || echo 'NOT_FOUND'")
-          DEPLOYED_WWW=$(ssh -i ~/.ssh/worker_key -o StrictHostKeyChecking=no ${SSH_USER}@${SSH_HOST} \
-            "cd /var/www/aitherhub && git rev-parse HEAD 2>/dev/null || echo 'NOT_A_GIT_REPO'")
           echo "Expected:       ${COMMIT_SHA}"
           echo "Deployed (opt): ${DEPLOYED_OPT}"
-          echo "Deployed (www): ${DEPLOYED_WWW}"
           
-          # Primary check: /opt/aitherhub must match (this is the git source)
           if [ "${DEPLOYED_OPT}" = "${COMMIT_SHA}" ]; then
             echo "SUCCESS: /opt/aitherhub commit matches"
           else
@@ -311,9 +268,6 @@ jobs:
               "cd /opt/aitherhub && git rev-parse HEAD")
             if [ "${DEPLOYED_FIXED}" = "${COMMIT_SHA}" ]; then
               echo "RECOVERED: Commit now matches after force reset"
-              # Re-sync to /var/www/aitherhub
-              ssh -i ~/.ssh/worker_key -o StrictHostKeyChecking=no ${SSH_USER}@${SSH_HOST} \
-                "sudo rsync -a --delete --exclude='.git' --exclude='.venv' --exclude='.env' --exclude='__pycache__' --exclude='*.pyc' --exclude='worker/batch/uploadedvideo/' --exclude='worker/batch/output/' --exclude='worker/batch/splitvideo/' --exclude='worker/batch/artifacts/' /opt/aitherhub/ /var/www/aitherhub/ 2>/dev/null || true"
               # Restart workers with new code
               ssh -i ~/.ssh/worker_key -o StrictHostKeyChecking=no ${SSH_USER}@${SSH_HOST} \
                 "sudo systemctl restart aither-worker 2>/dev/null || true; sudo systemctl restart simple-worker 2>/dev/null || true"
@@ -321,13 +275,6 @@ jobs:
               echo "FAILED: Could not fix commit mismatch"
               exit 1
             fi
-          fi
-          
-          # /var/www/aitherhub is rsync'd (not a git repo), so NOT_A_GIT_REPO is expected
-          if [ "${DEPLOYED_WWW}" != "NOT_A_GIT_REPO" ] && [ "${DEPLOYED_WWW}" != "${COMMIT_SHA}" ]; then
-            echo "WARNING: /var/www/aitherhub has stale git metadata, cleaning..."
-            ssh -i ~/.ssh/worker_key -o StrictHostKeyChecking=no ${SSH_USER}@${SSH_HOST} \
-              "sudo rm -rf /var/www/aitherhub/.git 2>/dev/null || true"
           fi
 
       - name: Health check

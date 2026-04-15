@@ -1,7 +1,7 @@
 import asyncio, os, sys
-sys.path.insert(0, "/var/www/aitherhub/worker/batch")
+sys.path.insert(0, "/opt/aitherhub/worker/batch")
 from dotenv import load_dotenv
-load_dotenv("/var/www/aitherhub/.env")
+load_dotenv("/opt/aitherhub/.env")
 
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker

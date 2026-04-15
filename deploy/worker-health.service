@@ -21,9 +21,10 @@ After=network.target
 Type=simple
 User=azureuser
 Group=azureuser
-WorkingDirectory=/var/www/aitherhub
-Environment=PYTHONPATH=/var/www/aitherhub:/var/www/aitherhub/worker/batch
-EnvironmentFile=/var/www/aitherhub/.env
+# v6: ALL paths unified to /opt/aitherhub (was /var/www/aitherhub — stale copy)
+WorkingDirectory=/opt/aitherhub
+Environment=PYTHONPATH=/opt/aitherhub:/opt/aitherhub/worker/batch
+EnvironmentFile=/opt/aitherhub/.env
 
 ExecStart=/opt/aitherhub/.venv/bin/python -m worker.entrypoints.health_check
 

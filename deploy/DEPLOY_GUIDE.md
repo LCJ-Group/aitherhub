@@ -6,20 +6,22 @@
 
 **安全設計**: 全ての変更は段階的に適用でき、各ステップでrollbackが可能です。
 
+> **v6 重要**: 全パスが `/opt/aitherhub` に統一されました。`/var/www/aitherhub` は使用しません。
+
 ---
 
 ## 前提条件
 
 - SSH で Worker VM にアクセスできること
 - `azureuser` ユーザーで操作すること
-- リポジトリが `/var/www/aitherhub` にクローンされていること
+- リポジトリが `/opt/aitherhub` にクローンされていること
 
 ---
 
 ## Step 1: コードの更新
 
 ```bash
-cd /var/www/aitherhub
+cd /opt/aitherhub
 git pull origin master
 ```
 
@@ -50,7 +52,7 @@ pip3 install python-dotenv sqlalchemy[asyncio] asyncpg azure-storage-queue azure
 
 ```bash
 # .envからDATABASE_URLを読み込む
-source /var/www/aitherhub/.env
+source /opt/aitherhub/.env
 
 # Phase 3: clip_jobs 正式化
 psql "$DATABASE_URL" -f backend/migrations/add_clip_jobs_v1.sql
@@ -95,11 +97,11 @@ sudo systemctl stop simple-worker
 **systemdを切り替える前に、まず手動で新Workerが起動するか確認します。**
 
 ```bash
-cd /var/www/aitherhub
+cd /opt/aitherhub
 
 # 環境変数を読み込む
 source .env
-export PYTHONPATH="/var/www/aitherhub:/var/www/aitherhub/worker/batch"
+export PYTHONPATH="/opt/aitherhub:/opt/aitherhub/worker/batch"
 
 # 新Workerを手動起動（Ctrl+Cで停止可能）
 python3 -m worker.entrypoints.queue_worker
@@ -124,9 +126,9 @@ python3 -m worker.entrypoints.queue_worker
 
 ```bash
 # 旧Workerに戻す
-cd /var/www/aitherhub
+cd /opt/aitherhub
 source .env
-export PYTHONPATH="/var/www/aitherhub:/var/www/aitherhub/worker/batch"
+export PYTHONPATH="/opt/aitherhub:/opt/aitherhub/worker/batch"
 
 # 旧Workerを手動起動
 python3 worker/controller/simple_worker.py
@@ -172,7 +174,7 @@ journalctl -u simple-worker -f
 
 ```bash
 # .envファイルに追加
-echo "PIPELINE_ENABLED=true" >> /var/www/aitherhub/.env
+echo "PIPELINE_ENABLED=true" >> /opt/aitherhub/.env
 
 # Workerを再起動
 sudo systemctl restart simple-worker
@@ -241,7 +243,7 @@ sudo systemctl stop simple-worker
 sudo systemctl stop worker-health
 
 # 旧systemdファイルに戻す（ExecStartを変更）
-sudo sed -i 's|ExecStart=.*|ExecStart=/usr/bin/python3 /var/www/aitherhub/worker/controller/simple_worker.py|' /etc/systemd/system/simple-worker.service
+sudo sed -i 's|ExecStart=.*|ExecStart=/opt/aitherhub/.venv/bin/python /opt/aitherhub/worker/controller/simple_worker.py|' /etc/systemd/system/simple-worker.service
 sudo systemctl daemon-reload
 sudo systemctl start simple-worker
 ```
@@ -249,7 +251,7 @@ sudo systemctl start simple-worker
 ### 2. DB rollback（必要な場合のみ）
 
 ```bash
-source /var/www/aitherhub/.env
+source /opt/aitherhub/.env
 
 # パイプラインテーブルを削除
 psql "$DATABASE_URL" -c "
@@ -285,7 +287,7 @@ DROP VIEW IF EXISTS v_dead_clip_jobs;
 
 ```bash
 # .envからPIPELINE_ENABLEDを削除
-sed -i '/PIPELINE_ENABLED/d' /var/www/aitherhub/.env
+sed -i '/PIPELINE_ENABLED/d' /opt/aitherhub/.env
 sudo systemctl restart simple-worker
 ```
 
@@ -295,9 +297,9 @@ sudo systemctl restart simple-worker
 
 | 症状 | 原因 | 対処 |
 |---|---|---|
-| `ModuleNotFoundError: shared` | PYTHONPATHに `/var/www/aitherhub` が含まれていない | systemdの `Environment=PYTHONPATH=...` を確認 |
+| `ModuleNotFoundError: shared` | PYTHONPATHに `/opt/aitherhub` が含まれていない | systemdの `Environment=PYTHONPATH=...` を確認 |
 | `ModuleNotFoundError: scenedetect` | PySceneDetectが未インストール | `pip3 install scenedetect[opencv]` |
-| `RuntimeError: DATABASE_URL is not set` | .envが読み込まれていない | `EnvironmentFile=/var/www/aitherhub/.env` を確認 |
+| `RuntimeError: DATABASE_URL is not set` | .envが読み込まれていない | `EnvironmentFile=/opt/aitherhub/.env` を確認 |
 | `startup check FAILED: ffmpeg` | ffmpegが未インストール | `sudo apt install ffmpeg` |
 | `startup check FAILED: queue` | Azure Queue接続文字列が不正 | `.env` の `AZURE_STORAGE_CONNECTION_STRING` を確認 |
 | Worker起動後すぐ停止 | startup checkが失敗 | `journalctl -u simple-worker -n 50` でログ確認 |

@@ -6,7 +6,7 @@ backfill_screen_moments.py  –  既存 screen_recording 動画への screen mom
 処理: 動画DL → フレーム抽出 → screen_moment_extractor → DB保存 → クリーンアップ
 
 実行方法 (Worker VM):
-  cd /var/www/aitherhub/worker/batch
+  cd /opt/aitherhub/worker/batch
   python backfill_screen_moments.py [--limit N] [--video-id UUID] [--skip-existing] [--dry-run]
 
 コスト見積もり:

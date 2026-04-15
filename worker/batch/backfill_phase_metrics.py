@@ -20,7 +20,7 @@ backfill_phase_metrics.py
   python backfill_phase_metrics.py --video-id <uuid> --debug
 
 【デプロイ先での実行】
-  cd /var/www/aitherhub/worker/batch
+  cd /opt/aitherhub/worker/batch
   python backfill_phase_metrics.py --video-id <uuid> --debug
 """
 

@@ -494,7 +494,7 @@ def _predict_with_model_v4(phases, moments, product_names, video_duration):
 
     model_dir = os.environ.get(
         "AI_MODEL_DIR",
-        "/var/www/aitherhub/worker/batch/models"
+        "/opt/aitherhub/worker/batch/models"
     )
     manifest_path = os.path.join(model_dir, "manifest.json")
 
