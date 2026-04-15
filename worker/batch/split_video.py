@@ -109,17 +109,20 @@ def upload_to_blob(local_path: str, blob_name: str) -> str | None:
 
         if account_name and account_key:
             try:
-                # generate a short-lived blob SAS for destination
-                from azure.storage.blob import generate_blob_sas, BlobSasPermissions
+                # generate a short-lived container SAS for destination.
+                # IMPORTANT: azcopy requires sr=c (container-level SAS), NOT sr=b (blob-level).
+                # Using generate_blob_sas (sr=b) causes 403 "specified signed resource is not
+                # allowed for this resource level" because azcopy performs container-level
+                # operations (e.g. listing) even for single-blob uploads.
+                from azure.storage.blob import generate_container_sas, ContainerSasPermissions
                 from datetime import datetime, timedelta
 
                 expiry = datetime.utcnow() + timedelta(minutes=SAS_EXP_MINUTES)
-                sas = generate_blob_sas(
+                sas = generate_container_sas(
                     account_name=account_name,
                     container_name=AZURE_BLOB_CONTAINER,
-                    blob_name=blob_name,
                     account_key=account_key,
-                    permission=BlobSasPermissions(read=True, write=True, create=True),
+                    permission=ContainerSasPermissions(read=True, write=True, create=True, list=True),
                     expiry=expiry,
                 )
 
