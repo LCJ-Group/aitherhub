@@ -26,6 +26,7 @@ import re
 import random
 import argparse
 import logging
+import resource
 import subprocess
 import tempfile
 import time
@@ -33,6 +34,27 @@ import requests
 from pathlib import Path
 from datetime import datetime
 from dotenv import load_dotenv
+
+# ---------------------------------------------------------------------------
+# Memory guard for FFmpeg child processes
+# ---------------------------------------------------------------------------
+# FFmpeg can consume unbounded memory when processing long/high-res videos.
+# On a 28GB VM, a single FFmpeg process once consumed 17GB, causing OOM that
+# killed the entire VM. This helper sets RLIMIT_AS (virtual address space)
+# on child processes so they get killed instead of crashing the VM.
+#
+# Default limit: 8GB per FFmpeg process. The systemd cgroup limit is 14GB
+# for the entire worker, so 8GB per child leaves headroom for Python + I/O.
+# ---------------------------------------------------------------------------
+_FFMPEG_MEM_LIMIT_BYTES = int(os.getenv("FFMPEG_MEM_LIMIT_GB", "8")) * 1024 * 1024 * 1024
+
+
+def _limit_ffmpeg_memory():
+    """preexec_fn for subprocess: set virtual memory limit on child process."""
+    try:
+        resource.setrlimit(resource.RLIMIT_AS, (_FFMPEG_MEM_LIMIT_BYTES, _FFMPEG_MEM_LIMIT_BYTES))
+    except (ValueError, OSError):
+        pass  # non-fatal: some environments don't support RLIMIT_AS
 
 # Load environment variables
 project_root = Path(__file__).parent.parent.parent
@@ -2198,6 +2220,12 @@ def _enrich_clip_after_generation(clip_id: str, video_id: str, phase_index, capt
 # =========================
 
 def main():
+    # Apply process-level memory limit to prevent OOM crashes on the VM.
+    # This limits the entire generate_clip.py process (Python + FFmpeg children)
+    # because child processes inherit RLIMIT_AS from the parent.
+    _limit_ffmpeg_memory()
+    logger.info(f"Memory limit set: {_FFMPEG_MEM_LIMIT_BYTES / (1024**3):.0f}GB per process")
+
     parser = argparse.ArgumentParser(description="Generate TikTok-style clip")
     parser.add_argument("--clip-id", required=True, help="Clip record UUID")
     parser.add_argument("--video-id", required=True, help="Source video UUID")

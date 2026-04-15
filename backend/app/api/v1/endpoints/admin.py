@@ -4452,3 +4452,118 @@ async def worker_vm_auto_check(
             return {"action": "restart_failed", "reason": f"Auto-restart failed: {e}"}
     except Exception as e:
         return {"action": "error", "reason": str(e)}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Reset dead / stuck clips
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.post("/reset-dead-clips")
+async def reset_dead_clips(
+    video_id: str | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Reset clips that are stuck in 'dead' or 'error' status back to 'pending'.
+
+    This allows the worker to re-process them. Optionally filter by video_id.
+    Root cause of dead clips was the simple-worker duplicate OOM crash loop
+    which caused clips to exceed POISON_MAX_RETRY.
+    """
+    try:
+        if video_id:
+            result = await db.execute(text("""
+                UPDATE video_clips
+                SET status = 'pending', progress_pct = 0, progress_step = 'queued',
+                    error_message = NULL, updated_at = NOW()
+                WHERE video_id = :video_id AND status IN ('dead', 'error')
+                RETURNING id
+            """), {"video_id": video_id})
+        else:
+            result = await db.execute(text("""
+                UPDATE video_clips
+                SET status = 'pending', progress_pct = 0, progress_step = 'queued',
+                    error_message = NULL, updated_at = NOW()
+                WHERE status IN ('dead', 'error')
+                RETURNING id
+            """))
+        rows = result.fetchall()
+        await db.commit()
+        clip_ids = [str(r[0]) for r in rows]
+        return {
+            "status": "ok",
+            "reset_count": len(clip_ids),
+            "clip_ids": clip_ids,
+            "message": f"Reset {len(clip_ids)} dead/error clip(s) to pending",
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@router.post("/reset-dead-clips/{video_id}/requeue")
+async def reset_and_requeue_dead_clips(
+    video_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Reset dead/error clips for a video AND re-enqueue them to the worker queue.
+
+    This is the full recovery path: reset DB status + push new queue messages.
+    """
+    try:
+        # 1. Reset clips in DB
+        result = await db.execute(text("""
+            UPDATE video_clips
+            SET status = 'pending', progress_pct = 0, progress_step = 'queued',
+                error_message = NULL, updated_at = NOW()
+            WHERE video_id = :video_id AND status IN ('dead', 'error')
+            RETURNING id, time_start, time_end
+        """), {"video_id": video_id})
+        rows = result.fetchall()
+
+        if not rows:
+            return {"status": "ok", "message": "No dead/error clips found for this video"}
+
+        # 2. Get video blob_url
+        vid_result = await db.execute(text("""
+            SELECT blob_url FROM videos WHERE id = :video_id
+        """), {"video_id": video_id})
+        vid_row = vid_result.fetchone()
+        if not vid_row or not vid_row.blob_url:
+            await db.commit()
+            return {
+                "status": "partial",
+                "message": f"Reset {len(rows)} clips in DB but could not requeue (no blob_url)",
+                "reset_count": len(rows),
+            }
+
+        # 3. Enqueue to Azure Storage Queue
+        import os
+        from azure.storage.queue import QueueClient
+
+        conn_str = os.getenv("AZURE_STORAGE_CONNECTION_STRING", "")
+        queue_name = os.getenv("AZURE_QUEUE_NAME", "aitherhub-jobs")
+        queue_client = QueueClient.from_connection_string(conn_str, queue_name)
+
+        enqueued = 0
+        for row in rows:
+            import json as _json
+            msg = _json.dumps({
+                "type": "generate_clip",
+                "video_id": video_id,
+                "clip_id": str(row.id),
+                "blob_url": vid_row.blob_url,
+                "time_start": float(row.time_start) if row.time_start else 0,
+                "time_end": float(row.time_end) if row.time_end else 0,
+            })
+            queue_client.send_message(msg, visibility_timeout=0)
+            enqueued += 1
+
+        await db.commit()
+        return {
+            "status": "ok",
+            "reset_count": len(rows),
+            "enqueued_count": enqueued,
+            "message": f"Reset and requeued {enqueued} clip(s)",
+        }
+    except Exception as e:
+        import traceback
+        return {"status": "error", "message": str(e), "trace": traceback.format_exc()}

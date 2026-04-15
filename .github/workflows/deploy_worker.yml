@@ -65,6 +65,21 @@ jobs:
             sudo du -sh /opt/aitherhub/.git 2>/dev/null || true
             echo "=== Top 20 largest files on disk ==="
             sudo find / -xdev -type f -size +50M -exec ls -lh {} \; 2>/dev/null | sort -k5 -h -r | head -20 || true
+            # ── Ensure swap is at least 8GB (prevents OOM on heavy FFmpeg jobs) ──
+            CURRENT_SWAP_MB=$(free -m | awk '/^Swap:/{print $2}')
+            if [ "${CURRENT_SWAP_MB:-0}" -lt 7000 ]; then
+              echo "Swap is ${CURRENT_SWAP_MB}MB, increasing to 8GB..."
+              sudo swapoff /swapfile 2>/dev/null || true
+              sudo rm -f /swapfile
+              sudo fallocate -l 8G /swapfile
+              sudo chmod 600 /swapfile
+              sudo mkswap /swapfile
+              sudo swapon /swapfile
+              echo "Swap increased to 8GB"
+            else
+              echo "Swap OK: ${CURRENT_SWAP_MB}MB"
+            fi
+
             echo "=== Aggressive disk cleanup ==="
             # Remove ALL old files (no age limit for batch dirs)
             sudo rm -rf /opt/aitherhub/worker/batch/uploadedvideo/* 2>/dev/null || true
@@ -94,16 +109,23 @@ jobs:
             echo "=== Stopping workers (graceful) ==="
             echo "Sending SIGTERM to workers..."
             sudo systemctl stop aither-worker 2>/dev/null || true
+            # ── Permanently remove simple-worker (root cause of OOM crashes) ──
+            # simple-worker ran the SAME entrypoint as aither-worker, causing
+            # duplicate processing → 2x memory → OOM → VM crash loop.
             sudo systemctl stop simple-worker 2>/dev/null || true
+            sudo systemctl disable simple-worker 2>/dev/null || true
+            sudo systemctl mask simple-worker 2>/dev/null || true
+            sudo rm -f /etc/systemd/system/simple-worker.service 2>/dev/null || true
+            sudo systemctl daemon-reload 2>/dev/null || true
+            echo "simple-worker permanently removed"
 
-            # Wait up to 5 minutes for graceful shutdown
+            # Wait up to 5 minutes for graceful shutdown of aither-worker
             GRACE_TIMEOUT=300
             GRACE_ELAPSED=0
             while [ $GRACE_ELAPSED -lt $GRACE_TIMEOUT ]; do
               AITHER_PID=$(systemctl show -p MainPID aither-worker 2>/dev/null | cut -d= -f2)
-              SIMPLE_PID=$(systemctl show -p MainPID simple-worker 2>/dev/null | cut -d= -f2)
-              if [ "${AITHER_PID:-0}" = "0" ] && [ "${SIMPLE_PID:-0}" = "0" ]; then
-                echo "Workers stopped gracefully after ${GRACE_ELAPSED}s"
+              if [ "${AITHER_PID:-0}" = "0" ]; then
+                echo "Worker stopped gracefully after ${GRACE_ELAPSED}s"
                 break
               fi
               echo "Waiting for graceful shutdown... (${GRACE_ELAPSED}/${GRACE_TIMEOUT}s)"
@@ -115,13 +137,11 @@ jobs:
             if [ $GRACE_ELAPSED -ge $GRACE_TIMEOUT ]; then
               echo "Grace period expired, force killing..."
               sudo systemctl kill -s SIGKILL aither-worker 2>/dev/null || true
-              sudo systemctl kill -s SIGKILL simple-worker 2>/dev/null || true
               sleep 2
             fi
 
             # Reset failure counters (prevents StartLimitBurst lockout)
             sudo systemctl reset-failed aither-worker 2>/dev/null || true
-            sudo systemctl reset-failed simple-worker 2>/dev/null || true
 
             # v6: Remove legacy /var/www/aitherhub AFTER workers are stopped
             # (workers may hold file locks on files in this directory)
@@ -174,16 +194,8 @@ jobs:
             # ============================================================
             echo ""
             echo "=== Starting workers ==="
-            # Install/update simple-worker service
-            if [ -f deploy/simple-worker.service ]; then
-              if [ ! -f /etc/systemd/system/simple-worker.service ] || \
-                 ! diff -q deploy/simple-worker.service /etc/systemd/system/simple-worker.service >/dev/null 2>&1; then
-                echo "Installing/updating simple-worker service..."
-                sudo cp deploy/simple-worker.service /etc/systemd/system/
-                sudo systemctl daemon-reload
-                sudo systemctl enable simple-worker
-              fi
-            fi
+            # simple-worker.service is permanently removed (see above).
+            # DO NOT re-add it — it was the root cause of OOM crashes.
 
             # Install/update worker-health service
             if [ -f deploy/worker-health.service ]; then
@@ -208,13 +220,11 @@ jobs:
             fi
 
             # Remove StartLimitBurst from systemd (prevents permanent stop after 5 crashes)
-            for svc in simple-worker aither-worker; do
-              if grep -q 'StartLimitBurst' /etc/systemd/system/${svc}.service 2>/dev/null; then
-                echo "Removing StartLimitBurst from ${svc}.service..."
-                sudo sed -i '/StartLimitBurst/d; /StartLimitIntervalSec/d' /etc/systemd/system/${svc}.service
-                sudo systemctl daemon-reload
-              fi
-            done
+            if grep -q 'StartLimitBurst' /etc/systemd/system/aither-worker.service 2>/dev/null; then
+              echo "Removing StartLimitBurst from aither-worker.service..."
+              sudo sed -i '/StartLimitBurst/d; /StartLimitIntervalSec/d' /etc/systemd/system/aither-worker.service
+              sudo systemctl daemon-reload
+            fi
 
             # Install/update encoding API service
             if [ -f gpu_vm/systemd/aither-encoding-api.service ]; then
@@ -227,25 +237,22 @@ jobs:
               fi
             fi
 
-            echo "Starting workers..."
+            echo "Starting worker..."
             sudo systemctl start aither-worker 2>/dev/null || true
-            sudo systemctl start simple-worker 2>/dev/null || true
             sudo systemctl restart aither-encoding-api 2>/dev/null || true
             sudo systemctl restart worker-health 2>/dev/null || true
             sleep 10
 
             for i in 1 2 3 4 5 6; do
               AITHER=$(sudo systemctl is-active aither-worker 2>/dev/null || echo "inactive")
-              SIMPLE=$(sudo systemctl is-active simple-worker 2>/dev/null || echo "inactive")
-              if [ "$AITHER" = "active" ] || [ "$SIMPLE" = "active" ]; then
-                echo "Worker is active (aither=$AITHER simple=$SIMPLE)"
+              if [ "$AITHER" = "active" ]; then
+                echo "Worker is active (aither=$AITHER)"
                 break
               fi
-              # Also accept 'activating' as the worker may still be initializing
-              if [ "$AITHER" = "activating" ] || [ "$SIMPLE" = "activating" ]; then
-                echo "Worker is activating (aither=$AITHER simple=$SIMPLE), waiting..."
+              if [ "$AITHER" = "activating" ]; then
+                echo "Worker is activating (aither=$AITHER), waiting..."
               else
-                echo "Attempt $i: workers not active yet (aither=$AITHER simple=$SIMPLE)"
+                echo "Attempt $i: worker not active yet (aither=$AITHER)"
               fi
               sleep 10
             done
@@ -284,9 +291,9 @@ jobs:
               "cd /opt/aitherhub && git rev-parse HEAD")
             if [ "${DEPLOYED_FIXED}" = "${COMMIT_SHA}" ]; then
               echo "RECOVERED: Commit now matches after force reset"
-              # Restart workers with new code
+              # Restart worker with new code
               ssh -i ~/.ssh/worker_key -o StrictHostKeyChecking=no ${SSH_USER}@${SSH_HOST} \
-                "sudo systemctl restart aither-worker 2>/dev/null || true; sudo systemctl restart simple-worker 2>/dev/null || true"
+                "sudo systemctl restart aither-worker 2>/dev/null || true"
             else
               echo "FAILED: Could not fix commit mismatch"
               exit 1
@@ -300,19 +307,16 @@ jobs:
         run: |
           ssh -i ~/.ssh/worker_key -o StrictHostKeyChecking=no ${SSH_USER}@${SSH_HOST} << 'HEALTHCHECK'
             AITHER=$(sudo systemctl is-active aither-worker 2>/dev/null || echo "inactive")
-            SIMPLE=$(sudo systemctl is-active simple-worker 2>/dev/null || echo "inactive")
             ENCODING=$(sudo systemctl is-active aither-encoding-api 2>/dev/null || echo "inactive")
             echo "aither-worker: ${AITHER}"
-            echo "simple-worker: ${SIMPLE}"
             echo "aither-encoding-api: ${ENCODING}"
             # Wait for worker to finish activating
             for HC_ATTEMPT in 1 2 3 4 5; do
               AITHER=$(sudo systemctl is-active aither-worker 2>/dev/null || echo "inactive")
-              SIMPLE=$(sudo systemctl is-active simple-worker 2>/dev/null || echo "inactive")
-              if [ "$AITHER" = "active" ] || [ "$SIMPLE" = "active" ]; then
+              if [ "$AITHER" = "active" ]; then
                 break
               fi
-              if [ "$AITHER" = "activating" ] || [ "$SIMPLE" = "activating" ]; then
+              if [ "$AITHER" = "activating" ]; then
                 echo "Worker still activating, waiting 10s... (attempt $HC_ATTEMPT/5)"
                 sleep 10
               else
@@ -320,14 +324,10 @@ jobs:
               fi
             done
             echo "aither-worker: ${AITHER}"
-            echo "simple-worker: ${SIMPLE}"
-            if [ "$AITHER" = "active" ] || [ "$SIMPLE" = "active" ]; then
+            if [ "$AITHER" = "active" ]; then
               echo "SUCCESS: Worker is running"
             else
-              echo "FAIL: No worker is active"
-              # Show journal for debugging
-              echo "=== simple-worker journal (last 30 lines) ==="
-              sudo journalctl -u simple-worker --no-pager -n 30 2>&1 || true
+              echo "FAIL: Worker is not active"
               echo "=== aither-worker journal (last 30 lines) ==="
               sudo journalctl -u aither-worker --no-pager -n 30 2>&1 || true
               exit 1

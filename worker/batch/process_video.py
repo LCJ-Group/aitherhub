@@ -1,6 +1,7 @@
 import os, time, sys
 import argparse
 import json
+import resource
 import shutil
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -523,6 +524,15 @@ def fire_compress_async(video_path, blob_url, video_id):
 # =========================
 
 def main():
+    # Apply process-level memory limit to prevent OOM crashes on the VM.
+    _mem_limit_gb = int(os.getenv("FFMPEG_MEM_LIMIT_GB", "8"))
+    _mem_limit_bytes = _mem_limit_gb * 1024 * 1024 * 1024
+    try:
+        resource.setrlimit(resource.RLIMIT_AS, (_mem_limit_bytes, _mem_limit_bytes))
+        logging.getLogger("process_video").info(f"Memory limit set: {_mem_limit_gb}GB per process")
+    except (ValueError, OSError):
+        pass
+
     parser = argparse.ArgumentParser(description="Process a livestream video")
     parser.add_argument("--video-id", dest="video_id", type=str, required=True)
     parser.add_argument("--video-path", dest="video_path", type=str)

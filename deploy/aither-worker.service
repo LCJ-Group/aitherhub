@@ -1,6 +1,10 @@
 # =============================================================================
 # systemd service for AitherHub Worker (aither-worker)
 # =============================================================================
+# THIS IS THE ONLY WORKER SERVICE. simple-worker was removed because
+# running two identical queue_worker processes caused OOM crashes.
+# See commit message for full root cause analysis.
+#
 # Install:
 #   sudo cp deploy/aither-worker.service /etc/systemd/system/
 #   sudo systemctl daemon-reload
@@ -42,8 +46,13 @@ RestartSec=15
 WatchdogSec=120
 
 # Memory guard: prevent OOM from killing the entire VM
-MemoryMax=20G
-MemoryHigh=16G
+# VM has 28GB RAM. Reserve ~8GB for OS + encoding-api + health + other services.
+# Worker + its child processes (FFmpeg, generate_clip.py) share this 14GB limit.
+# If memory exceeds MemoryHigh (10GB), systemd applies memory pressure.
+# If memory exceeds MemoryMax (14GB), systemd kills the cgroup.
+# This prevents the VM from becoming unresponsive due to swap thrashing.
+MemoryMax=14G
+MemoryHigh=10G
 
 # Logging
 StandardOutput=journal
