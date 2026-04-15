@@ -39,6 +39,7 @@ import LiveStreamPanel from "./LiveStreamPanel";
 import LivePreviewPlayer from "./LivePreviewPlayer";
 import HeyGenStreamingAvatar from "./HeyGenStreamingAvatar";
 import LiveAvatarStreaming from "./LiveAvatarStreaming";
+import AutoLivePanel from "./AutoLivePanel";
 
 /**
  * AI Live Creator Page — Full Livestream Studio
@@ -1385,6 +1386,15 @@ export default function AiLiveCreatorPage() {
                       </p>
                     </div>
                   </div>
+                )}
+
+                {/* AI Auto Live Panel (Realtime mode only) */}
+                {engine === "realtime" && (
+                  <AutoLivePanel
+                    sessionId={livekitCredsRef.current?.session_id}
+                    isConnected={liveAvatarConnected}
+                    onStatusChange={(status) => console.log('[AutoLive] Status:', status)}
+                  />
                 )}
 
                 {/* Text Input (compact) - hidden in realtime mode */}

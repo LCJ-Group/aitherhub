@@ -28,6 +28,8 @@ from app.api.v1.endpoints.clip_db import router as clip_db_router
 from app.api.v1.endpoints.widget import router as widget_router
 from app.api.v1.endpoints.brand_portal import router as brand_portal_router
 from app.api.v1.endpoints.brand_sync import router as brand_sync_router
+from app.api.v1.endpoints.shopee_live import router as shopee_live_router
+from app.api.v1.endpoints.auto_live import router as auto_live_router
 
 routers = APIRouter()
 routers.include_router(auth_router, prefix="/auth", tags=["Auth"])
@@ -58,3 +60,5 @@ routers.include_router(clip_db_router, prefix="/clip-db", tags=["Clip DB"])
 routers.include_router(widget_router, tags=["Widget"])
 routers.include_router(brand_portal_router, tags=["Brand Portal"])
 routers.include_router(brand_sync_router, tags=["Brand Sync"])
+routers.include_router(shopee_live_router, tags=["Shopee Live"])
+routers.include_router(auto_live_router, tags=["Auto Live"])

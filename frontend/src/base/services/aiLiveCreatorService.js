@@ -466,6 +466,128 @@ class AiLiveCreatorService {
       { text },
       { headers: this._headers(), timeout: 5000 }
     );
+     return res.data;
+  }
+
+  // ── Auto Live (AI自動配信) ──────────────────────────
+
+  /**
+   * Start auto live — AI自動セールストーク生成を開始
+   */
+  async autoLiveStart(params) {
+    const res = await axios.post(
+      `${this.baseURL}/api/v1/auto-live/start`,
+      params,
+      { headers: this._headers(), timeout: 15000 }
+    );
+    return res.data;
+  }
+
+  /**
+   * Stop auto live
+   */
+  async autoLiveStop(sessionId) {
+    const res = await axios.post(
+      `${this.baseURL}/api/v1/auto-live/stop`,
+      { session_id: sessionId },
+      { headers: this._headers(), timeout: 5000 }
+    );
+    return res.data;
+  }
+
+  /**
+   * Pause auto live
+   */
+  async autoLivePause(sessionId) {
+    const res = await axios.post(
+      `${this.baseURL}/api/v1/auto-live/pause`,
+      { session_id: sessionId },
+      { headers: this._headers(), timeout: 5000 }
+    );
+    return res.data;
+  }
+
+  /**
+   * Resume auto live
+   */
+  async autoLiveResume(sessionId) {
+    const res = await axios.post(
+      `${this.baseURL}/api/v1/auto-live/resume`,
+      { session_id: sessionId },
+      { headers: this._headers(), timeout: 5000 }
+    );
+    return res.data;
+  }
+
+  /**
+   * Get auto live status
+   */
+  async autoLiveStatus(sessionId) {
+    const res = await axios.get(
+      `${this.baseURL}/api/v1/auto-live/status/${sessionId}`,
+      { headers: this._headers(), timeout: 5000 }
+    );
+    return res.data;
+  }
+
+  // ── Shopee Live ──────────────────────────────────────
+
+  /**
+   * Get Shopee products
+   */
+  async shopeeGetProducts(shopId = 1542634108) {
+    const res = await axios.get(
+      `${this.baseURL}/api/v1/shopee-live/products/${shopId}`,
+      { headers: this._headers(), timeout: 15000 }
+    );
+    return res.data;
+  }
+
+  /**
+   * Get Shopee product details
+   */
+  async shopeeGetProductDetail(itemIds, shopId = 1542634108) {
+    const res = await axios.post(
+      `${this.baseURL}/api/v1/shopee-live/products/detail`,
+      { item_ids: itemIds, shop_id: shopId },
+      { headers: this._headers(), timeout: 15000 }
+    );
+    return res.data;
+  }
+
+  /**
+   * Create Shopee livestream session
+   */
+  async shopeeCreateLiveSession(params) {
+    const res = await axios.post(
+      `${this.baseURL}/api/v1/shopee-live/session/create`,
+      params,
+      { headers: this._headers(), timeout: 15000 }
+    );
+    return res.data;
+  }
+
+  /**
+   * Start Shopee livestream
+   */
+  async shopeeStartLiveSession(sessionId) {
+    const res = await axios.post(
+      `${this.baseURL}/api/v1/shopee-live/session/start`,
+      { session_id: sessionId },
+      { headers: this._headers(), timeout: 15000 }
+    );
+    return res.data;
+  }
+
+  /**
+   * End Shopee livestream
+   */
+  async shopeeEndLiveSession(sessionId) {
+    const res = await axios.post(
+      `${this.baseURL}/api/v1/shopee-live/session/end`,
+      { session_id: sessionId },
+      { headers: this._headers(), timeout: 15000 }
+    );
     return res.data;
   }
 }
