@@ -4259,3 +4259,17 @@ async def get_monitor_health(
     except Exception as e:
         # Table might not exist yet
         return {"monitor_health_logs": [], "error": str(e)}
+
+
+# ── Temporary: outbound IP check (for Shopee IP whitelist) ──
+@router.get("/outbound-ip")
+async def get_outbound_ip():
+    """Fetch this server's outbound IP by calling httpbin.org."""
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get("https://httpbin.org/ip")
+            data = resp.json()
+            return {"outbound_ip": data.get("origin", "unknown"), "source": "httpbin.org"}
+    except Exception as e:
+        return {"error": str(e)}
