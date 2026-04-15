@@ -124,7 +124,7 @@ async def get_widget_config(
     clips_result = await db.execute(
         text("""
             SELECT wca.clip_id, wca.sort_order, wca.page_url_pattern,
-                   vc.clip_url, vc.thumbnail_url,
+                   vc.clip_url, vc.exported_url, vc.thumbnail_url,
                    COALESCE(wca.product_name, vc.product_name) as product_name,
                    vc.transcript_text, vc.duration_sec, vc.liver_name,
                    wca.product_price, wca.product_image_url,
@@ -138,6 +138,12 @@ async def get_widget_config(
         {"cid": client_id},
     )
     clips = [dict(r) for r in clips_result.mappings().all()]
+
+    # Use exported_url (subtitled version) if available, fallback to clip_url
+    for clip in clips:
+        if clip.get("exported_url"):
+            clip["original_clip_url"] = clip["clip_url"]
+            clip["clip_url"] = clip["exported_url"]
 
     # Filter out clips without a playable clip_url
     clips = [c for c in clips if c.get("clip_url")]
@@ -158,6 +164,12 @@ async def get_widget_config(
                 clip["clip_url"] = generate_read_sas_from_url(clip["clip_url"])
             except Exception:
                 pass  # Keep original URL
+        # Also generate SAS for original_clip_url (fallback)
+        if clip.get("original_clip_url") and "blob.core.windows.net" in (clip["original_clip_url"] or ""):
+            try:
+                clip["original_clip_url"] = generate_read_sas_from_url(clip["original_clip_url"])
+            except Exception:
+                pass
         if clip.get("thumbnail_url") and "blob.core.windows.net" in (clip["thumbnail_url"] or ""):
             try:
                 clip["thumbnail_url"] = generate_read_sas_from_url(clip["thumbnail_url"])

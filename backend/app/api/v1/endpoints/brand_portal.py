@@ -299,7 +299,7 @@ async def _brand_list_clips_impl(client_id: str, limit: int, offset: int, db: As
     # Get clips uploaded by this brand
     result = await db.execute(
         text("""
-            SELECT vc.id as clip_id, vc.clip_url, vc.thumbnail_url,
+            SELECT vc.id as clip_id, vc.clip_url, vc.exported_url, vc.thumbnail_url,
                    vc.product_name, vc.product_price, vc.transcript_text,
                    vc.duration_sec, vc.liver_name, vc.created_at,
                    wca.id as assignment_id,
@@ -325,11 +325,20 @@ async def _brand_list_clips_impl(client_id: str, limit: int, offset: int, db: As
     clips = []
     for row in result.mappings().all():
         clip = dict(row)
+        # Use exported_url (subtitled version) if available
+        if clip.get("exported_url"):
+            clip["original_clip_url"] = clip["clip_url"]
+            clip["clip_url"] = clip["exported_url"]
         # Generate SAS URLs
         if generate_read_sas_from_url:
             if clip.get("clip_url") and "blob.core.windows.net" in (clip["clip_url"] or ""):
                 try:
                     clip["clip_url"] = generate_read_sas_from_url(clip["clip_url"])
+                except Exception:
+                    pass
+            if clip.get("original_clip_url") and "blob.core.windows.net" in (clip["original_clip_url"] or ""):
+                try:
+                    clip["original_clip_url"] = generate_read_sas_from_url(clip["original_clip_url"])
                 except Exception:
                     pass
             if clip.get("thumbnail_url") and "blob.core.windows.net" in (clip["thumbnail_url"] or ""):
@@ -503,7 +512,7 @@ async def _brand_list_widget_clips_impl(client_id: str, db: AsyncSession):
             SELECT wca.clip_id, wca.sort_order, wca.page_url_pattern,
                    wca.product_name, wca.product_price, wca.product_image_url,
                    wca.product_url, wca.product_cart_url,
-                   vc.clip_url, vc.thumbnail_url, vc.transcript_text,
+                   vc.clip_url, vc.exported_url, vc.thumbnail_url, vc.transcript_text,
                    vc.duration_sec, vc.liver_name
             FROM widget_clip_assignments wca
             JOIN video_clips vc ON vc.id = wca.clip_id::uuid
@@ -516,10 +525,19 @@ async def _brand_list_widget_clips_impl(client_id: str, db: AsyncSession):
     clips = []
     for row in result.mappings().all():
         clip = dict(row)
+        # Use exported_url (subtitled version) if available
+        if clip.get("exported_url"):
+            clip["original_clip_url"] = clip["clip_url"]
+            clip["clip_url"] = clip["exported_url"]
         if generate_read_sas_from_url:
             if clip.get("clip_url") and "blob.core.windows.net" in (clip["clip_url"] or ""):
                 try:
                     clip["clip_url"] = generate_read_sas_from_url(clip["clip_url"])
+                except Exception:
+                    pass
+            if clip.get("original_clip_url") and "blob.core.windows.net" in (clip["original_clip_url"] or ""):
+                try:
+                    clip["original_clip_url"] = generate_read_sas_from_url(clip["original_clip_url"])
                 except Exception:
                     pass
             if clip.get("thumbnail_url") and "blob.core.windows.net" in (clip["thumbnail_url"] or ""):
@@ -654,7 +672,7 @@ async def brand_recommended_clips(
         # Main query: find clips matching keywords via transcript OR product exposures
         result = await db.execute(
             text(f"""
-                SELECT DISTINCT vc.id as clip_id, vc.clip_url, vc.thumbnail_url,
+                SELECT DISTINCT vc.id as clip_id, vc.clip_url, vc.exported_url, vc.thumbnail_url,
                        vc.product_name, vc.product_price, vc.transcript_text,
                        vc.duration_sec, vc.liver_name, vc.created_at,
                        vc.video_id
@@ -673,11 +691,20 @@ async def brand_recommended_clips(
         for row in result.mappings().all():
             clip = dict(row)
             clip["is_assigned"] = str(clip["clip_id"]) in assigned_ids
+            # Use exported_url (subtitled version) if available
+            if clip.get("exported_url"):
+                clip["original_clip_url"] = clip["clip_url"]
+                clip["clip_url"] = clip["exported_url"]
             # Generate SAS URLs
             if generate_read_sas_from_url:
                 if clip.get("clip_url") and "blob.core.windows.net" in (clip["clip_url"] or ""):
                     try:
                         clip["clip_url"] = generate_read_sas_from_url(clip["clip_url"])
+                    except Exception:
+                        pass
+                if clip.get("original_clip_url") and "blob.core.windows.net" in (clip["original_clip_url"] or ""):
+                    try:
+                        clip["original_clip_url"] = generate_read_sas_from_url(clip["original_clip_url"])
                     except Exception:
                         pass
                 if clip.get("thumbnail_url") and "blob.core.windows.net" in (clip["thumbnail_url"] or ""):

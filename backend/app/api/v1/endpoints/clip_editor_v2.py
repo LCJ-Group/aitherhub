@@ -2110,8 +2110,36 @@ async def _run_export_job_inner(job_id: str, video_id: str, clip_url: str, capti
 
         _update_job(job_id, status="done", download_url=download_url, file_size=output_size, progress_pct=100)
         logger.info(f"[export-job {job_id}] Complete! URL: {download_url[:80]}...")
-
-        # Save to cache for instant re-export
+        # ── Save exported_url to video_clips for widget delivery ──
+        try:
+            from app.core.db import async_engine
+            from sqlalchemy import text as _text
+            async with async_engine.begin() as conn:
+                # blob_url is the permanent URL (without SAS token)
+                # Use clip_url to find the exact clip row
+                # Strip SAS token from clip_url for matching
+                import re as _re
+                clean_clip_url = _re.sub(r'\?.*$', '', clip_url)
+                await conn.execute(_text("""
+                    UPDATE video_clips
+                    SET exported_url = :exported_url, exported_at = NOW()
+                    WHERE id = (
+                        SELECT id FROM video_clips
+                        WHERE video_id = :video_id::uuid
+                        AND (clip_url LIKE :clip_url_pattern OR clip_url = :clean_clip_url)
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                    )
+                """), {
+                    "exported_url": blob_url,
+                    "video_id": video_id,
+                    "clip_url_pattern": clean_clip_url + "%",
+                    "clean_clip_url": clean_clip_url,
+                })
+            logger.info(f"[export-job {job_id}] Saved exported_url to video_clips for video {video_id}")
+        except Exception as db_err:
+            logger.warning(f"[export-job {job_id}] Failed to save exported_url to DB: {db_err}")
+        # Save to cache for instant re-exportt
         job_data = _load_job(job_id) or {}
         cache_key = job_data.get("cache_key")
         if cache_key:

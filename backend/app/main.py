@@ -269,6 +269,8 @@ async def ensure_tables_exist():
                 "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS cta_score INTEGER",
                 "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS importance_score REAL",
                 "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS enriched_at TIMESTAMPTZ",
+                "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS exported_url TEXT",
+                "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS exported_at TIMESTAMPTZ",
             ]:
                 try:
                     await conn.execute(text(col_sql))
