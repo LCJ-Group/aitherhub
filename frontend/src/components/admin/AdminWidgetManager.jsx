@@ -215,6 +215,35 @@ export default function AdminWidgetManager({ adminKey }) {
     });
   };
 
+  // ── Unassign (delete) clip from client ──
+  const handleUnassignClip = async (clipId) => {
+    if (!selectedClientForClips) return;
+    if (!confirm("このクリップの割り当てを解除しますか？")) return;
+    try {
+      setError(null);
+      await axios.delete(`${API_BASE}/api/v1/widget/admin/clients/${selectedClientForClips}/clips/${clipId}`, { headers });
+      fetchClipAssignments(selectedClientForClips);
+    } catch (err) {
+      setError(`クリップ削除失敗: ${err.response?.data?.detail || err.message}`);
+    }
+  };
+
+  // ── Reassign clip to different client (brand) ──
+  const handleReassignClip = async (clipId, toClientId) => {
+    if (!selectedClientForClips || !toClientId) return;
+    if (toClientId === selectedClientForClips) return;
+    try {
+      setError(null);
+      await axios.post(`${API_BASE}/api/v1/widget/admin/clips/${clipId}/reassign`, {
+        from_client_id: selectedClientForClips,
+        to_client_id: toClientId,
+      }, { headers });
+      fetchClipAssignments(selectedClientForClips);
+    } catch (err) {
+      setError(`ブランド移動失敗: ${err.response?.data?.detail || err.message}`);
+    }
+  };
+
   // ── Open clip picker ──
   const openClipPicker = () => {
     setShowClipPicker(true);
@@ -423,6 +452,10 @@ export default function AdminWidgetManager({ adminKey }) {
                           onSaveEdit={() => handleUpdateClipProduct(clip.clip_id)}
                           onEditFormChange={(field, value) => setEditProductForm(prev => ({ ...prev, [field]: value }))}
                           onPreview={() => setPreviewClip(clip)}
+                          onDelete={() => handleUnassignClip(clip.clip_id)}
+                          onReassign={(toClientId) => handleReassignClip(clip.clip_id, toClientId)}
+                          allClients={clients}
+                          currentClientId={selectedClientForClips}
                         />
                       ))}
                     </div>
@@ -699,7 +732,7 @@ function PickerClipCard({ clip, isAssigned, onPreview, onAssign }) {
 }
 
 /* ═══════════ ClipCard: 割当済みクリップカード（プレビュー＋商品情報編集） ═══════════ */
-function ClipCard({ clip, index, isEditing, editForm, onStartEdit, onCancelEdit, onSaveEdit, onEditFormChange, onPreview }) {
+function ClipCard({ clip, index, isEditing, editForm, onStartEdit, onCancelEdit, onSaveEdit, onEditFormChange, onPreview, onDelete, onReassign, allClients, currentClientId }) {
   const videoRef = useRef(null);
   const [isHovering, setIsHovering] = useState(false);
   const [videoError, setVideoError] = useState(false);
@@ -811,12 +844,40 @@ function ClipCard({ clip, index, isEditing, editForm, onStartEdit, onCancelEdit,
         {clip.product_url && <p className="text-xs text-blue-500 mt-1 truncate" title={clip.product_url}>{clip.product_url}</p>}
         {clip.transcript_text && <p className="text-xs text-gray-500 mt-1 line-clamp-2" title={clip.transcript_text}>{clip.transcript_text.slice(0, 60)}...</p>}
 
-        <button
-          onClick={(e) => { e.stopPropagation(); onStartEdit(); }}
-          className="mt-2 w-full px-2 py-1.5 bg-orange-50 text-orange-600 rounded text-xs hover:bg-orange-100 border border-orange-200"
-        >
-          {hasProductInfo ? "商品情報を編集" : "商品情報を追加"}
-        </button>
+        {/* Brand selector */}
+        {allClients && allClients.length > 1 && (
+          <div className="mt-2">
+            <label className="block text-[10px] text-gray-400 mb-0.5">ブランド</label>
+            <select
+              value={currentClientId || ""}
+              onChange={(e) => { e.stopPropagation(); if (onReassign) onReassign(e.target.value); }}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full px-2 py-1.5 border rounded text-xs bg-white text-gray-700 focus:ring-2 focus:ring-purple-300"
+            >
+              {allClients.filter(c => c.is_active).map(c => (
+                <option key={c.client_id} value={c.client_id}>
+                  {c.name} {c.client_id === currentClientId ? "(現在)" : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        <div className="flex gap-1.5 mt-2">
+          <button
+            onClick={(e) => { e.stopPropagation(); onStartEdit(); }}
+            className="flex-1 px-2 py-1.5 bg-orange-50 text-orange-600 rounded text-xs hover:bg-orange-100 border border-orange-200"
+          >
+            {hasProductInfo ? "商品情報編集" : "商品情報追加"}
+          </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); if (onDelete) onDelete(); }}
+            className="px-2 py-1.5 bg-red-50 text-red-500 rounded text-xs hover:bg-red-100 border border-red-200"
+            title="割り当て解除"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+          </button>
+        </div>
       </div>
 
       {/* Edit product info form (inline) */}
