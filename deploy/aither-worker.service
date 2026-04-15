@@ -13,11 +13,10 @@
 [Unit]
 Description=AitherHub Worker Service
 After=network.target
-StartLimitBurst=5
-StartLimitIntervalSec=300
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=main
 User=azureuser
 Group=azureuser
 WorkingDirectory=/opt/aitherhub
@@ -35,9 +34,16 @@ KillSignal=SIGTERM
 KillMode=process
 TimeoutStopSec=300
 
-# Auto-restart on failure
+# Auto-restart on failure — NO LIMIT
 Restart=always
-RestartSec=10
+RestartSec=15
+
+# Watchdog: worker must ping every 120s, else systemd kills & restarts it
+WatchdogSec=120
+
+# Memory guard: prevent OOM from killing the entire VM
+MemoryMax=20G
+MemoryHigh=16G
 
 # Logging
 StandardOutput=journal

@@ -17,7 +17,8 @@ After=network.target
 Wants=worker-health.service
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=main
 User=azureuser
 Group=azureuser
 # v6: ALL paths unified to /opt/aitherhub (was /var/www/aitherhub — stale copy, not a git repo)
@@ -33,11 +34,16 @@ KillSignal=SIGTERM
 KillMode=process
 TimeoutStopSec=300
 
-# Auto-restart on failure
+# Auto-restart on failure — NO LIMIT (was 5/300s which caused permanent stop)
 Restart=always
-RestartSec=10
-StartLimitBurst=5
-StartLimitIntervalSec=300
+RestartSec=15
+
+# Watchdog: worker must ping every 120s, else systemd kills & restarts it
+WatchdogSec=120
+
+# Memory guard: prevent OOM from killing the entire VM
+MemoryMax=20G
+MemoryHigh=16G
 
 # Logging
 StandardOutput=journal

@@ -4273,3 +4273,182 @@ async def get_outbound_ip():
             return {"outbound_ip": data.get("origin", "unknown"), "source": "httpbin.org"}
     except Exception as e:
         return {"error": str(e)}
+
+
+# =============================================================================
+# Worker VM Health Monitoring & Auto-Restart
+# =============================================================================
+
+@router.get("/worker-vm/status")
+async def get_worker_vm_status(
+    db: AsyncSession = Depends(get_db),
+):
+    """Check Worker VM status from DB heartbeats."""
+    from datetime import datetime, timezone
+
+    try:
+        result = await db.execute(text("""
+            SELECT worker_id, last_heartbeat, mem_total_gb, mem_used_gb, mem_pct,
+                   load_1m, load_5m, disk_total_gb, disk_free_gb, disk_pct, status
+            FROM worker_heartbeats
+            ORDER BY last_heartbeat DESC
+            LIMIT 5
+        """))
+        rows = result.fetchall()
+
+        if not rows:
+            return {
+                "status": "unknown",
+                "message": "No heartbeat data found. Worker may not have started yet.",
+                "workers": [],
+            }
+
+        now = datetime.now(timezone.utc)
+        workers = []
+        for row in rows:
+            age_seconds = (now - row.last_heartbeat).total_seconds()
+            is_alive = age_seconds < 300
+            workers.append({
+                "worker_id": row.worker_id,
+                "last_heartbeat": row.last_heartbeat.isoformat(),
+                "age_seconds": round(age_seconds, 1),
+                "is_alive": is_alive,
+                "status": row.status,
+                "mem_total_gb": row.mem_total_gb,
+                "mem_used_gb": row.mem_used_gb,
+                "mem_pct": row.mem_pct,
+                "load_1m": row.load_1m,
+                "load_5m": row.load_5m,
+                "disk_total_gb": row.disk_total_gb,
+                "disk_free_gb": row.disk_free_gb,
+                "disk_pct": row.disk_pct,
+            })
+
+        any_alive = any(w["is_alive"] for w in workers)
+        return {
+            "status": "healthy" if any_alive else "dead",
+            "message": "Worker is running" if any_alive else "Worker heartbeat stale (>5min). VM may be down.",
+            "workers": workers,
+        }
+    except Exception as e:
+        return {"status": "error", "message": f"Could not check worker status: {e}", "workers": []}
+
+
+@router.post("/worker-vm/restart")
+async def restart_worker_vm():
+    """Restart the Worker VM via Azure REST API.
+    Requires AZURE_SUBSCRIPTION_ID, AZURE_RESOURCE_GROUP, AZURE_VM_NAME env vars.
+    Uses DefaultAzureCredential (Managed Identity on App Service)."""
+    import os
+
+    subscription_id = os.getenv("AZURE_SUBSCRIPTION_ID")
+    resource_group = os.getenv("AZURE_RESOURCE_GROUP")
+    vm_name = os.getenv("AZURE_VM_NAME", "aitherhubVm")
+
+    if not subscription_id or not resource_group:
+        return {
+            "status": "error",
+            "message": "AZURE_SUBSCRIPTION_ID and AZURE_RESOURCE_GROUP must be set. "
+                       "Also ensure the App Service has a Managed Identity with "
+                       "Virtual Machine Contributor role on the VM.",
+        }
+
+    try:
+        from azure.identity import DefaultAzureCredential
+        import httpx
+
+        credential = DefaultAzureCredential()
+        token = credential.get_token("https://management.azure.com/.default")
+
+        url = (
+            f"https://management.azure.com/subscriptions/{subscription_id}"
+            f"/resourceGroups/{resource_group}"
+            f"/providers/Microsoft.Compute/virtualMachines/{vm_name}"
+            f"/restart?api-version=2024-07-01"
+        )
+
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(url, headers={"Authorization": f"Bearer {token.token}"})
+
+        if resp.status_code in (200, 202):
+            return {
+                "status": "ok",
+                "message": f"VM '{vm_name}' restart initiated (HTTP {resp.status_code}).",
+            }
+        else:
+            return {"status": "error", "message": f"Azure API returned HTTP {resp.status_code}: {resp.text}"}
+    except Exception as e:
+        return {"status": "error", "message": f"Failed to restart VM: {e}"}
+
+
+@router.get("/worker-vm/auto-check")
+async def worker_vm_auto_check(
+    db: AsyncSession = Depends(get_db),
+):
+    """Automated health check - call from cron/scheduler.
+    If worker heartbeat stale >10 min, attempts VM restart."""
+    import os
+    from datetime import datetime, timezone
+
+    try:
+        result = await db.execute(text("""
+            SELECT last_heartbeat FROM worker_heartbeats
+            ORDER BY last_heartbeat DESC LIMIT 1
+        """))
+        row = result.fetchone()
+
+        if not row:
+            return {"action": "none", "reason": "No heartbeat data"}
+
+        now = datetime.now(timezone.utc)
+        age_seconds = (now - row.last_heartbeat).total_seconds()
+
+        if age_seconds < 600:
+            return {
+                "action": "none",
+                "reason": f"Worker alive (heartbeat {age_seconds:.0f}s ago)",
+                "last_heartbeat": row.last_heartbeat.isoformat(),
+            }
+
+        # Worker is dead - attempt restart
+        subscription_id = os.getenv("AZURE_SUBSCRIPTION_ID")
+        resource_group = os.getenv("AZURE_RESOURCE_GROUP")
+        vm_name = os.getenv("AZURE_VM_NAME", "aitherhubVm")
+
+        if not subscription_id or not resource_group:
+            return {
+                "action": "alert_only",
+                "reason": f"Worker dead (heartbeat {age_seconds:.0f}s ago). Cannot auto-restart: missing Azure config.",
+            }
+
+        try:
+            from azure.identity import DefaultAzureCredential
+            import httpx
+
+            credential = DefaultAzureCredential()
+            token = credential.get_token("https://management.azure.com/.default")
+
+            url = (
+                f"https://management.azure.com/subscriptions/{subscription_id}"
+                f"/resourceGroups/{resource_group}"
+                f"/providers/Microsoft.Compute/virtualMachines/{vm_name}"
+                f"/restart?api-version=2024-07-01"
+            )
+
+            async with httpx.AsyncClient(timeout=60) as client:
+                resp = await client.post(url, headers={"Authorization": f"Bearer {token.token}"})
+
+            if resp.status_code in (200, 202):
+                await db.execute(text("""
+                    INSERT INTO worker_heartbeats (worker_id, last_heartbeat, status)
+                    VALUES ('auto-restart', NOW(), 'restarting')
+                    ON CONFLICT (worker_id) DO UPDATE SET last_heartbeat = NOW(), status = 'restarting'
+                """))
+                await db.commit()
+                return {"action": "restarted", "reason": f"Worker dead ({age_seconds:.0f}s). VM restart initiated."}
+            else:
+                return {"action": "restart_failed", "reason": f"Azure API HTTP {resp.status_code}"}
+        except Exception as e:
+            return {"action": "restart_failed", "reason": f"Auto-restart failed: {e}"}
+    except Exception as e:
+        return {"action": "error", "reason": str(e)}

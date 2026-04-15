@@ -196,15 +196,25 @@ jobs:
               fi
             fi
 
-            # Ensure aither-worker also uses KillMode=process (if service file exists)
-            if [ -f /etc/systemd/system/aither-worker.service ]; then
-              if ! grep -q 'KillMode=process' /etc/systemd/system/aither-worker.service; then
-                echo "Adding KillMode=process to aither-worker.service..."
-                sudo sed -i '/KillSignal=SIGTERM/a KillMode=process' /etc/systemd/system/aither-worker.service 2>/dev/null || \
-                sudo sed -i '/\[Service\]/a KillMode=process' /etc/systemd/system/aither-worker.service
+            # Install/update aither-worker service (full file copy replaces sed patches)
+            if [ -f deploy/aither-worker.service ]; then
+              if [ ! -f /etc/systemd/system/aither-worker.service ] || \
+                 ! diff -q deploy/aither-worker.service /etc/systemd/system/aither-worker.service >/dev/null 2>&1; then
+                echo "Installing/updating aither-worker service..."
+                sudo cp deploy/aither-worker.service /etc/systemd/system/
                 sudo systemctl daemon-reload
+                sudo systemctl enable aither-worker
               fi
             fi
+
+            # Remove StartLimitBurst from systemd (prevents permanent stop after 5 crashes)
+            for svc in simple-worker aither-worker; do
+              if grep -q 'StartLimitBurst' /etc/systemd/system/${svc}.service 2>/dev/null; then
+                echo "Removing StartLimitBurst from ${svc}.service..."
+                sudo sed -i '/StartLimitBurst/d; /StartLimitIntervalSec/d' /etc/systemd/system/${svc}.service
+                sudo systemctl daemon-reload
+              fi
+            done
 
             # Install/update encoding API service
             if [ -f gpu_vm/systemd/aither-encoding-api.service ]; then

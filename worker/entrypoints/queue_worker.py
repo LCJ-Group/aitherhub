@@ -1492,10 +1492,11 @@ executor_ref = [None]
 
 _heartbeat_manager = None
 _stalled_recovery = None
+_systemd_watchdog = None
 
 
 def main():
-    global _heartbeat_manager, _stalled_recovery
+    global _heartbeat_manager, _stalled_recovery, _systemd_watchdog
 
     lock_fp = acquire_lock()
 
@@ -1586,6 +1587,16 @@ def main():
     except Exception as e:
         print(f"[worker] Warning: Startup stuck recovery failed: {e}")
 
+    # ── Systemd Watchdog + DB Heartbeat ──
+    # Layer 1: Pings systemd every 30s (WatchdogSec=120 in service file)
+    # Layer 2: Writes heartbeat to DB every 30s for external monitoring
+    try:
+        from worker.recovery.systemd_watchdog import SystemdWatchdog
+        _systemd_watchdog = SystemdWatchdog(worker_id=WORKER_INSTANCE_ID)
+        _systemd_watchdog.start()
+    except Exception as e:
+        print(f"[worker] Warning: Systemd watchdog failed to start: {e}")
+
     executor = ThreadPoolExecutor(max_workers=MAX_WORKERS)
     executor_ref[0] = executor  # Set reference for DB fallback
 
@@ -1594,6 +1605,10 @@ def main():
     try:
         while not shutdown_requested:
             try:
+                # Ping systemd watchdog from main loop
+                if _systemd_watchdog:
+                    _systemd_watchdog.notify()
+
                 periodic_disk_cleanup()
                 poll_and_process(executor)
                 poll_pending_clips_from_db()  # DB fallback for lost queue messages
@@ -1610,6 +1625,8 @@ def main():
             _heartbeat_manager.stop()
         if _stalled_recovery:
             _stalled_recovery.stop()
+        if _systemd_watchdog:
+            _systemd_watchdog.stop()
 
         lock_fp.close()
         print("[worker] Worker shut down.")
