@@ -215,6 +215,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
   const [savingCaps, setSavingCaps] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const [captionsLoaded, setCaptionsLoaded] = useState(false);
+  const [targetLanguage, setTargetLanguage] = useState('ja'); // 'ja' | 'zh-TW'
 
   // Subtitle style & position
   const [subtitleStyle, setSubtitleStyle] = useState('box');
@@ -1453,6 +1454,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
         time_start: clip.time_start || origStart,
         time_end: clip.time_end || origEnd,
         phase_index: clip.phase_index,
+        target_language: targetLanguage,
       });
       if (res?.segments?.length > 0) {
         // API now returns LOCAL times (0-based relative to clip start)
@@ -2646,6 +2648,38 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                 <p style={{ color: C.textMuted, fontSize: 11, margin: "0 0 10px", lineHeight: 1.5 }}>
                   配信者の音声書き起こしです。テキストを直接編集・削除できます。タイムスタンプをクリックするとその位置にジャンプします。
                 </p>
+
+                {/* Language selector */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                  <span style={{ color: C.textMuted, fontSize: 11, whiteSpace: 'nowrap' }}>字幕言語:</span>
+                  <div style={{ display: 'flex', gap: 4 }}>
+                    {[
+                      { value: 'ja', label: '🇯🇵 日本語' },
+                      { value: 'zh-TW', label: '🇹🇼 繁體中文' },
+                    ].map(lang => (
+                      <button
+                        key={lang.value}
+                        onClick={() => setTargetLanguage(lang.value)}
+                        style={{
+                          padding: '4px 10px',
+                          border: `1px solid ${targetLanguage === lang.value ? C.accent : C.border}`,
+                          borderRadius: 6,
+                          backgroundColor: targetLanguage === lang.value ? C.accent + '22' : 'transparent',
+                          color: targetLanguage === lang.value ? C.accent : C.textMuted,
+                          fontSize: 11,
+                          fontWeight: targetLanguage === lang.value ? 600 : 400,
+                          cursor: 'pointer',
+                          transition: 'all 0.15s',
+                        }}
+                      >
+                        {lang.label}
+                      </button>
+                    ))}
+                  </div>
+                  {targetLanguage === 'zh-TW' && (
+                    <span style={{ color: C.textDim, fontSize: 10 }}>台湾語音声→繁體中文字幕</span>
+                  )}
+                </div>
                 {captions.length > 0 && captions[0]?.source && (
                   <p style={{ color: C.textDim, fontSize: 10, margin: "0 0 8px" }}>
                     データソース: {captions[0].source === "whisper" ? "Whisper音声認識（オンデマンド）" : captions[0].source === "transcript" ? "Whisper音声認識" : captions[0].source === "audio_text" ? "フェーズ音声テキスト" : captions[0].source === "saved" ? "保存済み" : captions[0].source === "manual" ? "手動追加" : captions[0].source === "master_transcript" ? "マスター文字起こし" : "クリップ字幕"}

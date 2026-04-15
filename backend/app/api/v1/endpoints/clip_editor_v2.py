@@ -63,6 +63,7 @@ class TranscribeRequest(BaseModel):
     time_start: float = Field(..., description="Clip start time in seconds (absolute)")
     time_end: float = Field(..., description="Clip end time in seconds (absolute)")
     phase_index: Optional[int] = Field(None, description="Phase index of the clip")
+    target_language: Optional[str] = Field("ja", description="Target language for transcription: 'ja' (Japanese), 'zh-TW' (Traditional Chinese), 'zh' (Simplified Chinese)")
 
 
 class SubtitleCaption(BaseModel):
@@ -682,8 +683,20 @@ async def transcribe_clip(
     except ValueError:
         raise HTTPException(status_code=422, detail="Invalid video_id UUID")
 
+    # Determine Whisper language based on target_language
+    target_lang = (req.target_language or "ja").strip().lower()
+    # Map target language to Whisper language parameter
+    whisper_lang_map = {
+        "ja": "ja",        # Japanese output (Whisper translates Chinese audio to Japanese)
+        "zh-tw": "zh",    # Traditional Chinese: first transcribe as Chinese, then convert
+        "zh": "zh",       # Simplified Chinese
+    }
+    whisper_language = whisper_lang_map.get(target_lang, "ja")
+    needs_traditional_chinese = target_lang == "zh-tw"
+
     logger.info(f"[transcribe] Starting transcription for video={video_id}, "
-                f"time={req.time_start}-{req.time_end}")
+                f"time={req.time_start}-{req.time_end}, target_lang={target_lang}, "
+                f"whisper_lang={whisper_language}, needs_trad_zh={needs_traditional_chinese}")
 
     # Step 1: Download the clip video to a temp file
     import httpx
@@ -752,7 +765,7 @@ async def transcribe_clip(
                     model="whisper",
                     file=f,
                     response_format="verbose_json",
-                    language="ja",
+                    language=whisper_language,
                     timestamp_granularities=["segment", "word"],
                 )
 
@@ -950,6 +963,66 @@ async def transcribe_clip(
         if len(split_segments) != len(segments):
             logger.info(f"[transcribe] Split long segments: {len(segments)} -> {len(split_segments)} segments")
         segments = split_segments
+
+        # ─── Traditional Chinese conversion ───────────────────────────
+        # If target language is zh-TW, convert Simplified Chinese to Traditional Chinese
+        # using Azure OpenAI GPT for natural conversion
+        if needs_traditional_chinese and segments:
+            try:
+                logger.info(f"[transcribe] Converting {len(segments)} segments to Traditional Chinese")
+                # Batch all texts for efficient conversion
+                all_texts = [seg.get("text", "") for seg in segments]
+                batch_text = "\n".join([f"{i}|{t}" for i, t in enumerate(all_texts)])
+
+                gpt_client = openai.AsyncAzureOpenAI(
+                    api_key=azure_key,
+                    api_version="2024-06-01",
+                    azure_endpoint=clean_endpoint,
+                )
+                gpt_response = await gpt_client.chat.completions.create(
+                    model=os.getenv("AZURE_OPENAI_GPT_DEPLOYMENT", "gpt-4.1-mini"),
+                    messages=[
+                        {"role": "system", "content": (
+                            "你是一個簡體中文轉繁體中文的翻譯助手。"
+                            "請將以下每行的簡體中文文字轉換為台灣使用的繁體中文。"
+                            "保持格式：每行格式為 '序號|文字'，只替換文字部分。"
+                            "不要添加任何解釋，只輸出轉換後的結果。"
+                            "注意使用台灣慣用的詞彙和用語。"
+                        )},
+                        {"role": "user", "content": batch_text},
+                    ],
+                    temperature=0.1,
+                    max_tokens=4000,
+                )
+                converted_text = gpt_response.choices[0].message.content.strip()
+                converted_lines = converted_text.split("\n")
+
+                # Parse converted lines back to segments
+                converted_map = {}
+                for line in converted_lines:
+                    if "|" in line:
+                        parts = line.split("|", 1)
+                        try:
+                            idx = int(parts[0].strip())
+                            converted_map[idx] = parts[1].strip()
+                        except (ValueError, IndexError):
+                            continue
+
+                # Apply converted text to segments
+                converted_count = 0
+                for i, seg in enumerate(segments):
+                    if i in converted_map and converted_map[i]:
+                        seg["text"] = converted_map[i]
+                        converted_count += 1
+                        # Also update word-level text if available
+                        if seg.get("words"):
+                            # Word-level timestamps can't be easily converted,
+                            # so remove them to avoid mismatch
+                            del seg["words"]
+
+                logger.info(f"[transcribe] Converted {converted_count}/{len(segments)} segments to Traditional Chinese")
+            except Exception as trad_err:
+                logger.warning(f"[transcribe] Traditional Chinese conversion failed: {trad_err}, keeping Simplified")
 
     except Exception as e:
         logger.error(f"[transcribe] Whisper API failed: {e}", exc_info=True)
