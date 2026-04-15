@@ -110,44 +110,22 @@ def _get_system_stats() -> dict:
     return stats
 
 
-_thread_engine = None
-
-
-def _get_sync_engine():
-    """Get or create a synchronous SQLAlchemy engine for heartbeat writes."""
-    global _thread_engine
-    if _thread_engine is None:
-        try:
-            from sqlalchemy import create_engine
-            db_url = os.environ.get("DATABASE_URL", "")
-            # Convert async URL to sync
-            sync_url = db_url.replace("postgresql+asyncpg://", "postgresql://")
-            sync_url = sync_url.replace("postgresql://", "postgresql+psycopg2://") if "psycopg2" not in sync_url else sync_url
-            # Try psycopg2 first, fall back to raw postgresql
-            try:
-                _thread_engine = create_engine(sync_url, pool_size=1, pool_recycle=300)
-            except Exception:
-                sync_url = db_url.replace("postgresql+asyncpg://", "postgresql://")
-                _thread_engine = create_engine(sync_url, pool_size=1, pool_recycle=300)
-        except Exception as e:
-            print(f"[watchdog] Failed to create DB engine: {e}")
-            return None
-    return _thread_engine
-
-
 def _write_heartbeat_to_db(worker_id: str, stats: dict):
-    """Write heartbeat to worker_heartbeats table (upsert)."""
-    try:
-        from sqlalchemy import text
+    """Write heartbeat to worker_heartbeats table using asyncpg directly.
+    Runs in a background thread, so we use asyncio.run() for each write."""
+    import asyncio
 
-        engine = _get_sync_engine()
-        if engine is None:
-            return
-        now = datetime.now(timezone.utc)
+    async def _do_write():
+        import asyncpg
+        db_url = os.environ.get("DATABASE_URL", "")
+        # Convert SQLAlchemy URL to asyncpg format
+        dsn = db_url.replace("postgresql+asyncpg://", "postgresql://")
 
-        with engine.connect() as conn:
+        conn = await asyncpg.connect(dsn, timeout=10,
+                                     ssl="require" if "sslmode" not in dsn else None)
+        try:
             # Ensure table exists (idempotent)
-            conn.execute(text("""
+            await conn.execute("""
                 CREATE TABLE IF NOT EXISTS worker_heartbeats (
                     worker_id TEXT PRIMARY KEY,
                     last_heartbeat TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -163,39 +141,42 @@ def _write_heartbeat_to_db(worker_id: str, stats: dict):
                     boot_time TIMESTAMPTZ,
                     ip_address TEXT
                 )
-            """))
+            """)
 
-            conn.execute(text("""
+            now = datetime.now(timezone.utc)
+            await conn.execute("""
                 INSERT INTO worker_heartbeats
                     (worker_id, last_heartbeat, mem_total_gb, mem_used_gb, mem_pct,
                      load_1m, load_5m, disk_total_gb, disk_free_gb, disk_pct, status)
                 VALUES
-                    (:wid, :now, :mem_total, :mem_used, :mem_pct,
-                     :load1, :load5, :disk_total, :disk_free, :disk_pct, 'running')
+                    ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'running')
                 ON CONFLICT (worker_id) DO UPDATE SET
-                    last_heartbeat = :now,
-                    mem_total_gb = :mem_total,
-                    mem_used_gb = :mem_used,
-                    mem_pct = :mem_pct,
-                    load_1m = :load1,
-                    load_5m = :load5,
-                    disk_total_gb = :disk_total,
-                    disk_free_gb = :disk_free,
-                    disk_pct = :disk_pct,
+                    last_heartbeat = $2,
+                    mem_total_gb = $3,
+                    mem_used_gb = $4,
+                    mem_pct = $5,
+                    load_1m = $6,
+                    load_5m = $7,
+                    disk_total_gb = $8,
+                    disk_free_gb = $9,
+                    disk_pct = $10,
                     status = 'running'
-            """), {
-                "wid": worker_id,
-                "now": now,
-                "mem_total": stats.get("mem_total_gb"),
-                "mem_used": stats.get("mem_used_gb"),
-                "mem_pct": stats.get("mem_pct"),
-                "load1": stats.get("load_1m"),
-                "load5": stats.get("load_5m"),
-                "disk_total": stats.get("disk_total_gb"),
-                "disk_free": stats.get("disk_free_gb"),
-                "disk_pct": stats.get("disk_pct"),
-            })
-            conn.commit()
+            """,
+                worker_id, now,
+                stats.get("mem_total_gb"),
+                stats.get("mem_used_gb"),
+                stats.get("mem_pct"),
+                stats.get("load_1m"),
+                stats.get("load_5m"),
+                stats.get("disk_total_gb"),
+                stats.get("disk_free_gb"),
+                stats.get("disk_pct"),
+            )
+        finally:
+            await conn.close()
+
+    try:
+        asyncio.run(_do_write())
     except Exception as e:
         print(f"[watchdog] DB heartbeat write failed: {e}")
 
