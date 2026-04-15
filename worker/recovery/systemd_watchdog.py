@@ -110,13 +110,39 @@ def _get_system_stats() -> dict:
     return stats
 
 
+_thread_engine = None
+
+
+def _get_sync_engine():
+    """Get or create a synchronous SQLAlchemy engine for heartbeat writes."""
+    global _thread_engine
+    if _thread_engine is None:
+        try:
+            from sqlalchemy import create_engine
+            db_url = os.environ.get("DATABASE_URL", "")
+            # Convert async URL to sync
+            sync_url = db_url.replace("postgresql+asyncpg://", "postgresql://")
+            sync_url = sync_url.replace("postgresql://", "postgresql+psycopg2://") if "psycopg2" not in sync_url else sync_url
+            # Try psycopg2 first, fall back to raw postgresql
+            try:
+                _thread_engine = create_engine(sync_url, pool_size=1, pool_recycle=300)
+            except Exception:
+                sync_url = db_url.replace("postgresql+asyncpg://", "postgresql://")
+                _thread_engine = create_engine(sync_url, pool_size=1, pool_recycle=300)
+        except Exception as e:
+            print(f"[watchdog] Failed to create DB engine: {e}")
+            return None
+    return _thread_engine
+
+
 def _write_heartbeat_to_db(worker_id: str, stats: dict):
     """Write heartbeat to worker_heartbeats table (upsert)."""
     try:
         from sqlalchemy import text
-        from worker.recovery.stalled_job_recovery import _get_fallback_engine
 
-        engine = _get_fallback_engine()
+        engine = _get_sync_engine()
+        if engine is None:
+            return
         now = datetime.now(timezone.utc)
 
         with engine.connect() as conn:
