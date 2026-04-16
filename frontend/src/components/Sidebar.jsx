@@ -12,7 +12,9 @@ import AuthService from "../base/services/userService";
 import VideoService from "../base/services/videoService";
 import personaService from "../base/services/personaService";
 
-import { ChevronDown, LogOut, Settings, User, Users, X, MoreHorizontal, Pencil, Trash2, Scissors, MessageSquareText, Radio, Video, Eye, Calendar, Sparkles, UserCircle, Clapperboard, Wand2, Brain, Check, FileText } from "lucide-react";
+import { ChevronDown, LogOut, Settings, User, Users, X, MoreHorizontal, Pencil, Trash2, Scissors, MessageSquareText, Radio, Video, Eye, Calendar, Sparkles, UserCircle, Clapperboard, Wand2, Brain, Check, FileText, Globe } from "lucide-react";
+import { useTranslation } from 'react-i18next';
+import { changeLanguage } from '../i18n';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -20,10 +22,14 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
 } from "./ui/dropdown-menu";
 
 export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAnalysis, onShowFeedback, refreshKey, selectedVideo, showFeedback }) {
   const sidebarRef = useRef(null);
+  const { t, i18n } = useTranslation();
   const [openForgotPassword, setOpenForgotPassword] = useState(false);
   const [videos, setVideos] = useState([]);
   const [loadingVideos, setLoadingVideos] = useState(false);
@@ -64,7 +70,7 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
       }
     } catch (error) {
       console.error("Failed to delete video:", error);
-      alert("動画の削除に失敗しました");
+      alert(window.__t("sidebar_deleteVideoFailed"));
     }
   };
 
@@ -83,7 +89,7 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
       setMenuOpenVideoId(null);
     } catch (error) {
       console.error("Failed to rename video:", error);
-      alert("名前の変更に失敗しました");
+      alert(window.__t("sidebar_renameFailed"));
     }
   };
 
@@ -523,7 +529,7 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
                 }`}
               >
                 <FileText className={`w-4 h-4 transition-colors duration-200 ease-out ${location.pathname === '/script-generator' ? 'text-orange-600' : 'text-gray-500'}`} />
-                <span className={`text-sm transition-colors duration-200 ease-out ${location.pathname === '/script-generator' ? 'text-orange-700 font-medium' : 'text-muted-foreground'}`}>売れる台本</span>
+                <span className={`text-sm transition-colors duration-200 ease-out ${location.pathname === '/script-generator' ? 'text-orange-700 font-medium' : 'text-muted-foreground'}`}>{window.__t("sidebar_scriptGenerator")}</span>
               </div>
               <div
                 onClick={() => { navigate('/personas'); onClose?.(); }}
@@ -582,7 +588,7 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
               <div className="flex items-center">
                 <img src={library} className="w-[29px] h-[22px] ml-2" />
                 <span className="ml-4 font-semibold text-[24px] bg-[linear-gradient(180deg,rgba(69,0,255,1),rgba(155,0,255,1))] bg-clip-text text-transparent">
-                  ライブラリ
+                  {window.__t("sidebar_library")}
                 </span>
               </div>
             </div>
@@ -612,7 +618,7 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
                       <>
                         <div className="flex items-center gap-2 w-full px-1 pt-1 pb-0.5 shrink-0">
                           <Radio className="w-3.5 h-3.5 text-red-500" />
-                          <span className="text-xs font-semibold text-gray-500">ライブ分析</span>
+                          <span className="text-xs font-semibold text-gray-500">{window.__t("sidebar_liveAnalysis")}</span>
                           <span className="ml-auto inline-flex items-center gap-1 bg-red-500 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full leading-none">
                             <span className="relative flex h-1.5 w-1.5"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-75"></span><span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-white"></span></span>
                             LIVE
@@ -633,9 +639,9 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
                                 className="text-sm font-medium text-gray-700 bg-white border border-red-300 rounded px-1 py-0.5 outline-none focus:ring-2 focus:ring-red-400 w-full" />
                             ) : deleteConfirmVideoId === video.id ? (
                               <div className="flex items-center gap-2 w-full" onClick={(e) => e.stopPropagation()}>
-                                <span className="text-xs text-red-500">削除しますか？</span>
-                                <button onClick={() => handleDeleteVideo(video.id)} className="text-xs bg-red-500 text-white px-2 py-0.5 rounded hover:bg-red-600">削除</button>
-                                <button onClick={() => setDeleteConfirmVideoId(null)} className="text-xs bg-gray-200 text-gray-700 px-2 py-0.5 rounded hover:bg-gray-300">取消</button>
+                                <span className="text-xs text-red-500">{window.__t("sidebar_deleteConfirm")}</span>
+                                <button onClick={() => handleDeleteVideo(video.id)} className="text-xs bg-red-500 text-white px-2 py-0.5 rounded hover:bg-red-600">{window.__t("common_delete")}</button>
+                                <button onClick={() => setDeleteConfirmVideoId(null)} className="text-xs bg-gray-200 text-gray-700 px-2 py-0.5 rounded hover:bg-gray-300">{window.__t("sidebar_cancel")}</button>
                               </div>
                             ) : (
                               <>
@@ -656,7 +662,7 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
                                         className="inline-flex items-center gap-1 text-[10px] font-semibold text-white bg-red-500 hover:bg-red-600 px-2 py-0.5 rounded-full transition-colors animate-pulse"
                                       >
                                         <Eye className="w-3 h-3" />
-                                        ライブを見る
+                                        {window.__t("sidebar_watchLive")}
                                       </button>
                                     )}
                                     {video.stream_duration != null && video.stream_duration > 0 && (
@@ -682,11 +688,11 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
                                     <div className="absolute right-0 top-8 z-50 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[140px]">
                                       <button onClick={(e) => { e.stopPropagation(); setRenamingVideoId(video.id); setRenameValue(video.original_filename || ""); setMenuOpenVideoId(null); }}
                                         className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100">
-                                        <Pencil className="w-3.5 h-3.5" /> 名前を変更
+                                        <Pencil className="w-3.5 h-3.5" /> {window.__t("sidebar_rename")}
                                       </button>
                                       <button onClick={(e) => { e.stopPropagation(); setDeleteConfirmVideoId(video.id); setMenuOpenVideoId(null); }}
                                         className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-500 hover:bg-red-50">
-                                        <Trash2 className="w-3.5 h-3.5" /> 削除
+                                        <Trash2 className="w-3.5 h-3.5" /> {window.__t("common_delete")}
                                       </button>
                                     </div>
                                   )}
@@ -724,11 +730,11 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
                                   className="inline-flex items-center gap-1 text-[10px] font-semibold text-white bg-red-500 hover:bg-red-600 px-2 py-0.5 rounded-full transition-colors animate-pulse"
                                 >
                                   <Eye className="w-3 h-3" />
-                                  ライブを見る
+                                  {window.__t("sidebar_watchLive")}
                                 </button>
                                 <span className="inline-flex items-center gap-0.5 text-[10px] text-green-600">
                                   <span className="relative flex h-1.5 w-1.5"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span><span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-green-500"></span></span>
-                                  Chrome拡張
+                                  {window.__t("sidebar_chromeExtension")}
                                 </span>
                               </div>
                             </div>
@@ -764,9 +770,9 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
                                 className="text-sm font-medium text-gray-700 bg-white border border-purple-300 rounded px-1 py-0.5 outline-none focus:ring-2 focus:ring-purple-400 w-full" />
                             ) : deleteConfirmVideoId === video.id ? (
                               <div className="flex items-center gap-2 w-full" onClick={(e) => e.stopPropagation()}>
-                                <span className="text-xs text-red-500">削除しますか？</span>
-                                <button onClick={() => handleDeleteVideo(video.id)} className="text-xs bg-red-500 text-white px-2 py-0.5 rounded hover:bg-red-600">削除</button>
-                                <button onClick={() => setDeleteConfirmVideoId(null)} className="text-xs bg-gray-200 text-gray-700 px-2 py-0.5 rounded hover:bg-gray-300">取消</button>
+                                <span className="text-xs text-red-500">{window.__t("sidebar_deleteConfirm")}</span>
+                                <button onClick={() => handleDeleteVideo(video.id)} className="text-xs bg-red-500 text-white px-2 py-0.5 rounded hover:bg-red-600">{window.__t("common_delete")}</button>
+                                <button onClick={() => setDeleteConfirmVideoId(null)} className="text-xs bg-gray-200 text-gray-700 px-2 py-0.5 rounded hover:bg-gray-300">{window.__t("sidebar_cancel")}</button>
                               </div>
                             ) : (
                               <>
@@ -780,12 +786,12 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
                                       {video.status === 'ERROR' && video.stream_duration ? (
                                         <span className="inline-flex items-center gap-1 text-[11px] text-amber-500 font-medium leading-normal">
                                           <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-                                          一部未完了
+                                          {window.__t("sidebar_partialIncomplete")}
                                         </span>
                                       ) : video.status === 'ERROR' ? (
                                         <span className="inline-flex items-center gap-1 text-[11px] text-red-500 font-medium leading-normal">
                                           <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
-                                          エラー
+                                          {window.__t("common_error")}
                                         </span>
                                       ) : (
                                         <span className="inline-flex items-center gap-1 text-[11px] text-amber-600 font-medium leading-normal">
@@ -876,7 +882,7 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
                                       {/* Persona tagging */}
                                       {personas.length > 0 && (
                                         <>
-                                          <div className="px-3 py-1.5 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">ライバー割り当て</div>
+                                          <div className="px-3 py-1.5 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">{window.__t("sidebar_liverAssignment")}</div>
                                           {personas.map(p => {
                                             const isTagged = (videoPersonaTags[video.id] || []).includes(p.id);
                                             return (
@@ -896,11 +902,11 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
                                       )}
                                       <button onClick={(e) => { e.stopPropagation(); setRenamingVideoId(video.id); setRenameValue(video.original_filename || ""); setMenuOpenVideoId(null); }}
                                         className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100">
-                                        <Pencil className="w-3.5 h-3.5" /> 名前を変更
+                                        <Pencil className="w-3.5 h-3.5" /> {window.__t("sidebar_rename")}
                                       </button>
                                       <button onClick={(e) => { e.stopPropagation(); setDeleteConfirmVideoId(video.id); setMenuOpenVideoId(null); }}
                                         className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-500 hover:bg-red-50">
-                                        <Trash2 className="w-3.5 h-3.5" /> 削除
+                                        <Trash2 className="w-3.5 h-3.5" /> {window.__t("common_delete")}
                                       </button>
                                     </div>
                                   )}
@@ -1002,8 +1008,38 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
                       }}
                     >
                       <Settings className="w-4 h-4" />
-                      {window.__t("changePassword")}
+                      {t("changePassword")}
                     </DropdownMenuItem>
+
+                    <DropdownMenuSub>
+                      <DropdownMenuSubTrigger>
+                        <Globe className="w-4 h-4" />
+                        {t("language_settings")}
+                      </DropdownMenuSubTrigger>
+                      <DropdownMenuSubContent>
+                        <DropdownMenuItem
+                          onSelect={() => changeLanguage('ja')}
+                          className={i18n.language === 'ja' ? 'bg-accent' : ''}
+                        >
+                          {i18n.language === 'ja' && <Check className="w-3 h-3 mr-1" />}
+                          🇯🇵 日本語
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onSelect={() => changeLanguage('zh-TW')}
+                          className={i18n.language === 'zh-TW' ? 'bg-accent' : ''}
+                        >
+                          {i18n.language === 'zh-TW' && <Check className="w-3 h-3 mr-1" />}
+                          🇹🇼 繁體中文
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onSelect={() => changeLanguage('en')}
+                          className={i18n.language === 'en' ? 'bg-accent' : ''}
+                        >
+                          {i18n.language === 'en' && <Check className="w-3 h-3 mr-1" />}
+                          🇺🇸 English
+                        </DropdownMenuItem>
+                      </DropdownMenuSubContent>
+                    </DropdownMenuSub>
 
                     <DropdownMenuSeparator />
 
