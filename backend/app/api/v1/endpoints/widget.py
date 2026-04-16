@@ -335,7 +335,7 @@ async def list_widget_clients(
                                wca.product_name, vc.duration_sec,
                                ROW_NUMBER() OVER (PARTITION BY wca.client_id ORDER BY wca.sort_order ASC, wca.created_at DESC) as rn
                         FROM widget_clip_assignments wca
-                        LEFT JOIN video_clips vc ON vc.id = wca.clip_id
+                        LEFT JOIN video_clips vc ON vc.id::text = wca.clip_id
                         WHERE wca.client_id = ANY(:cids) AND wca.is_active = TRUE
                     ) sub WHERE rn <= 5
                 """),
