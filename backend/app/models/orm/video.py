@@ -46,3 +46,6 @@ class Video(Base, UUIDMixin, TimestampMixin):
     worker_claimed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     worker_instance_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     dequeue_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    # Language for AI analysis output (ja, zh-TW, etc.)
+    language: Mapped[Optional[str]] = mapped_column(String(10), nullable=True, default="ja", server_default="ja")

@@ -839,15 +839,15 @@ VALID_SALES_TAGS = {
 }
 
 
-def build_phase_descriptions(phase_units, on_progress=None):
+def build_phase_descriptions(phase_units, on_progress=None, language="ja"):
     results = {}       # {phase_index: phase_description}
     cta_results = {}    # {phase_index: cta_score}
     sales_tags_results = {}  # {phase_index: ["HOOK", "DEMONSTRATION", ...]}
     total_tasks = len(phase_units)
     completed_count = [0]  # mutable for closure
 
-    async def _wrapped_task(phase, sem, results, cta_results, sales_tags_results):
-        await process_one_phase_desc_task(phase, sem, results, cta_results, sales_tags_results)
+    async def _wrapped_task(phase, sem, results, cta_results, sales_tags_results, language="ja"):
+        await process_one_phase_desc_task(phase, sem, results, cta_results, sales_tags_results, language=language)
         completed_count[0] += 1
         if on_progress and total_tasks > 0:
             pct = min(int(completed_count[0] / total_tasks * 100), 100)
@@ -865,6 +865,7 @@ def build_phase_descriptions(phase_units, on_progress=None):
                     results,
                     cta_results,
                     sales_tags_results,
+                    language=language,
                 )
             )
 
@@ -965,11 +966,13 @@ async def process_one_phase_desc_task(
     results,
     cta_results=None,
     sales_tags_results=None,
+    language="ja",
 ):
     data = await gpt_phase_description_async(
         phase.get("image_caption"),
         phase.get("speech_text"),
         sem,
+        language=language,
     )
 
     if isinstance(data, dict) and "phase_description" in data:
@@ -994,11 +997,15 @@ async def process_one_phase_desc_task(
             else:
                 sales_tags_results[phase["phase_index"]] = []
     else:
-        results[phase["phase_index"]] = (
+        fallback_text = (
+            "在此階段中，主播一邊與觀眾互動，一邊進行與畫面顯示內容相關的說明和推進。"
+            "由於處理限制，無法取得詳細說明。"
+        ) if language == "zh-TW" else (
             "このフェーズでは、配信者が視聴者とやり取りしながら、"
             "画面に表示されている内容に関連する説明や進行を行っている。"
             "詳細な説明は処理制限により取得できなかった。"
         )
+        results[phase["phase_index"]] = fallback_text
         if cta_results is not None:
             cta_results[phase["phase_index"]] = 1
         if sales_tags_results is not None:

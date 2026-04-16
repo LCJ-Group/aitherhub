@@ -218,6 +218,7 @@ class UploadPipelineService:
         excel_product_blob_url: Optional[str] = None,
         excel_trend_blob_url: Optional[str] = None,
         time_offset_seconds: float = 0.0,
+        language: str = "ja",
     ) -> UploadPipelineResult:
         """
         Execute the upload completion pipeline.
@@ -279,6 +280,7 @@ class UploadPipelineService:
                 excel_product_blob_url=excel_product_blob_url,
                 excel_trend_blob_url=excel_trend_blob_url,
                 time_offset_seconds=time_offset_seconds,
+                language=language,
             )
             evt = StageEvent(
                 stage=UploadStage.DB_RECORD, status="ok",
@@ -363,6 +365,7 @@ class UploadPipelineService:
                 user_id=user_id,
                 upload_type=upload_type,
                 time_offset_seconds=time_offset_seconds,
+                language=language,
             )
 
             # Add Excel download URLs for clean_video uploads
@@ -538,6 +541,7 @@ class UploadPipelineService:
         excel_product_blob_url: Optional[str],
         excel_trend_blob_url: Optional[str],
         time_offset_seconds: float,
+        language: str = "ja",
     ) -> Video:
         """Step 2: Persist video record to DB (status = 'uploaded')."""
         return await self._repo.create_video(
@@ -549,6 +553,7 @@ class UploadPipelineService:
             excel_product_blob_url=excel_product_blob_url,
             excel_trend_blob_url=excel_trend_blob_url,
             time_offset_seconds=time_offset_seconds,
+            language=language,
         )
 
     @staticmethod
@@ -603,6 +608,7 @@ class UploadPipelineService:
         user_id: int,
         upload_type: str,
         time_offset_seconds: float,
+        language: str = "ja",
     ) -> dict:
         """Step 4: Build the worker queue message payload."""
         return {
@@ -612,6 +618,7 @@ class UploadPipelineService:
             "user_id": user_id,
             "upload_type": upload_type,
             "time_offset_seconds": time_offset_seconds,
+            "language": language,
         }
 
     @staticmethod

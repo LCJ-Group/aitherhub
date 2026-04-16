@@ -86,6 +86,7 @@ class UploadCompleteRequest(BaseModel):
     excel_product_blob_url: Optional[str] = None
     excel_trend_blob_url: Optional[str] = None
     time_offset_seconds: Optional[float] = 0  # offset within CSV timeline (seconds)
+    language: Optional[str] = "ja"  # AI analysis output language (ja, zh-TW)
 
     class Config:
         schema_extra = {
@@ -176,6 +177,7 @@ class BatchUploadCompleteRequest(BaseModel):
     videos: List[BatchVideoItem]
     excel_product_blob_url: Optional[str] = None
     excel_trend_blob_url: Optional[str] = None
+    language: Optional[str] = "ja"  # AI analysis output language (ja, zh-TW)
 
     class Config:
         schema_extra = {

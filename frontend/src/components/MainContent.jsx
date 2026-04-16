@@ -11,6 +11,7 @@ import VideoDetail from "./VideoDetail";
 import FeedbackPage from "./FeedbackPage";
 import CsvValidationGate from "./CsvValidationGate";
 import { validateCsvDateTime } from "../base/utils/csvDateTimeValidator";
+import i18n from '../i18n';
 // LiveDashboard is now at /live/:sessionId route (LivePage.jsx)
 
 /**
@@ -494,6 +495,8 @@ export default function MainContent({
     setProgress(0);
 
     try {
+      // Map UI language to analysis language (en UI → ja analysis)
+      const analysisLang = i18n.language === 'zh-TW' ? 'zh-TW' : 'ja';
       if (filesToUpload.length === 1) {
         // Single video: use existing flow
         const video_id = await UploadService.uploadCleanVideo(
@@ -511,6 +514,7 @@ export default function MainContent({
               localStorage.setItem(storageKey, "active");
             }
           },
+          analysisLang,
         );
         setMessageType("success");
         setUploadDurationMs(Date.now() - (uploadStartTime || Date.now()));
@@ -549,6 +553,7 @@ export default function MainContent({
               localStorage.setItem(storageKey, "active");
             }
           },
+          analysisLang,
         );
         setMessageType("success");
         setUploadDurationMs(Date.now() - (uploadStartTime || Date.now()));
@@ -760,6 +765,8 @@ export default function MainContent({
 
       // Use correct completion method based on upload mode
       const uploadMode = metadata.uploadMode || 'screen_recording';
+      // Map UI language to analysis language (en UI → ja analysis)
+      const analysisLang = i18n.language === 'zh-TW' ? 'zh-TW' : 'ja';
       if (uploadMode === 'clean_video') {
         // Clean video: include upload_type and Excel URLs from metadata
         await UploadService.uploadCompleteWithType(
@@ -769,7 +776,8 @@ export default function MainContent({
           resumeUploadId,
           'clean_video',
           metadata.excelProductBlobUrl || null,
-          metadata.excelTrendBlobUrl || null
+          metadata.excelTrendBlobUrl || null,
+          analysisLang
         );
       } else {
         // Screen recording: simple completion
@@ -777,7 +785,8 @@ export default function MainContent({
           user.email,
           video_id,
           file.name,
-          resumeUploadId
+          resumeUploadId,
+          analysisLang
         );
       }
 
@@ -834,6 +843,8 @@ export default function MainContent({
     setProgress(0);
 
     try {
+      // Map UI language to analysis language (en UI → ja analysis)
+      const analysisLang = i18n.language === 'zh-TW' ? 'zh-TW' : 'ja';
       const video_id = await UploadService.uploadFile(
         selectedFile,
         user.email,
@@ -847,6 +858,7 @@ export default function MainContent({
             localStorage.setItem(storageKey, "active");
           }
         },
+        analysisLang,
       );
       setMessageType("success");
 

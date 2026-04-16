@@ -1368,12 +1368,18 @@ def main():
             _current_step_name = VideoStatus.STEP_6_BUILD_PHASE_DESCRIPTION
             update_video_status_sync(video_id, VideoStatus.STEP_6_BUILD_PHASE_DESCRIPTION)
             logger.info("=== STEP 6 – PHASE DESCRIPTION ===")
+
+            # Get video language for phase description generation
+            from db_ops import get_video_language_sync as _get_lang_sync
+            _video_lang = _get_lang_sync(video_id)
+            logger.info("[STEP6] Video language: %s", _video_lang)
+
             def _on_step6_progress(pct):
                 try:
                     update_video_step_progress_sync(video_id, pct)
                 except Exception as _e:
                     logger.debug(f"Suppressed: {_e}")
-            phase_units = build_phase_descriptions(phase_units, on_progress=_on_step6_progress)
+            phase_units = build_phase_descriptions(phase_units, on_progress=_on_step6_progress, language=_video_lang)
 
             logger.info("[DB] Persist phase_description to video_phases")
             for p in phase_units:
@@ -1827,7 +1833,12 @@ def main():
                 get_video_structure_features_sync,
                 get_video_structure_group_best_video_sync,
                 get_video_structure_group_stats_sync,
+                get_video_language_sync,
             )
+
+            # Get video language setting for report generation
+            video_language = get_video_language_sync(video_id)
+            logger.info("[REPORT] Video language: %s", video_language)
 
             r2_raw = build_report_2_phase_insights_raw(
                 phase_units, best_data, excel_data=excel_data
@@ -1864,10 +1875,10 @@ def main():
             logger.info("[REPORT] Running Report 2 & 3 GPT rewrites in parallel")
             r2_gpt = None
             with ThreadPoolExecutor(max_workers=2) as report_pool:
-                fut_r2 = report_pool.submit(rewrite_report_2_with_gpt, r2_raw, excel_data=excel_data)
+                fut_r2 = report_pool.submit(rewrite_report_2_with_gpt, r2_raw, excel_data=excel_data, language=video_language)
                 fut_r3 = None
                 if r3_raw is not None:
-                    fut_r3 = report_pool.submit(rewrite_report_3_structure_with_gpt, r3_raw)
+                    fut_r3 = report_pool.submit(rewrite_report_3_structure_with_gpt, r3_raw, language=video_language)
 
                 r2_gpt = fut_r2.result()
                 if fut_r3 is not None:

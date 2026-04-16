@@ -170,7 +170,7 @@ def build_report_1_timeline(phase_units):
 # ======================================================
 # REPORT 2 – PHASE INSIGHTS (RAW)
 # ======================================================
-def gpt_rewrite_report_2(item):
+def gpt_rewrite_report_2(item, language="ja"):
     payload = json.dumps(item, ensure_ascii=False)
 
     resp = client.responses.create(
@@ -190,7 +190,7 @@ def gpt_rewrite_report_2(item):
                 "content": [
                     {
                         "type": "input_text",
-                        "text": PROMPT_REPORT_2.format(data=payload)
+                        "text": (PROMPT_REPORT_2_ZHTW if language == "zh-TW" else PROMPT_REPORT_2).format(data=payload)
                     }
                 ]
             }
@@ -204,6 +204,7 @@ async def gpt_rewrite_report_2_async(
     item,
     sem: asyncio.Semaphore,
     max_retry: int = 5,
+    language: str = "ja",
 ):
     async with sem:
         loop = asyncio.get_event_loop()
@@ -212,7 +213,7 @@ async def gpt_rewrite_report_2_async(
             try:
                 text = await loop.run_in_executor(
                     None,
-                    partial(gpt_rewrite_report_2, item)
+                    partial(gpt_rewrite_report_2, item, language=language)
                 )
 
                 if text and not is_gpt_report_2_invalid(text):
@@ -231,16 +232,25 @@ async def process_one_report2_task(
     item,
     sem,
     results,
+    language: str = "ja",
 ):
-    text = await gpt_rewrite_report_2_async(item, sem)
+    text = await gpt_rewrite_report_2_async(item, sem, language=language)
 
     if not text:
-        text = (
-            "このフェーズについては、"
-            "現在の比較データから明確な改善ポイントを特定することができません。"
-            "今後、追加の配信データが蓄積され次第、"
-            "より具体的な改善提案が可能になります。"
-        )
+        if language == "zh-TW":
+            text = (
+                "關於此階段，"
+                "目前的比較數據尚無法明確找出改善重點。"
+                "隨著更多直播數據的累積，"
+                "將能提供更具體的改善建議。"
+            )
+        else:
+            text = (
+                "このフェーズについては、"
+                "現在の比較データから明確な改善ポイントを特定することができません。"
+                "今後、追加の配信データが蓄積され次第、"
+                "より具体的な改善提案が可能になります。"
+            )
 
     results[item["phase_index"]] = {
         "phase_index": item["phase_index"],
@@ -384,7 +394,50 @@ PROMPT_REPORT_2 = """
 
 """.strip()
 
-def rewrite_report_2_with_gpt(raw_items, excel_data=None):
+
+PROMPT_REPORT_2_ZHTW = """
+你是一位專精於「銷售額最大化」的直播電商專業顧問。
+
+以下是某個直播階段的資訊：
+- 階段描述（主播的行為與發言內容）
+- 觀看人數、按讚數的變化
+- 銷售數據（如有）
+- 與過去最佳表現的比較
+- CTA評分（1〜5，促購發言的強度。如有）
+- 語音特徵值（聲音熱度、抑揚、語速、沉默率。如有）
+
+你的角色：
+- 分析這個階段「如何在賣」
+- 具體建議「如何賣得更好」
+- 完全不需要描述影片畫面或場景
+
+分析觀點：
+- 銷售話術（促購用語、限量感、緊迫感的營造）
+- 商品展示方式（示範、前後對比、使用感的傳達）
+- 購買動線（加購物車的引導時機、價格提示的時機）
+- 觀眾互動（留言引導、回應提問）
+- 如有銷售數據：分析為何這個時段賣得好/賣不好
+- 如有CTA評分：評估促購發言的強度與頻率。低分階段應建議「需要更強力地促購」等具體建議
+- 如有語音特徵值：聲音熱度（energy_mean）或抑揚（pitch_std）偏低時建議「應更有感情地說話」，語速（speech_rate）過快時建議「應放慢速度仔細說明」
+
+輸出規則：
+- 最多2個具體的銷售改善建議
+- 每個建議按「目前賣法的問題點」→「具體的改善行動」順序撰寫
+- 不要寫「在某個畫面中主播正在做某事」這類影片描述
+- 具體到下一場直播就能立即實踐的程度
+- 每項最多3句
+
+限制：
+- 不捏造數據
+- 避免抽象表達（不要寫「多加工夫」，而是寫「先展示價格再告知限量數量」這樣的具體建議）
+- 不直接引用語音特徵值數字（不要寫「energy_mean為0.03」，而是用「聲音熱度偏低」這樣自然的表達）
+
+輸入：
+{data}
+
+""".strip()
+
+def rewrite_report_2_with_gpt(raw_items, excel_data=None, language="ja"):
     results = {}
 
     async def runner():
@@ -396,7 +449,8 @@ def rewrite_report_2_with_gpt(raw_items, excel_data=None):
                 process_one_report2_task(
                     item,
                     sem,
-                    results
+                    results,
+                    language=language,
                 )
             )
 
@@ -632,6 +686,54 @@ PROMPT_REPORT_3 = """
 """.strip()
 
 
+PROMPT_REPORT_3_ZHTW = """
+你是一位專精於「銷售額最大化」的直播電商專業顧問。
+
+提供的資訊：
+- 整場直播各階段的表現（觀看人數、按讚數的變動）
+- 銷售數據（GMV、訂單數、GPM。如有）
+- 各商品表現（介紹時間、銷售額。如有）
+- 銷售觸發分析（哪個階段銷售額暴增。如有）
+
+你的角色：
+- 從整場直播的「銷售流程」進行俯瞰式分析
+- 找出銷售額成長的時機點，以及錯失機會的地方
+- 具體提出「直播架構改善」方案以最大化銷售額
+- 完全不需要描述影片畫面或場景
+
+分析觀點：
+- 開場（第一個吸引點）的效果
+- 商品介紹的時機與順序
+- 購買高峰的營造方式（限量感、緊迫感、價格提示）
+- 收尾（最後的推動）的力度
+- 觀眾流失的時間點及其原因
+- 如有銷售數據：GMV效率高的階段特徵，以及低效階段的改善方向
+- 如有各商品數據：介紹時間與銷售額的關係、介紹順序的最佳化
+- 如有銷售觸發數據：銷售暴增階段的共通點與重現方法
+
+【必要規則】：
+- 不捏造數字
+- 完全不提及group_id或內部ID
+- 不寫影片描述或場景說明
+- 具體到下一場直播就能立即實踐的程度
+- 輸出必須僅為JSON
+- 每個洞察為1個物件＝1個洞察
+
+輸出格式（嚴格遵守）：
+{
+  "video_insights": [
+    {
+      "title": "直接影響銷售的簡短標題",
+      "content": "具體的銷售改善建議（數句）"
+    }
+  ]
+}
+
+輸入數據：
+{data}
+""".strip()
+
+
 def safe_json_load(text):
     if not text:
         return None
@@ -654,9 +756,10 @@ def safe_json_load(text):
         return None
 
 
-def rewrite_report_3_with_gpt(raw_video_insight, max_retry: int = 5):
+def rewrite_report_3_with_gpt(raw_video_insight, max_retry: int = 5, language: str = "ja"):
     payload = json.dumps(raw_video_insight, ensure_ascii=False)
-    prompt = PROMPT_REPORT_3.replace("{data}", payload)
+    prompt_tpl = PROMPT_REPORT_3_ZHTW if language == "zh-TW" else PROMPT_REPORT_3
+    prompt = prompt_tpl.replace("{data}", payload)
 
     for attempt in range(max_retry):
         try:
@@ -687,11 +790,13 @@ def rewrite_report_3_with_gpt(raw_video_insight, max_retry: int = 5):
         except Exception:
             break
 
+    fallback_title = "無法完成分析" if language == "zh-TW" else "分析できませんでした"
+    fallback_content = "GPT 未能以預期格式回傳結果。" if language == "zh-TW" else "GPT が期待された形式で結果を返しませんでした。"
     return {
         "video_insights": [
             {
-                "title": "分析できませんでした",
-                "content": "GPT が期待された形式で結果を返しませんでした。"
+                "title": fallback_title,
+                "content": fallback_content
             }
         ]
     }
@@ -1011,9 +1116,53 @@ PROMPT_REPORT_3_STRUCTURE = """
 {data}
 """.strip()
 
-def rewrite_report_3_structure_with_gpt(raw_struct_report: dict, max_retry: int = 5):
+
+PROMPT_REPORT_3_STRUCTURE_ZHTW = """
+你是一位專精於「銷售額最大化」的直播架構專家。
+
+以下是這場直播的「結構性特徵」的數值化與摘要數據。
+（※內部已進行比較分析，但請完全不要提及這個事實）
+
+你的角色：
+- 從「銷售額最大化」的觀點審視這場直播的架構
+- 明確指出影響銷售的架構優勢與劣勢
+- 具體提出「直播架構改善」方案以提升銷售額
+- 完全不需要描述影片畫面或場景
+
+分析觀點：
+- 商品介紹的配置與時機（何時、以什麼順序推出商品）
+- 購買高峰的營造方式（銷售話術的高潮營造）
+- 階段切換的節奏（不讓觀眾感到無聊的進行方式）
+- 開場與收尾的設計
+- 銷售的時間分布（前段、中段、後段的平衡）
+- 商品介紹時間與銷售額的關係（介紹過短的商品、過長的商品）
+- 銷售集中度（是否過度集中在特定階段）
+
+重要規則：
+- 完全不使用「基準」「其他影片」「平均」等用語
+- 不談論數值或內部指標
+- 不寫影片描述或場景說明
+- 具體到下一場直播就能立即實踐的程度
+- 輸出必須僅為JSON
+
+輸出格式：
+{
+  "video_insights": [
+    {
+      "title": "直接影響銷售的簡短標題",
+      "content": "具體的直播架構改善建議（數句）"
+    }
+  ]
+}
+
+輸入數據：
+{data}
+""".strip()
+
+def rewrite_report_3_structure_with_gpt(raw_struct_report: dict, max_retry: int = 5, language: str = "ja"):
     payload = json.dumps(raw_struct_report, ensure_ascii=False, indent=2)
-    prompt = PROMPT_REPORT_3_STRUCTURE.replace("{data}", payload)
+    prompt_tpl = PROMPT_REPORT_3_STRUCTURE_ZHTW if language == "zh-TW" else PROMPT_REPORT_3_STRUCTURE
+    prompt = prompt_tpl.replace("{data}", payload)
 
     for attempt in range(max_retry):
         try:
@@ -1045,11 +1194,13 @@ def rewrite_report_3_structure_with_gpt(raw_struct_report: dict, max_retry: int 
             break
 
     # フォールバック（パイプラインを止めない）
+    fallback_title = "無法完成分析" if language == "zh-TW" else "分析できませんでした"
+    fallback_content = "GPT 未能以預期格式回傳結果。" if language == "zh-TW" else "GPT が期待された形式で結果を返しませんでした。"
     return {
         "video_insights": [
             {
-                "title": "分析できませんでした",
-                "content": "GPT が期待された形式で結果を返しませんでした。"
+                "title": fallback_title,
+                "content": fallback_content
             }
         ]
     }

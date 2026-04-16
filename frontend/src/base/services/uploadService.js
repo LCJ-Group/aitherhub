@@ -373,7 +373,7 @@ class UploadService extends BaseApiService {
    * @param {string} upload_id - Upload ID
    * @returns {Promise<{video_id, status, message}>}
    */
-  async uploadComplete(email, video_id, filename, upload_id) {
+  async uploadComplete(email, video_id, filename, upload_id, language = 'ja') {
     // Verify token is valid before making authenticated request
     const token = TokenManager.getToken();
     if (!token) {
@@ -386,7 +386,7 @@ class UploadService extends BaseApiService {
 
     try {
       return await this.retryWithBackoff(
-        () => this.post(URL_CONSTANTS.UPLOAD_COMPLETE, { email, video_id, filename, upload_id }),
+        () => this.post(URL_CONSTANTS.UPLOAD_COMPLETE, { email, video_id, filename, upload_id, language }),
         MAX_RETRIES,
         'uploadComplete'
       );
@@ -447,7 +447,7 @@ class UploadService extends BaseApiService {
    * @param {string|null} excel_trend_blob_url - Trend Excel blob URL
    * @returns {Promise<{video_id, status, message}>}
    */
-  async uploadCompleteWithType(email, video_id, filename, upload_id, upload_type = 'screen_recording', excel_product_blob_url = null, excel_trend_blob_url = null) {
+  async uploadCompleteWithType(email, video_id, filename, upload_id, upload_type = 'screen_recording', excel_product_blob_url = null, excel_trend_blob_url = null, language = 'ja') {
     const token = TokenManager.getToken();
     if (!token) {
       throw new UploadStageError(UPLOAD_STAGES.AUTH, window.__t('authTokenNotFound') || 'Auth token not found');
@@ -465,6 +465,7 @@ class UploadService extends BaseApiService {
           upload_type,
           excel_product_blob_url,
           excel_trend_blob_url,
+          language,
         }),
         MAX_RETRIES,
         'uploadCompleteWithType'
@@ -499,7 +500,7 @@ class UploadService extends BaseApiService {
    * @param {Function} onProgress - Callback for progress updates
    * @returns {Promise<string>} - video_id
    */
-  async uploadFile(file, email, onProgress, onUploadInit) {
+  async uploadFile(file, email, onProgress, onUploadInit, language = 'ja') {
     const { video_id, upload_id, upload_url } = await this.generateUploadUrl(email, file.name);
 
     if (onUploadInit) {
@@ -525,7 +526,7 @@ class UploadService extends BaseApiService {
     await this.uploadToAzure(file, upload_url, upload_id, onProgress);
 
     // Notify backend that upload is complete
-    await this.uploadComplete(email, video_id, file.name, upload_id);
+    await this.uploadComplete(email, video_id, file.name, upload_id, language);
 
     return video_id;
   }
@@ -539,7 +540,7 @@ class UploadService extends BaseApiService {
    * @param {Function} onUploadInit - Callback when upload is initialized
    * @returns {Promise<string>} - video_id
    */
-  async uploadCleanVideo(videoFile, productExcel, trendExcel, email, onProgress, onUploadInit) {
+  async uploadCleanVideo(videoFile, productExcel, trendExcel, email, onProgress, onUploadInit, language = 'ja') {
     // Step 1: Generate video upload URL
     const { video_id, upload_id, upload_url } = await this.generateUploadUrl(email, videoFile.name);
 
@@ -616,7 +617,8 @@ class UploadService extends BaseApiService {
       upload_id,
       'clean_video',
       product_blob_url,
-      trend_blob_url
+      trend_blob_url,
+      language
     );
 
     if (onProgress) onProgress(100);
@@ -633,7 +635,7 @@ class UploadService extends BaseApiService {
    * @param {Function} onUploadInit - Callback when first upload is initialized
    * @returns {Promise<string[]>} - array of video_ids
    */
-  async batchUploadCleanVideos(videoItems, productExcel, trendExcel, email, onProgress, onUploadInit) {
+  async batchUploadCleanVideos(videoItems, productExcel, trendExcel, email, onProgress, onUploadInit, language = 'ja') {
     const totalVideos = videoItems.length;
     // Progress allocation: videos 0-75%, excel 75-90%, completion 90-100%
     const videoProgressShare = 75;
@@ -711,6 +713,7 @@ class UploadService extends BaseApiService {
       })),
       excel_product_blob_url: product_blob_url,
       excel_trend_blob_url: trend_blob_url,
+      language,
     };
 
     try {

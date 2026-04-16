@@ -1598,6 +1598,28 @@ def get_video_excel_urls_sync(video_id: str):
     loop = get_event_loop()
     return loop.run_until_complete(get_video_excel_urls(video_id))
 
+# =========================
+# Video Language
+# =========================
+async def get_video_language(video_id: str) -> str:
+    """Get the language setting for a video (defaults to 'ja')."""
+    sql = text("""
+        SELECT COALESCE(language, 'ja') as language
+        FROM videos
+        WHERE id = :video_id
+    """)
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(sql, {"video_id": video_id})
+        row = result.fetchone()
+    if not row:
+        return "ja"
+    return row[0] or "ja"
+
+def get_video_language_sync(video_id: str) -> str:
+    loop = get_event_loop()
+    return loop.run_until_complete(get_video_language(video_id))
+
+
 
 # =========================
 # CTA Score (PHASE)
