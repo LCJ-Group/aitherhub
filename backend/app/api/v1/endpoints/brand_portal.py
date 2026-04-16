@@ -647,17 +647,19 @@ async def brand_recommended_clips(
             return {"clips": [], "total": 0, "message": "ブランドキーワードが設定されていません。設定タブでキーワードを追加してください。"}
 
         # Build ILIKE conditions for transcript_text
+        # Use two separate fast queries instead of slow LEFT JOIN
         conditions = []
         params = {"cid": client_id, "lim": limit, "off": offset}
         for i, kw in enumerate(brand_keywords):
             conditions.append(f"vc.transcript_text ILIKE :kw{i}")
             params[f"kw{i}"] = f"%{kw}%"
 
-        # Also match via video_product_exposures
+        # VPE conditions (for subquery)
         vpe_conditions = []
+        vpe_params = {}
         for i, kw in enumerate(brand_keywords):
             vpe_conditions.append(f"vpe.brand_name ILIKE :bkw{i} OR vpe.product_name ILIKE :bkw{i}")
-            params[f"bkw{i}"] = f"%{kw}%"
+            vpe_params[f"bkw{i}"] = f"%{kw}%"
 
         where_transcript = " OR ".join(conditions)
         where_vpe = " OR ".join(vpe_conditions)
@@ -669,22 +671,40 @@ async def brand_recommended_clips(
         )
         assigned_ids = {str(r["clip_id"]) for r in assigned_result.mappings().all()}
 
-        # Main query: find clips matching keywords via transcript OR product exposures
+        # Optimized: Use UNION of two fast queries instead of slow LEFT JOIN
+        # Query 1: Match by transcript_text
+        # Query 2: Match by video_product_exposures (subquery for video_ids)
+        all_params = {**params, **vpe_params}
+
         result = await db.execute(
             text(f"""
-                SELECT DISTINCT vc.id as clip_id, vc.clip_url, vc.exported_url, vc.thumbnail_url,
-                       vc.product_name, vc.product_price, vc.transcript_text,
-                       vc.duration_sec, vc.liver_name, vc.created_at,
-                       vc.video_id
-                FROM video_clips vc
-                LEFT JOIN video_product_exposures vpe ON vpe.video_id = vc.video_id
-                WHERE vc.clip_url IS NOT NULL
-                  AND vc.status != 'deleted'
-                  AND (({where_transcript}) OR ({where_vpe}))
-                ORDER BY vc.created_at DESC
+                SELECT id as clip_id, clip_url, exported_url, thumbnail_url,
+                       product_name, product_price, transcript_text,
+                       duration_sec, liver_name, created_at, video_id
+                FROM (
+                    SELECT DISTINCT vc.id, vc.clip_url, vc.exported_url, vc.thumbnail_url,
+                           vc.product_name, vc.product_price, vc.transcript_text,
+                           vc.duration_sec, vc.liver_name, vc.created_at, vc.video_id
+                    FROM video_clips vc
+                    WHERE vc.clip_url IS NOT NULL
+                      AND vc.status != 'deleted'
+                      AND ({where_transcript})
+                    UNION
+                    SELECT DISTINCT vc.id, vc.clip_url, vc.exported_url, vc.thumbnail_url,
+                           vc.product_name, vc.product_price, vc.transcript_text,
+                           vc.duration_sec, vc.liver_name, vc.created_at, vc.video_id
+                    FROM video_clips vc
+                    WHERE vc.clip_url IS NOT NULL
+                      AND vc.status != 'deleted'
+                      AND vc.video_id IN (
+                          SELECT DISTINCT vpe.video_id FROM video_product_exposures vpe
+                          WHERE {where_vpe}
+                      )
+                ) sub
+                ORDER BY created_at DESC
                 LIMIT :lim OFFSET :off
             """),
-            params,
+            all_params,
         )
 
         clips = []
@@ -714,17 +734,23 @@ async def brand_recommended_clips(
                         pass
             clips.append(clip)
 
-        # Total count
+        # Optimized total count using same UNION approach
         count_result = await db.execute(
             text(f"""
-                SELECT COUNT(DISTINCT vc.id)
-                FROM video_clips vc
-                LEFT JOIN video_product_exposures vpe ON vpe.video_id = vc.video_id
-                WHERE vc.clip_url IS NOT NULL
-                  AND vc.status != 'deleted'
-                  AND (({where_transcript}) OR ({where_vpe}))
+                SELECT COUNT(*) FROM (
+                    SELECT vc.id FROM video_clips vc
+                    WHERE vc.clip_url IS NOT NULL AND vc.status != 'deleted'
+                      AND ({where_transcript})
+                    UNION
+                    SELECT vc.id FROM video_clips vc
+                    WHERE vc.clip_url IS NOT NULL AND vc.status != 'deleted'
+                      AND vc.video_id IN (
+                          SELECT DISTINCT vpe.video_id FROM video_product_exposures vpe
+                          WHERE {where_vpe}
+                      )
+                ) cnt
             """),
-            params,
+            all_params,
         )
         total = count_result.scalar() or 0
 
