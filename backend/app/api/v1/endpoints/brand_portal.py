@@ -625,9 +625,8 @@ async def brand_recommended_clips(
     db: AsyncSession = Depends(get_db),
 ):
     """Get recommended clips for this brand based on:
-    1. video_product_exposures.brand_name matching brand keywords
-    2. transcript_text containing brand keywords
-    3. Additional search query (optional)
+    1. video_product_exposures.brand_name matching brand keywords (fast, indexed)
+    2. transcript_text search only when user provides additional query (q param)
     """
     try:
         # Get brand keywords
@@ -640,29 +639,8 @@ async def brand_recommended_clips(
         if kw_row and kw_row["brand_keywords"]:
             brand_keywords = [k.strip() for k in kw_row["brand_keywords"].split(",") if k.strip()]
 
-        if q:
-            brand_keywords.append(q.strip())
-
-        if not brand_keywords:
+        if not brand_keywords and not q:
             return {"clips": [], "total": 0, "message": "ブランドキーワードが設定されていません。設定タブでキーワードを追加してください。"}
-
-        # Build ILIKE conditions for transcript_text
-        # Use two separate fast queries instead of slow LEFT JOIN
-        conditions = []
-        params = {"cid": client_id, "lim": limit, "off": offset}
-        for i, kw in enumerate(brand_keywords):
-            conditions.append(f"vc.transcript_text ILIKE :kw{i}")
-            params[f"kw{i}"] = f"%{kw}%"
-
-        # VPE conditions (for subquery)
-        vpe_conditions = []
-        vpe_params = {}
-        for i, kw in enumerate(brand_keywords):
-            vpe_conditions.append(f"vpe.brand_name ILIKE :bkw{i} OR vpe.product_name ILIKE :bkw{i}")
-            vpe_params[f"bkw{i}"] = f"%{kw}%"
-
-        where_transcript = " OR ".join(conditions)
-        where_vpe = " OR ".join(vpe_conditions)
 
         # Get clips already assigned to this brand's widget (to mark them)
         assigned_result = await db.execute(
@@ -671,40 +649,58 @@ async def brand_recommended_clips(
         )
         assigned_ids = {str(r["clip_id"]) for r in assigned_result.mappings().all()}
 
-        # Optimized: Use UNION of two fast queries instead of slow LEFT JOIN
-        # Query 1: Match by transcript_text
-        # Query 2: Match by video_product_exposures (subquery for video_ids)
-        all_params = {**params, **vpe_params}
+        # Strategy: Use VPE (video_product_exposures) for brand keyword matching (fast)
+        # Only use transcript_text ILIKE when user provides additional search query
+        all_keywords = list(brand_keywords)
+        if q:
+            all_keywords.append(q.strip())
+
+        params = {"lim": limit, "off": offset}
+
+        # Build VPE conditions (fast - indexed table)
+        vpe_conditions = []
+        for i, kw in enumerate(all_keywords):
+            vpe_conditions.append(f"vpe.brand_name ILIKE :bkw{i} OR vpe.product_name ILIKE :bkw{i}")
+            params[f"bkw{i}"] = f"%{kw}%"
+        where_vpe = " OR ".join(vpe_conditions)
+
+        # Step 1: Get matching video_ids from VPE (fast indexed lookup)
+        vpe_query = f"""
+            SELECT DISTINCT vpe.video_id FROM video_product_exposures vpe
+            WHERE {where_vpe}
+        """
+
+        # Step 2: Get clips for those video_ids
+        # Also include clips where product_name matches keywords (for clips without VPE data)
+        product_conditions = []
+        for i, kw in enumerate(all_keywords):
+            product_conditions.append(f"vc.product_name ILIKE :pkw{i}")
+            params[f"pkw{i}"] = f"%{kw}%"
+        where_product = " OR ".join(product_conditions)
+
+        # Optional: transcript search only when user provides q param
+        transcript_clause = ""
+        if q:
+            transcript_clause = f"OR vc.transcript_text ILIKE :tq"
+            params["tq"] = f"%{q.strip()}%"
 
         result = await db.execute(
             text(f"""
-                SELECT id as clip_id, clip_url, exported_url, thumbnail_url,
-                       product_name, product_price, transcript_text,
-                       duration_sec, liver_name, created_at, video_id
-                FROM (
-                    SELECT DISTINCT vc.id, vc.clip_url, vc.exported_url, vc.thumbnail_url,
-                           vc.product_name, vc.product_price, vc.transcript_text,
-                           vc.duration_sec, vc.liver_name, vc.created_at, vc.video_id
-                    FROM video_clips vc
-                    WHERE vc.clip_url IS NOT NULL
-                      AND vc.status != 'deleted'
-                      AND ({where_transcript})
-                    UNION
-                    SELECT DISTINCT vc.id, vc.clip_url, vc.exported_url, vc.thumbnail_url,
-                           vc.product_name, vc.product_price, vc.transcript_text,
-                           vc.duration_sec, vc.liver_name, vc.created_at, vc.video_id
-                    FROM video_clips vc
-                    WHERE vc.clip_url IS NOT NULL
-                      AND vc.status != 'deleted'
-                      AND vc.video_id IN (
-                          SELECT DISTINCT vpe.video_id FROM video_product_exposures vpe
-                          WHERE {where_vpe}
-                      )
-                ) sub
-                ORDER BY created_at DESC
+                SELECT vc.id as clip_id, vc.clip_url, vc.exported_url, vc.thumbnail_url,
+                       vc.product_name, vc.product_price, vc.transcript_text,
+                       vc.duration_sec, vc.liver_name, vc.created_at, vc.video_id
+                FROM video_clips vc
+                WHERE vc.clip_url IS NOT NULL
+                  AND vc.status != 'deleted'
+                  AND (
+                      vc.video_id IN ({vpe_query})
+                      OR ({where_product})
+                      {transcript_clause}
+                  )
+                ORDER BY vc.created_at DESC
                 LIMIT :lim OFFSET :off
             """),
-            all_params,
+            params,
         )
 
         clips = []
@@ -717,47 +713,34 @@ async def brand_recommended_clips(
                 clip["clip_url"] = clip["exported_url"]
             # Generate SAS URLs
             if generate_read_sas_from_url:
-                if clip.get("clip_url") and "blob.core.windows.net" in (clip["clip_url"] or ""):
-                    try:
-                        clip["clip_url"] = generate_read_sas_from_url(clip["clip_url"])
-                    except Exception:
-                        pass
-                if clip.get("original_clip_url") and "blob.core.windows.net" in (clip["original_clip_url"] or ""):
-                    try:
-                        clip["original_clip_url"] = generate_read_sas_from_url(clip["original_clip_url"])
-                    except Exception:
-                        pass
-                if clip.get("thumbnail_url") and "blob.core.windows.net" in (clip["thumbnail_url"] or ""):
-                    try:
-                        clip["thumbnail_url"] = generate_read_sas_from_url(clip["thumbnail_url"])
-                    except Exception:
-                        pass
+                for url_key in ["clip_url", "original_clip_url", "thumbnail_url"]:
+                    if clip.get(url_key) and "blob.core.windows.net" in (clip[url_key] or ""):
+                        try:
+                            clip[url_key] = generate_read_sas_from_url(clip[url_key])
+                        except Exception:
+                            pass
             clips.append(clip)
 
-        # Optimized total count using same UNION approach
+        # Fast count (skip heavy transcript search for count)
         count_result = await db.execute(
             text(f"""
-                SELECT COUNT(*) FROM (
-                    SELECT vc.id FROM video_clips vc
-                    WHERE vc.clip_url IS NOT NULL AND vc.status != 'deleted'
-                      AND ({where_transcript})
-                    UNION
-                    SELECT vc.id FROM video_clips vc
-                    WHERE vc.clip_url IS NOT NULL AND vc.status != 'deleted'
-                      AND vc.video_id IN (
-                          SELECT DISTINCT vpe.video_id FROM video_product_exposures vpe
-                          WHERE {where_vpe}
-                      )
-                ) cnt
+                SELECT COUNT(*) FROM video_clips vc
+                WHERE vc.clip_url IS NOT NULL
+                  AND vc.status != 'deleted'
+                  AND (
+                      vc.video_id IN ({vpe_query})
+                      OR ({where_product})
+                      {transcript_clause}
+                  )
             """),
-            all_params,
+            params,
         )
         total = count_result.scalar() or 0
 
         return {
             "clips": clips,
             "total": total,
-            "keywords": brand_keywords,
+            "keywords": all_keywords,
         }
     except Exception as e:
         logger.exception(f"brand_recommended_clips error for {client_id}: {e}")
