@@ -214,6 +214,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
   const [captions, setCaptions] = useState([]);
   const [savingCaps, setSavingCaps] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
+  const [transcribeProgress, setTranscribeProgress] = useState(0); // 0-100
   const [captionsLoaded, setCaptionsLoaded] = useState(false);
   const [targetLanguage, setTargetLanguage] = useState('ja'); // 'ja' | 'zh-TW'
 
@@ -1465,7 +1466,19 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
   const generateSubtitles = async () => {
     if (!videoId || !clip) return;
     setTranscribing(true);
+    setTranscribeProgress(0);
     setStatus(null);
+    // Simulated progress: Whisper takes ~10-60s depending on clip length
+    // Steps: download(10%) -> audio extract(25%) -> whisper API(40-85%) -> post-process(90%) -> done(100%)
+    const clipDurEst = ((clip.time_end || origEnd) - (clip.time_start || origStart)) || 60;
+    const estimatedMs = Math.max(8000, Math.min(90000, clipDurEst * 400));
+    const tickMs = estimatedMs / 100;
+    const progressRef = { current: 0 };
+    const progressInterval = setInterval(() => {
+      progressRef.current += (progressRef.current < 20 ? 6 : progressRef.current < 50 ? 3 : progressRef.current < 80 ? 1.5 : 0.3);
+      if (progressRef.current >= 92) { progressRef.current = 92; clearInterval(progressInterval); }
+      setTranscribeProgress(Math.min(92, Math.round(progressRef.current)));
+    }, tickMs);
     try {
       const clipUrl = clip.clip_url || videoData?.video_url || clip.video_url;
       if (!clipUrl) throw new Error(window.__t('clipEditorV2_302abd', '動画URLが見つかりません'));
@@ -1502,6 +1515,8 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
           } : {}),
         }));
         setCaptions(newCaps);
+        clearInterval(progressInterval);
+        setTranscribeProgress(100);
         setStatus({ ok: true, msg: `${newCaps.length}${window.__t('clipEditorV2_e4d6f5', '件の字幕を生成しました')}` });
         // Auto-save generated subtitles so they persist on next load
         if (clip?.clip_id) {
@@ -1518,9 +1533,12 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
         setStatus({ ok: false, msg: window.__t('clipEditorV2_c3d740', '音声が検出されませんでした') });
       }
     } catch (e) {
+      clearInterval(progressInterval);
+      setTranscribeProgress(0);
       setStatus({ ok: false, msg: `字幕生成失敗: ${e.message}` });
     } finally {
       setTranscribing(false);
+      setTimeout(() => setTranscribeProgress(0), 2000);
     }
   };
 
@@ -2743,6 +2761,8 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                     onClick={generateSubtitles}
                     disabled={transcribing}
                     style={{
+                      position: 'relative',
+                      overflow: 'hidden',
                       flex: '1 1 auto',
                       padding: '8px 12px',
                       border: `1px solid ${C.accent}66`,
@@ -2761,9 +2781,22 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                     }}
                   >
                     {transcribing ? (
-                      <><span style={{ animation: 'spin 1s linear infinite', display: 'inline-block' }}>{'⟳'}</span> {window.__t('script_generating', '生成中...')}</>
+                      <>
+                        <span style={{ animation: 'spin 1s linear infinite', display: 'inline-block' }}>{'⟳'}</span>
+                        {' '}{window.__t('script_generating', '生成中')}{transcribeProgress > 0 ? ` ${Math.round(transcribeProgress)}%` : '...'}
+                      </>
                     ) : (
                       <>{captions.length > 0 ? [window.__t('clipEditorV2_4b39ae', '🎤 AI再生成')] : window.__t('clipEditorV2_de99d4', '🎤 AI生成')}</>
+                    )}
+                    {/* Progress bar overlay */}
+                    {transcribing && transcribeProgress > 0 && (
+                      <div style={{
+                        position: 'absolute', bottom: 0, left: 0,
+                        height: 3, borderRadius: '0 0 8px 8px',
+                        width: `${transcribeProgress}%`,
+                        background: `linear-gradient(90deg, ${C.accent}, ${C.green})`,
+                        transition: 'width 0.3s ease',
+                      }} />
                     )}
                   </button>
 
