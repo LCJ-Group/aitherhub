@@ -76,6 +76,7 @@ class WidgetClientUpdate(BaseModel):
     cta_url_template: Optional[str] = None
     cart_selector: Optional[str] = None
     brand_keywords: Optional[str] = None
+    lcj_brand_id: Optional[int] = None
     assigned_clip_ids: Optional[List[str]] = None
 
 
