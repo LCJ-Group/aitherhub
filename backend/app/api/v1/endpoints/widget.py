@@ -296,54 +296,71 @@ async def list_widget_clients(
     if not _check_admin(x_admin_key):
         raise HTTPException(status_code=403, detail="Admin access required")
 
+    # 1) All clients
     result = await db.execute(
         text("SELECT * FROM widget_clients ORDER BY created_at DESC")
     )
     rows = result.mappings().all()
+    client_ids = [r["client_id"] for r in rows]
 
-    clients = []
-    for row in rows:
-        # Get clip count
-        clip_count_result = await db.execute(
-            text("SELECT COUNT(*) as cnt FROM widget_clip_assignments WHERE client_id = :cid AND is_active = TRUE"),
-            {"cid": row["client_id"]},
-        )
-        clip_count = clip_count_result.scalar() or 0
-
-        # Get event counts (last 24h)
-        event_result = await db.execute(
+    # 2) Batch: clip counts per client
+    clip_counts = {}
+    if client_ids:
+        cc_result = await db.execute(
             text("""
-                SELECT
+                SELECT client_id, COUNT(*) as cnt
+                FROM widget_clip_assignments
+                WHERE client_id = ANY(:cids) AND is_active = TRUE
+                GROUP BY client_id
+            """),
+            {"cids": client_ids},
+        )
+        for r in cc_result.mappings().all():
+            clip_counts[r["client_id"]] = r["cnt"]
+
+    # 3) Batch: 24h event stats per client
+    event_stats = {}
+    if client_ids:
+        ev_result = await db.execute(
+            text("""
+                SELECT client_id,
                     COUNT(*) FILTER (WHERE event_type = 'page_view') as page_views,
                     COUNT(*) FILTER (WHERE event_type = 'widget_open') as widget_opens,
                     COUNT(*) FILTER (WHERE event_type = 'video_play') as video_plays,
                     COUNT(*) FILTER (WHERE event_type = 'cta_click') as cta_clicks,
                     COUNT(*) FILTER (WHERE event_type = 'conversion') as conversions
                 FROM widget_tracking_events
-                WHERE client_id = :cid AND created_at > NOW() - INTERVAL '24 hours'
+                WHERE client_id = ANY(:cids) AND created_at > NOW() - INTERVAL '24 hours'
+                GROUP BY client_id
             """),
-            {"cid": row["client_id"]},
+            {"cids": client_ids},
         )
-        events = event_result.mappings().first()
+        for r in ev_result.mappings().all():
+            event_stats[r["client_id"]] = dict(r)
 
-        # Get clip previews (up to 5)
-        clips_result = await db.execute(
+    # 4) Batch: clip previews (up to 5 per client) using window function
+    clips_by_client = {}
+    if client_ids:
+        cp_result = await db.execute(
             text("""
-                SELECT wca.clip_id, vc.clip_url, vc.exported_url, vc.thumbnail_url,
-                       wca.product_name, wca.product_price, vc.duration_sec
-                FROM widget_clip_assignments wca
-                LEFT JOIN video_clips vc ON vc.id = wca.clip_id
-                WHERE wca.client_id = :cid AND wca.is_active = TRUE
-                ORDER BY wca.sort_order ASC, wca.created_at DESC
-                LIMIT 5
+                SELECT * FROM (
+                    SELECT wca.client_id, wca.clip_id, vc.clip_url, vc.exported_url,
+                           vc.thumbnail_url, wca.product_name, wca.product_price, vc.duration_sec,
+                           ROW_NUMBER() OVER (PARTITION BY wca.client_id ORDER BY wca.sort_order ASC, wca.created_at DESC) as rn
+                    FROM widget_clip_assignments wca
+                    LEFT JOIN video_clips vc ON vc.id = wca.clip_id
+                    WHERE wca.client_id = ANY(:cids) AND wca.is_active = TRUE
+                ) sub WHERE rn <= 5
             """),
-            {"cid": row["client_id"]},
+            {"cids": client_ids},
         )
-        clips_preview = []
-        for cr in clips_result.mappings().all():
+        for cr in cp_result.mappings().all():
+            cid = cr["client_id"]
+            if cid not in clips_by_client:
+                clips_by_client[cid] = []
             clip_url = cr.get("exported_url") or cr.get("clip_url") or ""
             thumb_url = cr.get("thumbnail_url") or ""
-            clips_preview.append({
+            clips_by_client[cid].append({
                 "clip_id": cr["clip_id"],
                 "clip_url": clip_url,
                 "thumbnail_url": thumb_url,
@@ -352,11 +369,17 @@ async def list_widget_clients(
                 "duration_sec": cr.get("duration_sec"),
             })
 
+    # 5) Assemble response
+    clients = []
+    for row in rows:
+        cid = row["client_id"]
+        ev = event_stats.get(cid, {})
+        ev.pop("client_id", None)
         clients.append({
             **dict(row),
-            "clip_count": clip_count,
-            "stats_24h": dict(events) if events else {},
-            "clips_preview": clips_preview,
+            "clip_count": clip_counts.get(cid, 0),
+            "stats_24h": ev,
+            "clips_preview": clips_by_client.get(cid, []),
         })
 
     return {"clients": clients}
