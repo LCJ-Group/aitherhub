@@ -678,6 +678,15 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
           console.log(`[Subtitles] Restored position: (${res.subtitle_position_x}, ${res.subtitle_position_y})`);
         }
         if (res?.captions && res.captions.length > 0) {
+          // Check if saved captions language matches current targetLanguage
+          const savedLang = res.captions[0]?.language;
+          if (savedLang && savedLang !== targetLanguage) {
+            console.log(`[Subtitles] Saved captions language (${savedLang}) doesn't match current (${targetLanguage}), auto-regenerating`);
+            setCaptionsLoaded(true);
+            // Directly trigger re-transcription with the correct language
+            setTimeout(() => generateSubtitles(), 100);
+            return;
+          }
           // Ensure saved captions have a source marker
           const saved = Array.isArray(res.captions) ? res.captions : [];
           // Auto-split any saved captions that are too long (legacy data protection)
@@ -847,8 +856,8 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
   useEffect(() => {
     if (prevTargetLanguage.current === targetLanguage) return;
     prevTargetLanguage.current = targetLanguage;
-    // Only auto-regenerate if we already have captions (user has seen subtitles)
-    if (captions.length > 0 && !transcribing && videoId && clip) {
+    // Auto-regenerate when language changes (regardless of whether captions exist)
+    if (!transcribing && videoId && clip) {
       console.log(`[AutoTranscribe] Language changed to ${targetLanguage}, auto-regenerating subtitles`);
       generateSubtitles();
     }
@@ -1498,7 +1507,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
         // Auto-save generated subtitles so they persist on next load
         if (clip?.clip_id) {
           try {
-            const capsToSave = newCaps.map(c => ({ ...c, source: 'saved' }));
+            const capsToSave = newCaps.map(c => ({ ...c, source: 'saved', language: targetLanguage }));
             await VideoService.updateClipCaptions(videoId, clip.clip_id, capsToSave);
             setCaptions(capsToSave);
             console.log("[Subtitles] Auto-saved generated subtitles (local times)");
