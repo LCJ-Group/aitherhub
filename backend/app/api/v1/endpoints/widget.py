@@ -630,15 +630,16 @@ async def search_clips_for_widget(
 @router.post("/widget/admin/clients/{client_id}/reset-password")
 async def reset_brand_password(
     client_id: str,
+    payload: Optional[dict] = None,
     x_admin_key: Optional[str] = Header(None),
     db: AsyncSession = Depends(get_db),
 ):
-    """Reset brand portal password for a client."""
+    """Reset brand portal password for a client. Optionally accepts {"password": "..."} in body."""
     if not _check_admin(x_admin_key):
         raise HTTPException(status_code=403, detail="Admin access required")
 
     import secrets as _secrets
-    new_password = _secrets.token_urlsafe(12)
+    new_password = (payload or {}).get("password") or _secrets.token_urlsafe(12)
     from app.api.v1.endpoints.brand_portal import _hash_password
     password_hash = _hash_password(new_password)
 
