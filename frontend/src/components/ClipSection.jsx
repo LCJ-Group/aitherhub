@@ -7,17 +7,34 @@ import ClipEditorV2 from "./ClipEditorV2";
  * Falls back to the cached URL if the API call fails.
  */
 async function handleDownloadClip(videoId, phaseIndex, fallbackUrl, clip, onDownloaded) {
+  const doDownload = async (url) => {
+    // Force download via fetch→blob to avoid opening in new tab
+    try {
+      const resp = await fetch(url);
+      const blob = await resp.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = `clip_phase${phaseIndex || ''}.mp4`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(blobUrl);
+    } catch (dlErr) {
+      console.warn('[ClipSection] Blob download failed, falling back to direct link:', dlErr);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `clip_phase${phaseIndex || ''}.mp4`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+  };
   try {
     const res = await VideoService.getClipStatus(videoId, phaseIndex);
     const freshUrl = res?.clip_url || fallbackUrl;
     if (freshUrl) {
-      const a = document.createElement('a');
-      a.href = freshUrl;
-      a.target = '_blank';
-      a.rel = 'noopener noreferrer';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
+      await doDownload(freshUrl);
       // Record download for ML training (non-blocking)
       VideoService.recordClipDownload(videoId, {
         phase_index: phaseIndex,
@@ -31,7 +48,7 @@ async function handleDownloadClip(videoId, phaseIndex, fallbackUrl, clip, onDown
   } catch (e) {
     console.warn('[ClipSection] Failed to fetch fresh download URL, using cached:', e);
     if (fallbackUrl) {
-      window.open(fallbackUrl, '_blank', 'noopener,noreferrer');
+      await doDownload(fallbackUrl);
       // Still record the download attempt
       VideoService.recordClipDownload(videoId, {
         phase_index: phaseIndex,

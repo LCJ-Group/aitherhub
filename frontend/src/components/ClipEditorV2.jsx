@@ -678,14 +678,13 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
           console.log(`[Subtitles] Restored position: (${res.subtitle_position_x}, ${res.subtitle_position_y})`);
         }
         if (res?.captions && res.captions.length > 0) {
-          // Check if saved captions language matches current targetLanguage
+          // Restore targetLanguage from saved captions to avoid unnecessary re-generation
           const savedLang = res.captions[0]?.language;
           if (savedLang && savedLang !== targetLanguage) {
-            console.log(`[Subtitles] Saved captions language (${savedLang}) doesn't match current (${targetLanguage}), auto-regenerating`);
-            setCaptionsLoaded(true);
-            // Directly trigger re-transcription with the correct language
-            setTimeout(() => generateSubtitles(), 100);
-            return;
+            console.log(`[Subtitles] Restoring targetLanguage from saved captions: ${savedLang}`);
+            setTargetLanguage(savedLang);
+            // Update ref to prevent the language-change useEffect from triggering
+            prevTargetLanguage.current = savedLang;
           }
           // Ensure saved captions have a source marker
           const saved = Array.isArray(res.captions) ? res.captions : [];
@@ -1830,15 +1829,27 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                   }
                   if (lastErr) throw lastErr;
                   if (res?.download_url) {
-                    // Use <a> tag download to avoid popup blockers
-                    const a = document.createElement('a');
-                    a.href = res.download_url;
-                    a.download = `clip_phase${clip.phase_index || ''}_subtitled.mp4`;
-                    a.target = '_blank';
-                    a.rel = 'noopener noreferrer';
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
+                    // Force download via fetch→blob to avoid opening in new tab
+                    try {
+                      const dlResp = await fetch(res.download_url);
+                      const blob = await dlResp.blob();
+                      const blobUrl = URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.href = blobUrl;
+                      a.download = `clip_phase${clip.phase_index || ''}_subtitled.mp4`;
+                      document.body.appendChild(a);
+                      a.click();
+                      document.body.removeChild(a);
+                      URL.revokeObjectURL(blobUrl);
+                    } catch (dlErr) {
+                      console.warn('[ClipEditor] Blob download failed, falling back to direct link:', dlErr);
+                      const a = document.createElement('a');
+                      a.href = res.download_url;
+                      a.download = `clip_phase${clip.phase_index || ''}_subtitled.mp4`;
+                      document.body.appendChild(a);
+                      a.click();
+                      document.body.removeChild(a);
+                    }
                     // Record download for ML training (non-blocking)
                     VideoService.recordClipDownload(videoId, {
                       phase_index: clip.phase_index,
@@ -1904,17 +1915,35 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                 try {
                   const freshRes = await VideoService.getClipStatus(videoId, clip.phase_index);
                   const freshUrl = freshRes?.clip_url || clip.clip_url;
+                  // Force download via fetch→blob to avoid opening in new tab
+                  try {
+                    const dlResp = await fetch(freshUrl);
+                    const blob = await dlResp.blob();
+                    const blobUrl = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = blobUrl;
+                    a.download = `clip_phase${clip.phase_index || ''}.mp4`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(blobUrl);
+                  } catch (dlErr) {
+                    console.warn('[ClipEditor] Blob download failed, falling back to direct link:', dlErr);
+                    const a = document.createElement('a');
+                    a.href = freshUrl;
+                    a.download = `clip_phase${clip.phase_index || ''}.mp4`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                  }
+                } catch (e) {
+                  console.warn('[ClipEditor] Failed to fetch fresh URL, using cached:', e);
                   const a = document.createElement('a');
-                  a.href = freshUrl;
+                  a.href = clip.clip_url;
                   a.download = `clip_phase${clip.phase_index || ''}.mp4`;
-                  a.target = '_blank';
-                  a.rel = 'noopener noreferrer';
                   document.body.appendChild(a);
                   a.click();
                   document.body.removeChild(a);
-                } catch (e) {
-                  console.warn('[ClipEditor] Failed to fetch fresh URL, using cached:', e);
-                  window.open(clip.clip_url, '_blank', 'noopener,noreferrer');
                 }
                 // Record raw download for ML training (non-blocking)
                 VideoService.recordClipDownload(videoId, {

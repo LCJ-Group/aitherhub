@@ -69,13 +69,20 @@ export default function LiveReportSection({ videoData }) {
     );
   }, [videoId]);
 
+  // Detect UI language for report generation
+  const getReportLanguage = () => {
+    const lang = localStorage.getItem('language') || 'zh-TW';
+    if (lang === 'ja') return 'ja';
+    return 'zh-TW';
+  };
+
   // Generate report (separate from useSectionState since it's a POST action)
   const handleGenerate = async () => {
     if (!videoId) return;
     setGenerating(true);
     setGenError(null);
     try {
-      const res = await VideoService.generateLiveReport(videoId);
+      const res = await VideoService.generateLiveReport(videoId, getReportLanguage());
       if (res?.report) {
         setReport(res.report);
         setVersion(res.version || 0);

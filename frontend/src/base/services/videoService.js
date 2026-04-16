@@ -1084,9 +1084,9 @@ class VideoService extends BaseApiService {
    * @param {string} videoId - Video ID
    * @returns {Promise} Report data
    */
-  async generateLiveReport(videoId) {
+  async generateLiveReport(videoId, language = 'ja') {
     try {
-      const response = await this.post(`${URL_CONSTANTS.REPORT_GENERATE}/${videoId}/generate`);
+      const response = await this.post(`${URL_CONSTANTS.REPORT_GENERATE}/${videoId}/generate?language=${encodeURIComponent(language)}`);
       return response;
     } catch (error) {
       console.error('Failed to generate live report:', error);

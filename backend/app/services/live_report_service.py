@@ -269,102 +269,115 @@ def _detect_event_type(description: str) -> str:
     return "other"
 
 
-def interpret_strong_segment(scored: dict) -> str:
+def interpret_strong_segment(scored: dict, language: str = "ja") -> str:
     """勝ち区間の「なぜ強いか」を生成する"""
     parts = []
     signals = scored["signals"]
     metrics = scored["metrics"]
     event_type = _detect_event_type(scored["phase_description"])
-
+    zh = language == "zh-TW"
     # 主要な理由
     if "csv_order" in signals or "csv_gmv" in signals:
         gmv_str = f"¥{metrics['gmv']:,.0f}" if metrics['gmv'] > 0 else ""
-        order_str = f"{metrics['order_count']}件" if metrics['order_count'] > 0 else ""
-        parts.append(f"売上が発生しています（{order_str} {gmv_str}）".strip())
-
+        unit = '筆' if zh else '件'
+        order_str = f"{metrics['order_count']}{unit}" if metrics['order_count'] > 0 else ""
+        label_sales = '產生了銷售額' if zh else '売上が発生しています'
+        parts.append(f"{label_sales}（{order_str} {gmv_str}）".strip())
     if "csv_product_clicks" in signals:
-        parts.append(f"商品クリックが急増しています（{metrics['product_clicks']}回）")
-
+        click_label = '商品點擊急增' if zh else '商品クリックが急増しています'
+        click_unit = '次' if zh else '回'
+        parts.append(f"{click_label}（{metrics['product_clicks']}{click_unit}）")
     if "cta_high" in signals:
-        parts.append(f"CTAが強く入っています（スコア: {scored['cta_score']}）")
-
+        cta_label = 'CTA很強' if zh else 'CTAが強く入っています'
+        score_label = '分數' if zh else 'スコア'
+        parts.append(f"{cta_label}（{score_label}: {scored['cta_score']}）")
     if "human_rating" in signals:
         rating = scored["human"]["user_rating"]
         comment = scored["human"]["user_comment"]
-        msg = f"人間評価が高い（★{rating}）"
+        rating_label = '人工評價高' if zh else '人間評価が高い'
+        msg = f"{rating_label}（★{rating}）"
         if comment:
-            msg += f"：{comment}"
+            msg += f"\uff1a{comment}"
         parts.append(msg)
-
     if "viewer_spike" in signals:
-        parts.append(f"視聴者数が平均を上回っています（{metrics['viewer_count']}人）")
-
+        viewer_label = '觀看人數超過平均' if zh else '視聴者数が平均を上回っています'
+        parts.append(f"{viewer_label}（{metrics['viewer_count']}人）")
     if "comment_spike" in signals:
-        parts.append(f"コメントが活発です（{metrics['comment_count']}件）")
-
+        comment_label = '留言活躍' if zh else 'コメントが活発です'
+        comment_unit = '則' if zh else '件'
+        parts.append(f"{comment_label}（{metrics['comment_count']}{comment_unit}）")
     # Event type context
-    event_labels = {
-        "price_reveal": "価格提示が入った区間です",
-        "demo": "商品デモが行われた区間です",
-        "cta": "購買を促すCTAが入った区間です",
-        "bonus": "特典の提示が行われた区間です",
-        "hook": "視聴者の注意を引くつかみの区間です",
-    }
+    if zh:
+        event_labels = {
+            "price_reveal": "\u9019\u662f\u5305\u542b\u50f9\u683c\u63ed\u66c9\u7684\u5340\u9593",
+            "demo": "\u9019\u662f\u5546\u54c1\u5c55\u793a\u7684\u5340\u9593",
+            "cta": "\u9019\u662f\u5305\u542b\u8cfc\u8cb7\u5f15\u5c0eCTA\u7684\u5340\u9593",
+            "bonus": "\u9019\u662f\u63d0\u4f9b\u512a\u60e0\u7684\u5340\u9593",
+            "hook": "\u9019\u662f\u5438\u5f15\u89c0\u773e\u6ce8\u610f\u7684\u958b\u5834\u5340\u9593",
+        }
+    else:
+        event_labels = {
+            "price_reveal": "\u4fa1\u683c\u63d0\u793a\u304c\u5165\u3063\u305f\u533a\u9593\u3067\u3059",
+            "demo": "\u5546\u54c1\u30c7\u30e2\u304c\u884c\u308f\u308c\u305f\u533a\u9593\u3067\u3059",
+            "cta": "\u8cfc\u8cb7\u3092\u4fc3\u3059CTA\u304c\u5165\u3063\u305f\u533a\u9593\u3067\u3059",
+            "bonus": "\u7279\u5178\u306e\u63d0\u793a\u304c\u884c\u308f\u308c\u305f\u533a\u9593\u3067\u3059",
+            "hook": "\u8996\u8074\u8005\u306e\u6ce8\u610f\u3092\u5f15\u304f\u3064\u304b\u307f\u306e\u533a\u9593\u3067\u3059",
+        }
     if event_type in event_labels:
         parts.append(event_labels[event_type])
-
     # Product names
     if scored["product_names"]:
         names = ", ".join(scored["product_names"][:3])
-        parts.append(f"対象商品: {names}")
-
+        product_label = '目標商品' if zh else '対象商品'
+        parts.append(f"{product_label}: {names}")
     if not parts:
-        parts.append("複数の指標が同時に高くなっています")
+        parts.append("\u591a\u9805\u6307\u6a19\u540c\u6642\u8868\u73fe\u512a\u7570" if zh else "\u8907\u6570\u306e\u6307\u6a19\u304c\u540c\u6642\u306b\u9ad8\u304f\u306a\u3063\u3066\u3044\u307e\u3059")
+    sep = "\u3002" if not zh else "\u3002"
+    return sep.join(parts) + sep
 
-    return "。".join(parts) + "。"
 
-
-def interpret_weak_segment(scored: dict, averages: dict) -> str:
+def interpret_weak_segment(scored: dict, averages: dict, language: str = "ja") -> str:
     """弱い区間の「何が足りないか」を生成する"""
     parts = []
     metrics = scored["metrics"]
     event_type = _detect_event_type(scored["phase_description"])
-
+    zh = language == "zh-TW"
     # Duration analysis
     duration = scored["time_end"] - scored["time_start"]
-
     if event_type == "chat":
-        parts.append(f"雑談が{duration:.0f}秒続いています")
+        chat_prefix = '閒聊持續了' if zh else '雑談が'
+        chat_suffix = '秒' if zh else '秒続いています'
+        parts.append(f"{chat_prefix}{duration:.0f}{chat_suffix}")
         if duration > 120:
-            parts.append("長すぎる雑談は視聴者離脱の原因になります")
-
+            parts.append("\u904e\u9577\u7684\u9592\u804a\u6703\u5c0e\u81f4\u89c0\u773e\u6d41\u5931" if zh else "\u9577\u3059\u304e\u308b\u96d1\u8ac7\u306f\u8996\u8074\u8005\u96e2\u8131\u306e\u539f\u56e0\u306b\u306a\u308a\u307e\u3059")
     if metrics["order_count"] == 0 and metrics["gmv"] == 0:
-        parts.append("この区間では売上が発生していません")
-
+        parts.append("\u6b64\u5340\u9593\u672a\u7522\u751f\u92b7\u552e\u984d" if zh else "\u3053\u306e\u533a\u9593\u3067\u306f\u58f2\u4e0a\u304c\u767a\u751f\u3057\u3066\u3044\u307e\u305b\u3093")
     if metrics["product_clicks"] == 0:
-        parts.append("商品クリックがありません")
-
+        parts.append("\u6c92\u6709\u5546\u54c1\u9ede\u64ca" if zh else "\u5546\u54c1\u30af\u30ea\u30c3\u30af\u304c\u3042\u308a\u307e\u305b\u3093")
     if scored["cta_score"] <= 1:
-        parts.append("CTAがほとんど入っていません")
-
+        parts.append("\u5e7e\u4e4e\u6c92\u6709CTA" if zh else "CTA\u304c\u307b\u3068\u3093\u3069\u5165\u3063\u3066\u3044\u307e\u305b\u3093")
     if metrics["viewer_count"] > 0 and averages.get("avg_viewer_count", 0) > 0:
         if metrics["viewer_count"] < averages["avg_viewer_count"] * 0.7:
-            parts.append(f"視聴者数が平均を下回っています（{metrics['viewer_count']}人）")
-
+            viewer_low_label = '觀看人數低於平均' if zh else '視聴者数が平均を下回っています'
+            parts.append(f"{viewer_low_label}（{metrics['viewer_count']}人）")
     if metrics["comment_count"] == 0:
-        parts.append("コメントがありません（視聴者との対話不足）")
-
-    event_weak_labels = {
-        "chat": "雑談が長く、商品訴求がありません",
-        "other": "配信の方向性が不明確です",
-        "unknown": "コンテンツの分類ができていません",
-    }
+        parts.append("\u6c92\u6709\u7559\u8a00\uff08\u8207\u89c0\u773e\u4e92\u52d5\u4e0d\u8db3\uff09" if zh else "\u30b3\u30e1\u30f3\u30c8\u304c\u3042\u308a\u307e\u305b\u3093\uff08\u8996\u8074\u8005\u3068\u306e\u5bfe\u8a71\u4e0d\u8db3\uff09")
+    if zh:
+        event_weak_labels = {
+            "chat": "\u9592\u804a\u904e\u9577\uff0c\u6c92\u6709\u5546\u54c1\u63a8\u5ee3",
+            "other": "\u76f4\u64ad\u65b9\u5411\u4e0d\u660e\u78ba",
+            "unknown": "\u5167\u5bb9\u7121\u6cd5\u5206\u985e",
+        }
+    else:
+        event_weak_labels = {
+            "chat": "\u96d1\u8ac7\u304c\u9577\u304f\u3001\u5546\u54c1\u8a34\u6c42\u304c\u3042\u308a\u307e\u305b\u3093",
+            "other": "\u914d\u4fe1\u306e\u65b9\u5411\u6027\u304c\u4e0d\u660e\u78ba\u3067\u3059",
+            "unknown": "\u30b3\u30f3\u30c6\u30f3\u30c4\u306e\u5206\u985e\u304c\u3067\u304d\u3066\u3044\u307e\u305b\u3093",
+        }
     if event_type in event_weak_labels and not parts:
         parts.append(event_weak_labels[event_type])
-
     if not parts:
-        parts.append("エンゲージメント指標が全体的に低い区間です")
-
+        parts.append("\u4e92\u52d5\u6307\u6a19\u6574\u9ad4\u504f\u4f4e" if zh else "\u30a8\u30f3\u30b2\u30fc\u30b8\u30e1\u30f3\u30c8\u6307\u6a19\u304c\u5168\u4f53\u7684\u306b\u4f4e\u3044\u533a\u9593\u3067\u3059")
     return "。".join(parts) + "。"
 
 
@@ -376,11 +389,13 @@ def generate_suggestions(
     strong_segments: list[dict],
     weak_segments: list[dict],
     averages: dict,
+    language: str = "ja",
 ) -> list[dict]:
     """
     勝ち区間と弱い区間から改善提案を生成する。
     最大3つの実行可能な提案を返す。
     """
+    zh = language == "zh-TW"
     suggestions = []
 
     # Analyze weak segments for patterns
@@ -400,13 +415,20 @@ def generate_suggestions(
             if "cta_high" in s.get("signals", []):
                 best_cta_time = _fmt_time(s["time_start"])
                 break
-        msg = "弱い区間でCTAが不足しています。"
-        if best_cta_time:
-            msg += f"勝ち区間（{best_cta_time}〜）のようにCTAを入れてください。"
+        if zh:
+            msg = "弱勢區間CTA不足。"
+            if best_cta_time:
+                msg += f"請參考優勢區間（{best_cta_time}〜）的CTA方式。"
+            else:
+                msg += "請加入「限時」「限量」等促購語句。"
         else:
-            msg += "「今だけ」「限定」などの購買を促すフレーズを追加してください。"
+            msg = "弱い区間でCTAが不足しています。"
+            if best_cta_time:
+                msg += f"勝ち区間（{best_cta_time}〜）のようにCTAを入れてください。"
+            else:
+                msg += "「今だけ」「限定」などの購買を促すフレーズを追加してください。"
         suggestions.append({
-            "category": "CTA強化",
+            "category": "強化CTA" if zh else "CTA強化",
             "suggestion": msg,
             "priority": "high",
         })
@@ -420,8 +442,8 @@ def generate_suggestions(
     if long_chat_segments:
         total_chat_sec = sum(s["time_end"] - s["time_start"] for s in long_chat_segments)
         suggestions.append({
-            "category": "雑談時間の短縮",
-            "suggestion": f"雑談区間が合計{total_chat_sec:.0f}秒あります。30秒以内に短縮し、商品説明やデモに切り替えてください。",
+            "category": "縮短閒聊時間" if zh else "雑談時間の短縮",
+            "suggestion": f"閒聊區間共計{total_chat_sec:.0f}秒。請縮短至30秒以內，轉換為商品說明或展示。" if zh else f"雑談区間が合計{total_chat_sec:.0f}秒あります。30秒以内に短縮し、商品説明やデモに切り替えてください。",
             "priority": "high",
         })
 
@@ -433,8 +455,8 @@ def generate_suggestions(
         )
         if price_segment:
             suggestions.append({
-                "category": "価格提示タイミング",
-                "suggestion": f"価格提示（{_fmt_time(price_segment['time_start'])}〜）で売上が発生しています。次回も同じタイミングで価格を提示してください。",
+                "category": "價格揭曉時機" if zh else "価格提示タイミング",
+                "suggestion": f"價格揭曉（{_fmt_time(price_segment['time_start'])}〜）產生了銷售額。下次請在相同時機揭曉價格。" if zh else f"価格提示（{_fmt_time(price_segment['time_start'])}〜）で売上が発生しています。次回も同じタイミングで価格を提示してください。",
                 "priority": "medium",
             })
 
@@ -442,18 +464,18 @@ def generate_suggestions(
     no_comment_weak = [s for s in weak_segments if s["metrics"]["comment_count"] == 0]
     if len(no_comment_weak) >= 2:
         suggestions.append({
-            "category": "コメント拾い",
-            "suggestion": "弱い区間でコメントへの反応がありません。視聴者のコメントを拾って対話することで、エンゲージメントを高めてください。",
+            "category": "回應留言" if zh else "コメント拾い",
+            "suggestion": "弱勢區間沒有回應留言。請積極回應觀眾留言以提高互動率。" if zh else "弱い区間でコメントへの反応がありません。視聴者のコメントを拾って対話することで、エンゲージメントを高めてください。",
             "priority": "medium",
         })
 
     # 5. Product comparison
     weak_with_products = [s for s in weak_segments if s.get("product_names")]
     if weak_with_products:
-        product_name = weak_with_products[0]["product_names"][0] if weak_with_products[0]["product_names"] else "商品"
+        product_name = weak_with_products[0]["product_names"][0] if weak_with_products[0]["product_names"] else ("商品" if zh else "商品")
         suggestions.append({
-            "category": "比較訴求の追加",
-            "suggestion": f"「{product_name}」の説明区間で反応が薄いです。競合商品との比較や、ビフォーアフターを見せることで訴求力を高めてください。",
+            "category": "增加對比訴求" if zh else "比較訴求の追加",
+            "suggestion": f"「{product_name}」的說明區間反應較弱。請透過與競品對比或展示前後效果來提升訴求力。" if zh else f"「{product_name}」の説明区間で反応が薄いです。競合商品との比較や、ビフォーアフターを見せることで訴求力を高めてください。",
             "priority": "medium",
         })
 
@@ -466,8 +488,8 @@ def generate_suggestions(
         ]
         if viewer_drop_segments:
             suggestions.append({
-                "category": "視聴者維持",
-                "suggestion": "視聴者が大幅に減少している区間があります。この区間の前にティーザー（次に見せるもの予告）を入れて離脱を防いでください。",
+                "category": "維持觀眾" if zh else "視聴者維持",
+                "suggestion": "有觀眾大量流失的區間。請在此區間前加入預告（接下來要展示的內容）以防止離開。" if zh else "視聴者が大幅に減少している区間があります。この区間の前にティーザー（次に見せるもの予告）を入れて離脱を防いでください。",
                 "priority": "low",
             })
 
@@ -481,7 +503,7 @@ def generate_suggestions(
 # Main Report Generator
 # ──────────────────────────────────────────────
 
-def generate_live_report(phases: list[dict]) -> dict:
+def generate_live_report(phases: list[dict], language: str = "ja") -> dict:
     """
     動画1本のフェーズデータから Live Report v1 を生成する。
 
@@ -549,19 +571,19 @@ def generate_live_report(phases: list[dict]) -> dict:
 
     # Step 4: Layer 2 – Interpretation
     for s in top_strong:
-        s["interpretation"] = interpret_strong_segment(s)
+        s["interpretation"] = interpret_strong_segment(s, language=language)
         s["event_type"] = _detect_event_type(s["phase_description"])
         s["time_range_display"] = f"{_fmt_time(s['time_start'])}〜{_fmt_time(s['time_end'])}"
-        s["reproducible_points"] = _get_reproducible_points(s)
+        s["reproducible_points"] = _get_reproducible_points(s, language=language)
 
     for s in top_weak:
-        s["interpretation"] = interpret_weak_segment(s, averages)
+        s["interpretation"] = interpret_weak_segment(s, averages, language=language)
         s["event_type"] = _detect_event_type(s["phase_description"])
         s["time_range_display"] = f"{_fmt_time(s['time_start'])}〜{_fmt_time(s['time_end'])}"
-        s["cut_points"] = _get_cut_points(s)
+        s["cut_points"] = _get_cut_points(s, language=language)
 
     # Step 5: Layer 3 – Suggestions
-    suggestions = generate_suggestions(top_strong, top_weak, averages)
+    suggestions = generate_suggestions(top_strong, top_weak, averages, language=language)
 
     # Step 6: Summary metrics
     viewer_peak_phase = max(scored_segments, key=lambda x: x["metrics"]["viewer_count"]) if scored_segments else None
@@ -587,54 +609,42 @@ def generate_live_report(phases: list[dict]) -> dict:
     }
 
 
-def _get_reproducible_points(scored: dict) -> list[str]:
+def _get_reproducible_points(scored: dict, language: str = "ja") -> list[str]:
     """勝ち区間から「次回も再現すべき点」を抽出する"""
     points = []
     event_type = _detect_event_type(scored["phase_description"])
-
+    zh = language == "zh-TW"
     if "csv_order" in scored["signals"]:
-        points.append("この区間の構成（商品説明→価格提示→CTA）を再現する")
-
+        points.append("再現此區間的結構（商品說明→價格揭曉→CTA）" if zh else "この区間の構成（商品説明→価格提示→CTA）を再現する")
     if "cta_high" in scored["signals"]:
-        points.append("CTAのタイミングと表現を維持する")
-
+        points.append("維持CTA的時機和表達方式" if zh else "CTAのタイミングと表現を維持する")
     if event_type == "price_reveal":
-        points.append("価格提示のタイミングを次回も同じにする")
-
+        points.append("下次保持相同的價格揭曉時機" if zh else "価格提示のタイミングを次回も同じにする")
     if event_type == "demo":
-        points.append("商品デモの見せ方を次回も同じにする")
-
+        points.append("下次保持相同的商品展示方式" if zh else "商品デモの見せ方を次回も同じにする")
     if "viewer_spike" in scored["signals"]:
-        points.append("視聴者が集まるこの時間帯を活用する")
-
+        points.append("利用觀眾聚集的這個時段" if zh else "視聴者が集まるこの時間帯を活用する")
     if "human_rating" in scored["signals"]:
-        points.append("高評価の理由を分析して再現する")
-
+        points.append("分析高評價的原因並再現" if zh else "高評価の理由を分析して再現する")
     if not points:
-        points.append("この区間のトーク構成を維持する")
-
+        points.append("維持此區間的談話結構" if zh else "この区間のトーク構成を維持する")
     return points[:3]
 
 
-def _get_cut_points(scored: dict) -> list[str]:
+def _get_cut_points(scored: dict, language: str = "ja") -> list[str]:
     """弱い区間から「削るべき点」を抽出する"""
     points = []
     event_type = _detect_event_type(scored["phase_description"])
     duration = scored["time_end"] - scored["time_start"]
-
+    zh = language == "zh-TW"
     if event_type == "chat" and duration > 60:
-        points.append(f"雑談を{max(30, duration - 60):.0f}秒短縮する")
-
+        points.append(f"縮短閒聊{max(30, duration - 60):.0f}秒" if zh else f"雑談を{max(30, duration - 60):.0f}秒短縮する")
     if scored["cta_score"] <= 1:
-        points.append("CTAなしの時間を減らす")
-
+        points.append("減少沒有CTA的時間" if zh else "CTAなしの時間を減らす")
     if scored["metrics"]["product_clicks"] == 0 and scored["metrics"]["order_count"] == 0:
-        points.append("商品訴求のない時間を削減する")
-
+        points.append("減少沒有商品推廣的時間" if zh else "商品訴求のない時間を削減する")
     if scored["metrics"]["comment_count"] == 0:
-        points.append("視聴者との対話がない区間を見直す")
-
+        points.append("檢視沒有與觀眾互動的區間" if zh else "視聴者との対話がない区間を見直す")
     if not points:
-        points.append("この区間の内容を見直して効率化する")
-
+        points.append("檢視此區間的內容並優化" if zh else "この区間の内容を見直して効率化する")
     return points[:3]

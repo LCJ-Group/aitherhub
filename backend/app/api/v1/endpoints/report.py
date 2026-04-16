@@ -9,7 +9,7 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,6 +24,7 @@ router = APIRouter(prefix="/reports", tags=["Reports"])
 @router.post("/{video_id}/generate")
 async def generate_report(
     video_id: str,
+    language: str = Query("ja", description="Report language: ja or zh-TW"),
     db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
@@ -145,7 +146,7 @@ async def generate_report(
             })
 
         # 3. Generate report
-        report = generate_live_report(phases)
+        report = generate_live_report(phases, language=language)
 
         # 4. Save to reports table
         report_json = json.dumps(report, ensure_ascii=False, default=str)
