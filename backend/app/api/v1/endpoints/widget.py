@@ -296,38 +296,37 @@ async def list_widget_clients(
     if not _check_admin(x_admin_key):
         raise HTTPException(status_code=403, detail="Admin access required")
 
-    # 1) All clients
-    result = await db.execute(
-        text("""
-            SELECT client_id, name, domain, theme_color, position, cta_text, 
-                   is_active, brand_keywords, lcj_brand_id, logo_url,
-                   created_at::text as created_at, updated_at::text as updated_at
-            FROM widget_clients ORDER BY created_at DESC
-        """)
-    )
-    rows = result.mappings().all()
-    client_ids = [r["client_id"] for r in rows]
+    import logging
+    logger = logging.getLogger(__name__)
 
-    # 2) Batch: clip counts per client
-    clip_counts = {}
-    if client_ids:
+    try:
+        # 1) All clients
+        result = await db.execute(
+            text("""
+                SELECT client_id, name, domain, theme_color, position, cta_text, 
+                       is_active, brand_keywords, lcj_brand_id, logo_url,
+                       created_at::text as created_at, updated_at::text as updated_at
+                FROM widget_clients ORDER BY created_at DESC
+            """)
+        )
+        rows = result.mappings().all()
+
+        # 2) Batch: clip counts
+        clip_counts = {}
         cc_result = await db.execute(
             text("""
                 SELECT client_id, COUNT(*) as cnt
                 FROM widget_clip_assignments
-                WHERE client_id = ANY(:cids) AND is_active = TRUE
+                WHERE is_active = TRUE
                 GROUP BY client_id
-            """),
-            {"cids": client_ids},
+            """)
         )
         for r in cc_result.mappings().all():
             clip_counts[r["client_id"]] = r["cnt"]
 
-    # 3) Batch: clip previews (up to 5 per client) using window function
-    clips_by_client = {}
-    if client_ids:
-        # Only query clients that have clips
-        active_cids = [cid for cid in client_ids if clip_counts.get(cid, 0) > 0]
+        # 3) Batch: clip previews (up to 5 per client with clips)
+        clips_by_client = {}
+        active_cids = [r["client_id"] for r in rows if clip_counts.get(r["client_id"], 0) > 0]
         if active_cids:
             cp_result = await db.execute(
                 text("""
@@ -353,17 +352,21 @@ async def list_widget_clients(
                     "duration_sec": cr.get("duration_sec"),
                 })
 
-    # 5) Assemble response
-    clients = []
-    for row in rows:
-        cid = row["client_id"]
-        clients.append({
-            **dict(row),
-            "clip_count": clip_counts.get(cid, 0),
-            "clips_preview": clips_by_client.get(cid, []),
-        })
+        # 4) Assemble response
+        clients = []
+        for row in rows:
+            cid = row["client_id"]
+            clients.append({
+                **dict(row),
+                "clip_count": clip_counts.get(cid, 0),
+                "clips_preview": clips_by_client.get(cid, []),
+            })
 
-    return {"clients": clients}
+        return {"clients": clients}
+
+    except Exception as e:
+        logger.error(f"list_widget_clients error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/widget/admin/clients")
