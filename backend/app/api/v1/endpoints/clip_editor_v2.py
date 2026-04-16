@@ -964,12 +964,14 @@ async def transcribe_clip(
             logger.info(f"[transcribe] Split long segments: {len(segments)} -> {len(split_segments)} segments")
         segments = split_segments
 
-        # ─── Traditional Chinese conversion ───────────────────────────
-        # If target language is zh-TW, convert Simplified Chinese to Traditional Chinese
-        # using Azure OpenAI GPT for natural conversion
+        # ─── Traditional Chinese conversion + post-processing ────────────
+        # If target language is zh-TW:
+        # 1. Fix Whisper misrecognitions (especially beauty/haircare terms)
+        # 2. Convert Simplified Chinese to Traditional Chinese (Taiwan usage)
+        # 3. Make subtitles more natural and human-like
         if needs_traditional_chinese and segments:
             try:
-                logger.info(f"[transcribe] Converting {len(segments)} segments to Traditional Chinese")
+                logger.info(f"[transcribe] Converting {len(segments)} segments to Traditional Chinese with post-processing")
                 # Batch all texts for efficient conversion
                 all_texts = [seg.get("text", "") for seg in segments]
                 batch_text = "\n".join([f"{i}|{t}" for i, t in enumerate(all_texts)])
@@ -983,15 +985,27 @@ async def transcribe_clip(
                     model=os.getenv("AZURE_OPENAI_GPT_DEPLOYMENT", "gpt-4.1-mini"),
                     messages=[
                         {"role": "system", "content": (
-                            "你是一個簡體中文轉繁體中文的翻譯助手。"
-                            "請將以下每行的簡體中文文字轉換為台灣使用的繁體中文。"
-                            "保持格式：每行格式為 '序號|文字'，只替換文字部分。"
-                            "不要添加任何解釋，只輸出轉換後的結果。"
-                            "注意使用台灣慣用的詞彙和用語。"
+                            "你是一位專業的繁體中文字幕校對與翻譯助手，專精於美容、護髮、直播帶貨領域。\n\n"
+                            "你的任務有三個：\n"
+                            "1. **修正語音辨識錯誤**：Whisper語音辨識經常把中文美容/護髮專業術語辨識錯誤，"
+                            "你必須根據上下文修正這些錯誤。常見的錯誤包括：\n"
+                            "   - 「拳頭嫖」→「全頭漂」（全頭漂髮/漂白）\n"
+                            "   - 「毛囊」可能是正確的，但要根據上下文判斷\n"
+                            "   - 角蛋白、胺基酸、膠原蛋白等護髮成分名稱要正確\n"
+                            "   - 品牌名「KYOGOKU」「京極」要保留原文\n"
+                            "   - 直播用語如「下單」「加購」「優惠」「限時」等要正確\n"
+                            "   - 同音字錯誤要根據美容護髮的語境來修正\n\n"
+                            "2. **轉換為台灣繁體中文**：使用台灣慣用的詞彙和用語，不是港式繁體。\n\n"
+                            "3. **讓字幕更自然**：保持口語化但清晰易讀，適當修正語句使其更通順，"
+                            "但不要改變原意或添加原文沒有的內容。\n\n"
+                            "格式規則：\n"
+                            "- 每行格式為 '序號|文字'，只替換文字部分\n"
+                            "- 不要添加任何解釋，只輸出轉換後的結果\n"
+                            "- 保持原有的行數和序號不變"
                         )},
                         {"role": "user", "content": batch_text},
                     ],
-                    temperature=0.1,
+                    temperature=0.2,
                     max_tokens=4000,
                 )
                 converted_text = gpt_response.choices[0].message.content.strip()
