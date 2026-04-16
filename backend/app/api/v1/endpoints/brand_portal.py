@@ -649,58 +649,55 @@ async def brand_recommended_clips(
         )
         assigned_ids = {str(r["clip_id"]) for r in assigned_result.mappings().all()}
 
-        # Strategy: Use VPE (video_product_exposures) for brand keyword matching (fast)
-        # Only use transcript_text ILIKE when user provides additional search query
+        # Two-step approach for speed:
+        # Step 1: Get matching video_ids from VPE (small indexed table, fast)
+        # Step 2: Fetch clips by those video_ids (indexed lookup)
         all_keywords = list(brand_keywords)
         if q:
             all_keywords.append(q.strip())
 
-        params = {"lim": limit, "off": offset}
-
-        # Build VPE conditions (fast - indexed table)
+        # Step 1: Query VPE for matching video_ids
         vpe_conditions = []
+        vpe_params = {}
         for i, kw in enumerate(all_keywords):
             vpe_conditions.append(f"vpe.brand_name ILIKE :bkw{i} OR vpe.product_name ILIKE :bkw{i}")
-            params[f"bkw{i}"] = f"%{kw}%"
+            vpe_params[f"bkw{i}"] = f"%{kw}%"
         where_vpe = " OR ".join(vpe_conditions)
 
-        # Step 1: Get matching video_ids from VPE (fast indexed lookup)
-        vpe_query = f"""
-            SELECT DISTINCT vpe.video_id FROM video_product_exposures vpe
-            WHERE {where_vpe}
-        """
+        vpe_result = await db.execute(
+            text(f"""
+                SELECT DISTINCT vpe.video_id FROM video_product_exposures vpe
+                WHERE {where_vpe}
+            """),
+            vpe_params,
+        )
+        matching_video_ids = [str(r["video_id"]) for r in vpe_result.mappings().all()]
 
-        # Step 2: Get clips for those video_ids
-        # Also include clips where product_name matches keywords (for clips without VPE data)
-        product_conditions = []
-        for i, kw in enumerate(all_keywords):
-            product_conditions.append(f"vc.product_name ILIKE :pkw{i}")
-            params[f"pkw{i}"] = f"%{kw}%"
-        where_product = " OR ".join(product_conditions)
+        if not matching_video_ids:
+            return {
+                "clips": [],
+                "total": 0,
+                "keywords": all_keywords,
+                "message": "マッチするクリップが見つかりませんでした。",
+            }
 
-        # Optional: transcript search only when user provides q param
-        transcript_clause = ""
-        if q:
-            transcript_clause = f"OR vc.transcript_text ILIKE :tq"
-            params["tq"] = f"%{q.strip()}%"
+        # Step 2: Fetch clips for those video_ids (fast indexed lookup)
+        # Use ANY() with array parameter for efficient IN clause
+        clip_params = {"vids": matching_video_ids, "lim": limit, "off": offset}
 
         result = await db.execute(
-            text(f"""
+            text("""
                 SELECT vc.id as clip_id, vc.clip_url, vc.exported_url, vc.thumbnail_url,
                        vc.product_name, vc.product_price, vc.transcript_text,
                        vc.duration_sec, vc.liver_name, vc.created_at, vc.video_id
                 FROM video_clips vc
                 WHERE vc.clip_url IS NOT NULL
                   AND vc.status != 'deleted'
-                  AND (
-                      vc.video_id IN ({vpe_query})
-                      OR ({where_product})
-                      {transcript_clause}
-                  )
+                  AND vc.video_id = ANY(:vids)
                 ORDER BY vc.created_at DESC
                 LIMIT :lim OFFSET :off
             """),
-            params,
+            clip_params,
         )
 
         clips = []
@@ -721,19 +718,15 @@ async def brand_recommended_clips(
                             pass
             clips.append(clip)
 
-        # Fast count (skip heavy transcript search for count)
+        # Fast count
         count_result = await db.execute(
-            text(f"""
+            text("""
                 SELECT COUNT(*) FROM video_clips vc
                 WHERE vc.clip_url IS NOT NULL
                   AND vc.status != 'deleted'
-                  AND (
-                      vc.video_id IN ({vpe_query})
-                      OR ({where_product})
-                      {transcript_clause}
-                  )
+                  AND vc.video_id = ANY(:vids)
             """),
-            params,
+            {"vids": matching_video_ids},
         )
         total = count_result.scalar() or 0
 
