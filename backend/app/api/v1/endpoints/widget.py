@@ -298,7 +298,12 @@ async def list_widget_clients(
 
     # 1) All clients
     result = await db.execute(
-        text("SELECT * FROM widget_clients ORDER BY created_at DESC")
+        text("""
+            SELECT client_id, name, domain, theme_color, position, cta_text, 
+                   is_active, brand_keywords, lcj_brand_id, logo_url,
+                   created_at::text as created_at, updated_at::text as updated_at
+            FROM widget_clients ORDER BY created_at DESC
+        """)
     )
     rows = result.mappings().all()
     client_ids = [r["client_id"] for r in rows]
