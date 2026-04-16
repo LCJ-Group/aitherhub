@@ -63,6 +63,8 @@ class TranscribeRequest(BaseModel):
     time_start: float = Field(..., description="Clip start time in seconds (absolute)")
     time_end: float = Field(..., description="Clip end time in seconds (absolute)")
     phase_index: Optional[int] = Field(None, description="Phase index of the clip")
+    target_language: Optional[str] = Field("ja", description="Target language for Whisper transcription: 'ja' or 'zh'")
+
 
 
 class SubtitleCaption(BaseModel):
@@ -682,8 +684,11 @@ async def transcribe_clip(
     except ValueError:
         raise HTTPException(status_code=422, detail="Invalid video_id UUID")
 
+    # Map frontend language codes to Whisper language codes
+    whisper_lang_map = {"ja": "ja", "zh-TW": "zh", "zh": "zh", "en": "en"}
+    whisper_lang = whisper_lang_map.get(req.target_language, "ja")
     logger.info(f"[transcribe] Starting transcription for video={video_id}, "
-                f"time={req.time_start}-{req.time_end}")
+                f"time={req.time_start}-{req.time_end}, target_language={req.target_language}, whisper_lang={whisper_lang}")
 
     # Step 1: Download the clip video to a temp file
     import httpx
@@ -752,7 +757,7 @@ async def transcribe_clip(
                     model="whisper",
                     file=f,
                     response_format="verbose_json",
-                    language="ja",
+                    language=whisper_lang,
                     timestamp_granularities=["segment", "word"],
                 )
 

@@ -842,6 +842,18 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
     generateSubtitles();
   }, [videoId, clip, captionsLoaded, captions, transcribing, videoData]);
 
+  // ─── Auto-regenerate subtitles when target language changes ─────
+  const prevTargetLanguage = useRef(targetLanguage);
+  useEffect(() => {
+    if (prevTargetLanguage.current === targetLanguage) return;
+    prevTargetLanguage.current = targetLanguage;
+    // Only auto-regenerate if we already have captions (user has seen subtitles)
+    if (captions.length > 0 && !transcribing && videoId && clip) {
+      console.log(`[AutoTranscribe] Language changed to ${targetLanguage}, auto-regenerating subtitles`);
+      generateSubtitles();
+    }
+  }, [targetLanguage]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ─── Video Handlers ────────────────────────────────────────────
   const onTimeUpdate = useCallback(() => {
     if (!videoRef.current) return;
