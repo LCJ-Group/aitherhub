@@ -340,7 +340,7 @@ export default function LiveReportSection({ videoData }) {
               </svg>
               {window.__t('autoVideo_generating')}
             </span>
-          ) : report ? window.__t('clip_regenerate') : window.__t('liveReportGenerate')}
+          ) : report ? [window.__t('clip_regenerate')] : window.__t('liveReportGenerate')}
         </button>
       </div>
 

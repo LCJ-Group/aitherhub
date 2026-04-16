@@ -220,7 +220,7 @@ export default function MomentClips({ videoData, onRequestClip, clipStates = {} 
                   disabled={isLoading}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-violet-600 bg-white border border-violet-200 hover:bg-violet-50 transition-colors disabled:opacity-60"
                 >
-                  {isLoading ? window.__t('statusAnalyzing') : window.__t('videoDetail_reDetect')}
+                  {isLoading ? [window.__t('statusAnalyzing')] : window.__t('videoDetail_reDetect')}
                 </button>
                 <button
                   type="button"

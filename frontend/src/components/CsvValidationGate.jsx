@@ -244,7 +244,7 @@ function InfoRow({ label, filename, value, confidence, subValue }) {
         )}
       </div>
       <span className={`text-[10px] ${confColor[confidence] || confColor.none} flex-shrink-0 pt-0.5`}>
-        {confidence === 'high' ? window.__t('csvValidationGate_242abd', '高信頼') : confidence === 'medium' ? window.__t('csvValidationGate_a585a1', '中信頼') : confidence === 'low' ? window.__t('csvValidationGate_597cb3', '低信頼') : window.__t('csvAssetPanel_efd626', '不明')}
+        {confidence === 'high' ? [window.__t('csvValidationGate_242abd', '高信頼')] : confidence === 'medium' ? [window.__t('csvValidationGate_a585a1', '中信頼')] : confidence === 'low' ? [window.__t('csvValidationGate_597cb3', '低信頼')] : window.__t('csvAssetPanel_efd626', '不明')}
       </span>
     </div>
   );

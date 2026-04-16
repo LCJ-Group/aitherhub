@@ -1060,7 +1060,7 @@ const LiveDashboard = ({ videoId, extensionVideoId, liveUrl, username, title, on
                 <span className="text-gray-400 font-mono">{formatTime(elapsedTime)}</span>
                 <span className="text-gray-600">|</span>
                 <span className={`${streamEnded ? 'text-gray-500' : 'text-green-400'}`}>
-                  {streamEnded ? window.__t('liveDashboard_5c0029', 'ライブ終了') : window.__t('liveDashboard_3e1111', '配信中')}
+                  {streamEnded ? [window.__t('liveDashboard_5c0029', 'ライブ終了')] : window.__t('liveDashboard_3e1111', '配信中')}
                 </span>
               </div>
             </div>
@@ -1388,7 +1388,7 @@ const LiveDashboard = ({ videoId, extensionVideoId, liveUrl, username, title, on
             <div className="flex items-center gap-2">
               <div className={`w-2 h-2 rounded-full ${isConnected && !streamEnded ? 'bg-green-500' : streamEnded ? 'bg-gray-500' : 'bg-red-500'}`}></div>
               <span className="text-[10px] text-gray-500">
-                {streamEnded ? window.__t('liveDashboard_5c0029', 'ライブ終了') : isConnected ? window.__t('liveDashboard_a94b52', '接続中') : window.__t('liveDashboard_9e0470', '接続待ち')}
+                {streamEnded ? [window.__t('liveDashboard_5c0029', 'ライブ終了')] : isConnected ? [window.__t('liveDashboard_a94b52', '接続中')] : window.__t('liveDashboard_9e0470', '接続待ち')}
               </span>
             </div>
             {metricsReceived && !streamEnded && (

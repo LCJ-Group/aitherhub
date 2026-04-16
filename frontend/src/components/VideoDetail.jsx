@@ -1315,7 +1315,7 @@ export default function VideoDetail({ videoData, editorParams }) {
                 <button
                   type="button"
                   aria-expanded={!reportCollapsed}
-                  aria-label={reportCollapsed ? (window.__t ? window.__t('expand') : 'expand') : (window.__t ? window.__t('collapse') : 'collapse')}
+                  aria-label={reportCollapsed ? (window.__t ? [window.__t('expand')] : 'expand') : (window.__t ? [window.__t('collapse')] : 'collapse')}
                   className="text-gray-400 p-2 rounded focus:outline-none transition-colors"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className={`w-6 h-6 transform transition-transform duration-200 ${!reportCollapsed ? 'rotate-180' : ''}`}>
@@ -1695,7 +1695,7 @@ export default function VideoDetail({ videoData, editorParams }) {
                                               />
                                             </div>
                                             <span className="text-[10px] font-medium text-purple-700">
-                                              {item.audio_features.energy_mean >= 0.03 ? window.__t('energyHigh') : item.audio_features.energy_mean >= 0.015 ? window.__t('energyMedium') : window.__t('energyLow')}
+                                              {item.audio_features.energy_mean >= 0.03 ? [window.__t('energyHigh')] : item.audio_features.energy_mean >= 0.015 ? [window.__t('energyMedium')] : window.__t('energyLow')}
                                             </span>
                                           </div>
                                         )}
@@ -1709,7 +1709,7 @@ export default function VideoDetail({ videoData, editorParams }) {
                                               />
                                             </div>
                                             <span className="text-[10px] font-medium text-indigo-700">
-                                              {item.audio_features.pitch_std >= 50 ? window.__t('intonationRich') : item.audio_features.pitch_std >= 25 ? window.__t('intonationNormal') : window.__t('intonationFlat')}
+                                              {item.audio_features.pitch_std >= 50 ? [window.__t('intonationRich')] : item.audio_features.pitch_std >= 25 ? [window.__t('intonationNormal')] : window.__t('intonationFlat')}
                                             </span>
                                           </div>
                                         )}
@@ -1724,8 +1724,8 @@ export default function VideoDetail({ videoData, editorParams }) {
                                               item.audio_features.speech_rate < 3 ? 'bg-blue-100 text-blue-600' :
                                               'bg-green-100 text-green-600'
                                             }`}>
-                                              {item.audio_features.speech_rate > 7 ? window.__t('speechFast') :
-                                               item.audio_features.speech_rate < 3 ? window.__t('speechSlow') : window.__t('speechProper')}
+                                              {item.audio_features.speech_rate > 7 ? [window.__t('speechFast')] :
+                                               item.audio_features.speech_rate < 3 ? [window.__t('speechSlow')] : window.__t('speechProper')}
                                             </span>
                                           </div>
                                         )}
@@ -1741,8 +1741,8 @@ export default function VideoDetail({ videoData, editorParams }) {
                                           <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-amber-50 border border-amber-200">
                                             <span className="text-[10px] text-amber-500">{window.__t('trend')}</span>
                                             <span className="text-[10px] font-medium text-amber-700">
-                                              {item.audio_features.energy_trend === 'rising' ? window.__t('trendRising') :
-                                               item.audio_features.energy_trend === 'falling' ? window.__t('trendFalling') : window.__t('trendStable')}
+                                              {item.audio_features.energy_trend === 'rising' ? [window.__t('trendRising')] :
+                                               item.audio_features.energy_trend === 'falling' ? [window.__t('trendFalling')] : window.__t('trendStable')}
                                             </span>
                                           </div>
                                         )}

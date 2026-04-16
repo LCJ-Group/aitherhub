@@ -14,9 +14,9 @@ import React, { useState, useEffect, useRef } from 'react';
 // ─── Comment Item ─────────────────────────────────────────────
 const CommentItem = ({ comment, isNew }) => {
   const badgeColors = {
-    window.__t('liveDashboardExtension_6cb266', '1位'): 'bg-yellow-500',
-    window.__t('liveDashboardExtension_4a1b24', '2位'): 'bg-gray-400',
-    window.__t('liveDashboardExtension_adf589', '3位'): 'bg-orange-600',
+    [window.__t('liveDashboardExtension_6cb266', '1位')]: 'bg-yellow-500',
+    [window.__t('liveDashboardExtension_4a1b24', '2位')]: 'bg-gray-400',
+    [window.__t('liveDashboardExtension_adf589', '3位')]: 'bg-orange-600',
   };
 
   return (

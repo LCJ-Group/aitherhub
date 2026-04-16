@@ -55,9 +55,9 @@ const [activeTab, setActiveTab] = useState(initialTab);
     } catch (err) {
       console.error("Dashboard fetch failed:", err);
       const msg = err.code === 'ECONNABORTED'
-        ? window.__t('adminDashboard_b2d586', 'サーバー接続タイムアウト。リトライしてください。')
+        ? [window.__t('adminDashboard_b2d586', 'サーバー接続タイムアウト。リトライしてください。')]
         : err.response?.status === 401 || err.response?.status === 403
-          ? window.__t('adminDashboard_bdf22f', '認証エラー。再ログインしてください。')
+          ? [window.__t('adminDashboard_bdf22f', '認証エラー。再ログインしてください。')]
           : `データの取得に失敗しました (${err.message || 'Unknown'})`;
       setError(msg);
       // Auto-logout on auth error
@@ -564,7 +564,7 @@ function UploadHealthSection({ data, loading }) {
               disabled={batchRetrying}
               className="px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
-              {batchRetrying ? window.__t('adminDashboard_3653a4', 'リトライ中...') : `全${stuck_videos}${window.__t('adminDashboard_4b1fa3', '件を一括リトライ')}`}
+              {batchRetrying ? [window.__t('adminDashboard_3653a4', 'リトライ中...')] : `全${stuck_videos}${window.__t('adminDashboard_4b1fa3', '件を一括リトライ')}`}
             </button>
             {batchResult && !batchResult.error && (
               <span className="text-sm text-green-600">
@@ -1100,10 +1100,10 @@ function ClipDBStatsSection() {
     CTA: window.__t('adminDashboard_5670e9', '行動喚起'), PRICE: window.__t('adminDashboard_6049bc', '価格訴求'), STORY: window.__t('adminDashboard_cffaf2', 'ストーリー'),
   };
   const TAG_COLORS = {
-    window.__t('empathy', '共感'): '#92400E', window.__t('adminDashboard_f983c2', '権威'): '#1E40AF', window.__t('adminDashboard_f8cd5e', '限定性'): '#9D174D',
-    window.__t('adminDashboard_f5b486', '実演'): '#065F46', window.__t('comparison', '比較'): '#3730A3', window.__t('adminDashboard_cffaf2', 'ストーリー'): '#991B1B',
-    window.__t('adminDashboard_1d9246', 'テンション'): '#9A3412', window.__t('adminDashboard_2ae709', '緊急性'): '#854D0E', window.__t('adminDashboard_fe9111', '社会的証明'): '#166534',
-    window.__t('adminDashboard_6049bc', '価格訴求'): '#047857', window.__t('adminDashboard_3b0c9b', '問題提起'): '#9F1239', window.__t('adminDashboard_7c11e2', '解決提示'): '#0C4A6E',
+    [window.__t('empathy', '共感')]: '#92400E', [window.__t('adminDashboard_f983c2', '権威')]: '#1E40AF', [window.__t('adminDashboard_f8cd5e', '限定性')]: '#9D174D',
+    [window.__t('adminDashboard_f5b486', '実演')]: '#065F46', [window.__t('comparison', '比較')]: '#3730A3', [window.__t('adminDashboard_cffaf2', 'ストーリー')]: '#991B1B',
+    [window.__t('adminDashboard_1d9246', 'テンション')]: '#9A3412', [window.__t('adminDashboard_2ae709', '緊急性')]: '#854D0E', [window.__t('adminDashboard_fe9111', '社会的証明')]: '#166534',
+    [window.__t('adminDashboard_6049bc', '価格訴求')]: '#047857', [window.__t('adminDashboard_3b0c9b', '問題提起')]: '#9F1239', [window.__t('adminDashboard_7c11e2', '解決提示')]: '#0C4A6E',
     // English key aliases
     HOOK: '#6D28D9', EMPATHY: '#92400E', PROBLEM: '#9F1239',
     EDUCATION: '#1E40AF', SOLUTION: '#065F46', DEMONSTRATION: '#0F766E',

@@ -160,7 +160,7 @@ function ErrorLogPanel({ videoId, autoOpen = false }) {
             disabled={loading}
             className="text-[11px] text-gray-500 hover:text-gray-300 underline transition-colors"
           >
-            {loading ? window.__t('loading') : window.__t('refreshErrorLog')}
+            {loading ? [window.__t('loading')] : window.__t('refreshErrorLog')}
           </button>
         </div>
       )}
@@ -1298,7 +1298,7 @@ export default function MainContent({
                   </svg>
                 </div>
                 <p className="text-red-600 text-sm font-medium">
-                  {videoLoadError === 'timeout' ? window.__t('videoLoadTimeout') : videoLoadError === 'auth' ? window.__t('checkLoginStatus') : window.__t('videoLoadFailed')}
+                  {videoLoadError === 'timeout' ? [window.__t('videoLoadTimeout')] : videoLoadError === 'auth' ? [window.__t('checkLoginStatus')] : window.__t('videoLoadFailed')}
                 </p>
                 <button
                   onClick={() => {
@@ -1690,7 +1690,7 @@ export default function MainContent({
                                 className="w-full h-[41px] flex items-center justify-center bg-[#7D01FF] text-white rounded-md text-sm font-medium hover:bg-[#6a01d9] transition-colors"
                               >
                                 {resumeInfo?.hasFileHandle
-                                  ? window.__t('resumeFromContinue')
+                                  ? [window.__t('resumeFromContinue')]
                                   : window.__t('selectFileToResume')
                                 }
                               </button>

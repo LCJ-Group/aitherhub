@@ -173,7 +173,7 @@ export default function ScriptGeneratorPanel({ videoId, videoData }) {
                           <span className="font-medium text-orange-700">"{extractCTAPhrase(cta)}"</span>
                           <div className="flex items-center gap-1 mt-0.5">
                             <span className="text-[10px] text-orange-500">
-                              {cta.moment_type === "order" ? window.__t('scriptGen_order') : window.__t('scriptGen_click')}
+                              {cta.moment_type === "order" ? [window.__t('scriptGen_order')] : window.__t('scriptGen_click')}
                             </span>
                             {cta.confidence && (
                               <span className="text-[10px] text-gray-400">

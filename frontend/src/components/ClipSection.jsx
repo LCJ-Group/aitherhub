@@ -351,7 +351,7 @@ export default function ClipSection({ videoData, clipStates, reports1, editorPar
     "Moment": "from-purple-500 to-pink-500",
     "Sales Spike": "from-orange-500 to-red-500",
     "Hook": "from-red-500 to-rose-500",
-    window.__t('clipSectionAiRecommend', 'AI推薦'): "from-amber-500 to-orange-500",
+    [window.__t('clipSectionAiRecommend', 'AI推薦')]: "from-amber-500 to-orange-500",
   };
 
   return (
@@ -461,10 +461,10 @@ export default function ClipSection({ videoData, clipStates, reports1, editorPar
                         if (typeof tags === 'string') { try { tags = JSON.parse(tags); } catch { tags = []; } }
                         if (!Array.isArray(tags) || tags.length === 0) return null;
                         const TAG_COLORS = {
-                          window.__t('empathy', '共感'): '#92400E', window.__t('adminDashboard_f983c2', '権威'): '#1E40AF', window.__t('adminDashboard_f8cd5e', '限定性'): '#9D174D',
-                          window.__t('adminDashboard_f5b486', '実演'): '#065F46', window.__t('comparison', '比較'): '#3730A3', window.__t('adminDashboard_cffaf2', 'ストーリー'): '#991B1B',
-                          window.__t('adminDashboard_1d9246', 'テンション'): '#9A3412', window.__t('adminDashboard_2ae709', '緊急性'): '#854D0E', window.__t('adminDashboard_fe9111', '社会的証明'): '#166534',
-                          window.__t('adminDashboard_6049bc', '価格訴求'): '#047857', window.__t('adminDashboard_3b0c9b', '問題提起'): '#9F1239', window.__t('adminDashboard_7c11e2', '解決提示'): '#0C4A6E',
+                          [window.__t('empathy', '共感')]: '#92400E', [window.__t('adminDashboard_f983c2', '権威')]: '#1E40AF', [window.__t('adminDashboard_f8cd5e', '限定性')]: '#9D174D',
+                          [window.__t('adminDashboard_f5b486', '実演')]: '#065F46', [window.__t('comparison', '比較')]: '#3730A3', [window.__t('adminDashboard_cffaf2', 'ストーリー')]: '#991B1B',
+                          [window.__t('adminDashboard_1d9246', 'テンション')]: '#9A3412', [window.__t('adminDashboard_2ae709', '緊急性')]: '#854D0E', [window.__t('adminDashboard_fe9111', '社会的証明')]: '#166534',
+                          [window.__t('adminDashboard_6049bc', '価格訴求')]: '#047857', [window.__t('adminDashboard_3b0c9b', '問題提起')]: '#9F1239', [window.__t('adminDashboard_7c11e2', '解決提示')]: '#0C4A6E',
                         };
                         return (
                           <div className="flex flex-wrap gap-1 mb-2">

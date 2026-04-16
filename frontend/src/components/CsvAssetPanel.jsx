@@ -187,7 +187,7 @@ export default function CsvAssetPanel({ videoData, onReplace, onRefresh }) {
                   : "text-gray-400 hover:text-blue-600 hover:bg-blue-50"
               }`}
             >
-              {showPreview === assetType ? window.__t('common_close', '閉じる') : window.__t('clip_preview', 'プレビュー')}
+              {showPreview === assetType ? [window.__t('common_close', '閉じる')] : window.__t('clip_preview', 'プレビュー')}
             </button>
           )}
         </div>
@@ -335,7 +335,7 @@ export default function CsvAssetPanel({ videoData, onReplace, onRefresh }) {
               </div>
               <div className="flex items-center gap-3 mt-0.5">
                 <span className="text-[10px] text-gray-400">
-                  商品: {excelInfo.has_product ? window.__t('csvAssetPanel_beb409', 'あり') : window.__t('csvAssetPanel_3609f9', 'なし')} / トレンド: {excelInfo.has_trend ? window.__t('csvAssetPanel_beb409', 'あり') : window.__t('csvAssetPanel_3609f9', 'なし')}
+                  商品: {excelInfo.has_product ? [window.__t('csvAssetPanel_beb409', 'あり')] : window.__t('csvAssetPanel_3609f9', 'なし')} / トレンド: {excelInfo.has_trend ? [window.__t('csvAssetPanel_beb409', 'あり')] : window.__t('csvAssetPanel_3609f9', 'なし')}
                   {excelInfo.asset_history?.length > 0 && ` / ${excelInfo.asset_history.length}${window.__t('csvAssetPanel_690db4', '件の履歴')}`}
                 </span>
               </div>
@@ -421,7 +421,7 @@ export default function CsvAssetPanel({ videoData, onReplace, onRefresh }) {
                   <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={revalidating ? "animate-spin" : ""}>
                     <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
                   </svg>
-                  {revalidating ? window.__t('csvAssetPanel_f5ae62', '検証中...') : window.__t('videoDetail_reVerify', '再検証')}
+                  {revalidating ? [window.__t('csvAssetPanel_f5ae62', '検証中...')] : window.__t('videoDetail_reVerify', '再検証')}
                 </button>
 
                 <button

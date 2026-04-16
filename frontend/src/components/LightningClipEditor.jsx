@@ -574,7 +574,7 @@ const LightningClipEditor = ({ videoId, clip, onClose, onClipUpdated }) => {
                     opacity: isTrimming ? 0.6 : 1,
                   }}
                 >
-                  {isTrimming ? window.__t('auto_303', '⏳ 生成中...') : window.__t('auto_304', '✂️ トリムを適用して再生成')}
+                  {isTrimming ? [window.__t('auto_303', '⏳ 生成中...')] : window.__t('auto_304', '✂️ トリムを適用して再生成')}
                 </button>
               </div>
             )}
@@ -662,7 +662,7 @@ const LightningClipEditor = ({ videoId, clip, onClose, onClipUpdated }) => {
                         )}
                         <button
                           onClick={() => handleCaptionEmphasisToggle(idx)}
-                          title={cap.emphasis ? window.__t('auto_339', '強調を解除') : window.__t('auto_338', '強調する')}
+                          title={cap.emphasis ? [window.__t('auto_339', '強調を解除')] : window.__t('auto_338', '強調する')}
                           style={{
                             background: cap.emphasis ? "#FFD700" : "#333",
                             border: "none",
@@ -698,7 +698,7 @@ const LightningClipEditor = ({ videoId, clip, onClose, onClipUpdated }) => {
                       opacity: isSavingCaptions ? 0.6 : 1,
                     }}
                   >
-                    {isSavingCaptions ? window.__t('auto_302', '⏳ 保存中...') : window.__t('auto_359', '💾 字幕を保存')}
+                    {isSavingCaptions ? [window.__t('auto_302', '⏳ 保存中...')] : window.__t('auto_359', '💾 字幕を保存')}
                   </button>
                 )}
               </div>

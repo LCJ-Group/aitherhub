@@ -149,7 +149,7 @@ export default function SalesMomentClips({ videoData, onRequestClip, clipStates 
                   disabled={isLoading}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-red-600 bg-white border border-red-200 hover:bg-red-50 transition-colors disabled:opacity-60"
                 >
-                  {isLoading ? window.__t('auto_346', '検出中...') : window.__t('videoDetail_reDetect', '再検出')}
+                  {isLoading ? [window.__t('auto_346', '検出中...')] : window.__t('videoDetail_reDetect', '再検出')}
                 </button>
                 <button
                   type="button"

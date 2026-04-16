@@ -272,7 +272,7 @@ function AddExposureForm({ onAdd, onCancel }) {
         disabled={saving || !data.product_name || !data.time_start || !data.time_end}
         className="px-3 py-1.5 text-xs bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50"
       >
-        {saving ? window.__t('productTimeline_f5915d', '追加中...') : window.__t('analytics_add', '追加')}
+        {saving ? [window.__t('productTimeline_f5915d', '追加中...')] : window.__t('analytics_add', '追加')}
       </button>
       <button
         onClick={onCancel}

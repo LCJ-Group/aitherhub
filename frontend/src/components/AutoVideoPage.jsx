@@ -688,7 +688,7 @@ export default function AutoVideoPage() {
                       >
                         <ImageIcon size={16} />
                         {productImages.length === 0
-                          ? window.__t('autoVideoPage_dba7ee', '商品写真をアップロード')
+                          ? [window.__t('autoVideoPage_dba7ee', '商品写真をアップロード')]
                           : `さらに追加（${productImages.length}/5）`}
                       </button>
                     )}
@@ -1064,9 +1064,9 @@ export default function AutoVideoPage() {
                           }`}
                         >
                           {job.status === "completed"
-                            ? window.__t('clip_completed', '完了')
+                            ? [window.__t('clip_completed', '完了')]
                             : job.status === "failed" || job.status === "error"
-                            ? window.__t('clip_failed', '失敗')
+                            ? [window.__t('clip_failed', '失敗')]
                             : `${job.progress}%`}
                         </span>
                       </div>

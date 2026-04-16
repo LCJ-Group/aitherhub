@@ -1713,7 +1713,7 @@ export default function AiLiveCreatorPage() {
                 </h2>
                 <p className="text-xs text-gray-500 mb-3">
                   {portraitType === "video"
-                    ? window.__t('aiLiveCreatorPage_9d1188', '9:16の参考動画をアップロード。AIが動きを再現し、音声を差し替えます。')
+                    ? [window.__t('aiLiveCreatorPage_9d1188', '9:16の参考動画をアップロード。AIが動きを再現し、音声を差し替えます。')]
                     : window.__t('aiLiveCreatorPage_64878e', '正面を向いた写真をアップロード。AIがこの顔を音声に合わせてアニメーションします。')
                   }
                 </p>

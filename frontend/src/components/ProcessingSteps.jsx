@@ -1078,8 +1078,8 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
     const h = Math.floor(sec / 3600);
     const m = Math.floor((sec % 3600) / 60);
     const s = Math.floor(sec % 60);
-    if (h > 0) return `${h}${window.__t('hours')}${m > 0 ? m + window.__t('minutes') : ''}${s > 0 ? s + window.__t('seconds') : ''}`;
-    if (m > 0) return `${m}${window.__t('minutes')}${s > 0 ? s + window.__t('seconds') : ''}`;
+    if (h > 0) return `${h}${window.__t('hours')}${m > 0 ? m + [window.__t('minutes')] : ''}${s > 0 ? s + [window.__t('seconds')] : ''}`;
+    if (m > 0) return `${m}${window.__t('minutes')}${s > 0 ? s + [window.__t('seconds')] : ''}`;
     return `${s}${window.__t('seconds')}`;
   };
 
@@ -1312,7 +1312,7 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
                 disabled={isRetrying}
                 className="px-4 py-1.5 text-sm font-medium text-white bg-amber-500 hover:bg-amber-600 disabled:bg-amber-300 rounded-md transition-colors"
               >
-                {isRetrying ? window.__t('retrying') : window.__t('retryAnalysisBtn')}
+                {isRetrying ? [window.__t('retrying')] : window.__t('retryAnalysisBtn')}
               </button>
             </div>
           )}
@@ -1358,7 +1358,7 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
                 disabled={isRetrying}
                 className="px-4 py-1.5 text-sm font-medium text-white bg-red-500 hover:bg-red-600 disabled:bg-red-300 rounded-md transition-colors"
               >
-                {isRetrying ? window.__t('retrying') : window.__t('retryAnalysisBtn')}
+                {isRetrying ? [window.__t('retrying')] : window.__t('retryAnalysisBtn')}
               </button>
             </div>
           </div>
@@ -1424,7 +1424,7 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
                   disabled={loadingErrorLogs}
                   className="text-[11px] text-gray-400 hover:text-gray-600 underline transition-colors"
                 >
-                  {loadingErrorLogs ? window.__t('loadingText') : window.__t('refreshErrorLog')}
+                  {loadingErrorLogs ? [window.__t('loadingText')] : window.__t('refreshErrorLog')}
                 </button>
               </div>
             )}

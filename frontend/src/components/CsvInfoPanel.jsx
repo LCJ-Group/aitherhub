@@ -124,7 +124,7 @@ export default function CsvInfoPanel({ videoData, onReplace }) {
               </div>
               <div className="flex items-center gap-3 mt-1">
                 <span className="text-xs text-gray-400">
-                  商品: {excelInfo.has_product ? window.__t('csvAssetPanel_beb409', 'あり') : window.__t('csvAssetPanel_3609f9', 'なし')} / トレンド: {excelInfo.has_trend ? window.__t('csvAssetPanel_beb409', 'あり') : window.__t('csvAssetPanel_3609f9', 'なし')}
+                  商品: {excelInfo.has_product ? [window.__t('csvAssetPanel_beb409', 'あり')] : window.__t('csvAssetPanel_3609f9', 'なし')} / トレンド: {excelInfo.has_trend ? [window.__t('csvAssetPanel_beb409', 'あり')] : window.__t('csvAssetPanel_3609f9', 'なし')}
                 </span>
               </div>
             </div>

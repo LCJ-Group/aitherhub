@@ -1072,11 +1072,11 @@ export default function ScriptGeneratorPage() {
                           ))}
                         </div>
                         <span className="text-xs text-gray-500">
-                          {ratingValue === 0 ? window.__t('scriptGeneratorPage_78cf37', '★をクリックして評価') :
-                           ratingValue === 1 ? window.__t('scriptGeneratorPage_4946ec', '★ もう少し...') :
-                           ratingValue === 2 ? window.__t('scriptGeneratorPage_9f48a0', '★★ いまいち') :
-                           ratingValue === 3 ? window.__t('scriptGeneratorPage_323d25', '★★★ まあまあ') :
-                           ratingValue === 4 ? window.__t('scriptGeneratorPage_dd2132', '★★★★ 良い！') :
+                          {ratingValue === 0 ? [window.__t('scriptGeneratorPage_78cf37', '★をクリックして評価')] :
+                           ratingValue === 1 ? [window.__t('scriptGeneratorPage_4946ec', '★ もう少し...')] :
+                           ratingValue === 2 ? [window.__t('scriptGeneratorPage_9f48a0', '★★ いまいち')] :
+                           ratingValue === 3 ? [window.__t('scriptGeneratorPage_323d25', '★★★ まあまあ')] :
+                           ratingValue === 4 ? [window.__t('scriptGeneratorPage_dd2132', '★★★★ 良い！')] :
                            window.__t('scriptGeneratorPage_2f0df0', '★★★★★ 最高！')}
                         </span>
                       </div>

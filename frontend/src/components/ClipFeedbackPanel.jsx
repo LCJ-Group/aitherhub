@@ -234,7 +234,7 @@ const ClipFeedbackPanel = ({
             transition: 'all 0.2s',
           }}
         >
-          {'\uD83D\uDC4D'} {rating === 'good' && submitted ? window.__t('auto_328', '使える') : 'Good'}
+          {'\uD83D\uDC4D'} {rating === 'good' && submitted ? [window.__t('auto_328', '使える')] : 'Good'}
         </button>
         <button
           onClick={() => { handleRatingSelect('bad'); }}
@@ -247,7 +247,7 @@ const ClipFeedbackPanel = ({
             transition: 'all 0.2s',
           }}
         >
-          {'\uD83D\uDC4E'} {rating === 'bad' && submitted ? window.__t('auto_340', '微妙') : 'Fix'}
+          {'\uD83D\uDC4E'} {rating === 'bad' && submitted ? [window.__t('auto_340', '微妙')] : 'Fix'}
         </button>
         {dirty && canSave && (
           <button
@@ -340,7 +340,7 @@ const ClipFeedbackPanel = ({
           <div style={{
             fontSize: '12px', color: '#6b7280', marginBottom: '8px', fontWeight: 600,
           }}>
-            {rating === 'bad' ? window.__t('auto_309', 'なぜ微妙？（複数選択可）') : window.__t('auto_308', 'どこが良い？（任意）')}
+            {rating === 'bad' ? [window.__t('auto_309', 'なぜ微妙？（複数選択可）')] : window.__t('auto_308', 'どこが良い？（任意）')}
           </div>
           <div style={{
             display: 'flex', flexWrap: 'wrap', gap: '6px',

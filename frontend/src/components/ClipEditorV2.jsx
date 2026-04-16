@@ -2713,7 +2713,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                     {transcribing ? (
                       <><span style={{ animation: 'spin 1s linear infinite', display: 'inline-block' }}>{'⟳'}</span> {window.__t('script_generating', '生成中...')}</>
                     ) : (
-                      <>{captions.length > 0 ? window.__t('clipEditorV2_4b39ae', '🎤 AI再生成') : window.__t('clipEditorV2_de99d4', '🎤 AI生成')}</>
+                      <>{captions.length > 0 ? [window.__t('clipEditorV2_4b39ae', '🎤 AI再生成')] : window.__t('clipEditorV2_de99d4', '🎤 AI生成')}</>
                     )}
                   </button>
 
@@ -2921,7 +2921,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                           opacity: savingCaps ? 0.6 : 1,
                         }}
                       >
-                        {savingCaps ? window.__t('auto_330', '保存中...') : window.__t('clipEditorV2_811028', '字幕を保存')}
+                        {savingCaps ? [window.__t('auto_330', '保存中...')] : window.__t('clipEditorV2_811028', '字幕を保存')}
                       </button>
                     </div>
                   </div>
@@ -2990,7 +2990,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                       width: "100%",
                     }}
                   >
-                    {isTrimming ? window.__t('script_generating', '生成中...') : window.__t('clipEditorV2_4117f4', 'トリムを適用')}
+                    {isTrimming ? [window.__t('script_generating', '生成中...')] : window.__t('clipEditorV2_4117f4', 'トリムを適用')}
                   </button>
                 </div>
               </div>
@@ -3268,7 +3268,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               color: C.textDim, fontSize: 11,
             }}>
-              {waveformLoading ? window.__t('clipEditorV2_8c34af', '波形読み込み中...') : window.__t('clipEditorV2_7f5005', '波形なし')}
+              {waveformLoading ? [window.__t('clipEditorV2_8c34af', '波形読み込み中...')] : window.__t('clipEditorV2_7f5005', '波形なし')}
             </div>
           )}
           {/* Split point markers on waveform */}

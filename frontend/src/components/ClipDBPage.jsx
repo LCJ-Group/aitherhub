@@ -41,18 +41,18 @@ function getTagLabel(tag) {
 
 // ─── Tag color mapping ───
 const TAG_COLORS = {
-  window.__t('empathy', '共感'): { bg: "#FEF3C7", text: "#92400E", border: "#FDE68A" },
-  window.__t('adminDashboard_f983c2', '権威'): { bg: "#DBEAFE", text: "#1E40AF", border: "#93C5FD" },
-  window.__t('adminDashboard_f8cd5e', '限定性'): { bg: "#FCE7F3", text: "#9D174D", border: "#F9A8D4" },
-  window.__t('adminDashboard_f5b486', '実演'): { bg: "#D1FAE5", text: "#065F46", border: "#6EE7B7" },
-  window.__t('comparison', '比較'): { bg: "#E0E7FF", text: "#3730A3", border: "#A5B4FC" },
-  window.__t('adminDashboard_cffaf2', 'ストーリー'): { bg: "#FEE2E2", text: "#991B1B", border: "#FCA5A5" },
-  window.__t('adminDashboard_1d9246', 'テンション'): { bg: "#FFF7ED", text: "#9A3412", border: "#FDBA74" },
-  window.__t('adminDashboard_2ae709', '緊急性'): { bg: "#FEF9C3", text: "#854D0E", border: "#FDE047" },
-  window.__t('adminDashboard_fe9111', '社会的証明'): { bg: "#F0FDF4", text: "#166534", border: "#86EFAC" },
-  window.__t('adminDashboard_6049bc', '価格訴求'): { bg: "#ECFDF5", text: "#047857", border: "#6EE7B7" },
-  window.__t('adminDashboard_3b0c9b', '問題提起'): { bg: "#FFF1F2", text: "#9F1239", border: "#FDA4AF" },
-  window.__t('adminDashboard_7c11e2', '解決提示'): { bg: "#F0F9FF", text: "#0C4A6E", border: "#7DD3FC" },
+  [window.__t('empathy', '共感')]: { bg: "#FEF3C7", text: "#92400E", border: "#FDE68A" },
+  [window.__t('adminDashboard_f983c2', '権威')]: { bg: "#DBEAFE", text: "#1E40AF", border: "#93C5FD" },
+  [window.__t('adminDashboard_f8cd5e', '限定性')]: { bg: "#FCE7F3", text: "#9D174D", border: "#F9A8D4" },
+  [window.__t('adminDashboard_f5b486', '実演')]: { bg: "#D1FAE5", text: "#065F46", border: "#6EE7B7" },
+  [window.__t('comparison', '比較')]: { bg: "#E0E7FF", text: "#3730A3", border: "#A5B4FC" },
+  [window.__t('adminDashboard_cffaf2', 'ストーリー')]: { bg: "#FEE2E2", text: "#991B1B", border: "#FCA5A5" },
+  [window.__t('adminDashboard_1d9246', 'テンション')]: { bg: "#FFF7ED", text: "#9A3412", border: "#FDBA74" },
+  [window.__t('adminDashboard_2ae709', '緊急性')]: { bg: "#FEF9C3", text: "#854D0E", border: "#FDE047" },
+  [window.__t('adminDashboard_fe9111', '社会的証明')]: { bg: "#F0FDF4", text: "#166534", border: "#86EFAC" },
+  [window.__t('adminDashboard_6049bc', '価格訴求')]: { bg: "#ECFDF5", text: "#047857", border: "#6EE7B7" },
+  [window.__t('adminDashboard_3b0c9b', '問題提起')]: { bg: "#FFF1F2", text: "#9F1239", border: "#FDA4AF" },
+  [window.__t('adminDashboard_7c11e2', '解決提示')]: { bg: "#F0F9FF", text: "#0C4A6E", border: "#7DD3FC" },
   // English key aliases (same colors mapped via Japanese label)
   HOOK: { bg: "#F5F3FF", text: "#6D28D9", border: "#C4B5FD" },
   EMPATHY: { bg: "#FEF3C7", text: "#92400E", border: "#FDE68A" },
@@ -613,7 +613,7 @@ export default function ClipDBPage() {
                   onKeyDown={(e) => e.key === "Enter" && handleSearch()}
                   placeholder={
                     searchMode === "semantic"
-                      ? window.__t('clipDBPage_9c4dcc', '例: 「シャンプーの効果を実演しながら説明」')
+                      ? [window.__t('clipDBPage_9c4dcc', '例: 「シャンプーの効果を実演しながら説明」')]
                       : window.__t('clipDBPage_31f8dd', 'テキスト検索...')
                   }
                   className="w-full pl-9 pr-4 py-2 rounded-lg border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
@@ -763,7 +763,7 @@ export default function ClipDBPage() {
               <Database className="w-12 h-12 text-gray-300 mx-auto mb-3" />
               <p className="text-gray-500 text-sm">
                 {searchQuery || selectedTag || soldFilter !== null
-                  ? window.__t('clipDBPage_3cfb04', '条件に一致するクリップが見つかりませんでした')
+                  ? [window.__t('clipDBPage_3cfb04', '条件に一致するクリップが見つかりませんでした')]
                   : window.__t('clipDBPage_99d2ce', '「検索」をクリックしてクリップを表示')}
               </p>
               <p className="text-gray-400 text-xs mt-1">

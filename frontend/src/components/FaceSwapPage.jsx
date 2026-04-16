@@ -329,7 +329,7 @@ export default function FaceSwapPage() {
                 />
                 GPU{" "}
                 {health.gpu_worker?.status === "ok"
-                  ? window.__t('faceSwapPage_1520a8', 'オンライン')
+                  ? [window.__t('faceSwapPage_1520a8', 'オンライン')]
                   : window.__t('faceSwapPage_259bb4', 'オフライン')}
               </div>
             )}
@@ -532,7 +532,7 @@ export default function FaceSwapPage() {
                         <option key={v.voice_id} value={v.voice_id}>
                           {v.name}{" "}
                           {v.category === "cloned"
-                            ? window.__t('faceSwapPage_1a572e', '(クローン)')
+                            ? [window.__t('faceSwapPage_1a572e', '(クローン)')]
                             : `(${v.category || window.__t('faceSwapPage_96104a', 'プリセット')})`}
                         </option>
                       ))}
@@ -857,7 +857,7 @@ export default function FaceSwapPage() {
                       }
                     >
                       {health.gpu_worker?.status === "ok"
-                        ? window.__t('faceSwapPage_1520a8', 'オンライン')
+                        ? [window.__t('faceSwapPage_1520a8', 'オンライン')]
                         : health.gpu_worker?.status || window.__t('csvAssetPanel_efd626', '不明')}
                     </span>
                   </div>
@@ -871,7 +871,7 @@ export default function FaceSwapPage() {
                       }
                     >
                       {health.elevenlabs?.status === "ok"
-                        ? window.__t('faceSwapPage_390056', '接続済み')
+                        ? [window.__t('faceSwapPage_390056', '接続済み')]
                         : health.elevenlabs?.status || window.__t('csvAssetPanel_efd626', '不明')}
                     </span>
                   </div>
