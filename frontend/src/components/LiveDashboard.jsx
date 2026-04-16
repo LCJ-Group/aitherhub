@@ -1260,7 +1260,7 @@ const LiveDashboard = ({ videoId, extensionVideoId, liveUrl, username, title, on
                             </div>
                             <div className="min-w-0">
                               <p className="text-[11px] text-gray-200 truncate max-w-[200px]">{product.name || window.__t('liveDashboard_950ca9', '商品名不明')}</p>
-                              <p className="text-[10px] text-red-400 font-medium">{product.price ? `${Number(String(product.price).replace(/,/g, 'window.__t('liveDashboard_40541c', ')).toLocaleString()}${window.__t('liveDashboard_a6de4c', '円')}` : product.gmv || ')'}</p>
+                              <p className="text-[10px] text-red-400 font-medium">{product.price ? `${Number(String(product.price).replace(/,/g, '')).toLocaleString()}${window.__t('liveDashboard_a6de4c', '円')}` : product.gmv || ''}</p>
                             </div>
                           </div>
                         </td>
