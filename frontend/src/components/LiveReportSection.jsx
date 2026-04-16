@@ -292,7 +292,7 @@ export default function LiveReportSection({ videoData }) {
           <div className="text-2xl font-bold text-emerald-600">
             {m.total_gmv > 0 ? `¥${m.total_gmv.toLocaleString()}` : "-"}
           </div>
-          <div className="text-xs text-gray-500">{window.__t('analytics_totalSales', window.__t('analytics_totalSales', '総売上'))}</div>
+          <div className="text-xs text-gray-500">{window.__t('analytics_totalSales', '総売上')}</div>
         </div>
         <div className="bg-white rounded-xl p-3 border border-gray-200 text-center">
           <div className="text-2xl font-bold text-blue-600">{m.viewer_peak || "-"}</div>

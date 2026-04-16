@@ -965,7 +965,7 @@ export default function AiLiveCreatorPage() {
                         <Crown className={`w-3 h-3 ${engine === "heygen" ? "text-amber-400" : "text-gray-500"}`} />
                         <span className={`text-[9px] font-bold ${engine === "heygen" ? "text-amber-300" : "text-gray-400"}`}>HeyGen</span>
                       </div>
-                      <p className="text-[7px] text-gray-500">{window.__t('aiLiveCreatorPage_6ca6ed', window.__t('aiLiveCreatorPage_6ca6ed', 'Arcads級'))}</p>
+                      <p className="text-[7px] text-gray-500">{window.__t('aiLiveCreatorPage_6ca6ed', 'Arcads級')}</p>
                     </button>
                     <button
                       onClick={() => setEngine("realtime")}
@@ -979,7 +979,7 @@ export default function AiLiveCreatorPage() {
                         <Radio className={`w-3 h-3 ${engine === "realtime" ? "text-green-400" : "text-gray-500"}`} />
                         <span className={`text-[9px] font-bold ${engine === "realtime" ? "text-green-300" : "text-gray-400"}`}>Realtime</span>
                       </div>
-                      <p className="text-[7px] text-gray-500">{window.__t('aiLiveCreatorPage_a08b09', window.__t('aiLiveCreatorPage_a08b09', 'LiveAvatar リアルタイム'))}</p>
+                      <p className="text-[7px] text-gray-500">{window.__t('aiLiveCreatorPage_a08b09', 'LiveAvatar リアルタイム')}</p>
                     </button>
                     <button
                       onClick={() => setEngine("imtalker")}
@@ -993,7 +993,7 @@ export default function AiLiveCreatorPage() {
                         <Sparkles className={`w-3 h-3 ${engine === "imtalker" ? "text-purple-400" : "text-gray-500"}`} />
                         <span className={`text-[9px] font-bold ${engine === "imtalker" ? "text-purple-300" : "text-gray-400"}`}>Premium</span>
                       </div>
-                      <p className="text-[7px] text-gray-500">{window.__t('aiLiveCreatorPage_860916', window.__t('aiLiveCreatorPage_860916', 'フル表情'))}</p>
+                      <p className="text-[7px] text-gray-500">{window.__t('aiLiveCreatorPage_860916', 'フル表情')}</p>
                     </button>
                     <button
                       onClick={() => setEngine("musetalk")}
@@ -1007,7 +1007,7 @@ export default function AiLiveCreatorPage() {
                         <Zap className={`w-3 h-3 ${engine === "musetalk" ? "text-blue-400" : "text-gray-500"}`} />
                         <span className={`text-[9px] font-bold ${engine === "musetalk" ? "text-blue-300" : "text-gray-400"}`}>Standard</span>
                       </div>
-                      <p className="text-[7px] text-gray-500">{window.__t('aiLiveCreatorPage_c8ac37', window.__t('aiLiveCreatorPage_c8ac37', 'リップシンク'))}</p>
+                      <p className="text-[7px] text-gray-500">{window.__t('aiLiveCreatorPage_c8ac37', 'リップシンク')}</p>
                     </button>
                   </div>
                 </div>
@@ -1360,26 +1360,26 @@ export default function AiLiveCreatorPage() {
                         }`}
                       >
                         {obsUrlCopied ? (
-                          <><CheckCircle className="w-3 h-3" />{window.__t('scriptGen_copied', window.__t('scriptGen_copied', 'コピー済み'))}</>
+                          <><CheckCircle className="w-3 h-3" />{window.__t('scriptGen_copied', 'コピー済み')}</>
                         ) : (
-                          <><Copy className="w-3 h-3" />{window.__t('aiLiveCreatorPage_8e3a82', window.__t('aiLiveCreatorPage_8e3a82', 'OBS URLをコピー'))}</>
+                          <><Copy className="w-3 h-3" />{window.__t('aiLiveCreatorPage_8e3a82', 'OBS URLをコピー')}</>
                         )}
                       </button>
                       <button
                         onClick={handleObsPopout}
                         className="py-2 px-3 rounded-lg text-[10px] font-medium flex items-center justify-center gap-1.5 transition-all border bg-purple-500/10 border-purple-500/30 text-purple-300 hover:bg-purple-500/20"
-                        title=={window.__t('aiLiveCreatorPage_cea581', window.__t('aiLiveCreatorPage_cea581', '別ウィンドウで開く（OBS Window Capture用）'))}
+                        title={window.__t('aiLiveCreatorPage_cea581', '別ウィンドウで開く（OBS Window Capture用）')}
                       >
                         <ExternalLink className="w-3 h-3" />Pop-out
                       </button>
                     </div>
                     <div className="mt-2 p-2 bg-gray-900/50 rounded-lg border border-gray-700/30">
-                      <p className="text-[8px] text-gray-500 font-medium mb-1">{window.__t('aiLiveCreatorPage_a4a1ad', window.__t('aiLiveCreatorPage_a4a1ad', 'OBS設定ガイド:'))}</p>
+                      <p className="text-[8px] text-gray-500 font-medium mb-1">{window.__t('aiLiveCreatorPage_a4a1ad', 'OBS設定ガイド:')}</p>
                       <ol className="text-[8px] text-gray-500 space-y-0.5 list-decimal list-inside">
-                        <li>{window.__t('aiLiveCreatorPage_f784ed', window.__t('aiLiveCreatorPage_f784ed', 'OBSで「ソース追加」→「ブラウザ」を選択'))}</li>
-                        <li>{window.__t('aiLiveCreatorPage_ef0458', window.__t('aiLiveCreatorPage_ef0458', '上の「OBS URLをコピー」で取得したURLを貼り付け'))}</li>
-                        <li>{window.__t('aiLiveCreatorPage_19e452', window.__t('aiLiveCreatorPage_19e452', '幅: 1080、高さ: 1920に設定'))}</li>
-                        <li>{window.__t('aiLiveCreatorPage_8c3f4e', window.__t('aiLiveCreatorPage_8c3f4e', 'クロマキーで緑背景を透過させる（任意）'))}</li>
+                        <li>{window.__t('aiLiveCreatorPage_f784ed', 'OBSで「ソース追加」→「ブラウザ」を選択')}</li>
+                        <li>{window.__t('aiLiveCreatorPage_ef0458', '上の「OBS URLをコピー」で取得したURLを貼り付け')}</li>
+                        <li>{window.__t('aiLiveCreatorPage_19e452', '幅: 1080、高さ: 1920に設定')}</li>
+                        <li>{window.__t('aiLiveCreatorPage_8c3f4e', 'クロマキーで緑背景を透過させる（任意）')}</li>
                       </ol>
                       <p className="text-[8px] text-gray-500 mt-1">
                         または「Pop-out」で別ウィンドウに開き、OBSの「ウィンドウキャプチャ」で取り込めます。
@@ -1409,7 +1409,7 @@ export default function AiLiveCreatorPage() {
                     <div className="mb-2 p-2 bg-purple-900/20 border border-purple-500/30 rounded-lg">
                       <div className="flex items-center gap-2 mb-1.5">
                         <Sparkles className="w-3 h-3 text-purple-400" />
-                        <span className="text-[10px] font-medium text-purple-300">{window.__t('aiLiveCreatorPage_73b1c6', window.__t('aiLiveCreatorPage_73b1c6', 'AI台本生成'))}</span>
+                        <span className="text-[10px] font-medium text-purple-300">{window.__t('aiLiveCreatorPage_73b1c6', 'AI台本生成')}</span>
                       </div>
                       <div className="flex gap-1.5">
                         <select
@@ -1427,9 +1427,9 @@ export default function AiLiveCreatorPage() {
                           className="px-3 py-1 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-700 disabled:text-gray-500 text-white text-[10px] font-medium rounded flex items-center gap-1 transition-colors"
                         >
                           {isGeneratingAiScript ? (
-                            <><Loader2 className="w-3 h-3 animate-spin" />{window.__t('script_generating', window.__t('script_generating', '生成中...'))}</>
+                            <><Loader2 className="w-3 h-3 animate-spin" />{window.__t('script_generating', '生成中...')}</>
                           ) : (
-                            <><Sparkles className="w-3 h-3" />{window.__t('aiLiveCreatorPage_72df0f', window.__t('aiLiveCreatorPage_72df0f', 'ペルソナで生成'))}</>
+                            <><Sparkles className="w-3 h-3" />{window.__t('aiLiveCreatorPage_72df0f', 'ペルソナで生成')}</>
                           )}
                         </button>
                       </div>
@@ -1438,7 +1438,7 @@ export default function AiLiveCreatorPage() {
                   <textarea
                     value={scriptText}
                     onChange={(e) => setScriptText(e.target.value)}
-                    placeholder=={window.__t('aiLiveCreatorPage_35d2ed', window.__t('aiLiveCreatorPage_35d2ed', 'テキストを入力、または上のAI台本生成で自動作成...'))}
+                    placeholder={window.__t('aiLiveCreatorPage_35d2ed', 'テキストを入力、または上のAI台本生成で自動作成...')}
                     rows={4}
                     maxLength={5000}
                     className="w-full px-2.5 py-2 bg-gray-900/50 border border-gray-700/30 rounded-lg text-xs text-gray-200 placeholder-gray-600 focus:ring-1 focus:ring-purple-500/50 focus:border-purple-500/50 outline-none resize-none"
@@ -1466,9 +1466,9 @@ export default function AiLiveCreatorPage() {
                       onChange={(e) => setLanguageCode(e.target.value)}
                       className="px-2 py-1.5 bg-gray-900/50 border border-gray-700/30 rounded-lg text-[10px] text-gray-300 outline-none"
                     >
-                      <option value="ja">{window.__t('language_japanese', window.__t('language_japanese', '日本語'))}</option>
+                      <option value="ja">{window.__t('language_japanese', '日本語')}</option>
                       <option value="en">English</option>
-                      <option value="zh">{window.__t('scriptGen_langZh', window.__t('scriptGen_langZh', '中文'))}</option>
+                      <option value="zh">{window.__t('scriptGen_langZh', '中文')}</option>
                       <option value="ko">한국어</option>
                     </select>
                   </div>
@@ -1635,7 +1635,7 @@ export default function AiLiveCreatorPage() {
                       <Crown className={`w-5 h-5 ${engine === "heygen" ? "text-amber-600" : "text-gray-400"}`} />
                       <span className={`text-sm font-bold ${engine === "heygen" ? "text-amber-700" : "text-gray-700"}`}>HeyGen</span>
                     </div>
-                    <p className="text-[11px] text-gray-500 leading-relaxed">{window.__t('aiLiveCreatorPage_8a1181', window.__t('aiLiveCreatorPage_8a1181', 'Arcads級の高品質。クラウドレンダリング。'))}</p>
+                    <p className="text-[11px] text-gray-500 leading-relaxed">{window.__t('aiLiveCreatorPage_8a1181', 'Arcads級の高品質。クラウドレンダリング。')}</p>
                     <div className="mt-2 flex flex-wrap gap-1">
                       <span className="text-[9px] bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded-full">Cloud</span>
                       <span className="text-[9px] bg-green-100 text-green-600 px-1.5 py-0.5 rounded-full">No GPU</span>
@@ -1655,7 +1655,7 @@ export default function AiLiveCreatorPage() {
                       <span className={`text-sm font-bold ${engine === "realtime" ? "text-green-700" : "text-gray-700"}`}>Realtime</span>
                       <span className="text-[9px] bg-gradient-to-r from-green-500 to-emerald-500 text-white px-1.5 py-0.5 rounded-full font-medium">LIVE</span>
                     </div>
-                    <p className="text-[11px] text-gray-500 leading-relaxed">{window.__t('aiLiveCreatorPage_bc0116', window.__t('aiLiveCreatorPage_bc0116', 'リアルタイム。文字を打つと即座に嗋る。'))}</p>
+                    <p className="text-[11px] text-gray-500 leading-relaxed">{window.__t('aiLiveCreatorPage_bc0116', 'リアルタイム。文字を打つと即座に嗋る。')}</p>
                     <div className="mt-2 flex flex-wrap gap-1">
                       <span className="text-[9px] bg-green-100 text-green-600 px-1.5 py-0.5 rounded-full">WebRTC</span>
                       <span className="text-[9px] bg-green-100 text-green-600 px-1.5 py-0.5 rounded-full">Instant</span>
@@ -1675,7 +1675,7 @@ export default function AiLiveCreatorPage() {
                       <Sparkles className={`w-5 h-5 ${engine === "imtalker" ? "text-purple-600" : "text-gray-400"}`} />
                       <span className={`text-sm font-bold ${engine === "imtalker" ? "text-purple-700" : "text-gray-700"}`}>Premium</span>
                     </div>
-                    <p className="text-[11px] text-gray-500 leading-relaxed">{window.__t('aiLiveCreatorPage_49db20', window.__t('aiLiveCreatorPage_49db20', 'フル表情アニメーション。頭の動き・まばたき・表情変化。'))}</p>
+                    <p className="text-[11px] text-gray-500 leading-relaxed">{window.__t('aiLiveCreatorPage_49db20', 'フル表情アニメーション。頭の動き・まばたき・表情変化。')}</p>
                     <div className="mt-2 flex flex-wrap gap-1">
                       <span className="text-[9px] bg-purple-100 text-purple-600 px-1.5 py-0.5 rounded-full">Head motion</span>
                       <span className="text-[9px] bg-purple-100 text-purple-600 px-1.5 py-0.5 rounded-full">Expressions</span>
@@ -1695,7 +1695,7 @@ export default function AiLiveCreatorPage() {
                       <Zap className={`w-5 h-5 ${engine === "musetalk" ? "text-blue-600" : "text-gray-400"}`} />
                       <span className={`text-sm font-bold ${engine === "musetalk" ? "text-blue-700" : "text-gray-700"}`}>Standard</span>
                     </div>
-                    <p className="text-[11px] text-gray-500 leading-relaxed">{window.__t('aiLiveCreatorPage_f11538', window.__t('aiLiveCreatorPage_f11538', 'リップシンクのみ。高速・安定。口元だけが動きます。'))}</p>
+                    <p className="text-[11px] text-gray-500 leading-relaxed">{window.__t('aiLiveCreatorPage_f11538', 'リップシンクのみ。高速・安定。口元だけが動きます。')}</p>
                     <div className="mt-2 flex flex-wrap gap-1">
                       <span className="text-[9px] bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded-full">Lip-sync</span>
                       <span className="text-[9px] bg-green-100 text-green-600 px-1.5 py-0.5 rounded-full">Fast</span>
@@ -1789,13 +1789,13 @@ export default function AiLiveCreatorPage() {
                     {portraitType === "video" ? (
                       <>
                         <Video className="w-10 h-10 text-gray-300 mx-auto mb-2" />
-                        <p className="text-sm text-gray-500">{window.__t('aiLiveCreatorPage_39e020', window.__t('aiLiveCreatorPage_39e020', 'クリックして9:16動画をアップロード'))}</p>
-                        <p className="text-xs text-gray-400 mt-1">{window.__t('aiLiveCreatorPage_06b455', window.__t('aiLiveCreatorPage_06b455', 'MP4, MOV (max 200MB) • 10-30秒推奨'))}</p>
+                        <p className="text-sm text-gray-500">{window.__t('aiLiveCreatorPage_39e020', 'クリックして9:16動画をアップロード')}</p>
+                        <p className="text-xs text-gray-400 mt-1">{window.__t('aiLiveCreatorPage_06b455', 'MP4, MOV (max 200MB) • 10-30秒推奨')}</p>
                       </>
                     ) : (
                       <>
                         <ImageIcon className="w-10 h-10 text-gray-300 mx-auto mb-2" />
-                        <p className="text-sm text-gray-500">{window.__t('aiLiveCreatorPage_ed3263', window.__t('aiLiveCreatorPage_ed3263', 'クリックして胖像画をアップロード'))}</p>
+                        <p className="text-sm text-gray-500">{window.__t('aiLiveCreatorPage_ed3263', 'クリックして胖像画をアップロード')}</p>
                         <p className="text-xs text-gray-400 mt-1">JPEG, PNG (max 20MB)</p>
                       </>
                     )}
@@ -1818,7 +1818,7 @@ export default function AiLiveCreatorPage() {
                   >
                     <Type className="w-4 h-4" />
                     テキスト入力
-                    <span className="text-[10px] bg-purple-100 text-purple-600 px-1.5 py-0.5 rounded-full">{window.__t('aiLiveCreatorPage_f73ce8', window.__t('aiLiveCreatorPage_f73ce8', 'AI音声'))}</span>
+                    <span className="text-[10px] bg-purple-100 text-purple-600 px-1.5 py-0.5 rounded-full">{window.__t('aiLiveCreatorPage_f73ce8', 'AI音声')}</span>
                   </button>
                   <button
                     onClick={() => setInputMode("audio")}
@@ -1837,23 +1837,23 @@ export default function AiLiveCreatorPage() {
                   {inputMode === "text" ? (
                     <div className="space-y-4">
                       <div>
-                        <label className="text-xs font-medium text-gray-600 block mb-1.5">{window.__t('aiLiveCreatorPage_012b1c', window.__t('aiLiveCreatorPage_012b1c', '台本テキスト'))}</label>
+                        <label className="text-xs font-medium text-gray-600 block mb-1.5">{window.__t('aiLiveCreatorPage_012b1c', '台本テキスト')}</label>
                         <textarea
                           value={scriptText}
                           onChange={(e) => setScriptText(e.target.value)}
-                          placeholder=={window.__t('aiLiveCreatorPage_ae0c84', window.__t('aiLiveCreatorPage_ae0c84', 'ここにテキストを入力してください。AIが自動的に音声を生成し、肖像画がこのテキストを話す動画を作成します。'))}
+                          placeholder={window.__t('aiLiveCreatorPage_ae0c84', 'ここにテキストを入力してください。AIが自動的に音声を生成し、肖像画がこのテキストを話す動画を作成します。')}
                           rows={6}
                           maxLength={5000}
                           className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-300 focus:border-purple-400 outline-none resize-none"
                         />
                         <div className="flex justify-between mt-1">
-                          <p className="text-[10px] text-gray-400">{window.__t('aiLiveCreatorPage_33b70b', window.__t('aiLiveCreatorPage_33b70b', 'ElevenLabs AIが自動的に音声を生成します'))}</p>
+                          <p className="text-[10px] text-gray-400">{window.__t('aiLiveCreatorPage_33b70b', 'ElevenLabs AIが自動的に音声を生成します')}</p>
                           <p className="text-[10px] text-gray-400">{scriptText.length}/5000</p>
                         </div>
                       </div>
                       <div className="grid grid-cols-2 gap-4">
                         <div>
-                          <label className="text-xs font-medium text-gray-600 block mb-1.5">{window.__t('aiLiveCreatorPage_9566d7', window.__t('aiLiveCreatorPage_9566d7', '音声 (Voice)'))}</label>
+                          <label className="text-xs font-medium text-gray-600 block mb-1.5">{window.__t('aiLiveCreatorPage_9566d7', '音声 (Voice)')}</label>
                           {loadingVoices ? (
                             <div className="flex items-center gap-2 text-xs text-gray-400 py-2">
                               <Loader2 className="w-3 h-3 animate-spin" /> Loading voices...
@@ -1874,22 +1874,22 @@ export default function AiLiveCreatorPage() {
                           )}
                         </div>
                         <div>
-                          <label className="text-xs font-medium text-gray-600 block mb-1.5">{window.__t('aiLiveCreatorPage_382a29', window.__t('aiLiveCreatorPage_382a29', '言語 (Language)'))}</label>
+                          <label className="text-xs font-medium text-gray-600 block mb-1.5">{window.__t('aiLiveCreatorPage_382a29', '言語 (Language)')}</label>
                           <select
                             value={languageCode}
                             onChange={(e) => setLanguageCode(e.target.value)}
                             className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-300 focus:border-purple-400 outline-none bg-white"
                           >
-                            <option value="ja">{window.__t('language_japanese', window.__t('language_japanese', '日本語'))}</option>
+                            <option value="ja">{window.__t('language_japanese', '日本語')}</option>
                             <option value="en">English</option>
-                            <option value="zh">{window.__t('scriptGen_langZh', window.__t('scriptGen_langZh', '中文'))}</option>
+                            <option value="zh">{window.__t('scriptGen_langZh', '中文')}</option>
                             <option value="ko">한국어</option>
                           </select>
                         </div>
                       </div>
                       {ttsInfo && (
                         <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs">
-                          <p className="text-blue-700 font-medium">{window.__t('aiLiveCreatorPage_5dc280', window.__t('aiLiveCreatorPage_5dc280', 'AI音声生成完了'))}</p>
+                          <p className="text-blue-700 font-medium">{window.__t('aiLiveCreatorPage_5dc280', 'AI音声生成完了')}</p>
                           <p className="text-blue-600 mt-1">音声長: {(ttsInfo.duration_ms / 1000).toFixed(1)}秒</p>
                         </div>
                       )}
@@ -1931,7 +1931,7 @@ export default function AiLiveCreatorPage() {
                           className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center cursor-pointer hover:border-purple-400 hover:bg-purple-50/30 transition-all"
                         >
                           <Mic className="w-10 h-10 text-gray-300 mx-auto mb-2" />
-                          <p className="text-sm text-gray-500">{window.__t('aiLiveCreatorPage_ee2255', window.__t('aiLiveCreatorPage_ee2255', 'クリックして音声ファイルをアップロード'))}</p>
+                          <p className="text-sm text-gray-500">{window.__t('aiLiveCreatorPage_ee2255', 'クリックして音声ファイルをアップロード')}</p>
                           <p className="text-xs text-gray-400 mt-1">WAV, MP3, M4A (max 50MB)</p>
                         </div>
                       )}
@@ -1964,19 +1964,19 @@ export default function AiLiveCreatorPage() {
                           <label className="text-xs font-medium text-gray-600 block mb-1">Audio CFG Scale</label>
                           <input type="number" value={aCfgScale} onChange={(e) => setACfgScale(Number(e.target.value))} min={0.5} max={5.0} step={0.1}
                             className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-300 focus:border-purple-400 outline-none" />
-                          <p className="text-[10px] text-gray-400 mt-1">{window.__t('aiLiveCreatorPage_4e7c99', window.__t('aiLiveCreatorPage_4e7c99', '表現力の強さ (0.5-5.0, 推奨: 1.5)'))}</p>
+                          <p className="text-[10px] text-gray-400 mt-1">{window.__t('aiLiveCreatorPage_4e7c99', '表現力の強さ (0.5-5.0, 推奨: 1.5)')}</p>
                         </div>
                         <div>
                           <label className="text-xs font-medium text-gray-600 block mb-1">NFE Steps</label>
                           <input type="number" value={nfe} onChange={(e) => setNfe(Number(e.target.value))} min={5} max={64}
                             className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-300 focus:border-purple-400 outline-none" />
-                          <p className="text-[10px] text-gray-400 mt-1">{window.__t('aiLiveCreatorPage_0ac324', window.__t('aiLiveCreatorPage_0ac324', '品質ステップ数 (5-64, 推奨: 32)'))}</p>
+                          <p className="text-[10px] text-gray-400 mt-1">{window.__t('aiLiveCreatorPage_0ac324', '品質ステップ数 (5-64, 推奨: 32)')}</p>
                         </div>
                         <div>
                           <label className="text-xs font-medium text-gray-600 block mb-1">Output FPS</label>
                           <input type="number" value={outputFps} onChange={(e) => setOutputFps(Number(e.target.value))} min={15} max={60}
                             className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-300 focus:border-purple-400 outline-none" />
-                          <p className="text-[10px] text-gray-400 mt-1">{window.__t('aiLiveCreatorPage_9c883c', window.__t('aiLiveCreatorPage_9c883c', '動画フレームレート (15-60)'))}</p>
+                          <p className="text-[10px] text-gray-400 mt-1">{window.__t('aiLiveCreatorPage_9c883c', '動画フレームレート (15-60)')}</p>
                         </div>
                         <div className="flex items-center gap-3 pt-4">
                           <label className="relative inline-flex items-center cursor-pointer">
@@ -1985,7 +1985,7 @@ export default function AiLiveCreatorPage() {
                           </label>
                           <div>
                             <p className="text-xs font-medium text-gray-600">Auto Crop</p>
-                            <p className="text-[10px] text-gray-400">{window.__t('aiLiveCreatorPage_d01d98', window.__t('aiLiveCreatorPage_d01d98', '顔領域を自動クロップ'))}</p>
+                            <p className="text-[10px] text-gray-400">{window.__t('aiLiveCreatorPage_d01d98', '顔領域を自動クロップ')}</p>
                           </div>
                         </div>
                       </div>
@@ -2052,17 +2052,17 @@ export default function AiLiveCreatorPage() {
                 <div className="mt-4 space-y-2">
                   <div className="flex items-center gap-2 text-xs">
                     {portraitUrl ? <CheckCircle className="w-3.5 h-3.5 text-green-500" /> : <div className="w-3.5 h-3.5 rounded-full border-2 border-gray-300" />}
-                    <span className={portraitUrl ? "text-green-700" : "text-gray-500"}>{window.__t('aiLiveCreatorPage_6eb732', window.__t('aiLiveCreatorPage_6eb732', '肖像画アップロード済み'))}</span>
+                    <span className={portraitUrl ? "text-green-700" : "text-gray-500"}>{window.__t('aiLiveCreatorPage_6eb732', '肖像画アップロード済み')}</span>
                   </div>
                   {inputMode === "text" ? (
                     <div className="flex items-center gap-2 text-xs">
                       {scriptText.trim() ? <CheckCircle className="w-3.5 h-3.5 text-green-500" /> : <div className="w-3.5 h-3.5 rounded-full border-2 border-gray-300" />}
-                      <span className={scriptText.trim() ? "text-green-700" : "text-gray-500"}>{window.__t('aiLiveCreatorPage_2ee885', window.__t('aiLiveCreatorPage_2ee885', 'テキスト入力済み'))}</span>
+                      <span className={scriptText.trim() ? "text-green-700" : "text-gray-500"}>{window.__t('aiLiveCreatorPage_2ee885', 'テキスト入力済み')}</span>
                     </div>
                   ) : (
                     <div className="flex items-center gap-2 text-xs">
                       {audioUrl ? <CheckCircle className="w-3.5 h-3.5 text-green-500" /> : <div className="w-3.5 h-3.5 rounded-full border-2 border-gray-300" />}
-                      <span className={audioUrl ? "text-green-700" : "text-gray-500"}>{window.__t('aiLiveCreatorPage_8104ae', window.__t('aiLiveCreatorPage_8104ae', '音声アップロード済み'))}</span>
+                      <span className={audioUrl ? "text-green-700" : "text-gray-500"}>{window.__t('aiLiveCreatorPage_8104ae', '音声アップロード済み')}</span>
                     </div>
                   )}
                   <div className="flex items-center gap-2 text-xs">

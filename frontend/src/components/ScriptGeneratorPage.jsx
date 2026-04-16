@@ -442,8 +442,8 @@ export default function ScriptGeneratorPage() {
               <FileText className="w-4 h-4 text-white" />
             </div>
             <div>
-              <h1 className="text-lg font-bold text-gray-900">{window.__t('sidebar_scriptGenerator', window.__t('sidebar_scriptGenerator', '売れる台本'))}</h1>
-              <p className="text-xs text-gray-500">{window.__t('scriptGeneratorPage_dfe294', window.__t('scriptGeneratorPage_dfe294', '実績データに基づくライブコマース台本生成AI'))}</p>
+              <h1 className="text-lg font-bold text-gray-900">{window.__t('sidebar_scriptGenerator', '売れる台本')}</h1>
+              <p className="text-xs text-gray-500">{window.__t('scriptGeneratorPage_dfe294', '実績データに基づくライブコマース台本生成AI')}</p>
             </div>
           </div>
           {patterns && (
@@ -470,7 +470,7 @@ export default function ScriptGeneratorPage() {
                 type="text"
                 value={productName}
                 onChange={(e) => setProductName(e.target.value)}
-                placeholder=={window.__t('scriptGeneratorPage_7cb419', window.__t('scriptGeneratorPage_7cb419', '例: KYOGOKU ケラチンシャンプー'))}
+                placeholder={window.__t('scriptGeneratorPage_7cb419', '例: KYOGOKU ケラチンシャンプー')}
                 className="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent"
               />
             </div>
@@ -478,9 +478,9 @@ export default function ScriptGeneratorPage() {
             {/* Product Images (Multiple) */}
             <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
               <label className="block text-sm font-semibold text-gray-800">
-                商品写真 <span className="text-gray-400 font-normal">{window.__t('scriptGeneratorPage_3ff100', window.__t('scriptGeneratorPage_3ff100', '(任意・複数可)'))}</span>
+                商品写真 <span className="text-gray-400 font-normal">{window.__t('scriptGeneratorPage_3ff100', '(任意・複数可)')}</span>
               </label>
-              <p className="text-xs text-gray-500">{window.__t('scriptGeneratorPage_df806d', window.__t('scriptGeneratorPage_df806d', 'AIが商品の特徴を読み取り、台本に反映します（最大10枚）'))}</p>
+              <p className="text-xs text-gray-500">{window.__t('scriptGeneratorPage_df806d', 'AIが商品の特徴を読み取り、台本に反映します（最大10枚）')}</p>
 
               {/* Image Grid */}
               <div className="grid grid-cols-3 gap-2">
@@ -520,7 +520,7 @@ export default function ScriptGeneratorPage() {
                 {imageFiles.length < 10 && (
                   <label className="aspect-square flex flex-col items-center justify-center border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-orange-400 hover:bg-orange-50 transition-colors">
                     <Plus className="w-6 h-6 text-gray-400 mb-0.5" />
-                    <span className="text-[10px] text-gray-400">{window.__t('analytics_add', window.__t('analytics_add', '追加'))}</span>
+                    <span className="text-[10px] text-gray-400">{window.__t('analytics_add', '追加')}</span>
                     <input
                       type="file"
                       accept="image/*"
@@ -550,7 +550,7 @@ export default function ScriptGeneratorPage() {
 
             {/* Product Details - Price Split */}
             <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
-              <label className="block text-sm font-semibold text-gray-800">{window.__t('scriptGeneratorPage_1bf863', window.__t('scriptGeneratorPage_1bf863', '商品詳細'))}</label>
+              <label className="block text-sm font-semibold text-gray-800">{window.__t('scriptGeneratorPage_1bf863', '商品詳細')}</label>
               <div className="space-y-2">
                 {/* Price fields - side by side */}
                 <div className="grid grid-cols-2 gap-2">
@@ -562,7 +562,7 @@ export default function ScriptGeneratorPage() {
                       type="text"
                       value={originalPrice}
                       onChange={(e) => setOriginalPrice(e.target.value)}
-                      placeholder=={window.__t('scriptGeneratorPage_fc2ec3', window.__t('scriptGeneratorPage_fc2ec3', '例: ¥5,980'))}
+                      placeholder={window.__t('scriptGeneratorPage_fc2ec3', '例: ¥5,980')}
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent"
                     />
                   </div>
@@ -574,7 +574,7 @@ export default function ScriptGeneratorPage() {
                       type="text"
                       value={discountedPrice}
                       onChange={(e) => setDiscountedPrice(e.target.value)}
-                      placeholder=={window.__t('scriptGeneratorPage_0c5cad', window.__t('scriptGeneratorPage_0c5cad', '例: ¥3,980'))}
+                      placeholder={window.__t('scriptGeneratorPage_0c5cad', '例: ¥3,980')}
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent"
                     />
                   </div>
@@ -595,7 +595,7 @@ export default function ScriptGeneratorPage() {
                 <textarea
                   value={productDescription}
                   onChange={(e) => setProductDescription(e.target.value)}
-                  placeholder=={window.__t('scriptGeneratorPage_0d9a33', window.__t('scriptGeneratorPage_0d9a33', '商品の特徴・説明（任意）'))}
+                  placeholder={window.__t('scriptGeneratorPage_0d9a33', '商品の特徴・説明（任意）')}
                   rows={3}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent resize-none"
                 />
@@ -603,7 +603,7 @@ export default function ScriptGeneratorPage() {
                   type="text"
                   value={targetAudience}
                   onChange={(e) => setTargetAudience(e.target.value)}
-                  placeholder=={window.__t('scriptGeneratorPage_2e2c42', window.__t('scriptGeneratorPage_2e2c42', 'ターゲット層（例: 30代女性、髪のダメージが気になる方）'))}
+                  placeholder={window.__t('scriptGeneratorPage_2e2c42', 'ターゲット層（例: 30代女性、髪のダメージが気になる方）')}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent"
                 />
               </div>
@@ -613,13 +613,13 @@ export default function ScriptGeneratorPage() {
             <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
               <label className="block text-sm font-semibold text-gray-800 flex items-center gap-1.5">
                 <Gift className="w-4 h-4 text-orange-500" />
-                特典 <span className="text-gray-400 font-normal">{window.__t('scriptGeneratorPage_8d9b0b', window.__t('scriptGeneratorPage_8d9b0b', '(任意)'))}</span>
+                特典 <span className="text-gray-400 font-normal">{window.__t('scriptGeneratorPage_8d9b0b', '(任意)')}</span>
               </label>
-              <p className="text-xs text-gray-500">{window.__t('scriptGeneratorPage_8ac449', window.__t('scriptGeneratorPage_8ac449', '配信限定の特典・おまけ・キャンペーン情報'))}</p>
+              <p className="text-xs text-gray-500">{window.__t('scriptGeneratorPage_8ac449', '配信限定の特典・おまけ・キャンペーン情報')}</p>
               <textarea
                 value={benefits}
                 onChange={(e) => setBenefits(e.target.value)}
-                placeholder=={window.__t('scriptGeneratorPage_af44d3', window.__t('scriptGeneratorPage_af44d3', '例: 配信限定20%OFF、2個セットで送料無料、先着100名にサンプルプレゼント'))}
+                placeholder={window.__t('scriptGeneratorPage_af44d3', '例: 配信限定20%OFF、2個セットで送料無料、先着100名にサンプルプレゼント')}
                 rows={2}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent resize-none"
               />
@@ -627,29 +627,29 @@ export default function ScriptGeneratorPage() {
 
             {/* Settings */}
             <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
-              <label className="block text-sm font-semibold text-gray-800">{window.__t('scriptGen_scriptSettingsTitle', window.__t('scriptGen_scriptSettingsTitle', '台本設定'))}</label>
+              <label className="block text-sm font-semibold text-gray-800">{window.__t('scriptGen_scriptSettingsTitle', '台本設定')}</label>
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="text-xs text-gray-500 mb-1 block">{window.__t('scriptGen_toneLabel', window.__t('scriptGen_toneLabel', 'トーン'))}</label>
+                  <label className="text-xs text-gray-500 mb-1 block">{window.__t('scriptGen_toneLabel', 'トーン')}</label>
                   <select
                     value={tone}
                     onChange={(e) => setTone(e.target.value)}
                     className="w-full px-2 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
                   >
-                    <option value="professional_friendly">{window.__t('scriptGeneratorPage_ea2102', window.__t('scriptGeneratorPage_ea2102', 'プロ＆親しみ'))}</option>
-                    <option value="energetic">{window.__t('autoVideoPage_3f558c', window.__t('autoVideoPage_3f558c', 'エネルギッシュ'))}</option>
-                    <option value="calm">{window.__t('scriptGeneratorPage_f16566', window.__t('scriptGeneratorPage_f16566', '落ち着き'))}</option>
+                    <option value="professional_friendly">{window.__t('scriptGeneratorPage_ea2102', 'プロ＆親しみ')}</option>
+                    <option value="energetic">{window.__t('autoVideoPage_3f558c', 'エネルギッシュ')}</option>
+                    <option value="calm">{window.__t('scriptGeneratorPage_f16566', '落ち着き')}</option>
                   </select>
                 </div>
                 <div>
-                  <label className="text-xs text-gray-500 mb-1 block">{window.__t('script_language', window.__t('script_language', '言語'))}</label>
+                  <label className="text-xs text-gray-500 mb-1 block">{window.__t('script_language', '言語')}</label>
                   <select
                     value={language}
                     onChange={(e) => setLanguage(e.target.value)}
                     className="w-full px-2 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
                   >
-                    <option value="ja">{window.__t('language_japanese', window.__t('language_japanese', '日本語'))}</option>
-                    <option value="zh">{window.__t('scriptGen_langZh', window.__t('scriptGen_langZh', '中文'))}</option>
+                    <option value="ja">{window.__t('language_japanese', '日本語')}</option>
+                    <option value="zh">{window.__t('scriptGen_langZh', '中文')}</option>
                     <option value="en">English</option>
                   </select>
                 </div>
@@ -667,9 +667,9 @@ export default function ScriptGeneratorPage() {
                   className="w-full accent-orange-500"
                 />
                 <div className="flex justify-between text-xs text-gray-400">
-                  <span>{window.__t('scriptGeneratorPage_de8203', window.__t('scriptGeneratorPage_de8203', '1分'))}</span>
-                  <span>{window.__t('scriptGeneratorPage_a872fb', window.__t('scriptGeneratorPage_a872fb', '30分'))}</span>
-                  <span>{window.__t('scriptGeneratorPage_fa1f81', window.__t('scriptGeneratorPage_fa1f81', '60分'))}</span>
+                  <span>{window.__t('scriptGeneratorPage_de8203', '1分')}</span>
+                  <span>{window.__t('scriptGeneratorPage_a872fb', '30分')}</span>
+                  <span>{window.__t('scriptGeneratorPage_fa1f81', '60分')}</span>
                 </div>
               </div>
             </div>
@@ -677,12 +677,12 @@ export default function ScriptGeneratorPage() {
             {/* Additional Instructions */}
             <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
               <label className="block text-sm font-semibold text-gray-800">
-                追加指示 <span className="text-gray-400 font-normal">{window.__t('scriptGeneratorPage_8d9b0b', window.__t('scriptGeneratorPage_8d9b0b', '(任意)'))}</span>
+                追加指示 <span className="text-gray-400 font-normal">{window.__t('scriptGeneratorPage_8d9b0b', '(任意)')}</span>
               </label>
               <textarea
                 value={additionalInstructions}
                 onChange={(e) => setAdditionalInstructions(e.target.value)}
-                placeholder=={window.__t('scriptGeneratorPage_0b6e4a', window.__t('scriptGeneratorPage_0b6e4a', '例: 最初に自己紹介を入れてほしい、特定のキャンペーンに触れてほしい等'))}
+                placeholder={window.__t('scriptGeneratorPage_0b6e4a', '例: 最初に自己紹介を入れてほしい、特定のキャンペーンに触れてほしい等')}
                 rows={2}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent resize-none"
               />
@@ -791,7 +791,7 @@ export default function ScriptGeneratorPage() {
               >
                 <div className="flex items-center gap-2">
                   <History className="w-4 h-4 text-indigo-500" />
-                  <span className="text-sm font-semibold text-gray-800">{window.__t('autoVideoPage_0c10ff', window.__t('autoVideoPage_0c10ff', '生成履歴'))}</span>
+                  <span className="text-sm font-semibold text-gray-800">{window.__t('autoVideoPage_0c10ff', '生成履歴')}</span>
                   {historyTotal > 0 && (
                     <span className="text-xs text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded-full">
                       {historyTotal}件
@@ -869,7 +869,7 @@ export default function ScriptGeneratorPage() {
               >
                 <div className="flex items-center gap-2">
                   <Zap className="w-4 h-4 text-orange-500" />
-                  <span className="text-sm font-semibold text-gray-800">{window.__t('scriptGeneratorPage_de2238', window.__t('scriptGeneratorPage_de2238', '学習済み勝ちパターン'))}</span>
+                  <span className="text-sm font-semibold text-gray-800">{window.__t('scriptGeneratorPage_de2238', '学習済み勝ちパターン')}</span>
                   {patternsLoading && <Loader2 className="w-3 h-3 animate-spin text-gray-400" />}
                 </div>
                 {showPatterns ? (
@@ -942,7 +942,7 @@ export default function ScriptGeneratorPage() {
                 <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <FileText className="w-4 h-4 text-orange-500" />
-                    <span className="text-sm font-semibold text-gray-800">{window.__t('scriptGen_generatedScriptTitle', window.__t('scriptGen_generatedScriptTitle', '生成された台本'))}</span>
+                    <span className="text-sm font-semibold text-gray-800">{window.__t('scriptGen_generatedScriptTitle', '生成された台本')}</span>
                   </div>
                   <div className="flex items-center gap-3">
                     <span className="text-xs text-gray-500">
@@ -955,7 +955,7 @@ export default function ScriptGeneratorPage() {
                       {copied ? (
                         <>
                           <Check className="w-3 h-3 text-green-600" />
-                          <span className="text-green-600">{window.__t('scriptGen_copied', window.__t('scriptGen_copied', 'コピー済み'))}</span>
+                          <span className="text-green-600">{window.__t('scriptGen_copied', 'コピー済み')}</span>
                         </>
                       ) : (
                         <>
@@ -1008,11 +1008,11 @@ export default function ScriptGeneratorPage() {
                 {/* Product Image Analysis Results */}
                 {generatedScript.product_analysis && (
                   <div className="px-4 py-3 border-t border-gray-100">
-                    <h4 className="text-xs font-semibold text-gray-500 mb-2">{window.__t('scriptGeneratorPage_dee910', window.__t('scriptGeneratorPage_dee910', 'AI商品画像分析'))}</h4>
+                    <h4 className="text-xs font-semibold text-gray-500 mb-2">{window.__t('scriptGeneratorPage_dee910', 'AI商品画像分析')}</h4>
                     <div className="grid grid-cols-2 gap-2 text-xs">
                       {generatedScript.product_analysis.product_type && (
                         <div className="bg-purple-50 px-2 py-1.5 rounded">
-                          <span className="text-purple-600 font-medium">{window.__t('scriptGeneratorPage_b9d1dd', window.__t('scriptGeneratorPage_b9d1dd', '種類:'))}</span>{" "}
+                          <span className="text-purple-600 font-medium">{window.__t('scriptGeneratorPage_b9d1dd', '種類:')}</span>{" "}
                           {generatedScript.product_analysis.product_type}
                         </div>
                       )}
@@ -1032,7 +1032,7 @@ export default function ScriptGeneratorPage() {
                   <div className="px-4 py-3 border-b border-gray-100">
                     <div className="flex items-center gap-2">
                       <Star className="w-4 h-4 text-yellow-500" />
-                      <span className="text-sm font-semibold text-gray-800">{window.__t('scriptGeneratorPage_8d0dcf', window.__t('scriptGeneratorPage_8d0dcf', 'この台本を評価'))}</span>
+                      <span className="text-sm font-semibold text-gray-800">{window.__t('scriptGeneratorPage_8d0dcf', 'この台本を評価')}</span>
                       {ratingSubmitted && (
                         <span className="ml-auto text-xs text-green-600 bg-green-50 px-2 py-0.5 rounded-full flex items-center gap-1">
                           <Check className="w-3 h-3" /> 評価送信済み
@@ -1048,7 +1048,7 @@ export default function ScriptGeneratorPage() {
                           <Star key={s} className={`w-6 h-6 ${s <= ratingValue ? 'text-yellow-400 fill-yellow-400' : 'text-gray-300'}`} />
                         ))}
                       </div>
-                      <p className="text-sm text-gray-600">{window.__t('scriptGeneratorPage_a2098d', window.__t('scriptGeneratorPage_a2098d', 'ご評価ありがとうございます！AIの学習に活用されます。'))}</p>
+                      <p className="text-sm text-gray-600">{window.__t('scriptGeneratorPage_a2098d', 'ご評価ありがとうございます！AIの学習に活用されます。')}</p>
                     </div>
                   ) : (
                     <div className="p-4 space-y-4">
@@ -1135,7 +1135,7 @@ export default function ScriptGeneratorPage() {
                           <textarea
                             value={ratingComment}
                             onChange={(e) => setRatingComment(e.target.value)}
-                            placeholder=={window.__t('commentPlaceholder', window.__t('commentPlaceholder', 'コメント（任意）'))}
+                            placeholder={window.__t('commentPlaceholder', 'コメント（任意）')}
                             className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm resize-none focus:outline-none focus:ring-2 focus:ring-orange-300 focus:border-orange-300"
                             rows={2}
                           />

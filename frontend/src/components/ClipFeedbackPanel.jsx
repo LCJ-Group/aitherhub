@@ -423,7 +423,7 @@ const ClipFeedbackPanel = ({
             type="text"
             value={salesNote}
             onChange={handleSalesNoteChange}
-            placeholder=={window.__t('auto_323', window.__t('auto_323', 'メモ（任意）: 例「商品紹介の瞬間」'))}
+            placeholder={window.__t('auto_323', 'メモ（任意）: 例「商品紹介の瞬間」')}
             style={{
               width: '100%', padding: '6px 10px', borderRadius: '6px',
               border: '1px solid #d1d5db', fontSize: '12px',
@@ -465,13 +465,13 @@ const ClipFeedbackPanel = ({
           }}
         >
           {submitting ? (
-            <>{window.__t('auto_330', window.__t('auto_330', '保存中...'))}</>
+            <>{window.__t('auto_330', '保存中...')}</>
           ) : dirty ? (
-            <>{window.__t('auto_360', window.__t('auto_360', '💾 評価を保存'))}</>
+            <>{window.__t('auto_360', '💾 評価を保存')}</>
           ) : submitted || salesSubmitted ? (
-            <>{window.__t('auto_305', window.__t('auto_305', '✅ 保存済み'))}</>
+            <>{window.__t('auto_305', '✅ 保存済み')}</>
           ) : (
-            <>{window.__t('auto_360', window.__t('auto_360', '💾 評価を保存'))}</>
+            <>{window.__t('auto_360', '💾 評価を保存')}</>
           )}
         </button>
       </div>

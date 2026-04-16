@@ -428,9 +428,9 @@ export default function FaceSwapPage() {
                     onChange={(e) => setQuality(e.target.value)}
                     className="w-full bg-[#1a1a24] border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-purple-500"
                   >
-                    <option value="fast">{window.__t('faceSwapPage_d834cc', window.__t('faceSwapPage_d834cc', '高速 (低品質)'))}</option>
-                    <option value="balanced">{window.__t('faceSwapPage_25eb09', window.__t('faceSwapPage_25eb09', 'バランス'))}</option>
-                    <option value="high">{window.__t('faceSwapPage_4c7249', window.__t('faceSwapPage_4c7249', '高品質 (推奨)'))}</option>
+                    <option value="fast">{window.__t('faceSwapPage_d834cc', '高速 (低品質)')}</option>
+                    <option value="balanced">{window.__t('faceSwapPage_25eb09', 'バランス')}</option>
+                    <option value="high">{window.__t('faceSwapPage_4c7249', '高品質 (推奨)')}</option>
                   </select>
                 </div>
 
@@ -704,7 +704,7 @@ export default function FaceSwapPage() {
                 <button
                   onClick={loadJobs}
                   className="p-1 hover:bg-gray-800 rounded transition"
-                  title=={window.__t('common_refresh', window.__t('common_refresh', '更新'))}
+                  title={window.__t('common_refresh', '更新')}
                 >
                   <RefreshCw
                     className={`w-4 h-4 text-gray-400 ${
@@ -745,7 +745,7 @@ export default function FaceSwapPage() {
                                 handleDownload(job.job_id);
                               }}
                               className="p-1 hover:bg-gray-700 rounded"
-                              title=={window.__t('clip_download', window.__t('clip_download', 'ダウンロード'))}
+                              title={window.__t('clip_download', 'ダウンロード')}
                             >
                               <Download className="w-3.5 h-3.5 text-green-400" />
                             </button>
@@ -756,7 +756,7 @@ export default function FaceSwapPage() {
                               handleDeleteJob(job.job_id);
                             }}
                             className="p-1 hover:bg-gray-700 rounded"
-                            title=={window.__t('sidebar_delete', window.__t('sidebar_delete', '削除'))}
+                            title={window.__t('sidebar_delete', '削除')}
                           >
                             <Trash2 className="w-3.5 h-3.5 text-gray-500 hover:text-red-400" />
                           </button>
@@ -793,15 +793,15 @@ export default function FaceSwapPage() {
 
             {/* Pipeline Info */}
             <div className="bg-[#12121a] rounded-xl border border-gray-800 p-4">
-              <h3 className="font-semibold text-sm mb-3">{window.__t('faceSwapPage_d7b1e1', window.__t('faceSwapPage_d7b1e1', 'パイプライン概要'))}</h3>
+              <h3 className="font-semibold text-sm mb-3">{window.__t('faceSwapPage_d7b1e1', 'パイプライン概要')}</h3>
               <div className="space-y-3 text-xs">
                 <div className="flex items-start gap-2">
                   <div className="w-6 h-6 rounded-full bg-purple-900/50 flex items-center justify-center flex-shrink-0 mt-0.5">
                     <span className="text-purple-400 font-bold">1</span>
                   </div>
                   <div>
-                    <p className="text-gray-300 font-medium">{window.__t('faceSwapPage_3229a0', window.__t('faceSwapPage_3229a0', '動画アップロード'))}</p>
-                    <p className="text-gray-500">{window.__t('faceSwapPage_bcfa92', window.__t('faceSwapPage_bcfa92', 'スタッフが撮影した動画'))}</p>
+                    <p className="text-gray-300 font-medium">{window.__t('faceSwapPage_3229a0', '動画アップロード')}</p>
+                    <p className="text-gray-500">{window.__t('faceSwapPage_bcfa92', 'スタッフが撮影した動画')}</p>
                   </div>
                 </div>
                 <div className="flex items-start gap-2">
@@ -809,7 +809,7 @@ export default function FaceSwapPage() {
                     <span className="text-purple-400 font-bold">2</span>
                   </div>
                   <div>
-                    <p className="text-gray-300 font-medium">{window.__t('faceSwapPage_db2022', window.__t('faceSwapPage_db2022', '顔変更 (FaceFusion)'))}</p>
+                    <p className="text-gray-300 font-medium">{window.__t('faceSwapPage_db2022', '顔変更 (FaceFusion)')}</p>
                     <p className="text-gray-500">
                       GPU処理で顔をインフルエンサーに変更
                     </p>
@@ -833,7 +833,7 @@ export default function FaceSwapPage() {
                     <span className="text-green-400 font-bold">4</span>
                   </div>
                   <div>
-                    <p className="text-gray-300 font-medium">{window.__t('faceSwapPage_d10e6a', window.__t('faceSwapPage_d10e6a', '合成 & ダウンロード'))}</p>
+                    <p className="text-gray-300 font-medium">{window.__t('faceSwapPage_d10e6a', '合成 & ダウンロード')}</p>
                     <p className="text-gray-500">
                       映像+音声を合成して完成動画を出力
                     </p>
@@ -845,7 +845,7 @@ export default function FaceSwapPage() {
             {/* Health Status */}
             {health && (
               <div className="bg-[#12121a] rounded-xl border border-gray-800 p-4">
-                <h3 className="font-semibold text-sm mb-3">{window.__t('faceSwapPage_c26372', window.__t('faceSwapPage_c26372', 'システム状態'))}</h3>
+                <h3 className="font-semibold text-sm mb-3">{window.__t('faceSwapPage_c26372', 'システム状態')}</h3>
                 <div className="space-y-2 text-xs">
                   <div className="flex justify-between">
                     <span className="text-gray-400">GPU Worker</span>
@@ -876,7 +876,7 @@ export default function FaceSwapPage() {
                     </span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-gray-400">{window.__t('faceSwapPage_ac3a23', window.__t('faceSwapPage_ac3a23', 'アクティブジョブ'))}</span>
+                    <span className="text-gray-400">{window.__t('faceSwapPage_ac3a23', 'アクティブジョブ')}</span>
                     <span className="text-gray-300">
                       {health.active_jobs || 0}
                     </span>

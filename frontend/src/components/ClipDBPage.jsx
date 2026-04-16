@@ -256,28 +256,28 @@ function StatsOverview({ stats }) {
     <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 mb-6">
       <div className="bg-white rounded-xl border border-gray-200 p-4 text-center">
         <div className="text-2xl font-bold text-gray-900">{stats.total_clips}</div>
-        <div className="text-xs text-gray-500 mt-1">{window.__t('clipDBPage_ddf417', window.__t('clipDBPage_ddf417', '総クリップ数'))}</div>
+        <div className="text-xs text-gray-500 mt-1">{window.__t('clipDBPage_ddf417', '総クリップ数')}</div>
       </div>
       <div className="bg-white rounded-xl border border-green-200 p-4 text-center">
         <div className="text-2xl font-bold text-green-600">{stats.sold_clips}</div>
-        <div className="text-xs text-gray-500 mt-1">{window.__t('clipDBPage_dd7ee8', window.__t('clipDBPage_dd7ee8', '売れたクリップ'))}</div>
+        <div className="text-xs text-gray-500 mt-1">{window.__t('clipDBPage_dd7ee8', '売れたクリップ')}</div>
       </div>
       <div className="bg-white rounded-xl border border-gray-200 p-4 text-center">
         <div className="text-2xl font-bold text-gray-400">{stats.unsold_clips}</div>
-        <div className="text-xs text-gray-500 mt-1">{window.__t('clipDBPage_13bd78', window.__t('clipDBPage_13bd78', '未売クリップ'))}</div>
+        <div className="text-xs text-gray-500 mt-1">{window.__t('clipDBPage_13bd78', '未売クリップ')}</div>
       </div>
       <div className="bg-white rounded-xl border border-purple-200 p-4 text-center">
         <div className="text-2xl font-bold text-purple-600">{formatGMV(stats.total_gmv)}</div>
-        <div className="text-xs text-gray-500 mt-1">{window.__t('adminDashboard_076fe3', window.__t('adminDashboard_076fe3', '総GMV'))}</div>
+        <div className="text-xs text-gray-500 mt-1">{window.__t('adminDashboard_076fe3', '総GMV')}</div>
       </div>
       <div className="bg-white rounded-xl border border-blue-200 p-4 text-center">
         <div className="text-2xl font-bold text-blue-600">{formatGMV(stats.avg_gmv)}</div>
-        <div className="text-xs text-gray-500 mt-1">{window.__t('clipDBPage_6c08b5', window.__t('clipDBPage_6c08b5', '平均GMV'))}</div>
+        <div className="text-xs text-gray-500 mt-1">{window.__t('clipDBPage_6c08b5', '平均GMV')}</div>
       </div>
       {stats.avg_cta_score != null && (
         <div className="bg-white rounded-xl border border-orange-200 p-4 text-center">
           <div className="text-2xl font-bold text-orange-600">{Math.round(stats.avg_cta_score)}</div>
-          <div className="text-xs text-gray-500 mt-1">{window.__t('clipDBPage_9e6ffd', window.__t('clipDBPage_9e6ffd', '平均CTA'))}</div>
+          <div className="text-xs text-gray-500 mt-1">{window.__t('clipDBPage_9e6ffd', '平均CTA')}</div>
         </div>
       )}
     </div>
@@ -563,7 +563,7 @@ export default function ClipDBPage() {
                 <button
                   onClick={() => setShowStats(!showStats)}
                   className={`p-2 rounded-lg transition ${showStats ? "bg-purple-100 text-purple-700" : "hover:bg-gray-100 text-gray-500"}`}
-                  title=={window.__t('clipDBPage_201829', window.__t('clipDBPage_201829', '統計表示'))}
+                  title={window.__t('clipDBPage_201829', '統計表示')}
                 >
                   <BarChart3 className="w-4 h-4" />
                 </button>
@@ -571,7 +571,7 @@ export default function ClipDBPage() {
                   onClick={handleEnrichAll}
                   disabled={enriching}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-purple-600 text-white text-xs font-medium hover:bg-purple-700 disabled:opacity-50 transition"
-                  title=={window.__t('clipDBPage_0aae80', window.__t('clipDBPage_0aae80', '全クリップのメタデータを自動付与'))}
+                  title={window.__t('clipDBPage_0aae80', '全クリップのメタデータを自動付与')}
                 >
                   {enriching ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
                   DB更新
@@ -648,7 +648,7 @@ export default function ClipDBPage() {
                   onChange={(e) => { setSelectedTag(e.target.value); setPage(1); }}
                   className="px-3 py-1.5 rounded-lg border border-gray-300 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-purple-500"
                 >
-                  <option value="">{window.__t('clipDBPage_7cbd5e', window.__t('clipDBPage_7cbd5e', 'タグ: すべて'))}</option>
+                  <option value="">{window.__t('clipDBPage_7cbd5e', 'タグ: すべて')}</option>
                   {allTags.map((t) => (
                     <option key={t.tag} value={t.tag}>{t.tag} ({t.count})</option>
                   ))}
@@ -664,9 +664,9 @@ export default function ClipDBPage() {
                   }}
                   className="px-3 py-1.5 rounded-lg border border-gray-300 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-purple-500"
                 >
-                  <option value="">{window.__t('clipDBPage_71f21d', window.__t('clipDBPage_71f21d', '売上: すべて'))}</option>
-                  <option value="true">{window.__t('adminDashboard_e6443c', window.__t('adminDashboard_e6443c', '売れた'))}</option>
-                  <option value="false">{window.__t('clipDBPage_40a96b', window.__t('clipDBPage_40a96b', '売れてない'))}</option>
+                  <option value="">{window.__t('clipDBPage_71f21d', '売上: すべて')}</option>
+                  <option value="true">{window.__t('adminDashboard_e6443c', '売れた')}</option>
+                  <option value="false">{window.__t('clipDBPage_40a96b', '売れてない')}</option>
                 </select>
 
                 {/* Rating filter */}
@@ -675,7 +675,7 @@ export default function ClipDBPage() {
                   onChange={(e) => { setRatingFilter(e.target.value); setPage(1); }}
                   className="px-3 py-1.5 rounded-lg border border-gray-300 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-purple-500"
                 >
-                  <option value="">{window.__t('clipDBPage_ebcbe0', window.__t('clipDBPage_ebcbe0', '評価: すべて'))}</option>
+                  <option value="">{window.__t('clipDBPage_ebcbe0', '評価: すべて')}</option>
                   <option value="good">Good</option>
                   <option value="bad">Bad</option>
                 </select>
@@ -686,11 +686,11 @@ export default function ClipDBPage() {
                   onChange={(e) => { setSortBy(e.target.value); setPage(1); }}
                   className="px-3 py-1.5 rounded-lg border border-gray-300 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-purple-500"
                 >
-                  <option value="created_at">{window.__t('clipDBPage_4cc522', window.__t('clipDBPage_4cc522', '作成日順'))}</option>
-                  <option value="gmv">{window.__t('clipDBPage_00013f', window.__t('clipDBPage_00013f', 'GMV順'))}</option>
-                  <option value="cta_score">{window.__t('clipDBPage_7918da', window.__t('clipDBPage_7918da', 'CTAスコア順'))}</option>
-                  <option value="importance_score">{window.__t('clipDBPage_3e8de7', window.__t('clipDBPage_3e8de7', '重要度順'))}</option>
-                  <option value="duration_sec">{window.__t('clipDBPage_3195e4', window.__t('clipDBPage_3195e4', '長さ順'))}</option>
+                  <option value="created_at">{window.__t('clipDBPage_4cc522', '作成日順')}</option>
+                  <option value="gmv">{window.__t('clipDBPage_00013f', 'GMV順')}</option>
+                  <option value="cta_score">{window.__t('clipDBPage_7918da', 'CTAスコア順')}</option>
+                  <option value="importance_score">{window.__t('clipDBPage_3e8de7', '重要度順')}</option>
+                  <option value="duration_sec">{window.__t('clipDBPage_3195e4', '長さ順')}</option>
                 </select>
 
                 <button
@@ -707,7 +707,7 @@ export default function ClipDBPage() {
                   value={selectedProduct}
                   onChange={(e) => setSelectedProduct(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-                  placeholder=={window.__t('clipDBPage_ddf17d', window.__t('clipDBPage_ddf17d', '商品名...'))}
+                  placeholder={window.__t('clipDBPage_ddf17d', '商品名...')}
                   className="px-3 py-1.5 rounded-lg border border-gray-300 text-xs w-32 focus:outline-none focus:ring-2 focus:ring-purple-500"
                 />
 
@@ -717,7 +717,7 @@ export default function ClipDBPage() {
                   value={selectedLiver}
                   onChange={(e) => setSelectedLiver(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-                  placeholder=={window.__t('clipDBPage_7acd53', window.__t('clipDBPage_7acd53', 'ライバー名...'))}
+                  placeholder={window.__t('clipDBPage_7acd53', 'ライバー名...')}
                   className="px-3 py-1.5 rounded-lg border border-gray-300 text-xs w-32 focus:outline-none focus:ring-2 focus:ring-purple-500"
                 />
 
@@ -756,7 +756,7 @@ export default function ClipDBPage() {
           {loading ? (
             <div className="flex items-center justify-center py-20">
               <Loader2 className="w-8 h-8 animate-spin text-purple-500" />
-              <span className="ml-3 text-gray-500">{window.__t('clipDBPage_1e06f9', window.__t('clipDBPage_1e06f9', '検索中...'))}</span>
+              <span className="ml-3 text-gray-500">{window.__t('clipDBPage_1e06f9', '検索中...')}</span>
             </div>
           ) : clips.length === 0 ? (
             <div className="text-center py-20">

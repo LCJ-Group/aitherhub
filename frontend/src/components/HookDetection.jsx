@@ -143,8 +143,8 @@ export default function HookDetection({ videoData, onSelectHook }) {
           <div className="px-5 pb-5">
             <div className="text-center py-8 text-gray-400 text-sm">
               <div className="text-3xl mb-2">🎣</div>
-              <div>{window.__t('auto_321', window.__t('auto_321', 'フック候補が検出されませんでした。'))}</div>
-              <div className="mt-1 text-xs">{window.__t('auto_318', window.__t('auto_318', 'トランスクリプトに強いキーワードや疑問文が含まれていない場合があります。'))}</div>
+              <div>{window.__t('auto_321', 'フック候補が検出されませんでした。')}</div>
+              <div className="mt-1 text-xs">{window.__t('auto_318', 'トランスクリプトに強いキーワードや疑問文が含まれていない場合があります。')}</div>
             </div>
           </div>
         )}
@@ -156,7 +156,7 @@ export default function HookDetection({ videoData, onSelectHook }) {
             {data.placement_suggestion?.should_reorder && (
               <div className="mb-3 px-4 py-3 rounded-xl bg-gradient-to-r from-yellow-50 to-orange-50 border border-yellow-200">
                 <div className="flex items-center gap-2 mb-1">
-                  <span className="text-yellow-600 font-bold text-xs">{window.__t('auto_358', window.__t('auto_358', '💡 配置提案'))}</span>
+                  <span className="text-yellow-600 font-bold text-xs">{window.__t('auto_358', '💡 配置提案')}</span>
                 </div>
                 <p className="text-sm text-gray-700">
                   {data.placement_suggestion.reason}
@@ -214,10 +214,10 @@ export default function HookDetection({ videoData, onSelectHook }) {
                       </span>
                       <div className="flex items-center gap-0.5">
                         {hook.is_question && (
-                          <span className="text-[10px] font-bold text-purple-500" title=={window.__t('auto_348', window.__t('auto_348', '疑問文'))}>Q</span>
+                          <span className="text-[10px] font-bold text-purple-500" title={window.__t('auto_348', '疑問文')}>Q</span>
                         )}
                         {hook.has_number && (
-                          <span className="text-[10px] font-bold text-blue-500" title=={window.__t('auto_343', window.__t('auto_343', '数字を含む'))}>#</span>
+                          <span className="text-[10px] font-bold text-blue-500" title={window.__t('auto_343', '数字を含む')}>#</span>
                         )}
                       </div>
                     </div>

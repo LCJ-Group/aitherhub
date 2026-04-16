@@ -304,7 +304,7 @@ const AIChatPanel = ({ videoId, metrics, advices, newAdviceId }) => {
                     <line x1="15" y1="9" x2="15.01" y2="9"/>
                   </svg>
                 </div>
-                <p className="text-sm text-gray-300 font-medium mb-1">{window.__t('liveDashboard_cbf611', window.__t('liveDashboard_cbf611', 'AI アシスタント'))}</p>
+                <p className="text-sm text-gray-300 font-medium mb-1">{window.__t('liveDashboard_cbf611', 'AI アシスタント')}</p>
                 <p className="text-[11px] text-gray-500 mb-4">
                   ライブ配信に関する質問をどうぞ。<br/>
                   リアルタイムデータに基づいてアドバイスします。
@@ -357,7 +357,7 @@ const AIChatPanel = ({ videoId, metrics, advices, newAdviceId }) => {
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && sendMessage()}
-                placeholder=={window.__t('liveDashboard_14ff15', window.__t('liveDashboard_14ff15', 'AIに質問する...'))}
+                placeholder={window.__t('liveDashboard_14ff15', 'AIに質問する...')}
                 className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-cyan-500/50 focus:ring-1 focus:ring-cyan-500/30"
               />
               <button
@@ -385,7 +385,7 @@ const AIChatPanel = ({ videoId, metrics, advices, newAdviceId }) => {
                   <path d="M2 12l10 5 10-5"/>
                 </svg>
               </div>
-              <p className="text-xs text-gray-400">{window.__t('liveDashboard_8b5cc6', window.__t('liveDashboard_8b5cc6', 'AIがライブを分析中...'))}</p>
+              <p className="text-xs text-gray-400">{window.__t('liveDashboard_8b5cc6', 'AIがライブを分析中...')}</p>
               <p className="text-[10px] text-gray-500 mt-1">
                 データが蓄積されるとAI提案が表示されます
               </p>
@@ -537,7 +537,7 @@ const HLSVideoPlayer = ({ streamUrl, username }) => {
       {playerState === 'loading' && (
         <div className="absolute inset-0 flex flex-col items-center justify-center">
           <div className="w-10 h-10 rounded-full border-3 border-t-[#FF0050] border-r-[#00F2EA] border-b-[#FF0050] border-l-[#00F2EA] animate-spin mb-3"></div>
-          <p className="text-gray-400 text-xs">{window.__t('liveDashboard_f72f90', window.__t('liveDashboard_f72f90', '映像読み込み中...'))}</p>
+          <p className="text-gray-400 text-xs">{window.__t('liveDashboard_f72f90', '映像読み込み中...')}</p>
         </div>
       )}
       {playerState === 'error' && (
@@ -547,7 +547,7 @@ const HLSVideoPlayer = ({ streamUrl, username }) => {
               <circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/>
             </svg>
           </div>
-          <p className="text-gray-400 text-xs">{window.__t('liveDashboard_1737b1', window.__t('liveDashboard_1737b1', '映像を取得できません'))}</p>
+          <p className="text-gray-400 text-xs">{window.__t('liveDashboard_1737b1', '映像を取得できません')}</p>
           <a
             href={`https://www.tiktok.com/@${username}/live`}
             target="_blank"
@@ -1079,7 +1079,7 @@ const LiveDashboard = ({ videoId, extensionVideoId, liveUrl, username, title, on
           <div className="hidden md:flex items-center gap-4 text-xs">
             <div className="flex items-center gap-1.5">
               <div className="w-2 h-2 rounded-full bg-red-500"></div>
-              <span className="text-gray-400">{window.__t('live_viewers', window.__t('live_viewers', '視聴者'))}</span>
+              <span className="text-gray-400">{window.__t('live_viewers', '視聴者')}</span>
               <span className="text-white font-bold">{displayViewers}</span>
             </div>
             <div className="flex items-center gap-1.5">
@@ -1128,7 +1128,7 @@ const LiveDashboard = ({ videoId, extensionVideoId, liveUrl, username, title, on
               </div>
             ) : (
               <div className="text-center py-4">
-                <p className="text-[10px] text-gray-500">{window.__t('liveDashboard_e81729', window.__t('liveDashboard_e81729', 'トラフィックデータ待ち...'))}</p>
+                <p className="text-[10px] text-gray-500">{window.__t('liveDashboard_e81729', 'トラフィックデータ待ち...')}</p>
               </div>
             )}
           </div>
@@ -1142,21 +1142,21 @@ const LiveDashboard = ({ videoId, extensionVideoId, liveUrl, username, title, on
             <div className="space-y-3">
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <span className="text-[10px] text-gray-500">{window.__t('analyticsSection_2da6', window.__t('analyticsSection_2da6', '視聴者数'))}</span>
+                  <span className="text-[10px] text-gray-500">{window.__t('analyticsSection_2da6', '視聴者数')}</span>
                   <span className="text-[10px] text-white font-medium">{displayViewers}</span>
                 </div>
                 <Sparkline data={metricsHistory.viewers.length > 1 ? metricsHistory.viewers : [0, 0]} color="#FF0050" height={40} />
               </div>
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <span className="text-[10px] text-gray-500">{window.__t('liveDashboard_4fb075', window.__t('liveDashboard_4fb075', 'コメント/分'))}</span>
+                  <span className="text-[10px] text-gray-500">{window.__t('liveDashboard_4fb075', 'コメント/分')}</span>
                   <span className="text-[10px] text-white font-medium">{metricsHistory.comments.length > 0 ? metricsHistory.comments[metricsHistory.comments.length - 1] : 0}</span>
                 </div>
                 <Sparkline data={metricsHistory.comments.length > 1 ? metricsHistory.comments : [0, 0]} color="#00F2EA" height={40} />
               </div>
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <span className="text-[10px] text-gray-500">{window.__t('live_likes', window.__t('live_likes', 'いいね'))}</span>
+                  <span className="text-[10px] text-gray-500">{window.__t('live_likes', 'いいね')}</span>
                   <span className="text-[10px] text-white font-medium">{formatLargeNum(metrics.like_count)}</span>
                 </div>
                 <Sparkline data={metricsHistory.likes.length > 1 ? metricsHistory.likes : [0, 0]} color="#FF6B6B" height={40} />
@@ -1185,17 +1185,17 @@ const LiveDashboard = ({ videoId, extensionVideoId, liveUrl, username, title, on
           {/* GMV Hero Section */}
           <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] p-4 border-b border-gray-800/30">
             <div className="text-center mb-3">
-              <p className="text-[10px] text-gray-400 uppercase tracking-wider mb-1">{window.__t('liveDashboard_65663b', window.__t('liveDashboard_65663b', 'Direct GMV (売上)'))}</p>
+              <p className="text-[10px] text-gray-400 uppercase tracking-wider mb-1">{window.__t('liveDashboard_65663b', 'Direct GMV (売上)')}</p>
               <p className="text-4xl xl:text-5xl font-black text-white tracking-tight">{displayGMV}</p>
               <div className="flex items-center justify-center gap-4 mt-2">
                 <div className="flex items-center gap-1.5">
                   <div className="w-2 h-2 rounded-full bg-green-500"></div>
-                  <span className="text-xs text-gray-400">{window.__t('liveDashboard_d21e3b', window.__t('liveDashboard_d21e3b', '販売数'))}</span>
+                  <span className="text-xs text-gray-400">{window.__t('liveDashboard_d21e3b', '販売数')}</span>
                   <span className="text-xs text-white font-bold">{displayItemsSold}</span>
                 </div>
                 <div className="flex items-center gap-1.5">
                   <div className="w-2 h-2 rounded-full bg-red-500"></div>
-                  <span className="text-xs text-gray-400">{window.__t('live_viewers', window.__t('live_viewers', '視聴者'))}</span>
+                  <span className="text-xs text-gray-400">{window.__t('live_viewers', '視聴者')}</span>
                   <span className="text-xs text-white font-bold">{displayViewers}</span>
                 </div>
               </div>
@@ -1205,17 +1205,17 @@ const LiveDashboard = ({ videoId, extensionVideoId, liveUrl, username, title, on
           {/* Metrics Grid */}
           <div className="p-3 border-b border-gray-800/30">
             <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2">
-              <MetricTile label=={window.__t('liveDashboard_5b3de2', window.__t('liveDashboard_5b3de2', 'インプレッション'))} value={displayImpressions} />
-              <MetricTile label=={window.__t('analyticsSection_9133', window.__t('analyticsSection_9133', '商品クリック'))} value={displayProductClicks} />
-              <MetricTile label=={window.__t('liveDashboard_de2426', window.__t('liveDashboard_de2426', 'タップスルー率'))} value={displayTTR} />
-              <MetricTile label=={window.__t('liveDashboard_4d86b1', window.__t('liveDashboard_4d86b1', '平均視聴時間'))} value={displayAvgDuration} />
+              <MetricTile label={window.__t('liveDashboard_5b3de2', 'インプレッション')} value={displayImpressions} />
+              <MetricTile label={window.__t('analyticsSection_9133', '商品クリック')} value={displayProductClicks} />
+              <MetricTile label={window.__t('liveDashboard_de2426', 'タップスルー率')} value={displayTTR} />
+              <MetricTile label={window.__t('liveDashboard_4d86b1', '平均視聴時間')} value={displayAvgDuration} />
               <MetricTile label="LIVE CTR" value={displayLiveCTR} />
-              <MetricTile label=={window.__t('liveDashboard_8a58ba', window.__t('liveDashboard_8a58ba', 'コメント率'))} value={displayCommentRate} />
-              <MetricTile label=={window.__t('liveDashboard_c48944', window.__t('liveDashboard_c48944', 'フォロー率'))} value={displayFollowRate} />
-              <MetricTile label=={window.__t('liveDashboard_46cd6e', window.__t('liveDashboard_46cd6e', '表示GPM'))} value={displayGPM} />
-              <MetricTile label=={window.__t('liveDashboard_466b12', window.__t('liveDashboard_466b12', '注文率'))} value={displayOrderRate} small />
-              <MetricTile label=={window.__t('liveDashboard_82b132', window.__t('liveDashboard_82b132', 'シェア率'))} value={displayShareRate} small />
-              <MetricTile label=={window.__t('liveDashboard_6230fb', window.__t('liveDashboard_6230fb', 'いいね率'))} value={displayLikeRate} small />
+              <MetricTile label={window.__t('liveDashboard_8a58ba', 'コメント率')} value={displayCommentRate} />
+              <MetricTile label={window.__t('liveDashboard_c48944', 'フォロー率')} value={displayFollowRate} />
+              <MetricTile label={window.__t('liveDashboard_46cd6e', '表示GPM')} value={displayGPM} />
+              <MetricTile label={window.__t('liveDashboard_466b12', '注文率')} value={displayOrderRate} small />
+              <MetricTile label={window.__t('liveDashboard_82b132', 'シェア率')} value={displayShareRate} small />
+              <MetricTile label={window.__t('liveDashboard_6230fb', 'いいね率')} value={displayLikeRate} small />
             </div>
           </div>
 
@@ -1237,11 +1237,11 @@ const LiveDashboard = ({ videoId, extensionVideoId, liveUrl, username, title, on
                   <thead>
                     <tr className="text-[10px] text-gray-500 border-b border-gray-800/30">
                       <th className="text-left py-1.5 px-2 font-medium">#</th>
-                      <th className="text-left py-1.5 px-2 font-medium">{window.__t('csv_product', window.__t('csv_product', '商品'))}</th>
-                      <th className="text-right py-1.5 px-2 font-medium">{window.__t('clickCount', window.__t('clickCount', 'クリック'))}</th>
-                      <th className="text-right py-1.5 px-2 font-medium">{window.__t('liveDashboard_6f642d', window.__t('liveDashboard_6f642d', 'カート'))}</th>
-                      <th className="text-right py-1.5 px-2 font-medium">{window.__t('liveDashboard_d21e3b', window.__t('liveDashboard_d21e3b', '販売数'))}</th>
-                      <th className="text-center py-1.5 px-2 font-medium">{window.__t('liveDashboard_c70d25', window.__t('liveDashboard_c70d25', '状態'))}</th>
+                      <th className="text-left py-1.5 px-2 font-medium">{window.__t('csv_product', '商品')}</th>
+                      <th className="text-right py-1.5 px-2 font-medium">{window.__t('clickCount', 'クリック')}</th>
+                      <th className="text-right py-1.5 px-2 font-medium">{window.__t('liveDashboard_6f642d', 'カート')}</th>
+                      <th className="text-right py-1.5 px-2 font-medium">{window.__t('liveDashboard_d21e3b', '販売数')}</th>
+                      <th className="text-center py-1.5 px-2 font-medium">{window.__t('liveDashboard_c70d25', '状態')}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1284,8 +1284,8 @@ const LiveDashboard = ({ videoId, extensionVideoId, liveUrl, username, title, on
                 <div className="w-12 h-12 rounded-full bg-gray-800 flex items-center justify-center mb-3">
                   <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#666" strokeWidth="1.5"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/></svg>
                 </div>
-                <p className="text-xs text-gray-500">{window.__t('liveDashboard_f78365', window.__t('liveDashboard_f78365', '商品データを受信中...'))}</p>
-                <p className="text-[10px] text-gray-600 mt-1">{window.__t('liveDashboard_b3873f', window.__t('liveDashboard_b3873f', 'Chrome拡張から商品リストが送信されます'))}</p>
+                <p className="text-xs text-gray-500">{window.__t('liveDashboard_f78365', '商品データを受信中...')}</p>
+                <p className="text-[10px] text-gray-600 mt-1">{window.__t('liveDashboard_b3873f', 'Chrome拡張から商品リストが送信されます')}</p>
               </div>
             )}
           </div>
@@ -1305,7 +1305,7 @@ const LiveDashboard = ({ videoId, extensionVideoId, liveUrl, username, title, on
                     <circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/>
                   </svg>
                 </div>
-                <p className="text-gray-500 text-[10px]">{window.__t('liveDashboard_2211bc', window.__t('liveDashboard_2211bc', 'LIVE映像'))}</p>
+                <p className="text-gray-500 text-[10px]">{window.__t('liveDashboard_2211bc', 'LIVE映像')}</p>
                 <a
                   href={`https://www.tiktok.com/@${extensionAccount || username}/live`}
                   target="_blank"

@@ -115,7 +115,7 @@ function ExposureRow({ exposure, color, onUpdate, onDelete, isEditing, setEditin
           className="flex-1 text-sm px-2 py-1 rounded border border-gray-300 bg-white"
           value={editData.product_name}
           onChange={(e) => setEditData({ ...editData, product_name: e.target.value })}
-          placeholder=={window.__t('analyticsSection_de54', window.__t('analyticsSection_de54', '商品名'))}
+          placeholder={window.__t('analyticsSection_de54', '商品名')}
         />
         <input
           className="w-16 text-sm px-2 py-1 rounded border border-gray-300 bg-white text-center"
@@ -190,7 +190,7 @@ function ExposureRow({ exposure, color, onUpdate, onDelete, isEditing, setEditin
         <button
           onClick={() => setEditing(exposure.id)}
           className="p-1 text-gray-400 hover:text-blue-500"
-          title=={window.__t('clip_edit', window.__t('clip_edit', '編集'))}
+          title={window.__t('clip_edit', '編集')}
         >
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
@@ -200,7 +200,7 @@ function ExposureRow({ exposure, color, onUpdate, onDelete, isEditing, setEditin
         <button
           onClick={() => onDelete(exposure.id)}
           className="p-1 text-gray-400 hover:text-red-500"
-          title=={window.__t('sidebar_delete', window.__t('sidebar_delete', '削除'))}
+          title={window.__t('sidebar_delete', '削除')}
         >
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="3 6 5 6 21 6" />
@@ -246,26 +246,26 @@ function AddExposureForm({ onAdd, onCancel }) {
         className="flex-1 min-w-[120px] text-sm px-2 py-1.5 rounded border border-gray-300 bg-white"
         value={data.product_name}
         onChange={(e) => setData({ ...data, product_name: e.target.value })}
-        placeholder=={window.__t('productTimeline_5ef1b7', window.__t('productTimeline_5ef1b7', '商品名 *'))}
+        placeholder={window.__t('productTimeline_5ef1b7', '商品名 *')}
       />
       <input
         className="w-24 text-sm px-2 py-1.5 rounded border border-gray-300 bg-white"
         value={data.brand_name}
         onChange={(e) => setData({ ...data, brand_name: e.target.value })}
-        placeholder=={window.__t('productTimeline_d21f2c', window.__t('productTimeline_d21f2c', 'ブランド'))}
+        placeholder={window.__t('productTimeline_d21f2c', 'ブランド')}
       />
       <input
         className="w-16 text-sm px-2 py-1.5 rounded border border-gray-300 bg-white text-center"
         value={data.time_start}
         onChange={(e) => setData({ ...data, time_start: e.target.value })}
-        placeholder=={window.__t('analytics_start', window.__t('analytics_start', '開始'))}
+        placeholder={window.__t('analytics_start', '開始')}
       />
       <span className="text-gray-400 text-xs">-</span>
       <input
         className="w-16 text-sm px-2 py-1.5 rounded border border-gray-300 bg-white text-center"
         value={data.time_end}
         onChange={(e) => setData({ ...data, time_end: e.target.value })}
-        placeholder=={window.__t('analytics_end', window.__t('analytics_end', '終了'))}
+        placeholder={window.__t('analytics_end', '終了')}
       />
       <button
         onClick={handleSubmit}
@@ -347,7 +347,7 @@ export default function ProductTimeline({ videoId, videoDuration }) {
         <div className="rounded-2xl bg-gray-50 border border-gray-200 p-5">
           <div className="flex items-center gap-3">
             <div className="w-5 h-5 border-2 border-gray-300 border-t-transparent rounded-full animate-spin" />
-            <span className="text-sm text-gray-500">{window.__t('productTimeline_08ec86', window.__t('productTimeline_08ec86', '商品タイムラインを読み込み中...'))}</span>
+            <span className="text-sm text-gray-500">{window.__t('productTimeline_08ec86', '商品タイムラインを読み込み中...')}</span>
           </div>
         </div>
       </div>
@@ -365,7 +365,7 @@ export default function ProductTimeline({ videoId, videoDuration }) {
                 <line x1="3" y1="6" x2="21" y2="6" />
                 <path d="M16 10a4 4 0 0 1-8 0" />
               </svg>
-              <span className="text-sm text-gray-500">{window.__t('productTimeline_a80f01', window.__t('productTimeline_a80f01', '商品タイムラインデータがありません'))}</span>
+              <span className="text-sm text-gray-500">{window.__t('productTimeline_a80f01', '商品タイムラインデータがありません')}</span>
             </div>
             <button
               onClick={() => setShowAddForm(true)}
@@ -399,7 +399,7 @@ export default function ProductTimeline({ videoId, videoDuration }) {
               <path d="M16 10a4 4 0 0 1-8 0" />
             </svg>
             <div>
-              <div className="text-gray-900 text-xl font-semibold">{window.__t('productTimeline_65f31f', window.__t('productTimeline_65f31f', '商品タイムライン'))}</div>
+              <div className="text-gray-900 text-xl font-semibold">{window.__t('productTimeline_65f31f', '商品タイムライン')}</div>
               <div className="text-gray-500 text-sm mt-1">
                 {productCount}商品 / {exposures.length}セグメント / 合計 {formatTime(totalDuration)}
               </div>

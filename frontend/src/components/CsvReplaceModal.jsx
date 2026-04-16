@@ -236,7 +236,7 @@ export default function CsvReplaceModal({ videoData, onClose, onComplete }) {
               </svg>
             </div>
             <div>
-              <h3 className="text-lg font-semibold text-gray-900">{window.__t('csvReplaceModal_ae80d1', window.__t('csvReplaceModal_ae80d1', 'CSV / Excel 差し替え'))}</h3>
+              <h3 className="text-lg font-semibold text-gray-900">{window.__t('csvReplaceModal_ae80d1', 'CSV / Excel 差し替え')}</h3>
               <p className="text-xs text-gray-400 mt-0.5 truncate max-w-[280px]">
                 {videoData?.original_filename}
               </p>
@@ -265,7 +265,7 @@ export default function CsvReplaceModal({ videoData, onClose, onComplete }) {
               <div className="border border-gray-200 rounded-xl p-4">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium text-gray-700">{window.__t('videoDetail_productData', window.__t('videoDetail_productData', '商品データ'))}</span>
+                    <span className="text-sm font-medium text-gray-700">{window.__t('videoDetail_productData', '商品データ')}</span>
                     <span className="text-xs text-gray-400">(Product Excel)</span>
                   </div>
                   <button
@@ -297,7 +297,7 @@ export default function CsvReplaceModal({ videoData, onClose, onComplete }) {
               <div className="border border-gray-200 rounded-xl p-4">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium text-gray-700">{window.__t('videoDetail_trendData', window.__t('videoDetail_trendData', 'トレンドデータ'))}</span>
+                    <span className="text-sm font-medium text-gray-700">{window.__t('videoDetail_trendData', 'トレンドデータ')}</span>
                     <span className="text-xs text-gray-400">(Trend Stats Excel)</span>
                   </div>
                   <button
@@ -332,8 +332,8 @@ export default function CsvReplaceModal({ videoData, onClose, onComplete }) {
                     <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
                   </svg>
                   <div className="text-xs text-amber-700">
-                    <p className="font-medium">{window.__t('csvReplaceModal_2be11b', window.__t('csvReplaceModal_2be11b', '差し替え後、AI分析が自動的に再実行されます。'))}</p>
-                    <p className="mt-1">{window.__t('csvReplaceModal_718def', window.__t('csvReplaceModal_718def', 'Sales Moment / Hook Detection / Live Report などの結果が更新されます。処理には数分かかる場合があります。'))}</p>
+                    <p className="font-medium">{window.__t('csvReplaceModal_2be11b', '差し替え後、AI分析が自動的に再実行されます。')}</p>
+                    <p className="mt-1">{window.__t('csvReplaceModal_718def', 'Sales Moment / Hook Detection / Live Report などの結果が更新されます。処理には数分かかる場合があります。')}</p>
                   </div>
                 </div>
               </div>
@@ -344,7 +344,7 @@ export default function CsvReplaceModal({ videoData, onClose, onComplete }) {
           {step === "validating" && (
             <div className="flex flex-col items-center gap-3 py-8">
               <div className="animate-spin w-8 h-8 border-3 border-blue-200 border-t-blue-600 rounded-full" />
-              <p className="text-sm text-gray-600">{window.__t('csvReplaceModal_3d8600', window.__t('csvReplaceModal_3d8600', '日時を照合中...'))}</p>
+              <p className="text-sm text-gray-600">{window.__t('csvReplaceModal_3d8600', '日時を照合中...')}</p>
             </div>
           )}
 
@@ -406,7 +406,7 @@ export default function CsvReplaceModal({ videoData, onClose, onComplete }) {
                   <polyline points="20 6 9 17 4 12"/>
                 </svg>
               </div>
-              <p className="text-sm font-medium text-gray-800">{window.__t('csvReplaceModal_e11077', window.__t('csvReplaceModal_e11077', '差し替え完了'))}</p>
+              <p className="text-sm font-medium text-gray-800">{window.__t('csvReplaceModal_e11077', '差し替え完了')}</p>
               <p className="text-xs text-gray-500 text-center">
                 AI分析の再処理がキューに追加されました。<br />
                 結果が反映されるまで数分お待ちください。
@@ -422,7 +422,7 @@ export default function CsvReplaceModal({ videoData, onClose, onComplete }) {
                   <circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>
                 </svg>
               </div>
-              <p className="text-sm font-medium text-red-700">{window.__t('csvReplaceModal_34117e', window.__t('csvReplaceModal_34117e', '差し替えに失敗しました'))}</p>
+              <p className="text-sm font-medium text-red-700">{window.__t('csvReplaceModal_34117e', '差し替えに失敗しました')}</p>
               <p className="text-xs text-gray-500">{error}</p>
             </div>
           )}

@@ -214,7 +214,7 @@ export default function CsvAssetPanel({ videoData, onReplace, onRefresh }) {
           </div>
         ) : (
           <div className="mt-1.5 pl-5">
-            <span className="text-xs text-gray-400">{window.__t('videoDetail_notAttached', window.__t('videoDetail_notAttached', '未添付'))}</span>
+            <span className="text-xs text-gray-400">{window.__t('videoDetail_notAttached', '未添付')}</span>
           </div>
         )}
 
@@ -329,7 +329,7 @@ export default function CsvAssetPanel({ videoData, onReplace, onRefresh }) {
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="text-sm font-semibold text-gray-800">{window.__t('videoDetail_csvAssetManagement', window.__t('videoDetail_csvAssetManagement', 'CSVアセット管理'))}</span>
+                <span className="text-sm font-semibold text-gray-800">{window.__t('videoDetail_csvAssetManagement', 'CSVアセット管理')}</span>
                 {uploadTypeBadge(excelInfo.upload_type)}
                 <ValidationBadge status={overallValidation} />
               </div>
@@ -373,7 +373,7 @@ export default function CsvAssetPanel({ videoData, onReplace, onRefresh }) {
             <div className="mt-3 space-y-3">
               {/* トレンドデータ */}
               <AssetRow
-                label=={window.__t('videoDetail_trendData', window.__t('videoDetail_trendData', 'トレンドデータ'))}
+                label={window.__t('videoDetail_trendData', 'トレンドデータ')}
                 hasFile={excelInfo.has_trend}
                 filename={excelInfo.trend_filename}
                 asset={excelInfo.current_assets?.trend_csv}
@@ -381,7 +381,7 @@ export default function CsvAssetPanel({ videoData, onReplace, onRefresh }) {
 
               {/* 商品データ */}
               <AssetRow
-                label=={window.__t('videoDetail_productData', window.__t('videoDetail_productData', '商品データ'))}
+                label={window.__t('videoDetail_productData', '商品データ')}
                 hasFile={excelInfo.has_product}
                 filename={excelInfo.product_filename}
                 asset={excelInfo.current_assets?.product_csv}
@@ -443,7 +443,7 @@ export default function CsvAssetPanel({ videoData, onReplace, onRefresh }) {
               {showHistory && (
                 <div className="mt-2 rounded-xl border border-gray-200 overflow-hidden">
                   <div className="bg-gray-50 px-3 py-2 border-b border-gray-200">
-                    <span className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{window.__t('csvAssetPanel_8514f2', window.__t('csvAssetPanel_8514f2', 'バージョン履歴'))}</span>
+                    <span className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{window.__t('csvAssetPanel_8514f2', 'バージョン履歴')}</span>
                   </div>
                   {historyLoading ? (
                     <div className="flex items-center gap-2 text-xs text-gray-400 p-4 justify-center">
@@ -467,7 +467,7 @@ export default function CsvAssetPanel({ videoData, onReplace, onRefresh }) {
                             <div className="flex items-center gap-2">
                               <ValidationBadge status={item.validation_status} />
                               {item.is_active && (
-                                <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-700">{window.__t('csvAssetPanel_684a6b', window.__t('csvAssetPanel_684a6b', '現在'))}</span>
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-700">{window.__t('csvAssetPanel_684a6b', '現在')}</span>
                               )}
                             </div>
                           </div>
@@ -482,7 +482,7 @@ export default function CsvAssetPanel({ videoData, onReplace, onRefresh }) {
                       {excelInfo.replace_history?.length > 0 ? (
                         // 旧形式の差し替え履歴を表示
                         <div className="text-left px-3">
-                          <p className="text-center mb-2">{window.__t('csvAssetPanel_76b4cb', window.__t('csvAssetPanel_76b4cb', '新形式の履歴はまだありません。旧形式の差し替え履歴:'))}</p>
+                          <p className="text-center mb-2">{window.__t('csvAssetPanel_76b4cb', '新形式の履歴はまだありません。旧形式の差し替え履歴:')}</p>
                           {excelInfo.replace_history.map((h) => (
                             <div key={h.id} className="py-2 border-b border-gray-100 last:border-0">
                               <div className="flex items-center justify-between">

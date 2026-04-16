@@ -2186,7 +2186,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                 </div>
 
                 {/* AI Score Cards */}
-                <Section title=={window.__t('clipEditorV2_a4a61c', window.__t('clipEditorV2_a4a61c', 'AI 評価'))}>
+                <Section title={window.__t('clipEditorV2_a4a61c', 'AI 評価')}>
                   {[
                     { l: window.__t('clipEditorV2_eab3a2', 'バイラル度'), s: currentPhase?.viral_score, i: "🔥" },
                     { l: window.__t('clipEditorV2_5245c0', 'フック力'), s: currentPhase?.hook_score, i: "🎣" },
@@ -2199,7 +2199,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
 
                 {/* AI Summary */}
                 {clip.description && (
-                  <Section title=={window.__t('clipEditorV2_bb6169', window.__t('clipEditorV2_bb6169', 'AI要約'))}>
+                  <Section title={window.__t('clipEditorV2_bb6169', 'AI要約')}>
                     <p
                       style={{
                         color: C.text,
@@ -2218,7 +2218,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
 
                 {/* Video Score */}
                 {videoScore?.overall_score != null && (
-                  <Section title=={window.__t('clipEditorV2_b5c20b', window.__t('clipEditorV2_b5c20b', '動画全体スコア'))}>
+                  <Section title={window.__t('clipEditorV2_b5c20b', '動画全体スコア')}>
                     <div
                       style={{
                         padding: 12,
@@ -2292,7 +2292,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
             {tab === "captions" && (
               <div>
                 {/* ═══ 字幕スタイル選択 ═══ */}
-                <SectionTitle>{window.__t('clipEditorV2_163132', window.__t('clipEditorV2_163132', '字幕スタイル'))}</SectionTitle>
+                <SectionTitle>{window.__t('clipEditorV2_163132', '字幕スタイル')}</SectionTitle>
 
                 {/* AIおすすめバッジ */}
                 <div
@@ -2468,7 +2468,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                 </p>
 
                 {/* ═══ フォントサイズ ═══ */}
-                <SectionTitle>{window.__t('clipEditorV2_61c13c', window.__t('clipEditorV2_61c13c', 'フォントサイズ'))}</SectionTitle>
+                <SectionTitle>{window.__t('clipEditorV2_61c13c', 'フォントサイズ')}</SectionTitle>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
                   <span style={{ color: C.textDim, fontSize: 10, minWidth: 16 }}>A</span>
                   <input
@@ -2518,7 +2518,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                 </div>
 
                 {/* ═══ 字幕フィードバック ═══ */}
-                <SectionTitle>{window.__t('clipEditorV2_a10aa2', window.__t('clipEditorV2_a10aa2', '字幕フィードバック'))}</SectionTitle>
+                <SectionTitle>{window.__t('clipEditorV2_a10aa2', '字幕フィードバック')}</SectionTitle>
                 <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
                   {['up', 'down'].map((vote) => (
                     <button
@@ -2597,7 +2597,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                 {/* ═══ 字幕タイミング調整 ═══ */}
                 {captions.length > 0 && (
                   <div style={{ marginBottom: 14 }}>
-                    <SectionTitle>{window.__t('clipEditorV2_40fc77', window.__t('clipEditorV2_40fc77', '字幕タイミング調整'))}</SectionTitle>
+                    <SectionTitle>{window.__t('clipEditorV2_40fc77', '字幕タイミング調整')}</SectionTitle>
                     <p style={{ color: C.textMuted, fontSize: 11, margin: '0 0 8px', lineHeight: 1.5 }}>
                       字幕が音声とずれている場合に調整できます。
                       {captionOffset > 0 ? `+${captionOffset.toFixed(1)}s（字幕を遅らせる）` : captionOffset < 0 ? `${captionOffset.toFixed(1)}s（字幕を早める）` : window.__t('clipEditorV2_21491c', '0s（調整なし）')}
@@ -2644,14 +2644,14 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                 )}
 
                 {/* ═══ 字幕編集 ═══ */}
-                <SectionTitle>{window.__t('auto_336', window.__t('auto_336', '字幕編集'))}</SectionTitle>
+                <SectionTitle>{window.__t('auto_336', '字幕編集')}</SectionTitle>
                 <p style={{ color: C.textMuted, fontSize: 11, margin: "0 0 10px", lineHeight: 1.5 }}>
                   配信者の音声書き起こしです。テキストを直接編集・削除できます。タイムスタンプをクリックするとその位置にジャンプします。
                 </p>
 
                 {/* Language selector */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-                  <span style={{ color: C.textMuted, fontSize: 11, whiteSpace: 'nowrap' }}>{window.__t('clipEditorV2_4d4921', window.__t('clipEditorV2_4d4921', '字幕言語:'))}</span>
+                  <span style={{ color: C.textMuted, fontSize: 11, whiteSpace: 'nowrap' }}>{window.__t('clipEditorV2_4d4921', '字幕言語:')}</span>
                   <div style={{ display: 'flex', gap: 4 }}>
                     {[
                       { value: 'ja', label: window.__t('clipEditorV2_fd32f4', '🇯🇵 日本語') },
@@ -2677,7 +2677,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                     ))}
                   </div>
                   {targetLanguage === 'zh-TW' && (
-                    <span style={{ color: C.textDim, fontSize: 10 }}>{window.__t('clipEditorV2_155d2b', window.__t('clipEditorV2_155d2b', '台湾語音声→繁體中文字幕'))}</span>
+                    <span style={{ color: C.textDim, fontSize: 10 }}>{window.__t('clipEditorV2_155d2b', '台湾語音声→繁體中文字幕')}</span>
                   )}
                 </div>
                 {captions.length > 0 && captions[0]?.source && (
@@ -2711,7 +2711,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                     }}
                   >
                     {transcribing ? (
-                      <><span style={{ animation: 'spin 1s linear infinite', display: 'inline-block' }}>{'⟳'}</span> {window.__t('script_generating', window.__t('script_generating', '生成中...'))}</>
+                      <><span style={{ animation: 'spin 1s linear infinite', display: 'inline-block' }}>{'⟳'}</span> {window.__t('script_generating', '生成中...')}</>
                     ) : (
                       <>{captions.length > 0 ? window.__t('clipEditorV2_4b39ae', '🎤 AI再生成') : window.__t('clipEditorV2_de99d4', '🎤 AI生成')}</>
                     )}
@@ -2783,7 +2783,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                   >
                     字幕がありません。
                     <br />
-                    <span style={{ fontSize: 11 }}>{window.__t('clipEditorV2_4a1c40', window.__t('clipEditorV2_4a1c40', '「AI生成」で音声認識、または「マスター反映」でタイムラインの文字起こしを使用できます。'))}</span>
+                    <span style={{ fontSize: 11 }}>{window.__t('clipEditorV2_4a1c40', '「AI生成」で音声認識、または「マスター反映」でタイムラインの文字起こしを使用できます。')}</span>
                   </div>
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -2850,7 +2850,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                           {/* Delete single caption button */}
                           <button
                             onClick={() => deleteCap(i)}
-                            title=={window.__t('clipEditorV2_40dc07', window.__t('clipEditorV2_40dc07', 'この字幕を削除'))}
+                            title={window.__t('clipEditorV2_40dc07', 'この字幕を削除')}
                             style={{
                               flexShrink: 0,
                               width: 24,
@@ -2932,7 +2932,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
             {/* ─── Trim ─── */}
             {tab === "trim" && (
               <div>
-                <SectionTitle>{window.__t('clipEditorV2_7ae953', window.__t('clipEditorV2_7ae953', 'トリム編集'))}</SectionTitle>
+                <SectionTitle>{window.__t('clipEditorV2_7ae953', 'トリム編集')}</SectionTitle>
                 <div
                   style={{
                     display: "flex",
@@ -2944,12 +2944,12 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                   }}
                 >
                   <TrimControl
-                    label=={window.__t('live_startTime', window.__t('live_startTime', '開始時間'))}
+                    label={window.__t('live_startTime', '開始時間')}
                     value={trimStart}
                     onChange={(v) => v < trimEnd - 1 && v >= 0 && setTrimStart(Math.round(v * 10) / 10)}
                   />
                   <TrimControl
-                    label=={window.__t('live_endTime', window.__t('live_endTime', '終了時間'))}
+                    label={window.__t('live_endTime', '終了時間')}
                     value={trimEnd}
                     onChange={(v) => v > trimStart + 1 && setTrimEnd(Math.round(v * 10) / 10)}
                   />
@@ -2962,7 +2962,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                       borderRadius: 6,
                     }}
                   >
-                    <span style={{ color: C.textMuted, fontSize: 12 }}>{window.__t('clipEditorV2_d28cd4', window.__t('clipEditorV2_d28cd4', 'クリップ長'))}</span>
+                    <span style={{ color: C.textMuted, fontSize: 12 }}>{window.__t('clipEditorV2_d28cd4', 'クリップ長')}</span>
                     <span style={{ color: C.text, fontSize: 15, fontWeight: 700 }}>
                       {(duration > 0 ? Math.min(clipDur, duration) : clipDur).toFixed(1)}秒
                     </span>
@@ -3459,9 +3459,9 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
               <span>{label}</span>
             </span>
           ))}
-          <span style={{ color: C.textMuted }}>{window.__t('clipEditorV2_35fc25', window.__t('clipEditorV2_35fc25', 'セグメントクリックで選択'))}</span>
-          <span style={{ color: C.textMuted }}>{window.__t('clipEditorV2_3d197e', window.__t('clipEditorV2_3d197e', '黄色線クリックで分割点削除'))}</span>
-          {deletedRanges.length > 0 && <span style={{ color: C.red }}>{window.__t('clipEditorV2_5bee1e', window.__t('clipEditorV2_5bee1e', '赤セグメントクリックで復元'))}</span>}
+          <span style={{ color: C.textMuted }}>{window.__t('clipEditorV2_35fc25', 'セグメントクリックで選択')}</span>
+          <span style={{ color: C.textMuted }}>{window.__t('clipEditorV2_3d197e', '黄色線クリックで分割点削除')}</span>
+          {deletedRanges.length > 0 && <span style={{ color: C.red }}>{window.__t('clipEditorV2_5bee1e', '赤セグメントクリックで復元')}</span>}
           {silentRegions.length > 0 && (
             <span style={{ color: C.red }}>赤 = 無音区間 ({silentRegions.length}箇所)</span>
           )}

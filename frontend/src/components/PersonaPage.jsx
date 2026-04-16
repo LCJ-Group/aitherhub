@@ -820,7 +820,7 @@ export default function PersonaPage() {
                             type="text"
                             value={chatContext}
                             onChange={(e) => setChatContext(e.target.value)}
-                            placeholder=={window.__t('personaPage_34b22b', window.__t('personaPage_34b22b', 'e.g., 商品紹介中、シャンプーの説明をしている'))}
+                            placeholder={window.__t('personaPage_34b22b', 'e.g., 商品紹介中、シャンプーの説明をしている')}
                             className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-xs text-gray-200 placeholder-gray-500"
                           />
                         </div>
@@ -871,7 +871,7 @@ export default function PersonaPage() {
                             value={chatInput}
                             onChange={(e) => setChatInput(e.target.value)}
                             onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSendChat()}
-                            placeholder=={window.__t('personaPage_38e48d', window.__t('personaPage_38e48d', 'メッセージを入力...'))}
+                            placeholder={window.__t('personaPage_38e48d', 'メッセージを入力...')}
                             className="flex-1 px-3 py-2.5 bg-white/5 border border-white/10 rounded-lg text-sm text-gray-200 placeholder-gray-500"
                             disabled={chatLoading}
                           />
@@ -914,11 +914,11 @@ export default function PersonaPage() {
                     {showScriptGen && (
                       <div className="border-t border-white/10 p-4 space-y-3">
                         <div>
-                          <label className="text-[10px] text-gray-500 mb-1 block">{window.__t('personaPage_9f4ad3', window.__t('personaPage_9f4ad3', '紹介する商品（改行区切り）'))}</label>
+                          <label className="text-[10px] text-gray-500 mb-1 block">{window.__t('personaPage_9f4ad3', '紹介する商品（改行区切り）')}</label>
                           <textarea
                             value={scriptProducts}
                             onChange={(e) => setScriptProducts(e.target.value)}
-                            placeholder=={window.__t('personaPage_ad8b61', window.__t('personaPage_ad8b61', 'KYOGOKU シャンプー\nKYOGOKU トリートメント'))}
+                            placeholder={window.__t('personaPage_ad8b61', 'KYOGOKU シャンプー\nKYOGOKU トリートメント')}
                             rows={3}
                             className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-xs text-gray-200 placeholder-gray-500 resize-none"
                           />
@@ -926,7 +926,7 @@ export default function PersonaPage() {
 
                         <div className="grid grid-cols-2 gap-3">
                           <div>
-                            <label className="text-[10px] text-gray-500 mb-1 block">{window.__t('personaPage_778653', window.__t('personaPage_778653', '配信時間（分）'))}</label>
+                            <label className="text-[10px] text-gray-500 mb-1 block">{window.__t('personaPage_778653', '配信時間（分）')}</label>
                             <input
                               type="number"
                               value={scriptDuration}
@@ -937,24 +937,24 @@ export default function PersonaPage() {
                             />
                           </div>
                           <div>
-                            <label className="text-[10px] text-gray-500 mb-1 block">{window.__t('script_style', window.__t('script_style', 'スタイル'))}</label>
+                            <label className="text-[10px] text-gray-500 mb-1 block">{window.__t('script_style', 'スタイル')}</label>
                             <input
                               type="text"
                               value={scriptStyle}
                               onChange={(e) => setScriptStyle(e.target.value)}
-                              placeholder=={window.__t('personaPage_447dd8', window.__t('personaPage_447dd8', 'e.g., ハイテンション'))}
+                              placeholder={window.__t('personaPage_447dd8', 'e.g., ハイテンション')}
                               className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-xs text-gray-200 placeholder-gray-500"
                             />
                           </div>
                         </div>
 
                         <div>
-                          <label className="text-[10px] text-gray-500 mb-1 block">{window.__t('personaPage_7f8bee', window.__t('personaPage_7f8bee', '備考'))}</label>
+                          <label className="text-[10px] text-gray-500 mb-1 block">{window.__t('personaPage_7f8bee', '備考')}</label>
                           <input
                             type="text"
                             value={scriptNotes}
                             onChange={(e) => setScriptNotes(e.target.value)}
-                            placeholder=={window.__t('personaPage_873534', window.__t('personaPage_873534', 'e.g., セール中、視聴者参加型'))}
+                            placeholder={window.__t('personaPage_873534', 'e.g., セール中、視聴者参加型')}
                             className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-xs text-gray-200 placeholder-gray-500"
                           />
                         </div>
@@ -965,9 +965,9 @@ export default function PersonaPage() {
                           className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 text-white text-sm font-bold rounded-lg transition-all disabled:opacity-50"
                         >
                           {scriptLoading ? (
-                            <><Loader2 className="w-4 h-4 animate-spin" /> {window.__t('personaPage_80bffc', window.__t('personaPage_80bffc', '台本生成中...'))}</>
+                            <><Loader2 className="w-4 h-4 animate-spin" /> {window.__t('personaPage_80bffc', '台本生成中...')}</>
                           ) : (
-                            <><FileText className="w-4 h-4" /> {window.__t('script_generate', window.__t('script_generate', '台本を生成'))}</>
+                            <><FileText className="w-4 h-4" /> {window.__t('script_generate', '台本を生成')}</>
                           )}
                         </button>
 
@@ -1070,7 +1070,7 @@ export default function PersonaPage() {
                   type="text"
                   value={formData.catchphrases}
                   onChange={(e) => setFormData({ ...formData, catchphrases: e.target.value })}
-                  placeholder=={window.__t('personaPage_791d39', window.__t('personaPage_791d39', 'e.g., すごいでしょ, これマジでいいよ'))}
+                  placeholder={window.__t('personaPage_791d39', 'e.g., すごいでしょ, これマジでいいよ')}
                   className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm text-gray-200 placeholder-gray-500"
                 />
               </div>

@@ -178,8 +178,8 @@ export default function SalesMomentClips({ videoData, onRequestClip, clipStates 
           <div className="px-5 pb-5">
             <div className="text-center py-8 text-gray-400 text-sm">
               <div className="text-3xl mb-2">{"\u{1F4CA}"}</div>
-              <div>{window.__t('salesMomentClips_7d058e', window.__t('salesMomentClips_7d058e', 'スパイクが検出されませんでした。'))}</div>
-              <div className="mt-1 text-xs">{window.__t('salesMomentClips_ca01fc', window.__t('salesMomentClips_ca01fc', '売上データが均一な場合、スパイクは検出されません。'))}</div>
+              <div>{window.__t('salesMomentClips_7d058e', 'スパイクが検出されませんでした。')}</div>
+              <div className="mt-1 text-xs">{window.__t('salesMomentClips_ca01fc', '売上データが均一な場合、スパイクは検出されません。')}</div>
             </div>
           </div>
         )}
@@ -272,7 +272,7 @@ export default function SalesMomentClips({ videoData, onRequestClip, clipStates 
                         ) : clipState?.status === "generating_subtitles" ? (
                           <div className="flex-1 flex flex-col gap-1">
                             <div className="flex items-center justify-between">
-                              <span className="text-purple-600 text-xs font-medium">{window.__t('dockPlayer_e826b5', window.__t('dockPlayer_e826b5', '字幕生成中...'))}</span>
+                              <span className="text-purple-600 text-xs font-medium">{window.__t('dockPlayer_e826b5', '字幕生成中...')}</span>
                               <span className="text-purple-500 text-xs font-bold">95%</span>
                             </div>
                             <div className="w-full h-1.5 bg-purple-100 rounded-full overflow-hidden">

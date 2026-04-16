@@ -306,7 +306,7 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
               </div>
             ) : products.length === 0 ? (
               <div className="text-center py-3">
-                <p className="text-[10px] text-gray-500 mb-2">{window.__t('autoLivePanel_32a50b', window.__t('autoLivePanel_32a50b', '商品データがありません'))}</p>
+                <p className="text-[10px] text-gray-500 mb-2">{window.__t('autoLivePanel_32a50b', '商品データがありません')}</p>
                 <button
                   onClick={loadProducts}
                   className="px-3 py-1 bg-amber-500/20 border border-amber-500/30 rounded text-[9px] text-amber-300 hover:bg-amber-500/30"
@@ -370,7 +370,7 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
             {isLoading ? (
               <><Loader2 className="w-3 h-3 animate-spin" />Starting...</>
             ) : (
-              <><Play className="w-3 h-3" />{window.__t('autoLivePanel_7508db', window.__t('autoLivePanel_7508db', 'Auto Live 開始'))}</>
+              <><Play className="w-3 h-3" />{window.__t('autoLivePanel_7508db', 'Auto Live 開始')}</>
             )}
           </button>
         ) : (
