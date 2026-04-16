@@ -318,67 +318,43 @@ async def list_widget_clients(
         for r in cc_result.mappings().all():
             clip_counts[r["client_id"]] = r["cnt"]
 
-    # 3) Batch: 24h event stats per client
-    event_stats = {}
-    if client_ids:
-        ev_result = await db.execute(
-            text("""
-                SELECT client_id,
-                    COUNT(*) FILTER (WHERE event_type = 'page_view') as page_views,
-                    COUNT(*) FILTER (WHERE event_type = 'widget_open') as widget_opens,
-                    COUNT(*) FILTER (WHERE event_type = 'video_play') as video_plays,
-                    COUNT(*) FILTER (WHERE event_type = 'cta_click') as cta_clicks,
-                    COUNT(*) FILTER (WHERE event_type = 'conversion') as conversions
-                FROM widget_tracking_events
-                WHERE client_id = ANY(:cids) AND created_at > NOW() - INTERVAL '24 hours'
-                GROUP BY client_id
-            """),
-            {"cids": client_ids},
-        )
-        for r in ev_result.mappings().all():
-            event_stats[r["client_id"]] = dict(r)
-
-    # 4) Batch: clip previews (up to 5 per client) using window function
+    # 3) Batch: clip previews (up to 5 per client) using window function
     clips_by_client = {}
     if client_ids:
-        cp_result = await db.execute(
-            text("""
-                SELECT * FROM (
-                    SELECT wca.client_id, wca.clip_id, vc.clip_url, vc.exported_url,
-                           vc.thumbnail_url, wca.product_name, wca.product_price, vc.duration_sec,
-                           ROW_NUMBER() OVER (PARTITION BY wca.client_id ORDER BY wca.sort_order ASC, wca.created_at DESC) as rn
-                    FROM widget_clip_assignments wca
-                    LEFT JOIN video_clips vc ON vc.id = wca.clip_id
-                    WHERE wca.client_id = ANY(:cids) AND wca.is_active = TRUE
-                ) sub WHERE rn <= 5
-            """),
-            {"cids": client_ids},
-        )
-        for cr in cp_result.mappings().all():
-            cid = cr["client_id"]
-            if cid not in clips_by_client:
-                clips_by_client[cid] = []
-            clip_url = cr.get("exported_url") or cr.get("clip_url") or ""
-            thumb_url = cr.get("thumbnail_url") or ""
-            clips_by_client[cid].append({
-                "clip_id": cr["clip_id"],
-                "clip_url": clip_url,
-                "thumbnail_url": thumb_url,
-                "product_name": cr.get("product_name"),
-                "product_price": cr.get("product_price"),
-                "duration_sec": cr.get("duration_sec"),
-            })
+        # Only query clients that have clips
+        active_cids = [cid for cid in client_ids if clip_counts.get(cid, 0) > 0]
+        if active_cids:
+            cp_result = await db.execute(
+                text("""
+                    SELECT * FROM (
+                        SELECT wca.client_id, wca.clip_id, vc.thumbnail_url,
+                               wca.product_name, vc.duration_sec,
+                               ROW_NUMBER() OVER (PARTITION BY wca.client_id ORDER BY wca.sort_order ASC, wca.created_at DESC) as rn
+                        FROM widget_clip_assignments wca
+                        LEFT JOIN video_clips vc ON vc.id = wca.clip_id
+                        WHERE wca.client_id = ANY(:cids) AND wca.is_active = TRUE
+                    ) sub WHERE rn <= 5
+                """),
+                {"cids": active_cids},
+            )
+            for cr in cp_result.mappings().all():
+                cid = cr["client_id"]
+                if cid not in clips_by_client:
+                    clips_by_client[cid] = []
+                clips_by_client[cid].append({
+                    "clip_id": cr["clip_id"],
+                    "thumbnail_url": cr.get("thumbnail_url") or "",
+                    "product_name": cr.get("product_name"),
+                    "duration_sec": cr.get("duration_sec"),
+                })
 
     # 5) Assemble response
     clients = []
     for row in rows:
         cid = row["client_id"]
-        ev = event_stats.get(cid, {})
-        ev.pop("client_id", None)
         clients.append({
             **dict(row),
             "clip_count": clip_counts.get(cid, 0),
-            "stats_24h": ev,
             "clips_preview": clips_by_client.get(cid, []),
         })
 
