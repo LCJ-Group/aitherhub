@@ -756,18 +756,41 @@ async def transcribe_clip(
         max_size = 25 * 1024 * 1024  # 25MB Whisper API limit
         logger.info(f"[transcribe] Video file size: {file_size} bytes ({file_size/1024/1024:.1f} MB, max: 25 MB)")
 
+        # Whisper prompt hints to improve recognition accuracy for domain-specific terms
+        whisper_prompts = {
+            "zh": (
+                "全頭漂、漂髮、染髮、護髮、角蛋白、胺基酸、膠原蛋白、"
+                "頭皮、毛囊、毛髮、髮質、受損、修復、保養、洗髮精、"
+                "潤髮乳、護髮素、髮膜、KYOGOKU、京極、"
+                "直播、下單、加購、優惠、限時、蝦皮、立即購買、"
+                "漂白、退色、補色、挑染、片染、全頭染、"
+                "沙龍、美髮師、設計師、造型師"
+            ),
+            "ja": (
+                "全頭ブリーチ、カラーリング、ヘアケア、ケラチン、アミノ酸、コラーゲン、"
+                "頭皮、毛穴、髪質、ダメージ、補修、シャンプー、トリートメント、"
+                "ヘアマスク、KYOGOKU、京極、"
+                "ライブ配信、ライブコマース、蝦皮、Shopee、"
+                "ブリーチ、リタッチ、ハイライト、サロン、美容師、スタイリスト"
+            ),
+        }
+        whisper_prompt = whisper_prompts.get(whisper_language, "")
+
         async def _call_whisper(file_path: str) -> list:
             """Call Azure OpenAI Whisper and return segments."""
             fsize = os.path.getsize(file_path)
-            logger.info(f"[transcribe] Sending to Whisper: {file_path} ({fsize/1024/1024:.1f} MB)")
+            logger.info(f"[transcribe] Sending to Whisper: {file_path} ({fsize/1024/1024:.1f} MB), prompt_lang={whisper_language}")
             with open(file_path, "rb") as f:
-                response = await openai_client.audio.transcriptions.create(
+                whisper_kwargs = dict(
                     model="whisper",
                     file=f,
                     response_format="verbose_json",
                     language=whisper_language,
                     timestamp_granularities=["segment", "word"],
                 )
+                if whisper_prompt:
+                    whisper_kwargs["prompt"] = whisper_prompt
+                response = await openai_client.audio.transcriptions.create(**whisper_kwargs)
 
             segs = []
             # Extract word-level timestamps if available (for karaoke-style highlighting)
