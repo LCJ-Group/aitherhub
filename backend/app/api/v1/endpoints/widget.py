@@ -326,10 +326,37 @@ async def list_widget_clients(
         )
         events = event_result.mappings().first()
 
+        # Get clip previews (up to 5)
+        clips_result = await db.execute(
+            text("""
+                SELECT wca.clip_id, vc.clip_url, vc.exported_url, vc.thumbnail_url,
+                       wca.product_name, wca.product_price, vc.duration_sec
+                FROM widget_clip_assignments wca
+                LEFT JOIN video_clips vc ON vc.id = wca.clip_id
+                WHERE wca.client_id = :cid AND wca.is_active = TRUE
+                ORDER BY wca.display_order ASC, wca.created_at DESC
+                LIMIT 5
+            """),
+            {"cid": row["client_id"]},
+        )
+        clips_preview = []
+        for cr in clips_result.mappings().all():
+            clip_url = cr.get("exported_url") or cr.get("clip_url") or ""
+            thumb_url = cr.get("thumbnail_url") or ""
+            clips_preview.append({
+                "clip_id": cr["clip_id"],
+                "clip_url": clip_url,
+                "thumbnail_url": thumb_url,
+                "product_name": cr.get("product_name"),
+                "product_price": cr.get("product_price"),
+                "duration_sec": cr.get("duration_sec"),
+            })
+
         clients.append({
             **dict(row),
             "clip_count": clip_count,
             "stats_24h": dict(events) if events else {},
+            "clips_preview": clips_preview,
         })
 
     return {"clients": clients}

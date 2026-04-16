@@ -404,6 +404,11 @@ export default function AdminWidgetManager({ adminKey }) {
                   <span className={`px-2 py-0.5 rounded-full text-xs ${client.is_active ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}>
                     {client.is_active ? "有効" : "無効"}
                   </span>
+                  {client.clip_count > 0 && (
+                    <span className="px-2 py-0.5 rounded-full text-xs bg-purple-100 text-purple-700">
+                      {client.clip_count}本
+                    </span>
+                  )}
                 </div>
                 <div className="flex gap-2">
                   <button
@@ -423,6 +428,62 @@ export default function AdminWidgetManager({ adminKey }) {
                   <button onClick={() => startEdit(client)} className="px-3 py-1.5 bg-blue-100 text-blue-700 rounded-lg text-xs hover:bg-blue-200">編集</button>
                 </div>
               </div>
+
+              {/* Clip Preview Thumbnails */}
+              {client.clips_preview && client.clips_preview.length > 0 && selectedClientForClips !== client.client_id && (
+                <div className="mt-3 pt-3 border-t border-gray-100">
+                  <div className="flex gap-2 overflow-x-auto pb-1">
+                    {client.clips_preview.map((cp, idx) => (
+                      <div
+                        key={cp.clip_id || idx}
+                        className="relative flex-shrink-0 rounded-lg overflow-hidden border border-gray-200 cursor-pointer hover:shadow-md transition-shadow group"
+                        style={{ width: "72px", height: "128px" }}
+                        onClick={() => setPreviewClip({ ...cp, clip_url: cp.clip_url })}
+                      >
+                        {cp.clip_url ? (
+                          <video
+                            src={cp.clip_url}
+                            muted
+                            playsInline
+                            preload="metadata"
+                            className="absolute inset-0 w-full h-full object-cover"
+                            onLoadedData={(e) => { e.target.currentTime = 0.5; }}
+                          />
+                        ) : cp.thumbnail_url ? (
+                          <img src={cp.thumbnail_url} alt="" className="absolute inset-0 w-full h-full object-cover" />
+                        ) : (
+                          <div className="absolute inset-0 bg-gray-200 flex items-center justify-center">
+                            <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+                          </div>
+                        )}
+                        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
+                          <svg className="w-5 h-5 text-white opacity-0 group-hover:opacity-100 transition-opacity drop-shadow" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
+                        </div>
+                        {cp.duration_sec && (
+                          <div className="absolute bottom-0.5 right-0.5 bg-black/70 text-white text-[8px] px-1 py-0.5 rounded">
+                            {Math.floor(cp.duration_sec / 60)}:{String(Math.floor(cp.duration_sec % 60)).padStart(2, '0')}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                    {client.clip_count > client.clips_preview.length && (
+                      <div
+                        className="relative flex-shrink-0 rounded-lg overflow-hidden border border-dashed border-gray-300 cursor-pointer hover:border-purple-400 hover:bg-purple-50 transition-colors flex items-center justify-center"
+                        style={{ width: "72px", height: "128px" }}
+                        onClick={() => {
+                          setSelectedClientForClips(client.client_id);
+                          fetchClipAssignments(client.client_id);
+                        }}
+                      >
+                        <div className="text-center">
+                          <span className="text-lg text-gray-400">+{client.clip_count - client.clips_preview.length}</span>
+                          <p className="text-[8px] text-gray-400 mt-0.5">もっと見る</p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {/* Clip Assignment Panel */}
               {selectedClientForClips === client.client_id && (
