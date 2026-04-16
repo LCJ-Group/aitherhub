@@ -370,7 +370,7 @@ export default function DigitalHumanPage() {
                     </div>
                   </div>
                   {room.created_at && (
-                    <p className="text-xs text-gray-400 mt-1window.__t('digitalHumanPage_5d03ed', '>開始: {new Date(room.created_at).toLocaleString(')ja-JP")}</p>
+                    <p className="text-xs text-gray-400 mt-1">{window.__t('digitalHumanPage_5d03ed', '開始')}: {new Date(room.created_at).toLocaleString("ja-JP")}</p>
                   )}
                 </div>
               ))}
