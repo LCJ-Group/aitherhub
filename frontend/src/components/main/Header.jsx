@@ -14,14 +14,20 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
 } from "../ui/dropdown-menu";
-import { ChevronDown, User, Settings, LogOut, Link2 } from "lucide-react";
+import { ChevronDown, User, Settings, LogOut, Link2, Globe, Check } from "lucide-react";
+import { useTranslation } from 'react-i18next';
+import { changeLanguage } from '../../i18n';
 
 export default function Header({
   onOpenSidebar,
   user: propUser,
   setUser: setPropUser,
 }) {
+  const { t, i18n } = useTranslation();
   const [openLogin, setOpenLogin] = useState(false);
   const [openRegister, setOpenRegister] = useState(false);
   const [localUser, setLocalUser] = useState(null);
@@ -146,6 +152,35 @@ export default function Header({
                   <Link2 className="w-4 h-4" />
                   {window.__t("lcjLinking")}
                 </DropdownMenuItem>
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger>
+                    <Globe className="w-4 h-4" />
+                    {window.__t("language_settings")}
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent>
+                    <DropdownMenuItem
+                      onSelect={() => changeLanguage('ja')}
+                      className={i18n.language === 'ja' ? 'bg-accent' : ''}
+                    >
+                      {i18n.language === 'ja' && <Check className="w-3 h-3 mr-1" />}
+                      🇯🇵 日本語
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onSelect={() => changeLanguage('zh-TW')}
+                      className={i18n.language === 'zh-TW' ? 'bg-accent' : ''}
+                    >
+                      {i18n.language === 'zh-TW' && <Check className="w-3 h-3 mr-1" />}
+                      🇹🇼 繁體中文
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onSelect={() => changeLanguage('en')}
+                      className={i18n.language === 'en' ? 'bg-accent' : ''}
+                    >
+                      {i18n.language === 'en' && <Check className="w-3 h-3 mr-1" />}
+                      🇺🇸 English
+                    </DropdownMenuItem>
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
                   className="text-red-500 focus:text-red-600"
