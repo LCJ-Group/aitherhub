@@ -383,7 +383,7 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
       // Trigger re-render which will re-establish SSE
     } catch (err) {
       console.error('Retry analysis failed:', err);
-      setErrorMessage('再試行に失敗しました。しばらく待ってからもう一度お試しください。');
+      setErrorMessage(window.__t('retryFailed'));
     } finally {
       setIsRetrying(false);
     }
@@ -655,7 +655,7 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
             }
           } else if (actualStatus === 'ERROR') {
             setCurrentStatus('ERROR');
-            setErrorMessage('処理中にエラーが発生しました');
+            setErrorMessage(window.__t('processingError'));
           } else {
             // Video is still processing - SSE closed prematurely
             // Fall back to polling to continue monitoring
@@ -885,7 +885,7 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
             watchdogIntervalRef.current = null;
           }
           setCurrentStatus('ERROR');
-          setErrorMessage('処理中にエラーが発生しました');
+          setErrorMessage(window.__t('processingError'));
           VideoService.getErrorLogs(videoId).then(res => {
             if (res?.error_logs) setErrorLogs(res.error_logs);
           }).catch(() => {});
@@ -928,11 +928,11 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
 
   // Derive queue/worker status label for display between upload and compress
   const getQueueStatusLabel = () => {
-    if (enqueueError) return `キュー投入失敗: ${enqueueError}`;
-    if (!enqueueStatus) return 'キュー投入中...';
-    if (enqueueStatus === 'FAILED') return 'キュー投入失敗';
-    if (!workerClaimedAt) return 'キュー待ち（ワーカー未受信）';
-    return 'ワーカー受信済み';
+    if (enqueueError) return `${window.__t('queueFailed')}: ${enqueueError}`;
+    if (!enqueueStatus) return window.__t('queueSubmitting');
+    if (enqueueStatus === 'FAILED') return window.__t('queueFailed');
+    if (!workerClaimedAt) return window.__t('queueWaiting');
+    return window.__t('workerClaimed');
   };
 
   const queueStep = { key: 'QUEUE_WAITING', label: getQueueStatusLabel() };
@@ -1078,19 +1078,19 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
     const h = Math.floor(sec / 3600);
     const m = Math.floor((sec % 3600) / 60);
     const s = Math.floor(sec % 60);
-    if (h > 0) return `${h}時間${m > 0 ? m + '分' : ''}${s > 0 ? s + '秒' : ''}`;
-    if (m > 0) return `${m}分${s > 0 ? s + '秒' : ''}`;
-    return `${s}秒`;
+    if (h > 0) return `${h}${window.__t('hours')}${m > 0 ? m + window.__t('minutes') : ''}${s > 0 ? s + window.__t('seconds') : ''}`;
+    if (m > 0) return `${m}${window.__t('minutes')}${s > 0 ? s + window.__t('seconds') : ''}`;
+    return `${s}${window.__t('seconds')}`;
   };
 
   // Format upload duration (ms) to human-readable
   const formatUploadDur = (ms) => {
     if (!ms || ms < 1000) return null;
     const totalSec = Math.floor(ms / 1000);
-    if (totalSec < 60) return `${totalSec}秒`;
+    if (totalSec < 60) return `${totalSec}${window.__t('seconds')}`;
     const m = Math.floor(totalSec / 60);
     const s = totalSec % 60;
-    return s > 0 ? `${m}分${s}秒` : `${m}分`;
+    return s > 0 ? `${m}${window.__t('minutes')}${s}${window.__t('seconds')}` : `${m}${window.__t('minutes')}`;
   };
 
   const videoTitleNode = useMemo(() => {
@@ -1108,13 +1108,13 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
             {hasInfo && (
               <span className="text-[11px] text-gray-400 whitespace-nowrap">
                 {durLabel && (
-                  <span title="動画の再生時間">🎬 {durLabel}</span>
+                  <span title={window.__t('videoDuration')}>🎬 {durLabel}</span>
                 )}
                 {durLabel && uploadDurLabel && (
                   <span className="mx-1">|</span>
                 )}
                 {uploadDurLabel && (
-                  <span title="アップロード所要時間">⬆ {uploadDurLabel}</span>
+                  <span title={window.__t('uploadDuration')}>⬆ {uploadDurLabel}</span>
                 )}
               </span>
             )}
@@ -1272,17 +1272,17 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
             <div className="flex items-center justify-between mb-3">
               <span className="text-xs text-gray-400 flex items-center gap-1">
                 <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-                {formatDuration(elapsedMs)} 経過
+                {formatDuration(elapsedMs)} {window.__t('elapsed')}
                 {showRemaining && (
                   <span className="text-gray-300 mx-1">/</span>
                 )}
                 {showRemaining && (
-                  <span>残り 約{formatDuration(estimatedRemainingMs)}</span>
+                  <span>{window.__t('remaining')}{formatDuration(estimatedRemainingMs)}</span>
                 )}
               </span>
               {isDone && (
                 <span className="text-xs text-green-500 font-medium">
-                  合計 {formatDuration(elapsedMs)}
+                  {window.__t('total')} {formatDuration(elapsedMs)}
                 </span>
               )}
             </div>
@@ -1305,14 +1305,14 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
           {isStalled && !isDone && !isError && (
             <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-center">
               <p className="text-sm text-amber-700 mb-2">
-                解析が停止している可能性があります（{STALL_DETECT_MINUTES}分以上進捗なし）
+                {window.__t('analysisMayStalled')}({STALL_DETECT_MINUTES}{window.__t('minutesNoProgress')})
               </p>
               <button
                 onClick={handleRetryAnalysis}
                 disabled={isRetrying}
                 className="px-4 py-1.5 text-sm font-medium text-white bg-amber-500 hover:bg-amber-600 disabled:bg-amber-300 rounded-md transition-colors"
               >
-                {isRetrying ? '再試行中...' : '解析を再試行'}
+                {isRetrying ? window.__t('retrying') : window.__t('retryAnalysisBtn')}
               </button>
             </div>
           )}
@@ -1341,11 +1341,11 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
                   )}
                 </div>
                 <p className="text-xs text-gray-700 break-words">
-                  {latestError.error_message || 'エラーの詳細情報がありません'}
+                  {latestError.error_message || window.__t('noErrorDetails')}
                 </p>
                 {latestError.created_at && (
                   <p className="text-[10px] text-gray-400 mt-1">
-                    {new Date(latestError.created_at).toLocaleString('ja-JP')}
+                    {new Date(latestError.created_at).toLocaleString(window.__currentLang === 'zh-TW' ? 'zh-TW' : window.__currentLang === 'en' ? 'en-US' : 'ja-JP')}
                   </p>
                 )}
               </div>
@@ -1358,7 +1358,7 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
                 disabled={isRetrying}
                 className="px-4 py-1.5 text-sm font-medium text-white bg-red-500 hover:bg-red-600 disabled:bg-red-300 rounded-md transition-colors"
               >
-                {isRetrying ? '再試行中...' : '解析を再試行'}
+                {isRetrying ? window.__t('retrying') : window.__t('retryAnalysisBtn')}
               </button>
             </div>
           </div>
@@ -1378,7 +1378,7 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
                 <line x1="16" y1="13" x2="8" y2="13"/>
                 <line x1="16" y1="17" x2="8" y2="17"/>
               </svg>
-              エラーログ {errorLogs.length > 0 ? `(${errorLogs.length}件)` : ''}
+              {window.__t('errorLogLabel')} {errorLogs.length > 0 ? `(${errorLogs.length}${window.__t('items')})` : ''}
               <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
                 className={`transition-transform duration-200 ${showErrorLogs ? 'rotate-180' : ''}`}>
                 <polyline points="6 9 12 15 18 9"/>
@@ -1388,10 +1388,10 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
             {showErrorLogs && (
               <div className="mt-2 max-h-60 overflow-y-auto space-y-2">
                 {loadingErrorLogs && (
-                  <p className="text-xs text-gray-400 text-center py-2">読み込み中...</p>
+                  <p className="text-xs text-gray-400 text-center py-2">{window.__t('loadingText')}</p>
                 )}
                 {!loadingErrorLogs && errorLogs.length === 0 && (
-                  <p className="text-xs text-gray-400 text-center py-2">エラーの詳細が記録されていません。「解析を再試行」ボタンで再実行してください。</p>
+                  <p className="text-xs text-gray-400 text-center py-2">{window.__t('noErrorRecorded')}</p>
                 )}
                 {errorLogs.map((log, idx) => (
                   <div key={log.id || idx} className="p-2.5 bg-gray-50 border border-gray-200 rounded-md text-left">
@@ -1409,7 +1409,7 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
                     <p className="text-[11px] text-gray-600 break-words">{log.error_message}</p>
                     {log.created_at && (
                       <p className="text-[10px] text-gray-400 mt-1">
-                        {new Date(log.created_at).toLocaleString('ja-JP')}
+                        {new Date(log.created_at).toLocaleString(window.__currentLang === 'zh-TW' ? 'zh-TW' : window.__currentLang === 'en' ? 'en-US' : 'ja-JP')}
                       </p>
                     )}
                   </div>
@@ -1424,7 +1424,7 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
                   disabled={loadingErrorLogs}
                   className="text-[11px] text-gray-400 hover:text-gray-600 underline transition-colors"
                 >
-                  {loadingErrorLogs ? '読み込み中...' : 'エラーログを更新'}
+                  {loadingErrorLogs ? window.__t('loadingText') : window.__t('refreshErrorLog')}
                 </button>
               </div>
             )}
@@ -1447,7 +1447,7 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
               <line x1="16" y1="13" x2="8" y2="13"/>
               <line x1="16" y1="17" x2="8" y2="17"/>
             </svg>
-            前回のエラー履歴 ({errorLogs.length}件)
+            {window.__t('previousErrorHistory')} ({errorLogs.length}{window.__t('items')})
             <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
               className={`transition-transform duration-200 ${showErrorLogs ? 'rotate-180' : ''}`}>
               <polyline points="6 9 12 15 18 9"/>
@@ -1469,7 +1469,7 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
                   <p className="text-[11px] text-gray-600 break-words">{log.error_message}</p>
                   {log.created_at && (
                     <p className="text-[10px] text-gray-400 mt-1">
-                      {new Date(log.created_at).toLocaleString('ja-JP')}
+                      {new Date(log.created_at).toLocaleString(window.__currentLang === 'zh-TW' ? 'zh-TW' : window.__currentLang === 'en' ? 'en-US' : 'ja-JP')}
                     </p>
                   )}
                 </div>

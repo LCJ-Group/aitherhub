@@ -516,12 +516,12 @@ export default function VideoDetail({ videoData, editorParams }) {
       ...prev,
       [phaseIndex]: { rating, saving: false, saved: true },
     }));
-    showToast('保存しました');
+    showToast(window.__t('saved'));
     // Fire-and-forget: save in background
     VideoService.ratePhase(videoData.id, phaseIndex, rating, comment, reviewerName)
       .catch(err => {
         console.error('Failed to rate phase:', err);
-        showToast('保存に失敗しました', 'error');
+        showToast(window.__t('saveFailed'), 'error');
         // Revert on failure
         setPhaseRatings(prev => ({
           ...prev,
@@ -540,14 +540,14 @@ export default function VideoDetail({ videoData, editorParams }) {
       ...prev,
       [phaseIndex]: { ...prev[phaseIndex], saving: false, saved: true },
     }));
-    showToast('保存しました');
+    showToast(window.__t('saved'));
     // Use rating API if rating exists, otherwise use comment-only API
     const savePromise = currentRating
       ? VideoService.ratePhase(videoData.id, phaseIndex, currentRating, comment, getReviewerName())
       : VideoService.savePhaseComment(videoData.id, phaseIndex, comment, getReviewerName());
     savePromise.catch(err => {
         console.error('Failed to save comment:', err);
-        showToast('保存に失敗しました', 'error');
+        showToast(window.__t('saveFailed'), 'error');
         // Revert on failure
         setPhaseRatings(prev => ({
           ...prev,
@@ -564,19 +564,19 @@ export default function VideoDetail({ videoData, editorParams }) {
   ];
   const SALES_TAG_CONFIG = {
     HOOK: { label: 'HOOK', color: 'bg-purple-100 text-purple-700 border-purple-300' },
-    EMPATHY: { label: '共感', color: 'bg-pink-100 text-pink-700 border-pink-300' },
-    PROBLEM: { label: '問題', color: 'bg-red-50 text-red-600 border-red-200' },
-    EDUCATION: { label: '教育', color: 'bg-blue-100 text-blue-700 border-blue-300' },
-    SOLUTION: { label: '解決', color: 'bg-green-100 text-green-700 border-green-300' },
-    DEMONSTRATION: { label: 'デモ', color: 'bg-teal-100 text-teal-700 border-teal-300' },
-    COMPARISON: { label: '比較', color: 'bg-indigo-100 text-indigo-700 border-indigo-300' },
-    PROOF: { label: '証拠', color: 'bg-cyan-100 text-cyan-700 border-cyan-300' },
-    TRUST: { label: '信頼', color: 'bg-emerald-100 text-emerald-700 border-emerald-300' },
-    SOCIAL_PROOF: { label: '社会証明', color: 'bg-violet-100 text-violet-700 border-violet-300' },
-    OBJECTION_HANDLING: { label: '反論処理', color: 'bg-amber-100 text-amber-700 border-amber-300' },
-    URGENCY: { label: '緊急', color: 'bg-orange-100 text-orange-700 border-orange-300' },
-    LIMITED_OFFER: { label: '限定', color: 'bg-rose-100 text-rose-700 border-rose-300' },
-    BONUS: { label: '特典', color: 'bg-lime-100 text-lime-700 border-lime-300' },
+    EMPATHY: { label: window.__t('empathy'), color: 'bg-pink-100 text-pink-700 border-pink-300' },
+    PROBLEM: { label: window.__t('problem'), color: 'bg-red-50 text-red-600 border-red-200' },
+    EDUCATION: { label: window.__t('education'), color: 'bg-blue-100 text-blue-700 border-blue-300' },
+    SOLUTION: { label: window.__t('solution'), color: 'bg-green-100 text-green-700 border-green-300' },
+    DEMONSTRATION: { label: window.__t('demonstration'), color: 'bg-teal-100 text-teal-700 border-teal-300' },
+    COMPARISON: { label: window.__t('comparison'), color: 'bg-indigo-100 text-indigo-700 border-indigo-300' },
+    PROOF: { label: window.__t('proof'), color: 'bg-cyan-100 text-cyan-700 border-cyan-300' },
+    TRUST: { label: window.__t('trust'), color: 'bg-emerald-100 text-emerald-700 border-emerald-300' },
+    SOCIAL_PROOF: { label: window.__t('socialProof'), color: 'bg-violet-100 text-violet-700 border-violet-300' },
+    OBJECTION_HANDLING: { label: window.__t('objectionHandling'), color: 'bg-amber-100 text-amber-700 border-amber-300' },
+    URGENCY: { label: window.__t('urgency'), color: 'bg-orange-100 text-orange-700 border-orange-300' },
+    LIMITED_OFFER: { label: window.__t('limitedOffer'), color: 'bg-rose-100 text-rose-700 border-rose-300' },
+    BONUS: { label: window.__t('bonus'), color: 'bg-lime-100 text-lime-700 border-lime-300' },
     CTA: { label: 'CTA', color: 'bg-red-100 text-red-700 border-red-300' },
   };
 
@@ -607,10 +607,10 @@ export default function VideoDetail({ videoData, editorParams }) {
     try {
       await VideoService.updateHumanSalesTags(videoData.id, phaseIndex, finalTags, getReviewerName());
       setTagEditState(prev => ({ ...prev, [phaseIndex]: { editing: false, saving: false, saved: true } }));
-      showToast('保存しました');
+      showToast(window.__t('saved'));
     } catch (err) {
       console.error('Failed to confirm tags:', err);
-      showToast('保存に失敗しました', 'error');
+      showToast(window.__t('saveFailed'), 'error');
       setTagEditState(prev => ({ ...prev, [phaseIndex]: { editing: false, saving: false, saved: false } }));
       throw err; // Re-throw so DockPlayer's autoSaveTags can catch it
     }
@@ -619,15 +619,15 @@ export default function VideoDetail({ videoData, editorParams }) {
   const handleTagSave = (phaseIndex) => {
     const tags = humanTags[phaseIndex] || [];
     setTagEditState(prev => ({ ...prev, [phaseIndex]: { editing: false, saving: true, saved: false } }));
-    showToast('タグ保存中...');
+    showToast(window.__t('savingTags'));
     VideoService.updateHumanSalesTags(videoData.id, phaseIndex, tags, getReviewerName())
       .then(() => {
         setTagEditState(prev => ({ ...prev, [phaseIndex]: { editing: false, saving: false, saved: true } }));
-        showToast('タグ保存済み');
+        showToast(window.__t('tagsSaved'));
       })
       .catch(err => {
         console.error('Failed to save tags:', err);
-        showToast('保存に失敗しました', 'error');
+        showToast(window.__t('saveFailed'), 'error');
         setTagEditState(prev => ({ ...prev, [phaseIndex]: { editing: true, saving: false, saved: false } }));
       });
   };
@@ -1162,8 +1162,8 @@ export default function VideoDetail({ videoData, editorParams }) {
           <div className="mx-4 mt-3 mb-1 px-4 py-3 rounded-xl border border-amber-300/40 bg-amber-50 flex items-center gap-3">
             <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-amber-500 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
             <div className="flex-1">
-              <p className="text-sm font-semibold text-amber-800">一部の処理が完了していません</p>
-              <p className="text-xs text-amber-600 mt-0.5">解析結果は表示できますが、一部のレポートが未生成の可能性があります。</p>
+              <p className="text-sm font-semibold text-amber-800">{window.__t('partialProcessing')}</p>
+              <p className="text-xs text-amber-600 mt-0.5">{window.__t('partialProcessingDesc')}</p>
             </div>
           </div>
         )}
@@ -1194,7 +1194,7 @@ export default function VideoDetail({ videoData, editorParams }) {
             </div>
           )}
           {/* CSV / Excel Info Panel */}
-          <SectionErrorBoundary sectionName="CSVアセット管理">
+          <SectionErrorBoundary sectionName={window.__t('csvAssetManagement')}>
             <CsvAssetPanel
               key={csvReplaceKey}
               videoData={videoData}
@@ -1216,12 +1216,12 @@ export default function VideoDetail({ videoData, editorParams }) {
           )}
 
           {/* Clip Section - show generated clips at the top */}
-          <SectionErrorBoundary sectionName="切り抜き動画">
+          <SectionErrorBoundary sectionName={window.__t('clipVideos')}>
             <ClipSection videoData={videoData} clipStates={clipStates} reports1={videoData?.reports_1} editorParams={editorParams} />
           </SectionErrorBoundary>
 
           {/* AI Sales Clip Candidates */}
-          <SectionErrorBoundary sectionName="AIおすすめクリップ">
+          <SectionErrorBoundary sectionName={window.__t('aiRecommendedClips')}>
             <SalesClipCandidates
               videoData={videoData}
               clipStates={clipStates}
@@ -1274,7 +1274,7 @@ export default function VideoDetail({ videoData, editorParams }) {
           </SectionErrorBoundary>
 
           {/* Analytics Section - above report */}
-          <SectionErrorBoundary sectionName="配信パフォーマンス">
+          <SectionErrorBoundary sectionName={window.__t('livePerformance')}>
             <AnalyticsSection reports1={videoData?.reports_1} videoData={videoData}
               onPreviewSegment={(timeStart, timeEnd) => {
                 handlePhasePreview({ time_start: timeStart, time_end: timeEnd });
@@ -1284,13 +1284,13 @@ export default function VideoDetail({ videoData, editorParams }) {
 
           {/* Data-Driven Script Generator */}
           {videoData?.status === 'DONE' && (
-            <SectionErrorBoundary sectionName="売れる台本生成">
+            <SectionErrorBoundary sectionName={window.__t('salesScriptGen')}>
               <ScriptGeneratorPanel videoId={videoData?.id} videoData={videoData} />
             </SectionErrorBoundary>
           )}
 
           {/* Live Report v1 - 3-layer report */}
-          <SectionErrorBoundary sectionName="ライブレポート">
+          <SectionErrorBoundary sectionName={window.__t('liveReport')}>
             <div className="w-full mt-2 mx-auto">
               <div className="rounded-2xl bg-gray-50 border border-gray-200 p-4 md:p-5">
                 <LiveReportSection videoData={videoData} />
@@ -1300,14 +1300,14 @@ export default function VideoDetail({ videoData, editorParams }) {
 
           {/* Product Timeline is now integrated into AnalyticsSection above */}
 
-          <SectionErrorBoundary sectionName="レポート：全体戦略">
+          <SectionErrorBoundary sectionName={window.__t('overallStrategy')}>
           <div className="w-full mt-6 mx-auto">
             <div className="rounded-2xl bg-gray-50 border border-gray-200">
               <div onClick={() => setReportCollapsed((s) => !s)} className="flex items-center justify-between p-5 cursor-pointer hover:bg-gray-100 transform transition-all duration-200">
                 <div className="flex items-center gap-4">
                   <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-target w-5 h-5 text-gray-700"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg>
                   <div>
-                    <div className="text-gray-900 text-xl font-semibold">{'レポート：全体戦略'}</div>
+                    <div className="text-gray-900 text-xl font-semibold">{window.__t('overallStrategy')}</div>
                     <div className="text-gray-500 text-sm mt-1">{videoData?.created_at ? new Date(videoData.created_at).toLocaleString() : ''}</div>
                   </div>
                 </div>
@@ -1331,7 +1331,7 @@ export default function VideoDetail({ videoData, editorParams }) {
                       <div className="flex items-start gap-4">
                         <div className="flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-medium bg-orange-100 text-orange-600">
                           <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-flame w-3.5 h-3.5"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"></path></svg>
-                          <span>高インパクト</span>
+                          <span>{window.__t('highImpact')}</span>
                         </div>
                       </div>
 
@@ -1341,7 +1341,7 @@ export default function VideoDetail({ videoData, editorParams }) {
                             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-file-text w-4 h-4 flex-shrink-0"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path><path d="M10 9H8"></path><path d="M16 13H8"></path><path d="M16 17H8"></path></svg>
                           </div>
                           <div className="min-w-0">
-                            <div className="text-blue-600 font-medium text-xs">概要</div>
+                            <div className="text-blue-600 font-medium text-xs">{window.__t('overview')}</div>
                             <div className="text-gray-700 mt-2 text-sm">
                               <div className="markdown">
                                 <MarkdownWithTables
@@ -1359,7 +1359,7 @@ export default function VideoDetail({ videoData, editorParams }) {
                             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-circle-check w-4 h-4 flex-shrink-0"><circle cx="12" cy="12" r="10"></circle><path d="m9 12 2 2 4-4"></path></svg>
                           </div>
                           <div className="min-w-0">
-                            <div className="text-green-600 font-medium text-xs">提案</div>
+                            <div className="text-green-600 font-medium text-xs">{window.__t('suggestion')}</div>
                             <div className="text-gray-700 mt-2 text-sm">
                               <div className="markdown">
                                 <MarkdownWithTables
@@ -1383,7 +1383,7 @@ export default function VideoDetail({ videoData, editorParams }) {
                       <div className="flex items-center gap-4">
                         <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-clock w-4 h-4 text-gray-400"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
                         <div>
-                          <div className="text-gray-600 text-base font-semibold">詳細分析（タイムライン）</div>
+                          <div className="text-gray-600 text-base font-semibold">{window.__t('detailedTimeline')}</div>
                         </div>
                       </div>
 
@@ -1450,12 +1450,12 @@ export default function VideoDetail({ videoData, editorParams }) {
                                   <div className="flex items-start gap-2 flex-shrink-0 mt-0.5">
                                     {/* Memo mark - shown when user has a comment */}
                                     {(ratingComments[itemKey] || item.user_comment) && (
-                                      <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[9px] font-medium bg-blue-100 text-blue-600 border border-blue-200" title="メモあり">
+                                      <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[9px] font-medium bg-blue-100 text-blue-600 border border-blue-200" title={window.__t('hasNote')}>
                                         <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                                           <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
                                           <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
                                         </svg>
-                                        メモ
+                                        {window.__t('noteLabel')}
                                       </span>
                                     )}
                                     {item.cta_score != null && item.cta_score >= 3 && (
@@ -1467,7 +1467,7 @@ export default function VideoDetail({ videoData, editorParams }) {
                                             ? 'bg-orange-100 text-orange-700 border-orange-300'
                                             : 'bg-yellow-100 text-yellow-700 border-yellow-300'
                                         }`}
-                                        title={`CTA強度: ${item.cta_score}/5`}
+                                        title={`${window.__t('ctaStrength')}: ${item.cta_score}/5`}
                                       >
                                         <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="currentColor" stroke="none">
                                           <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
@@ -1480,19 +1480,19 @@ export default function VideoDetail({ videoData, editorParams }) {
                                         {item.sales_psychology_tags.map((tag) => {
                                           const tagConfig = {
                                             HOOK: { label: 'HOOK', color: 'bg-purple-100 text-purple-700 border-purple-300' },
-                                            EMPATHY: { label: '共感', color: 'bg-pink-100 text-pink-700 border-pink-300' },
-                                            PROBLEM: { label: '問題', color: 'bg-red-50 text-red-600 border-red-200' },
-                                            EDUCATION: { label: '教育', color: 'bg-blue-100 text-blue-700 border-blue-300' },
-                                            SOLUTION: { label: '解決', color: 'bg-green-100 text-green-700 border-green-300' },
-                                            DEMONSTRATION: { label: 'デモ', color: 'bg-teal-100 text-teal-700 border-teal-300' },
-                                            COMPARISON: { label: '比較', color: 'bg-indigo-100 text-indigo-700 border-indigo-300' },
-                                            PROOF: { label: '証拠', color: 'bg-cyan-100 text-cyan-700 border-cyan-300' },
-                                            TRUST: { label: '信頼', color: 'bg-emerald-100 text-emerald-700 border-emerald-300' },
-                                            SOCIAL_PROOF: { label: '社会証明', color: 'bg-violet-100 text-violet-700 border-violet-300' },
-                                            OBJECTION_HANDLING: { label: '反論処理', color: 'bg-amber-100 text-amber-700 border-amber-300' },
-                                            URGENCY: { label: '緊急', color: 'bg-orange-100 text-orange-700 border-orange-300' },
-                                            LIMITED_OFFER: { label: '限定', color: 'bg-rose-100 text-rose-700 border-rose-300' },
-                                            BONUS: { label: '特典', color: 'bg-lime-100 text-lime-700 border-lime-300' },
+                                            EMPATHY: { label: window.__t('empathy'), color: 'bg-pink-100 text-pink-700 border-pink-300' },
+                                            PROBLEM: { label: window.__t('problem'), color: 'bg-red-50 text-red-600 border-red-200' },
+                                            EDUCATION: { label: window.__t('education'), color: 'bg-blue-100 text-blue-700 border-blue-300' },
+                                            SOLUTION: { label: window.__t('solution'), color: 'bg-green-100 text-green-700 border-green-300' },
+                                            DEMONSTRATION: { label: window.__t('demonstration'), color: 'bg-teal-100 text-teal-700 border-teal-300' },
+                                            COMPARISON: { label: window.__t('comparison'), color: 'bg-indigo-100 text-indigo-700 border-indigo-300' },
+                                            PROOF: { label: window.__t('proof'), color: 'bg-cyan-100 text-cyan-700 border-cyan-300' },
+                                            TRUST: { label: window.__t('trust'), color: 'bg-emerald-100 text-emerald-700 border-emerald-300' },
+                                            SOCIAL_PROOF: { label: window.__t('socialProof'), color: 'bg-violet-100 text-violet-700 border-violet-300' },
+                                            OBJECTION_HANDLING: { label: window.__t('objectionHandling'), color: 'bg-amber-100 text-amber-700 border-amber-300' },
+                                            URGENCY: { label: window.__t('urgency'), color: 'bg-orange-100 text-orange-700 border-orange-300' },
+                                            LIMITED_OFFER: { label: window.__t('limitedOffer'), color: 'bg-rose-100 text-rose-700 border-rose-300' },
+                                            BONUS: { label: window.__t('bonus'), color: 'bg-lime-100 text-lime-700 border-lime-300' },
                                             CTA: { label: 'CTA', color: 'bg-red-100 text-red-700 border-red-300' },
                                           };
                                           const cfg = tagConfig[tag] || { label: tag, color: 'bg-gray-100 text-gray-600 border-gray-300' };
@@ -1542,7 +1542,7 @@ export default function VideoDetail({ videoData, editorParams }) {
                                           className={`p-0 transition-all duration-150 ${
                                             isSaving ? 'opacity-50 cursor-not-allowed' : 'hover:scale-125 cursor-pointer'
                                           }`}
-                                          title={`${star}点`}
+                                          title={`${star}${window.__t('pointSuffix')}`}
                                         >
                                           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
                                             fill={star <= currentRating ? '#f59e0b' : 'none'}
@@ -1560,10 +1560,10 @@ export default function VideoDetail({ videoData, editorParams }) {
                                     <div className="w-3 h-3 rounded-full border-2 border-gray-300 border-t-amber-500 animate-spin" />
                                   )}
                                   {phaseRatings[itemKey]?.saved && !phaseRatings[itemKey]?.saving && (
-                                    <span className="text-[9px] text-green-500 font-medium">保存済み</span>
+                                    <span className="text-[9px] text-green-500 font-medium">{window.__t('savedLabel')}</span>
                                   )}
                                   {!phaseRatings[itemKey]?.rating && (
-                                    <span className="text-[10px] text-gray-400">採点する</span>
+                                    <span className="text-[10px] text-gray-400">{window.__t('rateThis')}</span>
                                   )}
                                 </div>
                                 {/* CSV Metrics Badges */}
@@ -1582,7 +1582,7 @@ export default function VideoDetail({ videoData, editorParams }) {
                                         {m.order_count > 0 && (
                                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-green-100 text-green-700 border border-green-300">
                                             <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
-                                            {m.order_count}件
+                                            {m.order_count}{window.__t('orderCount')}
                                           </span>
                                         )}
                                         {m.viewer_count > 0 && (
@@ -1612,7 +1612,7 @@ export default function VideoDetail({ videoData, editorParams }) {
                                         {m.product_clicks > 0 && (
                                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-orange-100 text-orange-700 border border-orange-300">
                                             <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
-                                            {m.product_clicks}クリック
+                                            {m.product_clicks}{window.__t('clickCount')}
                                           </span>
                                         )}
                                         {m.product_names && m.product_names.length > 0 && (
@@ -1632,13 +1632,13 @@ export default function VideoDetail({ videoData, editorParams }) {
                             {/* Expanded content sections */}
                             {expandedTimeline[itemKey] && (
                               <div className="px-4 pb-4 mt-4 ml-15 flex flex-col gap-4 rounded-xl py-3 bg-gray-50 border border-gray-200 mr-5">
-                                {/* 概要 (Overview) section */}
+                                {/* Overview section */}
                                 <div className="flex items-start gap-4">
                                   <div className="text-blue-500">
                                     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-file-text w-4 h-4 flex-shrink-0"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path><path d="M10 9H8"></path><path d="M16 13H8"></path><path d="M16 17H8"></path></svg>
                                   </div>
                                   <div className="min-w-0">
-                                    <div className="text-blue-600 font-medium text-xs">概要</div>
+                                    <div className="text-blue-600 font-medium text-xs">{window.__t('overview')}</div>
                                     <div className="text-gray-700 mt-2 text-sm">
                                       <div className="markdown">
                                         <MarkdownWithTables
@@ -1651,14 +1651,14 @@ export default function VideoDetail({ videoData, editorParams }) {
                                   </div>
                                 </div>
 
-                                {/* 提案 (Suggestion) section */}
+                                {/* Suggestion section */}
                                 {item.insight && (
                                   <div className="flex items-start gap-4">
                                     <div className="text-green-500">
                                       <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-circle-check w-4 h-4 flex-shrink-0"><circle cx="12" cy="12" r="10"></circle><path d="m9 12 2 2 4-4"></path></svg>
                                     </div>
                                     <div className="min-w-0">
-                                      <div className="text-green-600 font-medium text-xs">提案</div>
+                                      <div className="text-green-600 font-medium text-xs">{window.__t('suggestion')}</div>
                                       <div className="text-gray-700 mt-2 text-sm">
                                         <div className="markdown">
                                           <MarkdownWithTables
@@ -1683,11 +1683,11 @@ export default function VideoDetail({ videoData, editorParams }) {
                                       </svg>
                                     </div>
                                     <div className="min-w-0 flex-1">
-                                      <div className="text-purple-600 font-medium text-xs mb-2">音声分析</div>
+                                      <div className="text-purple-600 font-medium text-xs mb-2">{window.__t('audioAnalysis')}</div>
                                       <div className="flex flex-wrap gap-2">
                                         {item.audio_features.energy_mean != null && (
                                           <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-purple-50 border border-purple-200">
-                                            <span className="text-[10px] text-purple-500">熱量</span>
+                                            <span className="text-[10px] text-purple-500">{window.__t('energy')}</span>
                                             <div className="w-16 h-1.5 bg-purple-100 rounded-full overflow-hidden">
                                               <div
                                                 className="h-full bg-purple-500 rounded-full"
@@ -1695,13 +1695,13 @@ export default function VideoDetail({ videoData, editorParams }) {
                                               />
                                             </div>
                                             <span className="text-[10px] font-medium text-purple-700">
-                                              {item.audio_features.energy_mean >= 0.03 ? '高' : item.audio_features.energy_mean >= 0.015 ? '中' : '低'}
+                                              {item.audio_features.energy_mean >= 0.03 ? window.__t('energyHigh') : item.audio_features.energy_mean >= 0.015 ? window.__t('energyMedium') : window.__t('energyLow')}
                                             </span>
                                           </div>
                                         )}
                                         {item.audio_features.pitch_std != null && (
                                           <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-indigo-50 border border-indigo-200">
-                                            <span className="text-[10px] text-indigo-500">抑揚</span>
+                                            <span className="text-[10px] text-indigo-500">{window.__t('intonation')}</span>
                                             <div className="w-16 h-1.5 bg-indigo-100 rounded-full overflow-hidden">
                                               <div
                                                 className="h-full bg-indigo-500 rounded-full"
@@ -1709,29 +1709,29 @@ export default function VideoDetail({ videoData, editorParams }) {
                                               />
                                             </div>
                                             <span className="text-[10px] font-medium text-indigo-700">
-                                              {item.audio_features.pitch_std >= 50 ? '豊か' : item.audio_features.pitch_std >= 25 ? '普通' : '単調'}
+                                              {item.audio_features.pitch_std >= 50 ? window.__t('intonationRich') : item.audio_features.pitch_std >= 25 ? window.__t('intonationNormal') : window.__t('intonationFlat')}
                                             </span>
                                           </div>
                                         )}
                                         {item.audio_features.speech_rate != null && (
                                           <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-teal-50 border border-teal-200">
-                                            <span className="text-[10px] text-teal-500">話速</span>
+                                            <span className="text-[10px] text-teal-500">{window.__t('speechRate')}</span>
                                             <span className="text-[10px] font-medium text-teal-700">
-                                              {item.audio_features.speech_rate.toFixed(1)}字/秒
+                                              {item.audio_features.speech_rate.toFixed(1)}${window.__t('charPerSec')}
                                             </span>
                                             <span className={`text-[9px] px-1 py-0.5 rounded ${
                                               item.audio_features.speech_rate > 7 ? 'bg-red-100 text-red-600' :
                                               item.audio_features.speech_rate < 3 ? 'bg-blue-100 text-blue-600' :
                                               'bg-green-100 text-green-600'
                                             }`}>
-                                              {item.audio_features.speech_rate > 7 ? '速い' :
-                                               item.audio_features.speech_rate < 3 ? '遅い' : '適切'}
+                                              {item.audio_features.speech_rate > 7 ? window.__t('speechFast') :
+                                               item.audio_features.speech_rate < 3 ? window.__t('speechSlow') : window.__t('speechProper')}
                                             </span>
                                           </div>
                                         )}
                                         {item.audio_features.silence_ratio != null && (
                                           <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-gray-50 border border-gray-200">
-                                            <span className="text-[10px] text-gray-500">沈黙率</span>
+                                            <span className="text-[10px] text-gray-500">{window.__t('silenceRate')}</span>
                                             <span className="text-[10px] font-medium text-gray-700">
                                               {(item.audio_features.silence_ratio * 100).toFixed(0)}%
                                             </span>
@@ -1739,10 +1739,10 @@ export default function VideoDetail({ videoData, editorParams }) {
                                         )}
                                         {item.audio_features.energy_trend && (
                                           <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-amber-50 border border-amber-200">
-                                            <span className="text-[10px] text-amber-500">トレンド</span>
+                                            <span className="text-[10px] text-amber-500">{window.__t('trend')}</span>
                                             <span className="text-[10px] font-medium text-amber-700">
-                                              {item.audio_features.energy_trend === 'rising' ? '↗ 上昇' :
-                                               item.audio_features.energy_trend === 'falling' ? '↘ 下降' : '→ 安定'}
+                                              {item.audio_features.energy_trend === 'rising' ? window.__t('trendRising') :
+                                               item.audio_features.energy_trend === 'falling' ? window.__t('trendFalling') : window.__t('trendStable')}
                                             </span>
                                           </div>
                                         )}
@@ -1760,7 +1760,7 @@ export default function VideoDetail({ videoData, editorParams }) {
                                       </svg>
                                     </div>
                                     <div className="flex-1 min-w-0">
-                                      <div className="text-amber-600 font-medium text-xs mb-2">このフェーズを採点</div>
+                                      <div className="text-amber-600 font-medium text-xs mb-2">{window.__t('ratePhase')}</div>
                                       <div className="flex items-center gap-1">
                                         {[1, 2, 3, 4, 5].map((star) => {
                                           const currentRating = phaseRatings[itemKey]?.rating || 0;
@@ -1776,7 +1776,7 @@ export default function VideoDetail({ videoData, editorParams }) {
                                               className={`p-0.5 transition-all duration-150 ${
                                                 isSaving ? 'opacity-50 cursor-not-allowed' : 'hover:scale-110 cursor-pointer'
                                               }`}
-                                              title={`${star}点`}
+                                              title={`${star}${window.__t('pointSuffix')}`}
                                             >
                                               <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24"
                                                 fill={star <= currentRating ? '#f59e0b' : 'none'}
@@ -1793,7 +1793,7 @@ export default function VideoDetail({ videoData, editorParams }) {
                                           <div className="ml-2 w-3 h-3 rounded-full border-2 border-gray-300 border-t-amber-500 animate-spin" />
                                         )}
                                         {phaseRatings[itemKey]?.saved && !phaseRatings[itemKey]?.saving && (
-                                          <span className="ml-2 text-[10px] text-green-500 font-medium">保存済み</span>
+                                          <span className="ml-2 text-[10px] text-green-500 font-medium">{window.__t('savedLabel')}</span>
                                         )}
                                       </div>
                                       {/* Comment input - shown after rating */}
@@ -1801,7 +1801,7 @@ export default function VideoDetail({ videoData, editorParams }) {
                                         <div className="mt-2 flex items-start gap-2">
                                           <input
                                             type="text"
-                                            placeholder="コメント（任意）"
+                                            placeholder={window.__t('commentPlaceholder')}
                                             value={ratingComments[itemKey] || ''}
                                             onChange={(e) => {
                                               e.stopPropagation();
@@ -1822,7 +1822,7 @@ export default function VideoDetail({ videoData, editorParams }) {
                                             disabled={phaseRatings[itemKey]?.saving}
                                             className="text-xs px-3 py-1.5 rounded-lg bg-amber-500 text-white font-medium hover:bg-amber-600 transition-colors disabled:opacity-50"
                                           >
-                                            保存
+                                            {window.__t('save')}
                                           </button>
                                         </div>
                                       )}
@@ -1841,16 +1841,16 @@ export default function VideoDetail({ videoData, editorParams }) {
                                       </div>
                                       <div className="flex-1 min-w-0">
                                         <div className="flex items-center gap-2 mb-2">
-                                          <span className="text-indigo-600 font-medium text-xs">販売心理タグ</span>
+                                          <span className="text-indigo-600 font-medium text-xs">{window.__t('salesPsychTag')}</span>
                                           {tagEditState[itemKey]?.saved && !tagEditState[itemKey]?.editing && (
                                             <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[8px] font-medium bg-green-100 text-green-600 border border-green-200">
                                               <svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-                                              確認済み
+                                              {window.__t('verified')}
                                             </span>
                                           )}
                                           {humanTags[itemKey] && !tagEditState[itemKey]?.editing && (
                                             <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[8px] font-medium bg-blue-100 text-blue-600 border border-blue-200">
-                                              人間修正
+                                              {window.__t('humanCorrected')}
                                             </span>
                                           )}
                                           {tagEditState[itemKey]?.saving && (
@@ -1878,14 +1878,14 @@ export default function VideoDetail({ videoData, editorParams }) {
                                                   className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-medium bg-green-50 text-green-700 border border-green-200 hover:bg-green-100 transition-colors"
                                                 >
                                                   <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-                                                  正しい
+                                                  {window.__t('correct')}
                                                 </button>
                                                 <button
                                                   onClick={() => handleTagEditStart(itemKey, item.sales_psychology_tags)}
                                                   className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-medium bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100 transition-colors"
                                                 >
                                                   <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-                                                  修正
+                                                  {window.__t('fix')}
                                                 </button>
                                               </div>
                                             )}
@@ -1895,7 +1895,7 @@ export default function VideoDetail({ videoData, editorParams }) {
                                                 className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-medium bg-gray-50 text-gray-600 border border-gray-200 hover:bg-gray-100 transition-colors"
                                               >
                                                 <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-                                                再修正
+                                                {window.__t('reFix')}
                                               </button>
                                             )}
                                           </div>
@@ -1931,13 +1931,13 @@ export default function VideoDetail({ videoData, editorParams }) {
                                                 onClick={() => handleTagSave(itemKey)}
                                                 className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-[10px] font-medium bg-indigo-600 text-white hover:bg-indigo-700 transition-colors"
                                               >
-                                                保存
+                                                {window.__t('save')}
                                               </button>
                                               <button
                                                 onClick={() => handleTagEditCancel(itemKey)}
                                                 className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-[10px] font-medium bg-gray-100 text-gray-600 border border-gray-200 hover:bg-gray-200 transition-colors"
                                               >
-                                                キャンセル
+                                                {window.__t('cancelBtn')}
                                               </button>
                                             </div>
                                           </div>
@@ -1973,12 +1973,12 @@ export default function VideoDetail({ videoData, editorParams }) {
                                           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
                                           </svg>
-                                          切り抜きをダウンロード
+                                          {window.__t('downloadClip')}
                                         </a>
                                       ) : isGeneratingSubtitles ? (
                                         <div className="flex-1 flex flex-col gap-1.5">
                                           <div className="flex items-center justify-between">
-                                            <span className="text-purple-600 text-xs font-medium">字幕を生成中...</span>
+                                            <span className="text-purple-600 text-xs font-medium">{window.__t('generatingSubtitles')}</span>
                                             <span className="text-purple-500 text-xs font-bold">95%</span>
                                           </div>
                                           <div className="w-full h-2 bg-purple-100 rounded-full overflow-hidden">
@@ -1990,17 +1990,17 @@ export default function VideoDetail({ videoData, editorParams }) {
                                           const pct = Math.max(0, Math.min(100, clipState?.progress_pct || 0));
                                           const step = clipState?.progress_step || '';
                                           const stepLabels = {
-                                            downloading: 'ソース動画を取得中',
-                                            speech_boundary: '音声境界を検出中',
-                                            cutting: 'セグメントをカット中',
-                                            person_detection: '人物を検出中',
-                                            silence_removal: '無音区間を除去中',
-                                            transcribing: '音声を文字起こし中',
-                                            refining_subtitles: '字幕を最適化中',
-                                            creating_clip: '縦型動画を作成中',
-                                            uploading: 'アップロード中',
+                                            downloading: window.__t('stepDownloading'),
+                                            speech_boundary: window.__t('stepSpeechBoundary'),
+                                            cutting: window.__t('stepCutting'),
+                                            person_detection: window.__t('stepPersonDetection'),
+                                            silence_removal: window.__t('stepSilenceRemoval'),
+                                            transcribing: window.__t('stepTranscribing'),
+                                            refining_subtitles: window.__t('stepRefiningSubtitles'),
+                                            creating_clip: window.__t('stepCreatingClip'),
+                                            uploading: window.__t('stepUploading'),
                                           };
-                                          const label = stepLabels[step] || '切り抜き生成中';
+                                          const label = stepLabels[step] || window.__t('generatingClip');
                                           return (
                                             <div className="flex-1 flex flex-col gap-1.5">
                                               <div className="flex items-center justify-between">
@@ -2028,10 +2028,10 @@ export default function VideoDetail({ videoData, editorParams }) {
                                             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                               <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="7" x2="7" y2="7"/><line x1="2" y1="17" x2="7" y2="17"/><line x1="17" y1="7" x2="22" y2="7"/><line x1="17" y1="17" x2="22" y2="17"/>
                                             </svg>
-                                            TikTok切り抜きを生成
+                                            {window.__t('generateTikTokClip')}
                                           </button>
                                           {isFailed && (
-                                            <span className="text-red-500 text-xs">生成に失敗しました。再試行してください。</span>
+                                            <span className="text-red-500 text-xs">{window.__t('clipGenerationFailed')}</span>
                                           )}
                                         </>
                                       )}
@@ -2055,12 +2055,12 @@ export default function VideoDetail({ videoData, editorParams }) {
           </SectionErrorBoundary>
 
           {/* Questions and Answers Section */}
-          <SectionErrorBoundary sectionName="質問と回答">
+          <SectionErrorBoundary sectionName={window.__t('qaSection')}>
           <div className="space-y-3 pt-4 mt-4 border-t border-gray-200">
-            <p className="text-gray-400 text-xs text-center">質問と回答</p>
+            <p className="text-gray-400 text-xs text-center">{window.__t('qaSection')}</p>
             <div className="rounded-2xl p-4 max-w-[85%] bg-gray-50 border border-gray-200">
               <p className="text-gray-700 text-sm">
-                この動画の解析が完了しました。全体的に良い構成ですが、いくつかの改善点が見つかりました。詳細について質問があれば、お聞きください。
+                {window.__t('qaPlaceholder')}
               </p>
             </div>
             {/* Chat Section */}
@@ -2106,7 +2106,7 @@ export default function VideoDetail({ videoData, editorParams }) {
         </div>
       </div>
 
-      <SectionErrorBoundary sectionName="動画プレビュー">
+      <SectionErrorBoundary sectionName={window.__t('videoPreview')}>
       <DockPlayer
         open={!!previewData}
         onClose={handleCloseDockPlayer}

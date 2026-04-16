@@ -8,12 +8,12 @@ import ClipFeedbackPanel from "./ClipFeedbackPanel";
 /**
  * SalesClipCandidates
  * ===================
- * 「AIおすすめクリップ生成」ボタンと候補カード表示コンポーネント。
+ * 「AIおすすめ{window.__t(\'moment_generateClips\')}」ボタンと候補カード表示コンポーネント。
  * 採用/却下フィードバックボタンを含み、教師データを自動収集する。
  *
  * Props:
  *   videoData          – 動画詳細オブジェクト（id が必須）
- *   onRequestClip      – (candidate) => void  クリップ生成をリクエストする関数
+ *   onRequestClip      – (candidate) => void  {window.__t(\'moment_generateClips\')}をリクエストする関数
  *   clipStates         – { [phaseIndex]: { status, clip_url } }
  */
 export default function SalesClipCandidates({ videoData, onRequestClip, clipStates = {} }) {
@@ -37,7 +37,7 @@ export default function SalesClipCandidates({ videoData, onRequestClip, clipStat
   }, [videoData?.id]);
 
   const formatTime = (seconds) => {
-    if (seconds == null || isNaN(seconds)) return "--:--";
+    if (seconds == null || isNaN(seconds)) return window.__t(\'timePlaceholder\');
     const s = Math.round(Number(seconds));
     const h = Math.floor(s / 3600);
     const m = Math.floor((s % 3600) / 60);
@@ -50,8 +50,8 @@ export default function SalesClipCandidates({ videoData, onRequestClip, clipStat
     if (!sec || isNaN(sec)) return "";
     const m = Math.floor(sec / 60);
     const s = Math.round(sec % 60);
-    if (m > 0) return `${m}分${s}秒`;
-    return `${s}秒`;
+    if (m > 0) return `${m}${window.__t(\'common_minutes\')}${s}${window.__t(\'common_seconds\')}`;
+    return `${s}${window.__t(\'common_seconds\')}`;
   };
 
   const handleFetch = useCallback(() => {
@@ -168,9 +168,9 @@ export default function SalesClipCandidates({ videoData, onRequestClip, clipStat
               captions: [],
             })}
             className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-indigo-500 text-white text-xs font-medium hover:bg-indigo-600 transition-colors"
-            title="Lightning Clip Editor"
+            title={window.__t(\'lightningClipEditor\')}
           >
-            ⚡ 編集
+            ⚡ {window.__t(\'clip_edit\')}
           </button>
         </div>
       );
@@ -180,7 +180,7 @@ export default function SalesClipCandidates({ videoData, onRequestClip, clipStat
       return (
         <div className="flex-1 flex flex-col gap-1">
           <div className="flex items-center justify-between">
-            <span className="text-purple-600 text-xs font-medium">字幕生成中...</span>
+            <span className="text-purple-600 text-xs font-medium">{window.__t(\'generatingSubtitles\')}</span>
             <span className="text-purple-500 text-xs font-bold">95%</span>
           </div>
           <div className="w-full h-1.5 bg-purple-100 rounded-full overflow-hidden">
@@ -193,17 +193,17 @@ export default function SalesClipCandidates({ videoData, onRequestClip, clipStat
       const pct = clipState?.progress_pct || 0;
       const step = clipState?.progress_step || '';
       const stepLabels = {
-        downloading: '取得中',
-        speech_boundary: '音声検出',
-        cutting: 'カット中',
-        person_detection: '人物検出',
-        silence_removal: '無音除去',
-        transcribing: '文字起こし',
-        refining_subtitles: '字幕最適化',
-        creating_clip: '動画作成',
-        uploading: 'アップロード',
+        downloading: window.__t('stepDownloading'),
+        speech_boundary: window.__t('stepSpeechBoundary'),
+        cutting: window.__t('stepCutting'),
+        person_detection: window.__t('stepPersonDetection'),
+        silence_removal: window.__t('stepSilenceRemoval'),
+        transcribing: window.__t('stepTranscribing'),
+        refining_subtitles: window.__t('stepRefiningSubtitles'),
+        creating_clip: window.__t('stepCreatingClip'),
+        uploading: window.__t('stepUploading'),
       };
-      const label = stepLabels[step] || '生成中';
+      const label = stepLabels[step] || window.__t('clipGenerating');
       return (
         <div className="flex-1 flex flex-col gap-1">
           <div className="flex items-center justify-between">
@@ -229,7 +229,7 @@ export default function SalesClipCandidates({ videoData, onRequestClip, clipStat
         <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
           <polygon points="5 3 19 12 5 21 5 3"/>
         </svg>
-        クリップ生成
+        {window.__t(\'moment_generateClips\')}
       </button>
     );
   };
@@ -249,7 +249,7 @@ export default function SalesClipCandidates({ videoData, onRequestClip, clipStat
           type="button"
           disabled={isSubmitting}
           onClick={() => handleFeedback(candidate, "adopted")}
-          title={current === "adopted" ? "採用済み（クリックで取り消し）" : "採用する"}
+          title={current === "adopted" ? window.__t(\'clipAdoptedCancel\') : window.__t(\'clipAdopt\')}
           className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all border
             ${current === "adopted"
               ? "bg-green-500 text-white border-green-500 shadow-sm"
@@ -268,7 +268,7 @@ export default function SalesClipCandidates({ videoData, onRequestClip, clipStat
               <path d="M7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/>
             </svg>
           )}
-          {current === "adopted" ? "採用済み" : "採用"}
+          {current === "adopted" ? window.__t(\'clipAdopted\') : window.__t(\'clipAdoptLabel\')}
         </button>
 
         {/* 却下ボタン */}
@@ -276,7 +276,7 @@ export default function SalesClipCandidates({ videoData, onRequestClip, clipStat
           type="button"
           disabled={isSubmitting}
           onClick={() => handleFeedback(candidate, "rejected")}
-          title={current === "rejected" ? "却下済み（クリックで取り消し）" : "却下する"}
+          title={current === "rejected" ? window.__t(\'clipRejectedCancel\') : window.__t(\'clipReject\')}
           className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all border
             ${current === "rejected"
               ? "bg-red-500 text-white border-red-500 shadow-sm"
@@ -289,7 +289,7 @@ export default function SalesClipCandidates({ videoData, onRequestClip, clipStat
             <path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3H10z"/>
             <path d="M17 2h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17"/>
           </svg>
-          {current === "rejected" ? "却下済み" : "却下"}
+          {current === "rejected" ? window.__t(\'clipRejected\') : window.__t(\'clipRejectLabel\')}
         </button>
       </div>
     );
@@ -315,19 +315,19 @@ export default function SalesClipCandidates({ videoData, onRequestClip, clipStat
             </div>
             <div>
               <div className="text-gray-900 text-xl font-semibold flex items-center gap-2">
-                🔥 AIおすすめクリップ
+                🔥 {window.__t(\'aiRecommendedClips\')}
                 {/* Beta label – remove once clip generation accuracy is validated */}
                 <span className="inline-flex items-center justify-center px-2 py-0.5 rounded-md text-xs font-bold bg-orange-100 text-orange-600 border border-orange-300 tracking-wide">
                   Beta
                 </span>
                 {hasData && candidates && (
                   <span className="inline-flex items-center justify-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gradient-to-r from-indigo-500 to-purple-600 text-white">
-                    {Array.isArray(candidates) ? candidates.length : 0}件
+                    {Array.isArray(candidates) ? candidates.length : 0}{window.__t(\'items\')}
                   </span>
                 )}
               </div>
               <div className="text-gray-500 text-sm mt-0.5">
-                売上・注文・CTA から自動選定した売れるクリップ区間
+                {window.__t(\'aiRecommendedClipsDesc\')}
               </div>
             </div>
           </div>
@@ -350,14 +350,14 @@ export default function SalesClipCandidates({ videoData, onRequestClip, clipStat
                     <svg className="animate-spin" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                       <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
                     </svg>
-                    分析中...
+                    {window.__t(\'statusAnalyzing\')}
                   </>
                 ) : (
                   <>
                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
                     </svg>
-                    AIで分析する
+                    {window.__t(\'videoDetail_analyzeWithAi\')}
                   </>
                 )}
               </button>
@@ -372,7 +372,7 @@ export default function SalesClipCandidates({ videoData, onRequestClip, clipStat
                   <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                     <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-.08-4.56"/>
                   </svg>
-                  {isLoading ? "分析中..." : "再分析"}
+                  {isLoading ? window.__t(\'statusAnalyzing\') : window.__t(\'reanalyze\')}
                 </button>
                 <button
                   type="button"
@@ -392,7 +392,7 @@ export default function SalesClipCandidates({ videoData, onRequestClip, clipStat
         {/* エラー表示 - SectionStateUI統一 */}
         {state === "error" && (
           <div className="mx-5 mb-4">
-            <ErrorState error={error} onRetry={retry} sectionName="AIおすすめクリップ" compact />
+            <ErrorState error={error} onRetry={retry} sectionName={window.__t(\'aiRecommendedClips\')} compact />
           </div>
         )}
 
@@ -401,8 +401,8 @@ export default function SalesClipCandidates({ videoData, onRequestClip, clipStat
           <div className="px-5 pb-5">
             <div className="text-center py-8 text-gray-400 text-sm">
               <div className="text-3xl mb-2">📊</div>
-              <div>売上データが不足しているため候補を生成できませんでした。</div>
-              <div className="mt-1 text-xs">動画に売上・注文データが紐付いている場合に候補が表示されます。</div>
+              <div>{window.__t(\'clipNoSalesData\')}</div>
+              <div className="mt-1 text-xs">{window.__t(\'clipSalesDataHint\')}</div>
             </div>
           </div>
         )}
@@ -447,12 +447,12 @@ export default function SalesClipCandidates({ videoData, onRequestClip, clipStat
                         {/* フィードバック状態バッジ */}
                         {isAdopted && (
                           <span className="bg-green-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">
-                            ✓ 採用
+                            ✓ {window.__t(\'clipAdoptLabel\')}
                           </span>
                         )}
                         {isRejected && (
                           <span className="bg-red-400 text-white text-xs font-bold px-2 py-0.5 rounded-full">
-                            ✕ 却下
+                            ✕ {window.__t(\'clipRejectLabel\')}
                           </span>
                         )}
                       </div>
@@ -492,14 +492,14 @@ export default function SalesClipCandidates({ videoData, onRequestClip, clipStat
                         </div>
                       )}
 
-                      {/* スコア内訳（折りたたみ） */}
+                      {/* {window.__t(\'scoreBreakdown\')}（折りたたみ） */}
                       <ScoreBreakdown breakdown={candidate.score_breakdown} />
 
                       {/* アクションボタン行 */}
                       <div className="mt-3 flex items-center justify-between gap-2">
                         {/* 採用/却下ボタン */}
                         {renderFeedbackButtons(candidate)}
-                        {/* クリップ生成ボタン */}
+                        {/* {window.__t(\'moment_generateClips\')}ボタン */}
                         {renderClipButton(candidate)}
                       </div>
 
@@ -553,21 +553,21 @@ function FeedbackSummaryBar({ feedbackMap, total }) {
   if (adopted === 0 && rejected === 0) {
     return (
       <div className="text-xs text-gray-400 text-center py-1">
-        各クリップに 👍 採用 / 👎 却下 を付けると AI が学習します
+        {window.__t(\'clipFeedbackHint\')}
       </div>
     );
   }
 
   return (
     <div className="flex items-center gap-3 px-3 py-2 rounded-xl bg-white border border-gray-100 text-xs">
-      <span className="text-gray-500 font-medium">フィードバック</span>
+      <span className="text-gray-500 font-medium">{window.__t(\'feedback\')}</span>
       {adopted > 0 && (
         <span className="flex items-center gap-1 text-green-600 font-semibold">
           <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3H14z"/>
             <path d="M7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/>
           </svg>
-          採用 {adopted}件
+          {window.__t(\'clipAdoptLabel\')} {adopted}{window.__t(\'items\')}
         </span>
       )}
       {rejected > 0 && (
@@ -576,36 +576,36 @@ function FeedbackSummaryBar({ feedbackMap, total }) {
             <path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3H10z"/>
             <path d="M17 2h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17"/>
           </svg>
-          却下 {rejected}件
+          {window.__t(\'clipRejectLabel\')} {rejected}{window.__t(\'items\')}
         </span>
       )}
       {pending > 0 && (
-        <span className="text-gray-400">未評価 {pending}件</span>
+        <span className="text-gray-400">{window.__t(\'clipUnrated\')} {pending}{window.__t(\'items\')}</span>
       )}
       <span className="ml-auto text-indigo-500 font-medium">
-        AI学習データ収集中...
+        {window.__t(\'clipAiLearning\')}
       </span>
     </div>
   );
 }
 
 /**
- * スコア内訳の折りたたみ表示
+ * {window.__t(\'scoreBreakdown\')}の折りたたみ表示
  */
 function ScoreBreakdown({ breakdown }) {
   const [open, setOpen] = useState(false);
   if (!breakdown) return null;
 
   const items = [
-    { key: "gmv", label: "売上", icon: "💰" },
-    { key: "order", label: "注文", icon: "🛒" },
-    { key: "click", label: "クリック", icon: "👆" },
-    { key: "viewer", label: "視聴者", icon: "👁️" },
-    { key: "moments", label: "売れた瞬間", icon: "⚡" },
+    { key: "gmv", label: window.__t(\'live_sales\'), icon: "💰" },
+    { key: "order", label: window.__t(\'order\'), icon: "🛒" },
+    { key: "click", label: window.__t(\'clickCount\'), icon: "👆" },
+    { key: "viewer", label: window.__t(\'live_viewers\'), icon: "👁️" },
+    { key: "moments", label: window.__t(\'moment_salesSpike\'), icon: "⚡" },
     { key: "cta", label: "CTA", icon: "📢" },
-    { key: "human_rating", label: "人間評価", icon: "⭐" },
-    { key: "purchase_popup", label: "購入ポップアップ", icon: "🛍️" },
-    { key: "price_mention", label: "価格提示", icon: "🏷️" },
+    { key: "human_rating", label: window.__t(\'humanRating\'), icon: "⭐" },
+    { key: "purchase_popup", label: window.__t(\'purchasePopup\'), icon: "🛍️" },
+    { key: "price_mention", label: window.__t(\'priceMention\'), icon: "🏷️" },
   ].filter(item => breakdown[item.key] > 0);
 
   if (items.length === 0) return null;
@@ -621,7 +621,7 @@ function ScoreBreakdown({ breakdown }) {
           className={`w-3 h-3 transform transition-transform ${open ? "rotate-180" : ""}`}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
         </svg>
-        スコア内訳
+        {window.__t(\'scoreBreakdown\')}
       </button>
       {open && (
         <div className="mt-2 space-y-1">

@@ -25,16 +25,16 @@ export default function ScriptGeneratorPanel({ videoId, videoData }) {
   const [crossVideo, setCrossVideo] = useState(true);
 
   const toneOptions = [
-    { value: "professional_friendly", label: "プロフェッショナル（親しみやすい）" },
-    { value: "energetic", label: "ハイテンション" },
-    { value: "calm_expert", label: "落ち着いた専門家" },
-    { value: "casual", label: "カジュアル" },
+    { value: "professional_friendly", label: window.__t('scriptGen_toneProfessional') },
+    { value: "energetic", label: window.__t('scriptGen_toneEnergetic') },
+    { value: "calm_expert", label: window.__t('scriptGen_toneCalmExpert') },
+    { value: "casual", label: window.__t('scriptGen_toneCasual') },
   ];
 
   const languageOptions = [
-    { value: "ja", label: "日本語" },
-    { value: "zh", label: "中文" },
-    { value: "en", label: "English" },
+    { value: "ja", label: window.__t('language_japanese') },
+    { value: "zh", label: window.__t('scriptGen_langZh') },
+    { value: "en", label: window.__t('language_english') },
   ];
 
   // Load winning patterns when panel opens
@@ -71,7 +71,7 @@ export default function ScriptGeneratorPanel({ videoId, videoData }) {
       });
       setScript(result);
     } catch (err) {
-      setError(err?.message || "台本の生成に失敗しました");
+      setError(err?.message || window.__t('scriptGen_generateFailed'));
     } finally {
       setIsGenerating(false);
     }
@@ -90,7 +90,7 @@ export default function ScriptGeneratorPanel({ videoId, videoData }) {
     if (!sec && sec !== 0) return "—";
     const m = Math.floor(sec / 60);
     const s = Math.floor(sec % 60);
-    return m > 0 ? `${m}分${s}秒` : `${s}秒`;
+    return m > 0 ? `${m}${window.__t('minuteUnit')}${s}${window.__t('seconds')}` : `${s}${window.__t('seconds')}`;
   };
 
   // Helper: truncate CTA pre_talk to a short phrase
@@ -119,8 +119,8 @@ export default function ScriptGeneratorPanel({ videoId, videoData }) {
               </svg>
             </div>
             <div>
-              <div className="text-gray-900 text-lg font-semibold">売れる台本を生成</div>
-              <div className="text-gray-500 text-sm mt-0.5">実績データに基づいたライブコマース台本</div>
+              <div className="text-gray-900 text-lg font-semibold">{window.__t(\'scriptGen_panelTitle\')}</div>
+              <div className="text-gray-500 text-sm mt-0.5">{window.__t(\'scriptGen_panelSubtitle\')}</div>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -147,7 +147,7 @@ export default function ScriptGeneratorPanel({ videoId, videoData }) {
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
                 </svg>
-                勝ちパターンを分析中...
+                {window.__t(\'scriptGen_analyzingPatterns\')}
               </div>
             )}
 
@@ -161,9 +161,9 @@ export default function ScriptGeneratorPanel({ videoId, videoData }) {
                         <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
                       </svg>
                     </div>
-                    <span className="text-xs font-semibold text-gray-700">CTA（行動喚起）</span>
+                    <span className="text-xs font-semibold text-gray-700">{window.__t(\'scriptGen_ctaTitle\')}</span>
                     {patterns.cta_phrases?.length > 0 && (
-                      <span className="text-[10px] text-orange-500 font-medium">{patterns.cta_phrases.length}件</span>
+                      <span className="text-[10px] text-orange-500 font-medium">{patterns.cta_phrases.length}{window.__t(\'scriptGen_itemsSuffix\')}</span>
                     )}
                   </div>
                   {patterns.cta_phrases?.length > 0 ? (
@@ -173,11 +173,11 @@ export default function ScriptGeneratorPanel({ videoId, videoData }) {
                           <span className="font-medium text-orange-700">"{extractCTAPhrase(cta)}"</span>
                           <div className="flex items-center gap-1 mt-0.5">
                             <span className="text-[10px] text-orange-500">
-                              {cta.moment_type === "order" ? "注文" : "クリック"}
+                              {cta.moment_type === "order" ? window.__t(\'scriptGen_order\') : window.__t(\'scriptGen_click\')}
                             </span>
                             {cta.confidence && (
                               <span className="text-[10px] text-gray-400">
-                                信頼度: {(cta.confidence * 100).toFixed(0)}%
+                                {window.__t(\'scriptGen_confidenceLabel\')}{(cta.confidence * 100).toFixed(0)}%
                               </span>
                             )}
                           </div>
@@ -185,7 +185,7 @@ export default function ScriptGeneratorPanel({ videoId, videoData }) {
                       ))}
                     </div>
                   ) : (
-                    <p className="text-xs text-gray-400">データなし</p>
+                    <p className="text-xs text-gray-400">{window.__t(\'scriptGen_noData\')}</p>
                   )}
                 </div>
 
@@ -197,9 +197,9 @@ export default function ScriptGeneratorPanel({ videoId, videoData }) {
                         <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
                       </svg>
                     </div>
-                    <span className="text-xs font-semibold text-gray-700">商品説明の最適時間</span>
+                    <span className="text-xs font-semibold text-gray-700">{window.__t(\'scriptGen_productDurationTitle\')}</span>
                     {patterns.product_durations?.length > 0 && (
-                      <span className="text-[10px] text-green-500 font-medium">{patterns.product_durations.length}件</span>
+                      <span className="text-[10px] text-green-500 font-medium">{patterns.product_durations.length}{window.__t(\'scriptGen_itemsSuffix\')}</span>
                     )}
                   </div>
                   {patterns.product_durations?.length > 0 ? (
@@ -216,14 +216,14 @@ export default function ScriptGeneratorPanel({ videoId, videoData }) {
                               {formatDuration(pd.total_exposure_sec)}
                             </span>
                             {pd.had_sales && (
-                              <span className="text-[10px] text-green-600 font-semibold">★売上あり</span>
+                              <span className="text-[10px] text-green-600 font-semibold">{window.__t(\'scriptGen_hasSales\')}</span>
                             )}
                           </div>
                         </div>
                       ))}
                     </div>
                   ) : (
-                    <p className="text-xs text-gray-400">データなし</p>
+                    <p className="text-xs text-gray-400">{window.__t(\'scriptGen_noData\')}</p>
                   )}
                 </div>
 
@@ -235,9 +235,9 @@ export default function ScriptGeneratorPanel({ videoId, videoData }) {
                         <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
                       </svg>
                     </div>
-                    <span className="text-xs font-semibold text-gray-700">高パフォーマンスフェーズ</span>
+                    <span className="text-xs font-semibold text-gray-700">{window.__t(\'scriptGen_topPhasesTitle\')}</span>
                     {patterns.top_phases?.length > 0 && (
-                      <span className="text-[10px] text-purple-500 font-medium">{patterns.top_phases.length}件</span>
+                      <span className="text-[10px] text-purple-500 font-medium">{patterns.top_phases.length}{window.__t(\'scriptGen_itemsSuffix\')}</span>
                     )}
                   </div>
                   {patterns.top_phases?.length > 0 ? (
@@ -252,7 +252,7 @@ export default function ScriptGeneratorPanel({ videoId, videoData }) {
                           <div className="flex items-center gap-1 mt-0.5">
                             {phase.composite_score != null && (
                               <span className="text-[10px] text-purple-500">
-                                スコア: {phase.composite_score.toFixed(1)}
+                                {window.__t(\'scriptGen_scoreLabel\')}{phase.composite_score.toFixed(1)}
                               </span>
                             )}
                             {phase.gmv != null && phase.gmv > 0 && (
@@ -265,7 +265,7 @@ export default function ScriptGeneratorPanel({ videoId, videoData }) {
                       ))}
                     </div>
                   ) : (
-                    <p className="text-xs text-gray-400">データなし</p>
+                    <p className="text-xs text-gray-400">{window.__t(\'scriptGen_noData\')}</p>
                   )}
                 </div>
               </div>
@@ -273,41 +273,41 @@ export default function ScriptGeneratorPanel({ videoId, videoData }) {
 
             {/* Generation Form */}
             <div className="rounded-xl bg-white/80 border border-indigo-100 p-4 space-y-4">
-              <h4 className="text-sm font-semibold text-gray-800">台本設定</h4>
+              <h4 className="text-sm font-semibold text-gray-800">{window.__t(\'scriptGen_scriptSettingsTitle\')}</h4>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {/* Product Focus */}
                 <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">注力商品（任意）</label>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">{window.__t(\'scriptGen_productFocusLabel\')}</label>
                   <input
                     type="text"
                     value={productFocus}
                     onChange={(e) => setProductFocus(e.target.value)}
-                    placeholder="例: KYOGOKU シグネチャーシャンプー"
+                    placeholder={window.__t(\'scriptGen_productFocusPlaceholder\')}
                     className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-300 focus:border-indigo-400 outline-none transition-all bg-white"
                   />
                 </div>
 
                 {/* Duration */}
                 <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">台本の長さ</label>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">{window.__t(\'scriptGen_scriptDurationLabel\')}</label>
                   <select
                     value={durationMinutes}
                     onChange={(e) => setDurationMinutes(Number(e.target.value))}
                     className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-300 focus:border-indigo-400 outline-none transition-all bg-white"
                   >
-                    <option value={5}>5分</option>
-                    <option value={10}>10分</option>
-                    <option value={15}>15分</option>
-                    <option value={20}>20分</option>
-                    <option value={30}>30分</option>
-                    <option value={60}>60分</option>
+                    <option value={5}>5{window.__t(\'scriptGen_minutesSuffix\')}</option>
+                    <option value={10}>10{window.__t(\'scriptGen_minutesSuffix\')}</option>
+                    <option value={15}>15{window.__t(\'scriptGen_minutesSuffix\')}</option>
+                    <option value={20}>20{window.__t(\'scriptGen_minutesSuffix\')}</option>
+                    <option value={30}>30{window.__t(\'scriptGen_minutesSuffix\')}</option>
+                    <option value={60}>60{window.__t(\'scriptGen_minutesSuffix\')}</option>
                   </select>
                 </div>
 
                 {/* Tone */}
                 <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">トーン</label>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">{window.__t(\'scriptGen_toneLabel\')}</label>
                   <select
                     value={tone}
                     onChange={(e) => setTone(e.target.value)}
@@ -321,7 +321,7 @@ export default function ScriptGeneratorPanel({ videoId, videoData }) {
 
                 {/* Language */}
                 <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">言語</label>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">{window.__t(\'scriptGen_languageLabel\')}</label>
                   <select
                     value={language}
                     onChange={(e) => setLanguage(e.target.value)}
@@ -345,7 +345,7 @@ export default function ScriptGeneratorPanel({ videoId, videoData }) {
                   />
                   <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-indigo-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-600"></div>
                 </label>
-                <span className="text-xs text-gray-600">他の配信の勝ちパターンも参考にする</span>
+                <span className="text-xs text-gray-600">{window.__t(\'scriptGen_crossVideoLabel\')}</span>
               </div>
 
               {/* Generate Button */}
@@ -364,7 +364,7 @@ export default function ScriptGeneratorPanel({ videoId, videoData }) {
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
                     </svg>
-                    実績データを分析して台本を生成中...
+                    {window.__t(\'scriptGen_generatingScript\')}
                   </>
                 ) : (
                   <>
@@ -372,7 +372,7 @@ export default function ScriptGeneratorPanel({ videoId, videoData }) {
                       <path d="M12 3v18"/>
                       <path d="M5.5 8.5L12 3l6.5 5.5"/>
                     </svg>
-                    台本を生成する
+                    {window.__t(\'scriptGen_generateScriptBtn\')}
                   </>
                 )}
               </button>
@@ -390,12 +390,12 @@ export default function ScriptGeneratorPanel({ videoId, videoData }) {
               <div className="rounded-xl bg-white border border-indigo-200 p-4 space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <h4 className="text-sm font-semibold text-gray-800">生成された台本</h4>
+                    <h4 className="text-sm font-semibold text-gray-800">{window.__t(\'scriptGen_generatedScriptTitle\')}</h4>
                     <span className="px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 text-[10px] font-medium">
-                      {script.char_count?.toLocaleString()}文字
+                      {script.char_count?.toLocaleString()}{window.__t(\'scriptGen_characters\')}
                     </span>
                     <span className="px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 text-[10px] font-medium">
-                      約{script.estimated_duration_minutes}分
+                      {window.__t(\'scriptGen_approximately\')}{script.estimated_duration_minutes}{window.__t(\'scriptGen_minutesSuffix\')}
                     </span>
                   </div>
                   <button
@@ -407,14 +407,14 @@ export default function ScriptGeneratorPanel({ videoId, videoData }) {
                         <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 text-green-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                           <polyline points="20 6 9 17 4 12"/>
                         </svg>
-                        コピー済み
+                        {window.__t(\'scriptGen_copied\')}
                       </>
                     ) : (
                       <>
                         <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                           <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
                         </svg>
-                        コピー
+                        {window.__t(\'scriptGen_copy\')}
                       </>
                     )}
                   </button>
@@ -425,22 +425,22 @@ export default function ScriptGeneratorPanel({ videoId, videoData }) {
                   <div className="flex flex-wrap gap-1.5">
                     {script.patterns_used.cta_phrases_found > 0 && (
                       <span className="px-2 py-0.5 rounded-full bg-orange-50 text-orange-600 text-[10px] font-medium border border-orange-100">
-                        CTA {script.patterns_used.cta_phrases_found}件
+                        CTA {script.patterns_used.cta_phrases_found}{window.__t(\'scriptGen_itemsSuffix\')}
                       </span>
                     )}
                     {script.patterns_used.top_phases_used > 0 && (
                       <span className="px-2 py-0.5 rounded-full bg-purple-50 text-purple-600 text-[10px] font-medium border border-purple-100">
-                        高パフォーマンス {script.patterns_used.top_phases_used}件
+                        {window.__t(\'scriptGen_topPhasesTitle\')} {script.patterns_used.top_phases_used}{window.__t(\'scriptGen_itemsSuffix\')}
                       </span>
                     )}
                     {script.patterns_used.products_analyzed > 0 && (
                       <span className="px-2 py-0.5 rounded-full bg-green-50 text-green-600 text-[10px] font-medium border border-green-100">
-                        商品分析 {script.patterns_used.products_analyzed}件
+                        {window.__t(\'scriptGen_productAnalysisLabel\')}{script.patterns_used.products_analyzed}{window.__t(\'scriptGen_itemsSuffix\')}
                       </span>
                     )}
                     {script.patterns_used.cross_video_patterns && (
                       <span className="px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 text-[10px] font-medium border border-blue-100">
-                        クロス配信分析 ({script.patterns_used.videos_in_cross_analysis}本)
+                        {window.__t(\'scriptGen_crossVideoAnalysisLabel\')}{script.patterns_used.videos_in_cross_analysis}{window.__t(\'scriptGen_videosCountSuffix\')}
                       </span>
                     )}
                   </div>

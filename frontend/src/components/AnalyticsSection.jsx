@@ -58,7 +58,7 @@ function formatTime(seconds) {
 }
 
 function formatDurationMinutes(seconds) {
-  if (seconds == null || isNaN(seconds)) return "0分";
+  if (seconds == null || isNaN(seconds)) return window.__t('analyticsSection_e8b5');
   const mins = Math.round(seconds / 60);
   return `${mins}分`;
 }
@@ -100,16 +100,13 @@ function ExposureRow({ exposure, colorIdx, onUpdate, onDelete, isEditing, setEdi
     return (
       <div className={`flex items-center gap-2 p-2 rounded-lg border ${getBgClass(colorIdx)}`}>
         <input className="flex-1 text-sm px-2 py-1 rounded border border-gray-300 bg-white"
-          value={editData.product_name} onChange={(e) => setEditData({ ...editData, product_name: e.target.value })} placeholder="商品名" />
-        <input className="w-16 text-sm px-2 py-1 rounded border border-gray-300 bg-white text-center"
+          value={editData.product_name} onChange={(e) =>{window.__t('analyticsSection_29cc')}<input className="w-16 text-sm px-2 py-1 rounded border border-gray-300 bg-white text-center"
           value={editData.time_start} onChange={(e) => setEditData({ ...editData, time_start: e.target.value })} placeholder="0:00" />
         <span className="text-gray-400 text-xs">-</span>
         <input className="w-16 text-sm px-2 py-1 rounded border border-gray-300 bg-white text-center"
           value={editData.time_end} onChange={(e) => setEditData({ ...editData, time_end: e.target.value })} placeholder="0:00" />
-        <button onClick={handleSave} disabled={saving} className="px-2 py-1 text-xs bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50">
-          {saving ? "..." : "保存"}
-        </button>
-        <button onClick={() => setEditing(null)} className="px-2 py-1 text-xs bg-gray-300 text-gray-700 rounded hover:bg-gray-400">取消</button>
+        <button onClick={handleSave} disabled={saving} className="px-2 py-1 text-xs bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50">{window.__t('analyticsSection_f220')}</button>
+        <button onClick={() =>{window.__t('analyticsSection_9dbc')}</button>
       </div>
     );
   }
@@ -130,13 +127,11 @@ function ExposureRow({ exposure, colorIdx, onUpdate, onDelete, isEditing, setEdi
       }`}>{Math.round((exposure.confidence || 0) * 100)}%</div>
       <div className={`text-[10px] px-1.5 py-0.5 rounded-full ${
         exposure.source === "human" ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-500"
-      }`}>{exposure.source === "human" ? "手動" : "AI"}</div>
+      }`}>{window.__t('analyticsSection_e006')}</div>
       <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-        <button onClick={() => setEditing(exposure.id)} className="p-1 text-gray-400 hover:text-blue-500" title="編集">
-          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
+        <button onClick={() =>{window.__t('analyticsSection_3e9c')}<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
         </button>
-        <button onClick={() => onDelete(exposure.id)} className="p-1 text-gray-400 hover:text-red-500" title="削除">
-          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
+        <button onClick={() =>{window.__t('analyticsSection_7bb8')}<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
         </button>
       </div>
     </div>
@@ -161,132 +156,13 @@ function AddExposureForm({ onAdd, onCancel }) {
   return (
     <div className="flex flex-wrap items-center gap-2 p-3 rounded-lg bg-blue-50 border border-blue-200">
       <input className="flex-1 min-w-[120px] text-sm px-2 py-1.5 rounded border border-gray-300 bg-white"
-        value={data.product_name} onChange={(e) => setData({ ...data, product_name: e.target.value })} placeholder="商品名 *" />
+        value={data.product_name} onChange={(e) =>{window.__t('analyticsSection_351a')}<input className="w-16 text-sm px-2 py-1.5 rounded border border-gray-300 bg-white text-center"
+        value={data.time_start} onChange={(e) =>{window.__t('analyticsSection_fde6')}<span className="text-gray-400 text-xs">-</span>
       <input className="w-16 text-sm px-2 py-1.5 rounded border border-gray-300 bg-white text-center"
-        value={data.time_start} onChange={(e) => setData({ ...data, time_start: e.target.value })} placeholder="開始" />
-      <span className="text-gray-400 text-xs">-</span>
-      <input className="w-16 text-sm px-2 py-1.5 rounded border border-gray-300 bg-white text-center"
-        value={data.time_end} onChange={(e) => setData({ ...data, time_end: e.target.value })} placeholder="終了" />
-      <button onClick={handleSubmit} disabled={saving || !data.product_name || !data.time_start || !data.time_end}
-        className="px-3 py-1.5 text-xs bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50">
-        {saving ? "保存中..." : "追加"}
-      </button>
-      <button onClick={onCancel} className="px-3 py-1.5 text-xs bg-gray-200 text-gray-700 rounded hover:bg-gray-300">キャンセル</button>
-    </div>
-  );
-}
-
-// ─── Helper: add seconds to HH:MM time string ────────────
-function addSecondsToTime(baseTime, seconds) {
-  if (!baseTime) return null;
-  const match = baseTime.match(/^(\d{1,2}):(\d{2})/);
-  if (!match) return null;
-  const baseMinutes = parseInt(match[1]) * 60 + parseInt(match[2]);
-  const totalMinutes = baseMinutes + Math.floor(seconds / 60);
-  const h = Math.floor(totalMinutes / 60) % 24;
-  const m = totalMinutes % 60;
-  return `${h.toString().padStart(2, "0")}:${m.toString().padStart(2, "0")}`;
-}
-
-// ─── Main Component ───────────────────────────────────────
-export default function AnalyticsSection({ reports1, videoData, onPreviewSegment }) {
-  const [collapsed, setCollapsed] = useState(false);
-  const [excelData, setExcelData] = useState(null);
-  const [loadingExcel, setLoadingExcel] = useState(false);
-  const [excelError, setExcelError] = useState(null);
-  const [productCollapsed, setProductCollapsed] = useState(false);
-  const [phaseProductCollapsed, setPhaseProductCollapsed] = useState(true);
-
-  // Product exposure states (merged from ProductTimeline)
-  const [exposures, setExposures] = useState([]);
-  const [loadingExposures, setLoadingExposures] = useState(false);
-  const [exposuresError, setExposuresError] = useState(null);
-  const [editingId, setEditingId] = useState(null);
-  const [showAddForm, setShowAddForm] = useState(false);
-  const [ganttExpanded, setGanttExpanded] = useState(false);
-  const [exposureListExpanded, setExposureListExpanded] = useState(false);
-
-  // Selected product for filtering
-  const [selectedProduct, setSelectedProduct] = useState(null);
-  const [rankingCollapsed, setRankingCollapsed] = useState(false);
-
-  // ── Fetch Excel product/trend data ────────────────────────────
-  useEffect(() => {
-    if (!videoData?.id) return;
-    if (!videoData.excel_product_blob_url && !videoData.excel_trend_blob_url) return;
-    let cancelled = false;
-    setLoadingExcel(true);
-    setExcelError(null);
-    VideoService.getProductData(videoData.id)
-      .then((data) => { if (!cancelled) setExcelData(data); })
-      .catch((e) => {
-        if (!cancelled) {
-          const errType = e?.response?.status === 404 ? "not_found" : e?.response?.status >= 500 ? "server" : "unknown";
-          setExcelError({ type: errType, message: e?.message || "Excel data load failed", status: e?.response?.status });
-          logSectionError({ sectionName: "配信パフォーマンス/Excel", videoId: videoData.id, endpoint: "getProductData", errorType: errType, errorMessage: e?.message, httpStatus: e?.response?.status });
-        }
-      })
-      .finally(() => { if (!cancelled) setLoadingExcel(false); });
-    return () => { cancelled = true; };
-  }, [videoData?.id, videoData?.excel_product_blob_url, videoData?.excel_trend_blob_url]);
-
-  // ── Fetch product exposures ───────────────────────────────────
-  const fetchExposures = useCallback(async () => {
-    if (!videoData?.id) return;
-    setLoadingExposures(true);
-    setExposuresError(null);
-    try {
-      const result = await VideoService.getProductExposures(videoData.id);
-      setExposures(result?.exposures || []);
-    } catch (e) {
-      console.error("Failed to fetch exposures:", e);
-      const errType = e?.response?.status === 404 ? "not_found" : e?.response?.status >= 500 ? "server" : "unknown";
-      setExposuresError({ type: errType, message: e?.message || "Exposures load failed", status: e?.response?.status });
-      logSectionError({ sectionName: "配信パフォーマンス/商品露出", videoId: videoData.id, endpoint: "getProductExposures", errorType: errType, errorMessage: e?.message, httpStatus: e?.response?.status });
-    }
-    setLoadingExposures(false);
-  }, [videoData?.id]);
-
-  useEffect(() => { fetchExposures(); }, [fetchExposures]);
-
-  // CRUD handlers for exposures
-  const handleUpdateExposure = async (exposureId, data) => {
-    await VideoService.updateProductExposure(videoData.id, exposureId, data);
-    await fetchExposures();
-  };
-  const handleDeleteExposure = async (exposureId) => {
-    if (!window.confirm("この商品露出セグメントを削除しますか？")) return;
-    await VideoService.deleteProductExposure(videoData.id, exposureId);
-    await fetchExposures();
-  };
-  const handleAddExposure = async (data) => {
-    await VideoService.createProductExposure(videoData.id, data);
-    await fetchExposures();
-    setShowAddForm(false);
-  };
-
-  // ── Build product color map & stats from exposures ────────────
-  const exposureStats = useMemo(() => {
-    // Build a name-resolution map: Product_N → real product name from Excel
-    const excelNames = (excelData?.products || []).map(p => {
-      const keys = Object.keys(p);
-      const nameKey = keys.find(k => k === '商品名')
-        || keys.find(k => /product_name|name/i.test(k) && !/id/i.test(k))
-        || keys.find(k => /商品名/.test(k))
-        || keys.find(k => /商品/.test(k) && !/ID|id|ＩＤ/.test(k))
-        || keys[1] || keys[0];
-      return nameKey ? p[nameKey] : null;
-    }).filter(Boolean);
-
-    const nameMap = {};
-    for (const exp of exposures) {
-      const raw = exp.product_name;
-      if (nameMap[raw] !== undefined) continue;
-      // Check if it matches Product_N pattern
-      const m = raw.match(/^Product_(\d+)$/i);
-      if (m) {
-        const idx = parseInt(m[1], 10);
-        if (idx < excelNames.length) {
+        value={data.time_end} onChange={(e) =>{window.__t('analyticsSection_d2de')}<button onClick={handleSubmit} disabled={saving || !data.product_name || !data.time_start || !data.time_end}
+        className="px-3 py-1.5 text-xs bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50">{window.__t('analyticsSection_bd82')}</button>
+      <button onClick={onCancel} className="px-3 py-1.5 text-xs bg-gray-200 text-gray-700 rounded hover:bg-gray-300">{window.__t('cancelBtn')}</button>
+    </div>{window.__t('analyticsSection_6257')}< excelNames.length) {
           nameMap[raw] = excelNames[idx];
         } else {
           nameMap[raw] = raw; // no match, keep original
@@ -296,126 +172,7 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
       }
     }
 
-    const resolveName = (raw) => nameMap[raw] ?? raw;
-
-    const uniqueProducts = [...new Set(exposures.map((e) => resolveName(e.product_name)))];
-    const colorMap = {};
-    uniqueProducts.forEach((name, idx) => { colorMap[name] = idx; });
-
-    // Per-product stats (using resolved names)
-    const stats = {};
-    for (const exp of exposures) {
-      const name = resolveName(exp.product_name);
-      if (!stats[name]) {
-        stats[name] = { name, segments: [], totalDuration: 0, count: 0, colorIdx: colorMap[name] };
-      }
-      const dur = (exp.time_end || 0) - (exp.time_start || 0);
-      stats[name].segments.push(exp);
-      stats[name].totalDuration += dur;
-      stats[name].count += 1;
-    }
-
-    // Sort by total duration descending
-    const sorted = Object.values(stats).sort((a, b) => b.totalDuration - a.totalDuration);
-    return { colorMap, uniqueProducts, sorted, resolveName };
-  }, [exposures, excelData]);
-
-  // ── Aggregate metrics from all phases ──────────────────────────
-  const agg = useMemo(() => {
-    if (!reports1 || reports1.length === 0) return null;
-
-    let totalGmv = 0, totalOrders = 0, totalViewers = 0, totalLikes = 0;
-    let totalComments = 0, totalShares = 0, totalFollowers = 0, totalClicks = 0;
-    let maxTime = 0, hasAnyData = false;
-    const productMap = {};
-    const timeSeriesGmv = [], timeSeriesViewers = [];
-
-    for (const item of reports1) {
-      const m = item.csv_metrics;
-      if (!m) continue;
-      if (m.gmv > 0 || m.order_count > 0 || m.viewer_count > 0 || m.like_count > 0) hasAnyData = true;
-
-      totalGmv += m.gmv || 0;
-      totalOrders += m.order_count || 0;
-      totalViewers = Math.max(totalViewers, m.viewer_count || 0);
-      totalLikes += m.like_count || 0;
-      totalComments += m.comment_count || 0;
-      totalShares += m.share_count || 0;
-      totalFollowers += m.new_followers || 0;
-      totalClicks += m.product_clicks || 0;
-
-      if (item.time_end != null && Number(item.time_end) > maxTime) maxTime = Number(item.time_end);
-
-      const midTime = item.time_start != null && item.time_end != null
-        ? (Number(item.time_start) + Number(item.time_end)) / 2
-        : item.time_start != null ? Number(item.time_start) : null;
-
-      if (midTime != null) {
-        timeSeriesGmv.push({ x: midTime, y: m.gmv || 0 });
-        timeSeriesViewers.push({ x: midTime, y: m.viewer_count || 0 });
-      }
-
-      if (m.product_names && Array.isArray(m.product_names)) {
-        for (const name of m.product_names) {
-          if (!productMap[name]) productMap[name] = { name, gmv: 0, orders: 0, clicks: 0, phases: 0 };
-          productMap[name].gmv += m.gmv || 0;
-          productMap[name].orders += m.order_count || 0;
-          productMap[name].clicks += m.product_clicks || 0;
-          productMap[name].phases += 1;
-        }
-      }
-    }
-
-    if (!hasAnyData) return null;
-
-    timeSeriesGmv.sort((a, b) => a.x - b.x);
-    timeSeriesViewers.sort((a, b) => a.x - b.x);
-
-    let cumGmv = 0;
-    const cumulativeGmv = timeSeriesGmv.map((p) => { cumGmv += p.y; return { x: p.x, y: cumGmv }; });
-
-    const durationMin = Math.round(maxTime / 60);
-    const cvr = totalClicks > 0 ? ((totalOrders / totalClicks) * 100).toFixed(1) : "0.0";
-    const avgOrderValue = totalOrders > 0 ? Math.round(totalGmv / totalOrders) : 0;
-    const gmvPerHour = durationMin > 0 ? Math.round(totalGmv / (durationMin / 60)) : 0;
-    const gpm = totalViewers > 0 ? Math.round(totalGmv / totalViewers) : 0;
-    const products = Object.values(productMap).sort((a, b) => b.gmv - a.gmv);
-
-    return {
-      totalGmv, totalOrders, totalViewers, totalLikes, totalComments,
-      totalShares, totalFollowers, totalClicks, durationMin, cvr,
-      avgOrderValue, gmvPerHour, gpm, products, cumulativeGmv, timeSeriesViewers,
-    };
-  }, [reports1]);
-
-  // ── Process Excel trend data for chart with real timestamps ────
-  const trendChart = useMemo(() => {
-    if (!excelData?.has_trend_data || !excelData.trends || excelData.trends.length === 0) return null;
-
-    const trends = excelData.trends;
-    const keys = Object.keys(trends[0] || {});
-    const timeKey = keys.find(k => /时间|time|時間/.test(k.toLowerCase())) || keys[0];
-    const gmvKey = keys.find(k => /gmv|销售额|売上|revenue|成交金额/.test(k.toLowerCase()));
-    const viewerKey = keys.find(k => /观看|viewer|視聴|在线|观众|人数/.test(k.toLowerCase()));
-    const orderKey = keys.find(k => /订单|order|注文|成交/.test(k.toLowerCase()));
-
-    if (!timeKey) return null;
-
-    const parsed = [];
-    let firstMinutes = null;
-
-    for (const row of trends) {
-      const timeVal = row[timeKey];
-      if (!timeVal) continue;
-      const timeStr = String(timeVal).trim();
-      const match = timeStr.match(/^(\d{1,2}):(\d{2})/);
-      if (!match) continue;
-      const hours = parseInt(match[1], 10);
-      const minutes = parseInt(match[2], 10);
-      const totalMinutes = hours * 60 + minutes;
-      if (firstMinutes === null) firstMinutes = totalMinutes;
-      let elapsed = totalMinutes - firstMinutes;
-      if (elapsed < 0) elapsed += 24 * 60;
+    const resolveName = (raw) =>{window.__t('analyticsSection_d0ba')}< 0) elapsed += 24 * 60;
 
       parsed.push({
         realTime: timeStr,
@@ -430,226 +187,10 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
     if (parsed.length < 2) return null;
     const startTime = parsed[0]?.realTime || null;
     // Calculate totals from Excel trend data
-    const excelTotalGmv = gmvKey ? parsed.reduce((sum, d) => sum + (d.gmv || 0), 0) : null;
-    const excelTotalOrders = orderKey ? parsed.reduce((sum, d) => sum + (d.orders || 0), 0) : null;
-    const excelMaxViewers = viewerKey ? Math.max(...parsed.map(d => d.viewers || 0)) : null;
-
-    return { data: parsed, hasGmv: !!gmvKey, hasViewers: !!viewerKey, hasOrders: !!orderKey, startTime, excelTotalGmv, excelTotalOrders, excelMaxViewers };
-  }, [excelData]);
-
-  // Stream start time (from trend data or video filename)
-  const streamStartTime = useMemo(() => {
-    if (trendChart?.startTime) return trendChart.startTime;
-    // Try to extract from filename: ryukyogoku-20260129-0802.mp4 → 08:02
-    const fn = videoData?.original_filename || "";
-    const m = fn.match(/(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})/);
-    if (m) return `${m[4]}:${m[5]}`;
-    return null;
-  }, [trendChart, videoData]);
-
-  // ── Video duration from various sources ───────────────────────
-  const videoDuration = useMemo(() => {
-    if (videoData?.duration) return videoData.duration;
-    if (agg?.durationMin) return agg.durationMin * 60;
-    if (exposures.length > 0) return Math.max(...exposures.map(e => e.time_end || 0), 60);
-    return 0;
-  }, [videoData, agg, exposures]);
-
-  // ── Format helpers ─────────────────────────────────────────────
-  const fmtTime = (seconds) => {
-    const m = Math.floor(seconds / 60);
-    const s = Math.floor(seconds % 60);
-    return `${m}:${s.toString().padStart(2, "0")}`;
-  };
-
-  const fmtElapsed = (seconds) => {
-    const m = Math.floor(seconds / 60);
-    return `配信${m}分頃`;
-  };
-
-  // ── Process Excel product data ────────────────────────────────
-  const excelProducts = useMemo(() => {
-    if (!excelData?.has_product_data || !excelData.products || excelData.products.length === 0) return null;
-
-    const products = excelData.products;
-    const keys = Object.keys(products[0] || {});
-    const nameKey = keys.find(k => k === '商品名')
-      || keys.find(k => /product_name|name/i.test(k) && !/id/i.test(k))
-      || keys.find(k => /商品名/.test(k))
-      || keys.find(k => /商品/.test(k) && !/ID|id|ＩＤ/.test(k))
-      || keys[1] || keys[0];
-    const priceKey = keys.find(k => /価格|price|单价|金額/.test(k.toLowerCase()));
-    const quantityKey = keys.find(k => /数量|quantity|qty|販売数/.test(k.toLowerCase()));
-    const revenueKey = keys.find(k => /^GMV$/i.test(k))
-      || keys.find(k => /売上|revenue|gmv|销售额|金額/.test(k.toLowerCase()));
-    const categoryKey = keys.find(k => /カテゴリ|category|分類/.test(k.toLowerCase()));
-    const displayKeys = keys.filter(k => k && !k.startsWith("col_"));
-    const parseNum = (v) => { if (typeof v === 'number') return v; if (typeof v === 'string') { const n = parseFloat(v.replace(/,/g, '')); return isNaN(n) ? 0 : n; } return 0; };
-    const sortedItems = revenueKey ? [...products].sort((a, b) => parseNum(b[revenueKey]) - parseNum(a[revenueKey])) : products;
-
-    // Calculate total GMV from product data
-    const totalProductGmv = revenueKey ? products.reduce((sum, p) => sum + parseNum(p[revenueKey]), 0) : null;
-    const orderCountKey = keys.find(k => /注文|成交件数|order|orders|件数/i.test(k));
-    const totalProductOrders = orderCountKey ? products.reduce((sum, p) => sum + parseNum(p[orderCountKey]), 0) : null;
-
-    return { items: sortedItems, nameKey, priceKey, quantityKey, revenueKey, categoryKey, displayKeys, top5: sortedItems.slice(0, 5), totalProductGmv, totalProductOrders };
-  }, [excelData]);
-
-  // ── Match exposure product names with Excel product sales data ─
-  const productRanking = useMemo(() => {
-    if (exposureStats.sorted.length === 0) return [];
-
-    // Build a lookup from Excel products by name
-    const excelLookup = {};
-    if (excelProducts?.items && excelProducts.nameKey && excelProducts.revenueKey) {
-      const parseNum = (v) => { if (typeof v === 'number') return v; if (typeof v === 'string') { const n = parseFloat(v.replace(/,/g, '')); return isNaN(n) ? 0 : n; } return 0; };
-      for (const p of excelProducts.items) {
-        const name = p[excelProducts.nameKey];
-        if (name) {
-          excelLookup[name] = {
-            gmv: parseNum(p[excelProducts.revenueKey]),
-            quantity: excelProducts.quantityKey ? parseNum(p[excelProducts.quantityKey]) : 0,
-            clicks: 0,
-          };
-        }
-      }
-    }
-
-    // Also check phase-based product data
-    const phaseLookup = {};
-    if (agg?.products) {
-      for (const p of agg.products) {
-        phaseLookup[p.name] = { gmv: p.gmv, orders: p.orders, clicks: p.clicks };
-      }
-    }
-
-    // Total GMV for share calculation
-    let totalProductGmv = 0;
-
-    const ranked = exposureStats.sorted.map((stat) => {
-      // Try to match with Excel data (fuzzy: contains match)
-      let salesData = excelLookup[stat.name] || null;
-      if (!salesData) {
-        // Fuzzy match: check if exposure name is contained in any Excel product name or vice versa
-        for (const [excelName, data] of Object.entries(excelLookup)) {
-          if (excelName.includes(stat.name) || stat.name.includes(excelName)) {
-            salesData = data;
-            break;
-          }
-        }
-      }
-
-      // Fallback to phase data
-      const phaseData = phaseLookup[stat.name] || null;
-
-      const gmv = salesData?.gmv || phaseData?.gmv || 0;
-      const orders = salesData?.quantity || phaseData?.orders || 0;
-      const clicks = phaseData?.clicks || salesData?.clicks || 0;
-      totalProductGmv += gmv;
-
-      return {
-        ...stat,
-        gmv,
-        orders,
-        clicks,
-      };
-    });
-
-    // Add share percentage and CVR
-    return ranked.map(p => ({
-      ...p,
-      sharePercent: totalProductGmv > 0 ? ((p.gmv / totalProductGmv) * 100) : 0,
-      cvr: p.clicks > 0 ? ((p.orders / p.clicks) * 100) : (p.orders > 0 && agg?.totalClicks > 0 ? ((p.orders / agg.totalClicks) * 100) : 0),
-    })).sort((a, b) => b.gmv - a.gmv || b.totalDuration - a.totalDuration);
-  }, [exposureStats, excelProducts, agg]);
-
-  // ── Build a lookup for quick product data access in tooltips ───
-  const productDataLookup = useMemo(() => {
-    const lookup = {};
-    for (const p of productRanking) {
-      lookup[p.name] = p;
-    }
-    return lookup;
-  }, [productRanking]);
-
-  // ── Filtered exposures based on selected product ──────────────
-  const filteredExposures = useMemo(() => {
-    if (!selectedProduct) return exposures;
-    return exposures.filter(e => exposureStats.resolveName(e.product_name) === selectedProduct);
-  }, [exposures, selectedProduct, exposureStats]);
-
-  // ── Handle product click in ranking table ──────────────────────
-  const handleProductClick = (productName) => {
-    if (selectedProduct === productName) {
-      setSelectedProduct(null); // Toggle off
-    } else {
-      setSelectedProduct(productName);
-    }
-  };
-
-  // ── Handle segment click to preview video ─────────────────────
-  const handleSegmentClick = (timeStart, timeEnd) => {
-    if (onPreviewSegment) {
-      onPreviewSegment(timeStart, timeEnd);
-    }
-  };
-
-  // ── Don't render if no data ────────────────────────────────────
-  if (!agg) return null;
-
-  // ── Highcharts options (phase-based fallback) ─────────────────
-  const chartOptions = {
-    chart: { height: 180, backgroundColor: "transparent", style: { fontFamily: "inherit" } },
-    title: { text: null },
-    credits: { enabled: false },
-    legend: { align: "right", verticalAlign: "top", floating: true, itemStyle: { fontSize: "10px", color: "#6b7280" } },
-    xAxis: {
-      type: "linear",
-      crosshair: { width: 1, color: "#d1d5db", dashStyle: "Dash" },
-      labels: { formatter: function () { return fmtTime(this.value); }, style: { fontSize: "10px", color: "#9ca3af" } },
-      lineColor: "#e5e7eb", tickColor: "#e5e7eb",
-    },
-    yAxis: [
-      { title: { text: null }, labels: { formatter: function () { return "¥" + (this.value >= 1000 ? Math.round(this.value / 1000) + "k" : this.value); }, style: { fontSize: "10px", color: "#f97316" } }, gridLineColor: "#f3f4f6" },
-      { title: { text: null }, opposite: true, labels: { style: { fontSize: "10px", color: "#3b82f6" } }, gridLineWidth: 0 },
-    ],
-    tooltip: {
-      shared: true,
-      formatter: function () {
-        const time = fmtTime(this.x);
-        const elapsed = fmtElapsed(this.x);
-        let s = `<b>${time}</b> (${elapsed})<br/>`;
-        for (const p of this.points) {
-          const val = p.series.name === "売上（累積）" ? "¥" + Math.round(p.y).toLocaleString() : p.y.toLocaleString() + "人";
-          s += `<span style="color:${p.color}">\u25CF</span> ${p.series.name}: <b>${val}</b><br/>`;
-        }
-        return s;
-      },
-    },
-    plotOptions: { areaspline: { fillOpacity: 0.15, marker: { enabled: false, radius: 2 }, lineWidth: 2 } },
-    series: [
-      { name: "売上（累積）", type: "areaspline", color: "#f97316", data: agg.cumulativeGmv.map((p) => [p.x, p.y]), yAxis: 0 },
-      { name: "視聴者数", type: "areaspline", color: "#3b82f6", data: agg.timeSeriesViewers.map((p) => [p.x, p.y]), yAxis: 1 },
-    ],
-  };
-
-  // ── Trend chart options (from Excel with real timestamps) ─────
-  // Build tooltip formatter that includes active product info with sales data
-  const trendTooltipFormatter = function () {
-    const elapsed = Math.round(this.x / 60);
-    const timeStr = streamStartTime
-      ? addSecondsToTime(streamStartTime, this.x)
-      : trendChart.data.reduce((prev, curr) =>
-          Math.abs(curr.elapsedSec - this.x) < Math.abs(prev.elapsedSec - this.x) ? curr : prev
+    const excelTotalGmv = gmvKey ? parsed.reduce((sum, d) =>{window.__t('analyticsSection_b6eb')}<b>${time}</b> (${elapsed})<br/>{window.__t('analyticsSection_4b14')}<span style="color:${p.color}">\u25CF</span> ${p.series.name}: <b>${val}</b><br/>{window.__t('analyticsSection_57b3')}< Math.abs(prev.elapsedSec - this.x) ? curr : prev
         ).realTime;
     let s = `<div style="padding:4px 2px;">`;
-    s += `<b style="font-size:13px">${timeStr}</b> <span style="color:#6b7280">(配信${elapsed}分)</span><br/>`;
-    for (const p of this.points) {
-      let val;
-      if (p.series.name.includes("売上")) val = "¥" + Math.round(p.y).toLocaleString();
-      else if (p.series.name.includes("視聴")) val = p.y.toLocaleString() + "人";
-      else val = p.y.toLocaleString();
-      s += `<span style="color:${p.color}">\u25CF</span> ${p.series.name}：<b>${val}</b><br/>`;
+    s += `<b style="font-size:13px">${timeStr}</b> <span style="color:#6b7280">{window.__t('analyticsSection_d9ec')}</span><br/>{window.__t('analyticsSection_0b32')}<span style="color:${p.color}">\u25CF</span> ${p.series.name}：<b>${val}</b><br/>`;
     }
     // Show active products at this time with sales data
     const currentSec = this.x;
@@ -664,12 +205,12 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
           uniqueActive.push({ ...ap, resolvedName });
         }
       }
-      s += `<br/><span style="font-size:10px;color:#6b7280">\uD83D\uDCE6 表示中:</span><br/>`;
+      s += `<br/><span style="font-size:10px;color:#6b7280">{window.__t('analyticsSection_c1e2')}</span><br/>`;
       for (const ap of uniqueActive) {
         const ci = exposureStats.colorMap[ap.resolvedName] ?? 0;
         const pData = productDataLookup[ap.resolvedName];
         const gmvStr = pData?.gmv > 0 ? ` <span style="color:#f97316;font-weight:bold">¥${Math.round(pData.gmv).toLocaleString()}</span>` : "";
-        const statsStr = pData ? ` <span style="color:#9ca3af">(${pData.count}回/${formatDurationMinutes(pData.totalDuration)})</span>` : "";
+        const statsStr = pData ? ` <span style="color:#9ca3af">{window.__t('analyticsSection_cf29')}</span>` : "";
         s += `<span style="color:${getColor(ci)}">\u25CF</span> <span style="font-size:11px">${ap.resolvedName}</span>${gmvStr}${statsStr}<br/>`;
       }
     }
@@ -701,33 +242,7 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
       lineColor: "#e5e7eb", tickColor: "#e5e7eb",
     },
     yAxis: [
-      ...(trendChart.hasGmv ? [{ title: { text: null }, labels: { formatter: function () { return "¥" + (this.value >= 1000 ? Math.round(this.value / 1000) + "k" : this.value); }, style: { fontSize: "10px", color: "#f97316" } }, gridLineColor: "#f3f4f6" }] : []),
-      ...(trendChart.hasViewers ? [{ title: { text: null }, opposite: true, labels: { style: { fontSize: "10px", color: "#3b82f6" } }, gridLineWidth: 0 }] : []),
-    ],
-    tooltip: {
-      shared: true,
-      useHTML: true,
-      snap: 1,
-      formatter: trendTooltipFormatter,
-    },
-    plotOptions: { areaspline: { fillOpacity: 0.15, marker: { enabled: false, radius: 2 }, lineWidth: 2, stickyTracking: true, trackByArea: true } },
-    series: [
-      ...(trendChart.hasGmv ? [{
-        name: "売上（累積）", type: "areaspline", color: "#f97316",
-        data: (() => { let cum = 0; return trendChart.data.filter(d => d.gmv != null).map(d => { cum += d.gmv; return [d.elapsedSec, cum]; }); })(),
-        yAxis: 0,
-      }] : []),
-      ...(trendChart.hasViewers ? [{
-        name: "視聴者数", type: "areaspline", color: "#3b82f6",
-        data: trendChart.data.filter(d => d.viewers != null).map(d => [d.elapsedSec, d.viewers]),
-        yAxis: trendChart.hasGmv ? 1 : 0,
-      }] : []),
-    ],
-  } : null;
-
-  // ── Render ─────────────────────────────────────────────────────
-  return (
-    <div className="w-full mt-6 mx-auto mb-4">
+      ...(trendChart.hasGmv ? [{ title: { text: null }, labels: { formatter: function () { return "¥" + (this.value >{window.__t('analyticsSection_e6e4')}<div className="w-full mt-6 mx-auto mb-4">
       <div className="rounded-2xl bg-gray-50 border border-gray-200">
         {/* Header */}
         <div onClick={() => setCollapsed((s) => !s)}
@@ -739,10 +254,8 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
               <path d="M3 3v18h18" /><path d="m19 9-5 5-4-4-3 3" />
             </svg>
             <div>
-              <div className="text-gray-900 text-xl font-semibold">配信パフォーマンス</div>
-              <div className="text-gray-500 text-sm mt-1">
-                売上・視聴者推移 + 商品露出タイムライン + 商品別売上
-              </div>
+              <div className="text-gray-900 text-xl font-semibold">{window.__t('livePerformance')}</div>
+              <div className="text-gray-500 text-sm mt-1">{window.__t('analyticsSection_e870')}</div>
             </div>
           </div>
           <button type="button" className="text-gray-400 p-2 rounded focus:outline-none transition-colors">
@@ -767,9 +280,7 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
                     <p className="text-xs text-gray-500 mb-2 flex items-center gap-1">
                       <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-gray-400">
                         <rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" />
-                      </svg>
-                      商品露出タイムライン（{exposureStats.sorted.length}商品 / {exposures.length}セグメント）
-                    </p>
+                      </svg>{window.__t('analyticsSection_29a7')}</p>
                     <div className="relative w-full h-8 bg-gray-50 rounded-lg overflow-hidden border border-gray-100">
                       {exposures.map((exp, idx) => {
                         const left = (exp.time_start / videoDuration) * 100;
@@ -781,18 +292,7 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
                         return (
                           <div key={exp.id || idx}
                             className="absolute top-0 h-full rounded-sm cursor-pointer transition-all duration-200 hover:opacity-90"
-                            onClick={() => handleSegmentClick(exp.time_start, exp.time_end)}
-                            style={{
-                              left: `${Math.max(0, left)}%`,
-                              width: `${Math.max(0.3, width)}%`,
-                              backgroundColor: getColor(ci),
-                              opacity: Math.max(0.5, exp.confidence || 0.8),
-                            }}
-                            title={`${resolved} (${formatTime(exp.time_start)} - ${formatTime(exp.time_end)}) ▶ クリックで再生`}
-                          />
-                        );
-                      })}
-                    </div>
+                            onClick={() =>{window.__t('analyticsSection_cd82')}</div>
 
                     {/* ── Product Legend with sales data ── */}
                     <div className="flex flex-wrap gap-x-4 gap-y-1.5 mt-3">
@@ -808,7 +308,7 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
                             {p.gmv > 0 && (
                               <span className="text-orange-500 font-bold">¥{Math.round(p.gmv).toLocaleString()}</span>
                             )}
-                            <span className="text-gray-400">{p.count}回 {formatDurationMinutes(p.totalDuration)}</span>
+                            <span className="text-gray-400">{window.__t('analyticsSection_8212')}</span>
                           </div>
                         );
                       })}
@@ -846,7 +346,7 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
                           <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: getColor(p.colorIdx) }} />
                           <span className="text-gray-700 font-medium">{p.name}</span>
                           {p.gmv > 0 && <span className="text-orange-500 font-bold">¥{Math.round(p.gmv).toLocaleString()}</span>}
-                          <span className="text-gray-400">{p.count}回 {formatDurationMinutes(p.totalDuration)}</span>
+                          <span className="text-gray-400">{window.__t('analyticsSection_8212')}</span>
                         </div>
                       ))}
                     </div>
@@ -864,8 +364,8 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
                       <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-amber-500">
                         <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
                       </svg>
-                      <span className="text-sm font-semibold text-gray-700">商品別売上ランキング</span>
-                      <span className="text-xs text-gray-400">({productRanking.length}商品)</span>
+                      <span className="text-sm font-semibold text-gray-700">{window.__t('analyticsSection_b9b5')}</span>
+                      <span className="text-xs text-gray-400">{window.__t('analyticsSection_50fa')}</span>
                     </div>
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`text-gray-400 transition-transform duration-200 ${rankingCollapsed ? '' : 'rotate-180'}`}>
                       <polyline points="6 9 12 15 18 9" />
@@ -877,13 +377,13 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
                       <thead>
                         <tr className="border-b border-gray-200">
                           <th className="text-left text-xs text-gray-400 font-medium py-3 pr-2 w-10">#</th>
-                          <th className="text-left text-xs text-gray-400 font-medium py-3 pr-4">商品名</th>
-                          <th className="text-right text-xs text-gray-400 font-medium py-3 px-2">売上</th>
-                          <th className="text-right text-xs text-gray-400 font-medium py-3 px-2">注文</th>
-                          <th className="text-center text-xs text-gray-400 font-medium py-3 px-2">売上シェア</th>
+                          <th className="text-left text-xs text-gray-400 font-medium py-3 pr-4">{window.__t('analyticsSection_de54')}</th>
+                          <th className="text-right text-xs text-gray-400 font-medium py-3 px-2">{window.__t('live_sales')}</th>
+                          <th className="text-right text-xs text-gray-400 font-medium py-3 px-2">{window.__t('analyticsSection_c4c7')}</th>
+                          <th className="text-center text-xs text-gray-400 font-medium py-3 px-2">{window.__t('analyticsSection_a3cf')}</th>
                           <th className="text-center text-xs text-gray-400 font-medium py-3 px-2">CVR</th>
-                          <th className="text-center text-xs text-gray-400 font-medium py-3 px-2">登場</th>
-                          <th className="text-left text-xs text-gray-400 font-medium py-3 px-2 hidden md:table-cell" style={{ minWidth: 80 }}>露出パターン</th>
+                          <th className="text-center text-xs text-gray-400 font-medium py-3 px-2">{window.__t('analyticsSection_7161')}</th>
+                          <th className="text-left text-xs text-gray-400 font-medium py-3 px-2 hidden md:table-cell" style={{ minWidth: 80 }}>{window.__t('analyticsSection_0814')}</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -909,7 +409,7 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
                                   {p.gmv > 0 ? `¥${Math.round(p.gmv).toLocaleString()}` : "-"}
                                 </span>
                               </td>
-                              <td className="text-right py-5 px-2 text-gray-600">{p.orders > 0 ? `${p.orders}件` : "-"}</td>
+                              <td className="text-right py-5 px-2 text-gray-600">{window.__t('analyticsSection_288c')}</td>
                               <td className="text-center py-5 px-2">
                                 {p.sharePercent > 0 ? (
                                   <div className="flex items-center justify-center gap-2">
@@ -927,8 +427,8 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
                               </td>
                               <td className="text-center py-5 px-2">
                                 <div>
-                                  <div className="text-sm font-bold text-gray-700">{p.count}回</div>
-                                  <div className="text-[10px] text-gray-400">合計 {formatDurationMinutes(p.totalDuration)}</div>
+                                  <div className="text-sm font-bold text-gray-700">{window.__t('analyticsSection_a980')}</div>
+                                  <div className="text-[10px] text-gray-400">{window.__t('analyticsSection_9586')}</div>
                                 </div>
                               </td>
                               <td className="py-5 px-2 hidden md:table-cell">
@@ -940,13 +440,7 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
                                       const width = ((seg.time_end - seg.time_start) / videoDuration) * 100;
                                       return (
                                         <div key={si} className="absolute top-0 h-full rounded-sm cursor-pointer hover:ring-1 hover:ring-blue-300"
-                                          onClick={(e) => { e.stopPropagation(); handleSegmentClick(seg.time_start, seg.time_end); }}
-                                          style={{ left: `${left}%`, width: `${Math.max(1.5, width)}%`, backgroundColor: getColor(p.colorIdx) }}
-                                          title={`${formatTime(seg.time_start)} - ${formatTime(seg.time_end)} ▶ クリックで再生`}
-                                        />
-                                      );
-                                    })}
-                                  </div>
+                                          onClick={(e) =>{window.__t('analyticsSection_4edb')}</div>
                                 )}
                               </td>
                             </tr>
@@ -966,15 +460,12 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
                   <div className="flex items-center gap-2">
                     <div className="w-3 h-3 rounded-full" style={{ backgroundColor: getColor(exposureStats.colorMap[selectedProduct] ?? 0) }} />
                     <span className="text-sm font-semibold text-blue-800">{selectedProduct}</span>
-                    <span className="text-xs text-blue-500">({filteredExposures.length}セグメント)</span>
+                    <span className="text-xs text-blue-500">{window.__t('analyticsSection_e77a')}</span>
                   </div>
-                  <button onClick={() => setSelectedProduct(null)}
-                    className="text-xs text-blue-500 hover:text-blue-700 bg-white px-2 py-1 rounded-md border border-blue-200 hover:bg-blue-50 transition-colors">
-                    ✕ フィルタ解除
-                  </button>
+                  <button onClick={() =>{window.__t('analyticsSection_c18c')}</button>
                 </div>
                 <div className="p-4">
-                  <div className="text-xs text-gray-500 mb-2">タップして動画を再生 ▶</div>
+                  <div className="text-xs text-gray-500 mb-2">{window.__t('analyticsSection_c195')}</div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 max-h-64 overflow-y-auto">
                     {filteredExposures.map((seg, idx) => {
                       const duration = (seg.time_end || 0) - (seg.time_start || 0);
@@ -1011,55 +502,38 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
                 <div className="flex items-center gap-2 text-gray-500 text-xs font-medium mb-1">
                   <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-orange-500">
                     <line x1="12" y1="1" x2="12" y2="23" /><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
-                  </svg>
-                  売上 (GMV)
-                </div>
+                  </svg>{window.__t('analyticsSection_044b')}</div>
                 <div className="text-2xl font-bold text-gray-900">¥{Math.round(trendChart?.excelTotalGmv ?? excelProducts?.totalProductGmv ?? agg.totalGmv).toLocaleString()}</div>
-                <div className="text-xs text-gray-400 mt-1">{(trendChart?.excelTotalOrders ?? excelProducts?.totalProductOrders ?? agg.totalOrders)}件の注文</div>
+                <div className="text-xs text-gray-400 mt-1">{window.__t('analyticsSection_1cc3')}</div>
               </div>
               <div className="rounded-xl bg-white border border-gray-200 p-4 shadow-sm">
                 <div className="flex items-center gap-2 text-gray-500 text-xs font-medium mb-1">
                   <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-blue-500">
                     <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" />
-                  </svg>
-                  視聴者数
-                </div>
+                  </svg>{window.__t('analyticsSection_2da6')}</div>
                 <div className="text-2xl font-bold text-gray-900">{(trendChart?.excelMaxViewers ?? agg.totalViewers).toLocaleString()}</div>
-                <div className="text-xs text-gray-400 mt-1">ピーク視聴者</div>
+                <div className="text-xs text-gray-400 mt-1">{window.__t('analyticsSection_f785')}</div>
               </div>
               <div className="rounded-xl bg-white border border-gray-200 p-4 shadow-sm">
                 <div className="flex items-center gap-2 text-gray-500 text-xs font-medium mb-1">
                   <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none" className="text-pink-500">
                     <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
-                  </svg>
-                  いいね
-                </div>
+                  </svg>{window.__t('live_likes')}</div>
                 <div className="text-2xl font-bold text-gray-900">{agg.totalLikes.toLocaleString()}</div>
-                <div className="text-xs text-gray-400 mt-1">コメント {agg.totalComments}</div>
+                <div className="text-xs text-gray-400 mt-1">{window.__t('analyticsSection_285e')}</div>
               </div>
               <div className="rounded-xl bg-white border border-gray-200 p-4 shadow-sm">
                 <div className="flex items-center gap-2 text-gray-500 text-xs font-medium mb-1">
                   <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-green-500">
                     <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" /><polyline points="10 17 15 12 10 7" /><line x1="15" y1="12" x2="3" y2="12" />
-                  </svg>
-                  商品クリック
-                </div>
+                  </svg>{window.__t('analyticsSection_9133')}</div>
                 <div className="text-2xl font-bold text-gray-900">{agg.totalClicks.toLocaleString()}</div>
                 <div className="text-xs text-gray-400 mt-1">CVR {agg.cvr}%</div>
               </div>
             </div>
 
             {/* ── Sub Metrics ── */}
-            <div className="grid grid-cols-3 md:grid-cols-6 gap-2">
-              {[
-                { label: "GPM", value: `¥${agg.gpm}` },
-                { label: "新規フォロワー", value: `+${agg.totalFollowers}` },
-                { label: "シェア", value: agg.totalShares.toString() },
-                { label: "客単価", value: `¥${agg.avgOrderValue.toLocaleString()}` },
-                { label: "配信時間", value: `${agg.durationMin}分` },
-                { label: "売上/時間", value: `¥${agg.gmvPerHour.toLocaleString()}/h` },
-              ].map((item, i) => (
-                <div key={i} className="rounded-lg bg-white border border-gray-100 px-3 py-2 text-center">
+            <div className="grid grid-cols-3 md:grid-cols-6 gap-2">{window.__t('analyticsSection_4f4b')}<div key={i} className="rounded-lg bg-white border border-gray-100 px-3 py-2 text-center">
                   <div className="text-[10px] text-gray-400 font-medium">{item.label}</div>
                   <div className="text-sm font-semibold text-gray-700 mt-0.5">{item.value}</div>
                 </div>
@@ -1075,7 +549,7 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-blue-500">
                       <rect x="3" y="3" width="18" height="18" rx="2" ry="2" /><line x1="3" y1="9" x2="21" y2="9" /><line x1="3" y1="15" x2="21" y2="15" /><line x1="9" y1="3" x2="9" y2="21" />
                     </svg>
-                    <span className="text-sm font-semibold text-gray-700">商品別タイムライン詳細</span>
+                    <span className="text-sm font-semibold text-gray-700">{window.__t('analyticsSection_d464')}</span>
                   </div>
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"
                     className={`w-5 h-5 text-gray-400 transform transition-transform duration-200 ${ganttExpanded ? "rotate-180" : ""}`}>
@@ -1102,20 +576,12 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
                                 const width = ((seg.time_end - seg.time_start) / videoDuration) * 100;
                                 return (
                                   <div key={si} className="absolute top-0.5 h-4 rounded-sm cursor-pointer hover:opacity-80 hover:ring-2 hover:ring-blue-300"
-                                    onClick={() => handleSegmentClick(seg.time_start, seg.time_end)}
-                                    style={{ left: `${left}%`, width: `${Math.max(0.5, width)}%`, backgroundColor: getColor(product.colorIdx) }}
-                                    title={`${formatTime(seg.time_start)} - ${formatTime(seg.time_end)}${streamStartTime ? ` (${addSecondsToTime(streamStartTime, seg.time_start)} - ${addSecondsToTime(streamStartTime, seg.time_end)})` : ""} ▶ クリックで再生`}
-                                  />
-                                );
-                              })}
-                            </div>
+                                    onClick={() =>{window.__t('analyticsSection_a22f')}</div>
                             {/* Stats */}
                             <div className="w-20 flex-shrink-0 text-right text-[10px] text-gray-500">
                               {matchedRank?.gmv > 0 ? `¥${Math.round(matchedRank.gmv).toLocaleString()}` : ""}
                             </div>
-                            <div className="w-16 flex-shrink-0 text-right text-[10px] text-gray-400">
-                              {product.count}回 / {formatTime(product.totalDuration)}
-                            </div>
+                            <div className="w-16 flex-shrink-0 text-right text-[10px] text-gray-400">{window.__t('analyticsSection_ad47')}</div>
                           </div>
                         );
                       })}
@@ -1125,8 +591,7 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
                       {[0, 0.25, 0.5, 0.75, 1].map(pct => (
                         <span key={pct}>
                           {streamStartTime ? addSecondsToTime(streamStartTime, pct * videoDuration) : formatTime(pct * videoDuration)}
-                          <br />({Math.round(pct * videoDuration / 60)}分)
-                        </span>
+                          <br />{window.__t('analyticsSection_e218')}</span>
                       ))}
                     </div>
                   </div>
@@ -1143,8 +608,8 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-gray-500">
                       <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z" /><line x1="3" y1="6" x2="21" y2="6" /><path d="M16 10a4 4 0 0 1-8 0" />
                     </svg>
-                    <span className="text-sm font-semibold text-gray-700">商品セグメント一覧</span>
-                    <span className="text-xs text-gray-400">（{exposures.length}件 / 編集・追加・削除）</span>
+                    <span className="text-sm font-semibold text-gray-700">{window.__t('analyticsSection_db3f')}</span>
+                    <span className="text-xs text-gray-400">{window.__t('analyticsSection_0dd6')}</span>
                   </div>
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"
                     className={`w-5 h-5 text-gray-400 transform transition-transform duration-200 ${exposureListExpanded ? "rotate-180" : ""}`}>
@@ -1172,10 +637,7 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
                       {showAddForm ? (
                         <AddExposureForm onAdd={handleAddExposure} onCancel={() => setShowAddForm(false)} />
                       ) : (
-                        <button onClick={() => setShowAddForm(true)}
-                          className="w-full py-2 text-sm text-gray-500 border border-dashed border-gray-300 rounded-lg hover:bg-gray-100 hover:text-gray-700 transition-colors">
-                          + 商品セグメントを手動追加
-                        </button>
+                        <button onClick={() =>{window.__t('analyticsSection_c820')}</button>
                       )}
                     </div>
                   </div>
@@ -1185,7 +647,7 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
 
             {/* ── Loading Excel data indicator ── */}
             {loadingExcel && (
-              <div className="text-center text-xs text-gray-400 py-2">商品データを読み込み中...</div>
+              <div className="text-center text-xs text-gray-400 py-2">{window.__t('analyticsSection_00b1')}</div>
             )}
 
             {/* ── Excel Product Data Table ── */}
@@ -1198,8 +660,8 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
                       <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
                       <polyline points="3.27 6.96 12 12.01 20.73 6.96" /><line x1="12" y1="22.08" x2="12" y2="12" />
                     </svg>
-                    <span className="text-sm font-semibold text-gray-700">商品データ</span>
-                    <span className="text-xs text-gray-400">（{excelProducts.items.length}商品）</span>
+                    <span className="text-sm font-semibold text-gray-700">{window.__t('videoDetail_productData')}</span>
+                    <span className="text-xs text-gray-400">{window.__t('analyticsSection_b2f9')}</span>
                   </div>
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"
                     className={`w-5 h-5 text-gray-400 transform transition-transform duration-200 ${!productCollapsed ? "rotate-180" : ""}`}>
@@ -1242,7 +704,7 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
                         </tbody>
                       </table>
                       {excelProducts.items.length > 30 && (
-                        <div className="text-center text-xs text-gray-400 py-2">他 {excelProducts.items.length - 30} 商品</div>
+                        <div className="text-center text-xs text-gray-400 py-2">{window.__t('analyticsSection_cd6c')}</div>
                       )}
                     </div>
                   </div>
@@ -1260,7 +722,7 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
                       <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
                       <line x1="7" y1="7" x2="7.01" y2="7" />
                     </svg>
-                    <span className="text-sm font-semibold text-gray-700">商品別売上（フェーズ分析）</span>
+                    <span className="text-sm font-semibold text-gray-700">{window.__t('analyticsSection_2b7b')}</span>
                   </div>
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"
                     className={`w-5 h-5 text-gray-400 transform transition-transform duration-200 ${!phaseProductCollapsed ? "rotate-180" : ""}`}>
@@ -1273,11 +735,11 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
                       <table className="w-full text-sm">
                         <thead>
                           <tr className="border-b border-gray-100">
-                            <th className="text-left text-xs text-gray-400 font-medium py-2 pr-4">商品名</th>
-                            <th className="text-right text-xs text-gray-400 font-medium py-2 px-2">売上</th>
-                            <th className="text-right text-xs text-gray-400 font-medium py-2 px-2">注文</th>
-                            <th className="text-right text-xs text-gray-400 font-medium py-2 px-2">クリック</th>
-                            <th className="text-right text-xs text-gray-400 font-medium py-2 pl-2">登場回数</th>
+                            <th className="text-left text-xs text-gray-400 font-medium py-2 pr-4">{window.__t('analyticsSection_de54')}</th>
+                            <th className="text-right text-xs text-gray-400 font-medium py-2 px-2">{window.__t('live_sales')}</th>
+                            <th className="text-right text-xs text-gray-400 font-medium py-2 px-2">{window.__t('analyticsSection_c4c7')}</th>
+                            <th className="text-right text-xs text-gray-400 font-medium py-2 px-2">{window.__t('clickCount')}</th>
+                            <th className="text-right text-xs text-gray-400 font-medium py-2 pl-2">{window.__t('analyticsSection_8cf9')}</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -1290,9 +752,9 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
                                 </span>
                               </td>
                               <td className="text-right py-2 px-2 text-gray-700 font-medium">¥{Math.round(p.gmv).toLocaleString()}</td>
-                              <td className="text-right py-2 px-2 text-gray-600">{p.orders}件</td>
+                              <td className="text-right py-2 px-2 text-gray-600">{window.__t('analyticsSection_eb0c')}</td>
                               <td className="text-right py-2 px-2 text-gray-600">{p.clicks}</td>
-                              <td className="text-right py-2 pl-2 text-gray-500">{p.phases}回</td>
+                              <td className="text-right py-2 pl-2 text-gray-500">{window.__t('analyticsSection_0838')}</td>
                             </tr>
                           ))}
                         </tbody>

@@ -9,7 +9,7 @@ import { ErrorState } from "./SectionStateUI";
  * 3-layer report display:
  *   1. 勝ち区間 TOP3 (Strong Segments)
  *   2. 弱い区間 TOP3 (Weak Segments)
- *   3. 改善提案 3つ (Improvement Suggestions)
+ *   3. {window.__t('liveReportImprovementSuggestions')} 3つ (Improvement Suggestions)
  *
  * Props:
  *   videoData – the full video detail object (must contain .id)
@@ -23,22 +23,22 @@ const PRIORITY_COLORS = {
 };
 
 const PRIORITY_LABELS = {
-  high: "高",
-  medium: "中",
-  low: "低",
+  high: window.__t('energyHigh'),
+  medium: window.__t('energyMedium'),
+  low: window.__t('energyLow'),
 };
 
 // ── Signal badge config ──
 const SIGNAL_BADGES = {
-  csv_order: { label: "注文", color: "bg-emerald-100 text-emerald-700" },
-  csv_gmv: { label: "売上", color: "bg-emerald-100 text-emerald-700" },
-  csv_product_clicks: { label: "クリック", color: "bg-blue-100 text-blue-700" },
-  purchase_popup: { label: "購入POP", color: "bg-rose-100 text-rose-700" },
-  product_viewers: { label: "閲覧POP", color: "bg-purple-100 text-purple-700" },
-  human_rating: { label: "人間評価", color: "bg-amber-100 text-amber-700" },
-  cta_high: { label: "CTA", color: "bg-indigo-100 text-indigo-700" },
-  viewer_spike: { label: "視聴者↑", color: "bg-cyan-100 text-cyan-700" },
-  comment_spike: { label: "コメント↑", color: "bg-teal-100 text-teal-700" },
+  csv_order: { label: window.__t('liveReportSignalOrder'), color: "bg-emerald-100 text-emerald-700" },
+  csv_gmv: { label: window.__t('live_sales'), color: "bg-emerald-100 text-emerald-700" },
+  csv_product_clicks: { label: window.__t('clickCount'), color: "bg-blue-100 text-blue-700" },
+  purchase_popup: { label: window.__t('liveReportSignalPurchasePop'), color: "bg-rose-100 text-rose-700" },
+  product_viewers: { label: window.__t('liveReportSignalViewPop'), color: "bg-purple-100 text-purple-700" },
+  human_rating: { label: window.__t('liveReportSignalHumanRating'), color: "bg-amber-100 text-amber-700" },
+  cta_high: { label: window.__t('liveReportSignalCta'), color: "bg-indigo-100 text-indigo-700" },
+  viewer_spike: { label: window.__t('liveReportSignalViewerSpike'), color: "bg-cyan-100 text-cyan-700" },
+  comment_spike: { label: window.__t('liveReportSignalCommentSpike'), color: "bg-teal-100 text-teal-700" },
 };
 
 export default function LiveReportSection({ videoData }) {
@@ -82,7 +82,7 @@ export default function LiveReportSection({ videoData }) {
       }
     } catch (err) {
       console.error("Failed to generate report:", err);
-      setGenError(err?.response?.data?.detail || "レポート生成に失敗しました");
+      setGenError(err?.response?.data?.detail || window.__t('liveReportGenError'));
     } finally {
       setGenerating(false);
     }
@@ -152,31 +152,31 @@ export default function LiveReportSection({ videoData }) {
             <div className="text-emerald-600 font-bold">
               ¥{seg.metrics.gmv.toLocaleString()}
             </div>
-            <div className="text-gray-500">売上</div>
+            <div className="text-gray-500">{window.__t('live_sales')}</div>
           </div>
         )}
         {seg.metrics?.order_count > 0 && (
           <div className="bg-emerald-50 rounded-lg p-2 text-center">
             <div className="text-emerald-600 font-bold">{seg.metrics.order_count}</div>
-            <div className="text-gray-500">注文</div>
+            <div className="text-gray-500">{window.__t('liveReportMetricOrder')}</div>
           </div>
         )}
         {seg.metrics?.viewer_count > 0 && (
           <div className="bg-blue-50 rounded-lg p-2 text-center">
             <div className="text-blue-600 font-bold">{seg.metrics.viewer_count}</div>
-            <div className="text-gray-500">視聴者</div>
+            <div className="text-gray-500">{window.__t('live_viewers')}</div>
           </div>
         )}
         {seg.metrics?.product_clicks > 0 && (
           <div className="bg-purple-50 rounded-lg p-2 text-center">
             <div className="text-purple-600 font-bold">{seg.metrics.product_clicks}</div>
-            <div className="text-gray-500">クリック</div>
+            <div className="text-gray-500">{window.__t('clickCount')}</div>
           </div>
         )}
         {seg.metrics?.comment_count > 0 && (
           <div className="bg-cyan-50 rounded-lg p-2 text-center">
             <div className="text-cyan-600 font-bold">{seg.metrics.comment_count}</div>
-            <div className="text-gray-500">コメント</div>
+            <div className="text-gray-500">{window.__t('live_comments')}</div>
           </div>
         )}
       </div>
@@ -185,7 +185,7 @@ export default function LiveReportSection({ videoData }) {
       {seg.reproducible_points && seg.reproducible_points.length > 0 && (
         <div className="mt-3 pt-2 border-t border-emerald-100">
           <div className="text-xs font-semibold text-emerald-600 mb-1">
-            次回も再現すべき点
+            {window.__t('liveReportReproduciblePoints')}
           </div>
           <ul className="text-xs text-gray-600 space-y-0.5">
             {seg.reproducible_points.map((pt, i) => (
@@ -226,7 +226,7 @@ export default function LiveReportSection({ videoData }) {
         : (
           <div className="flex flex-wrap gap-1 mt-1">
             <span className="text-xs px-1.5 py-0.5 rounded-full font-medium bg-gray-100 text-gray-500">
-              信号なし
+              {window.__t('liveReportNoSignal')}
             </span>
           </div>
         )}
@@ -235,7 +235,7 @@ export default function LiveReportSection({ videoData }) {
       {seg.cut_points && seg.cut_points.length > 0 && (
         <div className="mt-3 pt-2 border-t border-red-100">
           <div className="text-xs font-semibold text-red-500 mb-1">
-            削るべき点
+            {window.__t('liveReportCutPoints')}
           </div>
           <ul className="text-xs text-gray-600 space-y-0.5">
             {seg.cut_points.map((pt, i) => (
@@ -286,7 +286,7 @@ export default function LiveReportSection({ videoData }) {
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
         <div className="bg-white rounded-xl p-3 border border-gray-200 text-center">
           <div className="text-2xl font-bold text-gray-800">{m.total_phases || 0}</div>
-          <div className="text-xs text-gray-500">分析区間</div>
+          <div className="text-xs text-gray-500">{window.__t('liveReportAnalysisPhase')}</div>
         </div>
         <div className="bg-white rounded-xl p-3 border border-gray-200 text-center">
           <div className="text-2xl font-bold text-emerald-600">
@@ -297,14 +297,14 @@ export default function LiveReportSection({ videoData }) {
         <div className="bg-white rounded-xl p-3 border border-gray-200 text-center">
           <div className="text-2xl font-bold text-blue-600">{m.viewer_peak || "-"}</div>
           <div className="text-xs text-gray-500">
-            視聴者ピーク{m.viewer_peak_time ? ` (${m.viewer_peak_time})` : ""}
+            {window.__t('liveReportViewerPeak')}{m.viewer_peak_time ? ` (${m.viewer_peak_time})` : ""}
           </div>
         </div>
         <div className="bg-white rounded-xl p-3 border border-gray-200 text-center">
           <div className="text-2xl font-bold text-purple-600">
             {m.strong_count || 0} / {m.weak_count || 0}
           </div>
-          <div className="text-xs text-gray-500">勝ち / 弱い区間</div>
+          <div className="text-xs text-gray-500">{window.__t('liveReportStrongWeakPhase')}</div>
         </div>
       </div>
     );
@@ -338,9 +338,9 @@ export default function LiveReportSection({ videoData }) {
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
               </svg>
-              生成中...
+              {window.__t('autoVideo_generating')}
             </span>
-          ) : report ? "再生成" : "レポート生成"}
+          ) : report ? window.__t('clip_regenerate') : window.__t('liveReportGenerate')}
         </button>
       </div>
 
@@ -370,8 +370,8 @@ export default function LiveReportSection({ videoData }) {
         <div className="bg-gray-50 rounded-xl p-8 text-center border border-dashed border-gray-300">
           <div className="text-gray-400 text-4xl mb-3">&#128202;</div>
           <p className="text-gray-500 text-sm">
-            まだレポートが生成されていません。<br />
-            「レポート生成」ボタンをクリックして分析を開始してください。
+            {window.__t('liveReportNotGeneratedYet')}<br />
+            {window.__t('liveReportClickToStart')}
           </p>
         </div>
       )}
@@ -388,13 +388,13 @@ export default function LiveReportSection({ videoData }) {
               <span className="w-6 h-6 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600 text-xs font-bold">
                 &#9650;
               </span>
-              勝ち区間 TOP {report.strong_segments?.length || 0}
+              {window.__t('liveReportStrongSegmentsTop')} {report.strong_segments?.length || 0}
             </h3>
             <div className="grid gap-3">
               {report.strong_segments?.map((seg, idx) => renderStrongSegment(seg, idx))}
               {(!report.strong_segments || report.strong_segments.length === 0) && (
                 <div className="text-sm text-gray-400 p-4 text-center bg-gray-50 rounded-lg">
-                  勝ち区間が検出されませんでした
+                  {window.__t('liveReportNoStrongSegments')}
                 </div>
               )}
             </div>
@@ -406,13 +406,13 @@ export default function LiveReportSection({ videoData }) {
               <span className="w-6 h-6 rounded-full bg-red-100 flex items-center justify-center text-red-500 text-xs font-bold">
                 &#9660;
               </span>
-              弱い区間 TOP {report.weak_segments?.length || 0}
+              {window.__t('liveReportWeakSegmentsTop')} {report.weak_segments?.length || 0}
             </h3>
             <div className="grid gap-3">
               {report.weak_segments?.map((seg, idx) => renderWeakSegment(seg, idx))}
               {(!report.weak_segments || report.weak_segments.length === 0) && (
                 <div className="text-sm text-gray-400 p-4 text-center bg-gray-50 rounded-lg">
-                  弱い区間が検出されませんでした
+                  {window.__t('liveReportNoWeakSegments')}
                 </div>
               )}
             </div>
@@ -424,13 +424,13 @@ export default function LiveReportSection({ videoData }) {
               <span className="w-6 h-6 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 text-xs font-bold">
                 &#9733;
               </span>
-              改善提案
+              {window.__t('liveReportImprovementSuggestions')}
             </h3>
             <div className="grid gap-3">
               {report.suggestions?.map((sug, idx) => renderSuggestion(sug, idx))}
               {(!report.suggestions || report.suggestions.length === 0) && (
                 <div className="text-sm text-gray-400 p-4 text-center bg-gray-50 rounded-lg">
-                  改善提案がありません
+                  {window.__t('liveReportImprovementSuggestions')}がありません
                 </div>
               )}
             </div>

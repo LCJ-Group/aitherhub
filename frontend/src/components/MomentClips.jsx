@@ -187,9 +187,7 @@ export default function MomentClips({ videoData, onRequestClip, clipStates = {} 
                   AI Auto-Detect
                 </span>
               </h3>
-              <p className="text-xs text-gray-500 mt-0.5">
-                ライブの盛り上がり瞬間を自動検出してクリップ候補を生成
-              </p>
+              <p className="text-xs text-gray-500 mt-0.5">{window.__t('videoDetail_momentClipsDesc')}</p>
             </div>
           </div>
 
@@ -205,17 +203,13 @@ export default function MomentClips({ videoData, onRequestClip, clipStates = {} 
                   <>
                     <svg className="animate-spin" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                       <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
-                    </svg>
-                    検出中...
-                  </>
+                    </svg>{window.__t('statusAnalyzing')}</>
                 ) : (
                   <>
                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                       <circle cx="12" cy="12" r="10"/>
                       <polygon points="10 8 16 12 10 16 10 8"/>
-                    </svg>
-                    モーメント検出
-                  </>
+                    </svg>{window.__t('videoDetail_momentsDetected')}</>
                 )}
               </button>
             ) : (
@@ -226,7 +220,7 @@ export default function MomentClips({ videoData, onRequestClip, clipStates = {} 
                   disabled={isLoading}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-violet-600 bg-white border border-violet-200 hover:bg-violet-50 transition-colors disabled:opacity-60"
                 >
-                  {isLoading ? "検出中..." : "再検出"}
+                  {isLoading ? window.__t('statusAnalyzing') : window.__t('videoDetail_reDetect')}
                 </button>
                 <button
                   type="button"
@@ -255,8 +249,8 @@ export default function MomentClips({ videoData, onRequestClip, clipStates = {} 
           <div className="px-5 pb-5">
             <div className="text-center py-8 text-gray-400 text-sm">
               <div className="text-3xl mb-2">🔍</div>
-              <div>モーメントが検出されませんでした。</div>
-              <div className="mt-1 text-xs">画面収録の解析が完了していない可能性があります。</div>
+              <div>{window.__t('momentClips_noMomentsDetected')}</div>
+              <div className="mt-1 text-xs">{window.__t('momentClips_screenRecordAnalysisNotComplete')}</div>
             </div>
           </div>
         )}
@@ -267,22 +261,20 @@ export default function MomentClips({ videoData, onRequestClip, clipStates = {} 
             {/* サマリー統計 */}
             <div className="flex items-center gap-3 px-3 py-2 rounded-xl bg-violet-50 border border-violet-100 text-xs mb-4">
               <span className="text-violet-600 font-semibold">
-                {data.total_moments} モーメント検出
+                {data.total_moments} {window.__t('videoDetail_momentsDetected')}
               </span>
               <span className="text-gray-400">|</span>
               <span className="text-gray-600">
-                {data.categories?.length} カテゴリ
+                {data.categories?.length} {window.__t('videoDetail_categories')}
               </span>
               <span className="text-gray-400">|</span>
               <span className="text-gray-600">
-                {data.categories?.reduce((sum, c) => sum + c.count, 0)} クリップ候補
+                {data.categories?.reduce((sum, c) => sum + c.count, 0)} {window.__t('videoDetail_clipCandidates')}
               </span>
               {data.auto_zoom_data?.length > 0 && (
                 <>
                   <span className="text-gray-400">|</span>
-                  <span className="text-emerald-600 font-medium">
-                    Auto Zoom対応
-                  </span>
+                  <span className="text-emerald-600 font-medium">{window.__t('momentClips_autoZoomSupported')}</span>
                 </>
               )}
             </div>
@@ -351,7 +343,7 @@ export default function MomentClips({ videoData, onRequestClip, clipStates = {} 
                         <div className="flex items-center gap-2">
                           {clip.moment_count > 1 && (
                             <span className="bg-white/20 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">
-                              {clip.moment_count}件
+                              {clip.moment_count}{window.__t('momentClips_items')}
                             </span>
                           )}
                           <span className="bg-white/20 text-white text-xs font-bold px-2 py-0.5 rounded-full">
@@ -366,17 +358,17 @@ export default function MomentClips({ videoData, onRequestClip, clipStates = {} 
                         <div className="flex flex-wrap gap-2 mb-2">
                           {clip.order_value > 0 && (
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-50 border border-amber-200 text-amber-700">
-                              🛒 購入 {clip.order_value}件
+                              🛒 {window.__t('momentClips_purchase')} {clip.order_value}{window.__t('momentClips_items')}
                             </span>
                           )}
                           {clip.click_value > 0 && (
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-50 border border-blue-200 text-blue-700">
-                              👆 クリック {clip.click_value}
+                              👆 {window.__t('momentClips_click')} {clip.click_value}
                             </span>
                           )}
                           {clip.frame_meta?.face_region && (
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-50 border border-green-200 text-green-700">
-                              🎯 Auto Zoom対応
+                              🎯 {window.__t('momentClips_autoZoomSupported')}
                             </span>
                           )}
                         </div>
@@ -414,9 +406,7 @@ export default function MomentClips({ videoData, onRequestClip, clipStates = {} 
                                 <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                   <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
                                   <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-                                </svg>
-                                編集
-                              </button>
+                                </svg>{window.__t('common_edit')}</button>
                               {/* ダウンロードボタン */}
                               <a
                                 href={clipState.clip_url}
@@ -428,14 +418,12 @@ export default function MomentClips({ videoData, onRequestClip, clipStates = {} 
                                   <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
                                   <polyline points="7 10 12 15 17 10"/>
                                   <line x1="12" y1="15" x2="12" y2="3"/>
-                                </svg>
-                                ダウンロード
-                              </a>
+                                </svg>{window.__t('common_download')}</a>
                             </>
                           ) : clipState?.status === "generating_subtitles" ? (
                             <div className="flex-1 flex flex-col gap-1">
                               <div className="flex items-center justify-between">
-                                <span className="text-purple-600 text-xs font-medium">字幕生成中...</span>
+                                <span className="text-purple-600 text-xs font-medium">{window.__t('generatingSubtitles')}</span>
                                 <span className="text-purple-500 text-xs font-bold">95%</span>
                               </div>
                               <div className="w-full h-1.5 bg-purple-100 rounded-full overflow-hidden">
@@ -447,17 +435,17 @@ export default function MomentClips({ videoData, onRequestClip, clipStates = {} 
                               const pct = clipState?.progress_pct || 0;
                               const step = clipState?.progress_step || '';
                               const stepLabels = {
-                                downloading: '取得中',
-                                speech_boundary: '音声検出',
-                                cutting: 'カット中',
-                                person_detection: '人物検出',
-                                silence_removal: '無音除去',
-                                transcribing: '文字起こし',
-                                refining_subtitles: '字幕最適化',
-                                creating_clip: '動画作成',
-                                uploading: 'アップロード',
+                                downloading: window.__t('momentClips_downloading'),
+                                speech_boundary: window.__t('momentClips_speechBoundary'),
+                                cutting: window.__t('momentClips_cutting'),
+                                person_detection: window.__t('momentClips_personDetection'),
+                                silence_removal: window.__t('momentClips_silenceRemoval'),
+                                transcribing: window.__t('momentClips_transcribing'),
+                                refining_subtitles: window.__t('momentClips_refiningSubtitles'),
+                                creating_clip: window.__t('momentClips_creatingClip'),
+                                uploading: window.__t('momentClips_uploading'),
                               };
-                              const label = stepLabels[step] || '生成中';
+                              const label = stepLabels[step] || window.__t('momentClips_generating');
                               return (
                                 <div className="flex-1 flex flex-col gap-1">
                                   <div className="flex items-center justify-between">
@@ -481,9 +469,7 @@ export default function MomentClips({ videoData, onRequestClip, clipStates = {} 
                             >
                               <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                                 <polygon points="5 3 19 12 5 21 5 3"/>
-                              </svg>
-                              クリップ生成
-                            </button>
+                              </svg>{window.__t('moment_generateClips')}</button>
                           )}
                         </div>
                       </div>
