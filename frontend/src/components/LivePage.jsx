@@ -33,12 +33,12 @@ export default function LivePage() {
             // Redirect to the specific session
             navigate(`/live/${session.video_id}`, { replace: true });
           } else {
-            setError('アクティブなライブセッションが見つかりません');
+            setError(window.__t('auto_310', 'アクティブなライブセッションが見つかりません'));
             setLoading(false);
           }
         })
         .catch(() => {
-          setError('セッション情報の取得に失敗しました');
+          setError(window.__t('auto_316', 'セッション情報の取得に失敗しました'));
           setLoading(false);
         });
       return;
@@ -131,7 +131,7 @@ export default function LivePage() {
             title: '',
           });
         } else {
-          setError('ライブセッションが見つかりません');
+          setError(window.__t('auto_324', 'ライブセッションが見つかりません'));
         }
       })
       .catch(() => {
@@ -144,7 +144,7 @@ export default function LivePage() {
             title: '',
           });
         } else {
-          setError('セッション情報の取得に失敗しました');
+          setError(window.__t('auto_316', 'セッション情報の取得に失敗しました'));
         }
       });
   };
@@ -158,7 +158,7 @@ export default function LivePage() {
       <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
           <div className="w-12 h-12 rounded-full border-4 border-t-[#FF0050] border-r-[#00F2EA] border-b-[#FF0050] border-l-[#00F2EA] animate-spin"></div>
-          <p className="text-white text-sm">ライブセッションに接続中...</p>
+          <p className="text-white text-sm">{window.__t('auto_325', window.__t('auto_325', 'ライブセッションに接続中...'))}</p>
         </div>
       </div>
     );

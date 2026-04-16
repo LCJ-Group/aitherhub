@@ -127,10 +127,10 @@ const DonutChart = ({ data, size = 120 }) => {
 // ─── Conversion Funnel ────────────────────────────────────
 const ConversionFunnel = ({ metrics }) => {
   const items = [
-    { label: 'インプレッション', key: 'impressions', color: '#00F2EA' },
-    { label: '視聴数', key: 'views', color: '#7D01FF' },
-    { label: '商品クリック', key: 'product_clicks', color: '#FF0050' },
-    { label: '注文数', key: 'orders', color: '#FFD93D' },
+    { label: window.__t('liveDashboard_5b3de2', 'インプレッション'), key: 'impressions', color: '#00F2EA' },
+    { label: window.__t('liveDashboard_4800e1', '視聴数'), key: 'views', color: '#7D01FF' },
+    { label: window.__t('analyticsSection_9133', '商品クリック'), key: 'product_clicks', color: '#FF0050' },
+    { label: window.__t('liveDashboard_0ceb22', '注文数'), key: 'orders', color: '#FFD93D' },
   ];
 
   const values = items.map(item => {
@@ -241,7 +241,7 @@ const AIChatPanel = ({ videoId, metrics, advices, newAdviceId }) => {
             const updated = [...prev];
             updated[updated.length - 1] = {
               role: 'assistant',
-              content: 'エラーが発生しました。もう一度お試しください。'
+              content: window.__t('liveDashboard_bdaf2e', 'エラーが発生しました。もう一度お試しください。')
             };
             return updated;
           });
@@ -255,10 +255,10 @@ const AIChatPanel = ({ videoId, metrics, advices, newAdviceId }) => {
   };
 
   const quickQuestions = [
-    '視聴者を増やすには？',
-    '今の商品戦略は？',
-    'コメント率を上げるには？',
-    'GMVを改善するには？',
+    window.__t('liveDashboard_3d2253', '視聴者を増やすには？'),
+    window.__t('liveDashboard_422450', '今の商品戦略は？'),
+    window.__t('liveDashboard_e972fb', 'コメント率を上げるには？'),
+    window.__t('liveDashboard_5db669', 'GMVを改善するには？'),
   ];
 
   return (
@@ -304,7 +304,7 @@ const AIChatPanel = ({ videoId, metrics, advices, newAdviceId }) => {
                     <line x1="15" y1="9" x2="15.01" y2="9"/>
                   </svg>
                 </div>
-                <p className="text-sm text-gray-300 font-medium mb-1">AI アシスタント</p>
+                <p className="text-sm text-gray-300 font-medium mb-1">{window.__t('liveDashboard_cbf611', window.__t('liveDashboard_cbf611', 'AI アシスタント'))}</p>
                 <p className="text-[11px] text-gray-500 mb-4">
                   ライブ配信に関する質問をどうぞ。<br/>
                   リアルタイムデータに基づいてアドバイスします。
@@ -357,7 +357,7 @@ const AIChatPanel = ({ videoId, metrics, advices, newAdviceId }) => {
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && sendMessage()}
-                placeholder="AIに質問する..."
+                placeholder=={window.__t('liveDashboard_14ff15', window.__t('liveDashboard_14ff15', 'AIに質問する...'))}
                 className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-cyan-500/50 focus:ring-1 focus:ring-cyan-500/30"
               />
               <button
@@ -385,7 +385,7 @@ const AIChatPanel = ({ videoId, metrics, advices, newAdviceId }) => {
                   <path d="M2 12l10 5 10-5"/>
                 </svg>
               </div>
-              <p className="text-xs text-gray-400">AIがライブを分析中...</p>
+              <p className="text-xs text-gray-400">{window.__t('liveDashboard_8b5cc6', window.__t('liveDashboard_8b5cc6', 'AIがライブを分析中...'))}</p>
               <p className="text-[10px] text-gray-500 mt-1">
                 データが蓄積されるとAI提案が表示されます
               </p>
@@ -537,7 +537,7 @@ const HLSVideoPlayer = ({ streamUrl, username }) => {
       {playerState === 'loading' && (
         <div className="absolute inset-0 flex flex-col items-center justify-center">
           <div className="w-10 h-10 rounded-full border-3 border-t-[#FF0050] border-r-[#00F2EA] border-b-[#FF0050] border-l-[#00F2EA] animate-spin mb-3"></div>
-          <p className="text-gray-400 text-xs">映像読み込み中...</p>
+          <p className="text-gray-400 text-xs">{window.__t('liveDashboard_f72f90', window.__t('liveDashboard_f72f90', '映像読み込み中...'))}</p>
         </div>
       )}
       {playerState === 'error' && (
@@ -547,7 +547,7 @@ const HLSVideoPlayer = ({ streamUrl, username }) => {
               <circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/>
             </svg>
           </div>
-          <p className="text-gray-400 text-xs">映像を取得できません</p>
+          <p className="text-gray-400 text-xs">{window.__t('liveDashboard_1737b1', window.__t('liveDashboard_1737b1', '映像を取得できません'))}</p>
           <a
             href={`https://www.tiktok.com/@${username}/live`}
             target="_blank"
@@ -587,13 +587,13 @@ function formatLargeNum(n) {
     // Try to parse as number (remove commas)
     const parsed = parseFloat(n.replace(/,/g, ''));
     if (!isNaN(parsed)) {
-      if (parsed >= 10000) return (parsed / 10000).toFixed(1) + '万';
+      if (parsed >= 10000) return (parsed / 10000).toFixed(1) + window.__t('tenThousand', '万');
       if (parsed >= 1000) return parsed.toLocaleString();
       return String(parsed);
     }
     return n;
   }
-  if (n >= 10000) return (n / 10000).toFixed(1) + '万';
+  if (n >= 10000) return (n / 10000).toFixed(1) + window.__t('tenThousand', '万');
   if (n >= 1000) return n.toLocaleString();
   return String(n);
 }
@@ -628,7 +628,7 @@ function sanitizeMetricValue(val) {
 
 function parseMetricNumber(value) {
   if (!value) return 0;
-  const str = String(value).trim().replace(/,/g, '').replace('¥', '').replace('円', '');
+  const str = String(value).trim().replace(/,/g, '').replace('¥', '').replace(window.__t('liveDashboard_a6de4c', '円'), '');
   if (str.includes('万')) return parseFloat(str.replace('万', '')) * 10000;
   if (str.includes('K') || str.includes('k')) return parseFloat(str.replace(/[Kk]/g, '')) * 1000;
   if (str.includes('M') || str.includes('m')) return parseFloat(str.replace(/[Mm]/g, '')) * 1000000;
@@ -679,12 +679,12 @@ const LiveDashboard = ({ videoId, extensionVideoId, liveUrl, username, title, on
   const [rightTab, setRightTab] = useState('ai'); // 'ai' | 'comments' | 'products' | 'activity'
 
   const loadSteps = [
-    { label: 'モニター起動中...', pct: 10 },
-    { label: 'TikTokライブに接続中...', pct: 30 },
-    { label: 'SSEストリーム確立中...', pct: 50 },
-    { label: 'ストリームURL取得中...', pct: 70 },
-    { label: 'メトリクス受信待ち...', pct: 85 },
-    { label: '接続完了', pct: 100 },
+    { label: window.__t('liveDashboard_25f938', 'モニター起動中...'), pct: 10 },
+    { label: window.__t('liveDashboard_468394', 'TikTokライブに接続中...'), pct: 30 },
+    { label: window.__t('liveDashboard_35ba17', 'SSEストリーム確立中...'), pct: 50 },
+    { label: window.__t('liveDashboard_e67474', 'ストリームURL取得中...'), pct: 70 },
+    { label: window.__t('liveDashboard_676ee7', 'メトリクス受信待ち...'), pct: 85 },
+    { label: window.__t('liveDashboard_251b44', '接続完了'), pct: 100 },
   ];
 
   const sseRef = useRef(null);
@@ -898,7 +898,7 @@ const LiveDashboard = ({ videoId, extensionVideoId, liveUrl, username, title, on
       setExtensionConnected(false);
     },
     onError: (err) => {
-      if (isPrimary) setError('接続が切断されました。再接続中...');
+      if (isPrimary) setError(window.__t('liveDashboard_33aa85', '接続が切断されました。再接続中...'));
     },
   });
 
@@ -982,7 +982,7 @@ const LiveDashboard = ({ videoId, extensionVideoId, liveUrl, username, title, on
     // Parse numeric value
     const numVal = parseMetricNumber(String(rawGMV));
     if (numVal >= 10000) {
-      return `${(numVal / 10000).toFixed(1)}万円`;
+      return `${(numVal / 10000).toFixed(1)}${window.__t('liveDashboard_c05ea6', '万円')}`;
     }
     // Format with comma separator
     return `¥${numVal.toLocaleString()}`;
@@ -996,12 +996,12 @@ const LiveDashboard = ({ videoId, extensionVideoId, liveUrl, username, title, on
   const displayTTR = sanitizeMetricValue(getMetric('tap_through_rate', 'Tap-through rate', 'TRR', 'trr', '\u30bf\u30c3\u30d7\u30b9\u30eb\u30fc\u7387')) || '--';
   const displayAvgDuration = getMetric('avg_duration', 'Avg. viewing duration', 'Avg. viewing duration per view', 'Avg. duration', '\u5e73\u5747\u8996\u8074\u6642\u9593') || '--';
   const displayLiveCTR = sanitizeMetricValue(getMetric('live_ctr', 'LIVE CTR')) || '--';
-  const displayCommentRate = sanitizeMetricValue(getMetric('comment_rate', 'Comment rate', 'コメント率')) || workerCommentRate || '--';
-  const displayFollowRate = sanitizeMetricValue(getMetric('follow_rate', 'Follow rate', 'フォロー率')) || '--';
-  const displayOrderRate = sanitizeMetricValue(getMetric('order_rate', 'Order rate (SKU orders)', '注文率')) || '--';
-  const displayShareRate = sanitizeMetricValue(getMetric('share_rate', 'Share rate', 'シェア率')) || workerShareRate || '--';
-  const displayLikeRate = sanitizeMetricValue(getMetric('like_rate', 'Like rate', 'いいね率')) || workerLikeRate || '--';
-  const displayGPM = getMetric('gpm', 'show_gpm', 'Show GPM', '表示GPM') || '--';
+  const displayCommentRate = sanitizeMetricValue(getMetric('comment_rate', 'Comment rate', window.__t('liveDashboard_8a58ba', 'コメント率'))) || workerCommentRate || '--';
+  const displayFollowRate = sanitizeMetricValue(getMetric('follow_rate', 'Follow rate', window.__t('liveDashboard_c48944', 'フォロー率'))) || '--';
+  const displayOrderRate = sanitizeMetricValue(getMetric('order_rate', 'Order rate (SKU orders)', window.__t('liveDashboard_466b12', '注文率'))) || '--';
+  const displayShareRate = sanitizeMetricValue(getMetric('share_rate', 'Share rate', window.__t('liveDashboard_82b132', 'シェア率'))) || workerShareRate || '--';
+  const displayLikeRate = sanitizeMetricValue(getMetric('like_rate', 'Like rate', window.__t('liveDashboard_6230fb', 'いいね率'))) || workerLikeRate || '--';
+  const displayGPM = getMetric('gpm', 'show_gpm', 'Show GPM', window.__t('liveDashboard_46cd6e', '表示GPM')) || '--';
 
   // ─── RENDER ─────────────────────────────────────────────
   if (!showDashboard) {
@@ -1012,7 +1012,7 @@ const LiveDashboard = ({ videoId, extensionVideoId, liveUrl, username, title, on
             <svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>
           </div>
           <p className="text-white text-2xl font-bold mb-2">{loadProgress}%</p>
-          <p className="text-gray-300 text-sm mb-4">{loadSteps[loadStep]?.label || '準備中...'}</p>
+          <p className="text-gray-300 text-sm mb-4">{loadSteps[loadStep]?.label || window.__t('autoVideoPage_0114a5', '準備中...')}</p>
           <div className="w-full bg-gray-700 rounded-full h-2 mb-4 overflow-hidden">
             <div
               className="h-full rounded-full bg-gradient-to-r from-[#FF0050] to-[#00F2EA] transition-all duration-300"
@@ -1060,7 +1060,7 @@ const LiveDashboard = ({ videoId, extensionVideoId, liveUrl, username, title, on
                 <span className="text-gray-400 font-mono">{formatTime(elapsedTime)}</span>
                 <span className="text-gray-600">|</span>
                 <span className={`${streamEnded ? 'text-gray-500' : 'text-green-400'}`}>
-                  {streamEnded ? 'ライブ終了' : '配信中'}
+                  {streamEnded ? window.__t('liveDashboard_5c0029', 'ライブ終了') : window.__t('liveDashboard_3e1111', '配信中')}
                 </span>
               </div>
             </div>
@@ -1079,7 +1079,7 @@ const LiveDashboard = ({ videoId, extensionVideoId, liveUrl, username, title, on
           <div className="hidden md:flex items-center gap-4 text-xs">
             <div className="flex items-center gap-1.5">
               <div className="w-2 h-2 rounded-full bg-red-500"></div>
-              <span className="text-gray-400">視聴者</span>
+              <span className="text-gray-400">{window.__t('live_viewers', window.__t('live_viewers', '視聴者'))}</span>
               <span className="text-white font-bold">{displayViewers}</span>
             </div>
             <div className="flex items-center gap-1.5">
@@ -1128,7 +1128,7 @@ const LiveDashboard = ({ videoId, extensionVideoId, liveUrl, username, title, on
               </div>
             ) : (
               <div className="text-center py-4">
-                <p className="text-[10px] text-gray-500">トラフィックデータ待ち...</p>
+                <p className="text-[10px] text-gray-500">{window.__t('liveDashboard_e81729', window.__t('liveDashboard_e81729', 'トラフィックデータ待ち...'))}</p>
               </div>
             )}
           </div>
@@ -1142,21 +1142,21 @@ const LiveDashboard = ({ videoId, extensionVideoId, liveUrl, username, title, on
             <div className="space-y-3">
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <span className="text-[10px] text-gray-500">視聴者数</span>
+                  <span className="text-[10px] text-gray-500">{window.__t('analyticsSection_2da6', window.__t('analyticsSection_2da6', '視聴者数'))}</span>
                   <span className="text-[10px] text-white font-medium">{displayViewers}</span>
                 </div>
                 <Sparkline data={metricsHistory.viewers.length > 1 ? metricsHistory.viewers : [0, 0]} color="#FF0050" height={40} />
               </div>
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <span className="text-[10px] text-gray-500">コメント/分</span>
+                  <span className="text-[10px] text-gray-500">{window.__t('liveDashboard_4fb075', window.__t('liveDashboard_4fb075', 'コメント/分'))}</span>
                   <span className="text-[10px] text-white font-medium">{metricsHistory.comments.length > 0 ? metricsHistory.comments[metricsHistory.comments.length - 1] : 0}</span>
                 </div>
                 <Sparkline data={metricsHistory.comments.length > 1 ? metricsHistory.comments : [0, 0]} color="#00F2EA" height={40} />
               </div>
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <span className="text-[10px] text-gray-500">いいね</span>
+                  <span className="text-[10px] text-gray-500">{window.__t('live_likes', window.__t('live_likes', 'いいね'))}</span>
                   <span className="text-[10px] text-white font-medium">{formatLargeNum(metrics.like_count)}</span>
                 </div>
                 <Sparkline data={metricsHistory.likes.length > 1 ? metricsHistory.likes : [0, 0]} color="#FF6B6B" height={40} />
@@ -1185,17 +1185,17 @@ const LiveDashboard = ({ videoId, extensionVideoId, liveUrl, username, title, on
           {/* GMV Hero Section */}
           <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] p-4 border-b border-gray-800/30">
             <div className="text-center mb-3">
-              <p className="text-[10px] text-gray-400 uppercase tracking-wider mb-1">Direct GMV (売上)</p>
+              <p className="text-[10px] text-gray-400 uppercase tracking-wider mb-1">{window.__t('liveDashboard_65663b', window.__t('liveDashboard_65663b', 'Direct GMV (売上)'))}</p>
               <p className="text-4xl xl:text-5xl font-black text-white tracking-tight">{displayGMV}</p>
               <div className="flex items-center justify-center gap-4 mt-2">
                 <div className="flex items-center gap-1.5">
                   <div className="w-2 h-2 rounded-full bg-green-500"></div>
-                  <span className="text-xs text-gray-400">販売数</span>
+                  <span className="text-xs text-gray-400">{window.__t('liveDashboard_d21e3b', window.__t('liveDashboard_d21e3b', '販売数'))}</span>
                   <span className="text-xs text-white font-bold">{displayItemsSold}</span>
                 </div>
                 <div className="flex items-center gap-1.5">
                   <div className="w-2 h-2 rounded-full bg-red-500"></div>
-                  <span className="text-xs text-gray-400">視聴者</span>
+                  <span className="text-xs text-gray-400">{window.__t('live_viewers', window.__t('live_viewers', '視聴者'))}</span>
                   <span className="text-xs text-white font-bold">{displayViewers}</span>
                 </div>
               </div>
@@ -1205,17 +1205,17 @@ const LiveDashboard = ({ videoId, extensionVideoId, liveUrl, username, title, on
           {/* Metrics Grid */}
           <div className="p-3 border-b border-gray-800/30">
             <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2">
-              <MetricTile label="インプレッション" value={displayImpressions} />
-              <MetricTile label="商品クリック" value={displayProductClicks} />
-              <MetricTile label="タップスルー率" value={displayTTR} />
-              <MetricTile label="平均視聴時間" value={displayAvgDuration} />
+              <MetricTile label=={window.__t('liveDashboard_5b3de2', window.__t('liveDashboard_5b3de2', 'インプレッション'))} value={displayImpressions} />
+              <MetricTile label=={window.__t('analyticsSection_9133', window.__t('analyticsSection_9133', '商品クリック'))} value={displayProductClicks} />
+              <MetricTile label=={window.__t('liveDashboard_de2426', window.__t('liveDashboard_de2426', 'タップスルー率'))} value={displayTTR} />
+              <MetricTile label=={window.__t('liveDashboard_4d86b1', window.__t('liveDashboard_4d86b1', '平均視聴時間'))} value={displayAvgDuration} />
               <MetricTile label="LIVE CTR" value={displayLiveCTR} />
-              <MetricTile label="コメント率" value={displayCommentRate} />
-              <MetricTile label="フォロー率" value={displayFollowRate} />
-              <MetricTile label="表示GPM" value={displayGPM} />
-              <MetricTile label="注文率" value={displayOrderRate} small />
-              <MetricTile label="シェア率" value={displayShareRate} small />
-              <MetricTile label="いいね率" value={displayLikeRate} small />
+              <MetricTile label=={window.__t('liveDashboard_8a58ba', window.__t('liveDashboard_8a58ba', 'コメント率'))} value={displayCommentRate} />
+              <MetricTile label=={window.__t('liveDashboard_c48944', window.__t('liveDashboard_c48944', 'フォロー率'))} value={displayFollowRate} />
+              <MetricTile label=={window.__t('liveDashboard_46cd6e', window.__t('liveDashboard_46cd6e', '表示GPM'))} value={displayGPM} />
+              <MetricTile label=={window.__t('liveDashboard_466b12', window.__t('liveDashboard_466b12', '注文率'))} value={displayOrderRate} small />
+              <MetricTile label=={window.__t('liveDashboard_82b132', window.__t('liveDashboard_82b132', 'シェア率'))} value={displayShareRate} small />
+              <MetricTile label=={window.__t('liveDashboard_6230fb', window.__t('liveDashboard_6230fb', 'いいね率'))} value={displayLikeRate} small />
             </div>
           </div>
 
@@ -1237,11 +1237,11 @@ const LiveDashboard = ({ videoId, extensionVideoId, liveUrl, username, title, on
                   <thead>
                     <tr className="text-[10px] text-gray-500 border-b border-gray-800/30">
                       <th className="text-left py-1.5 px-2 font-medium">#</th>
-                      <th className="text-left py-1.5 px-2 font-medium">商品</th>
-                      <th className="text-right py-1.5 px-2 font-medium">クリック</th>
-                      <th className="text-right py-1.5 px-2 font-medium">カート</th>
-                      <th className="text-right py-1.5 px-2 font-medium">販売数</th>
-                      <th className="text-center py-1.5 px-2 font-medium">状態</th>
+                      <th className="text-left py-1.5 px-2 font-medium">{window.__t('csv_product', window.__t('csv_product', '商品'))}</th>
+                      <th className="text-right py-1.5 px-2 font-medium">{window.__t('clickCount', window.__t('clickCount', 'クリック'))}</th>
+                      <th className="text-right py-1.5 px-2 font-medium">{window.__t('liveDashboard_6f642d', window.__t('liveDashboard_6f642d', 'カート'))}</th>
+                      <th className="text-right py-1.5 px-2 font-medium">{window.__t('liveDashboard_d21e3b', window.__t('liveDashboard_d21e3b', '販売数'))}</th>
+                      <th className="text-center py-1.5 px-2 font-medium">{window.__t('liveDashboard_c70d25', window.__t('liveDashboard_c70d25', '状態'))}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1259,8 +1259,8 @@ const LiveDashboard = ({ videoId, extensionVideoId, liveUrl, username, title, on
                               <span className="text-[10px] text-gray-500">📦</span>
                             </div>
                             <div className="min-w-0">
-                              <p className="text-[11px] text-gray-200 truncate max-w-[200px]">{product.name || '商品名不明'}</p>
-                              <p className="text-[10px] text-red-400 font-medium">{product.price ? `${Number(String(product.price).replace(/,/g, '')).toLocaleString()}円` : product.gmv || ''}</p>
+                              <p className="text-[11px] text-gray-200 truncate max-w-[200px]">{product.name || window.__t('liveDashboard_950ca9', '商品名不明')}</p>
+                              <p className="text-[10px] text-red-400 font-medium">{product.price ? `${Number(String(product.price).replace(/,/g, 'window.__t('liveDashboard_40541c', ')).toLocaleString()}${window.__t('liveDashboard_a6de4c', '円')}` : product.gmv || ')'}</p>
                             </div>
                           </div>
                         </td>
@@ -1284,8 +1284,8 @@ const LiveDashboard = ({ videoId, extensionVideoId, liveUrl, username, title, on
                 <div className="w-12 h-12 rounded-full bg-gray-800 flex items-center justify-center mb-3">
                   <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#666" strokeWidth="1.5"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/></svg>
                 </div>
-                <p className="text-xs text-gray-500">商品データを受信中...</p>
-                <p className="text-[10px] text-gray-600 mt-1">Chrome拡張から商品リストが送信されます</p>
+                <p className="text-xs text-gray-500">{window.__t('liveDashboard_f78365', window.__t('liveDashboard_f78365', '商品データを受信中...'))}</p>
+                <p className="text-[10px] text-gray-600 mt-1">{window.__t('liveDashboard_b3873f', window.__t('liveDashboard_b3873f', 'Chrome拡張から商品リストが送信されます'))}</p>
               </div>
             )}
           </div>
@@ -1305,7 +1305,7 @@ const LiveDashboard = ({ videoId, extensionVideoId, liveUrl, username, title, on
                     <circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/>
                   </svg>
                 </div>
-                <p className="text-gray-500 text-[10px]">LIVE映像</p>
+                <p className="text-gray-500 text-[10px]">{window.__t('liveDashboard_2211bc', window.__t('liveDashboard_2211bc', 'LIVE映像'))}</p>
                 <a
                   href={`https://www.tiktok.com/@${extensionAccount || username}/live`}
                   target="_blank"
@@ -1332,9 +1332,9 @@ const LiveDashboard = ({ videoId, extensionVideoId, liveUrl, username, title, on
           <div className="flex border-b border-gray-800/50 shrink-0">
             {[
               { id: 'ai', label: 'AI', icon: '🤖' },
-              { id: 'comments', label: 'コメント', icon: '💬', count: extensionComments.length },
-              { id: 'products', label: '商品', icon: '🛍️' },
-              { id: 'activity', label: 'アクティビティ', icon: '⚡' },
+              { id: 'comments', label: window.__t('live_comments', 'コメント'), icon: '💬', count: extensionComments.length },
+              { id: 'products', label: window.__t('csv_product', '商品'), icon: '🛍️' },
+              { id: 'activity', label: window.__t('liveDashboard_ee2abe', 'アクティビティ'), icon: '⚡' },
             ].map(tab => (
               <button
                 key={tab.id}
@@ -1388,7 +1388,7 @@ const LiveDashboard = ({ videoId, extensionVideoId, liveUrl, username, title, on
             <div className="flex items-center gap-2">
               <div className={`w-2 h-2 rounded-full ${isConnected && !streamEnded ? 'bg-green-500' : streamEnded ? 'bg-gray-500' : 'bg-red-500'}`}></div>
               <span className="text-[10px] text-gray-500">
-                {streamEnded ? 'ライブ終了' : isConnected ? '接続中' : '接続待ち'}
+                {streamEnded ? window.__t('liveDashboard_5c0029', 'ライブ終了') : isConnected ? window.__t('liveDashboard_a94b52', '接続中') : window.__t('liveDashboard_9e0470', '接続待ち')}
               </span>
             </div>
             {metricsReceived && !streamEnded && (

@@ -23,9 +23,9 @@ const ERROR_STYLES = {
     text: "text-yellow-700", subtext: "text-yellow-500",
     icon: "wifi_off", iconBg: "bg-yellow-100", iconColor: "text-yellow-500",
     btn: "text-yellow-600 bg-yellow-100 hover:bg-yellow-200",
-    label: "ネットワーク",
-    userMessage: "インターネット接続を確認してください。",
-    actionLabel: "再試行",
+    label: window.__t('sectionStateUI_0b063b', 'ネットワーク'),
+    userMessage: window.__t('sectionStateUI_ac4532', 'インターネット接続を確認してください。'),
+    actionLabel: window.__t('videoListRetry', '再試行'),
     actionType: "retry",
   },
   timeout: {
@@ -33,9 +33,9 @@ const ERROR_STYLES = {
     text: "text-yellow-700", subtext: "text-yellow-500",
     icon: "schedule", iconBg: "bg-yellow-100", iconColor: "text-yellow-500",
     btn: "text-yellow-600 bg-yellow-100 hover:bg-yellow-200",
-    label: "タイムアウト",
-    userMessage: "サーバーの応答に時間がかかっています。しばらくしてから再試行してください。",
-    actionLabel: "再試行",
+    label: window.__t('sectionStateUI_197603', 'タイムアウト'),
+    userMessage: window.__t('sectionStateUI_f968d8', 'サーバーの応答に時間がかかっています。しばらくしてから再試行してください。'),
+    actionLabel: window.__t('videoListRetry', '再試行'),
     actionType: "retry",
   },
   auth: {
@@ -43,9 +43,9 @@ const ERROR_STYLES = {
     text: "text-orange-700", subtext: "text-orange-500",
     icon: "lock", iconBg: "bg-orange-100", iconColor: "text-orange-500",
     btn: "text-orange-600 bg-orange-100 hover:bg-orange-200",
-    label: "認証エラー",
-    userMessage: "ログインセッションが切れました。再ログインしてください。",
-    actionLabel: "再ログイン",
+    label: window.__t('sectionStateUI_dcda22', '認証エラー'),
+    userMessage: window.__t('sectionStateUI_2eede1', 'ログインセッションが切れました。再ログインしてください。'),
+    actionLabel: window.__t('sectionStateUI_515e4f', '再ログイン'),
     actionType: "relogin",
   },
   not_found: {
@@ -53,9 +53,9 @@ const ERROR_STYLES = {
     text: "text-gray-600", subtext: "text-gray-400",
     icon: "search_off", iconBg: "bg-gray-100", iconColor: "text-gray-400",
     btn: "text-gray-600 bg-gray-100 hover:bg-gray-200",
-    label: "未生成",
+    label: window.__t('sectionStateUI_da3b42', '未生成'),
     userMessage: null, // sectionNameで動的生成
-    actionLabel: "再読込",
+    actionLabel: window.__t('sectionStateUI_72bdc2', '再読込'),
     actionType: "retry",
   },
   server: {
@@ -63,9 +63,9 @@ const ERROR_STYLES = {
     text: "text-red-700", subtext: "text-red-500",
     icon: "error", iconBg: "bg-red-100", iconColor: "text-red-500",
     btn: "text-red-600 bg-red-100 hover:bg-red-200",
-    label: "サーバーエラー",
-    userMessage: "サーバーで一時的な障害が発生しています。しばらくしてから再試行してください。",
-    actionLabel: "再試行",
+    label: window.__t('sectionStateUI_a479c6', 'サーバーエラー'),
+    userMessage: window.__t('sectionStateUI_e8331f', 'サーバーで一時的な障害が発生しています。しばらくしてから再試行してください。'),
+    actionLabel: window.__t('videoListRetry', '再試行'),
     actionType: "retry",
   },
   rate_limit: {
@@ -73,9 +73,9 @@ const ERROR_STYLES = {
     text: "text-yellow-700", subtext: "text-yellow-500",
     icon: "speed", iconBg: "bg-yellow-100", iconColor: "text-yellow-500",
     btn: "text-yellow-600 bg-yellow-100 hover:bg-yellow-200",
-    label: "レート制限",
-    userMessage: "リクエストが多すぎます。30秒ほど待ってから再試行してください。",
-    actionLabel: "再試行",
+    label: window.__t('sectionStateUI_583935', 'レート制限'),
+    userMessage: window.__t('sectionStateUI_67920d', 'リクエストが多すぎます。30秒ほど待ってから再試行してください。'),
+    actionLabel: window.__t('videoListRetry', '再試行'),
     actionType: "retry",
   },
   parse: {
@@ -83,9 +83,9 @@ const ERROR_STYLES = {
     text: "text-red-700", subtext: "text-red-500",
     icon: "code_off", iconBg: "bg-red-100", iconColor: "text-red-500",
     btn: "text-red-600 bg-red-100 hover:bg-red-200",
-    label: "データエラー",
-    userMessage: "データの読み取りに失敗しました。再試行しても改善しない場合はサポートにお問い合わせください。",
-    actionLabel: "再試行",
+    label: window.__t('sectionStateUI_3b438b', 'データエラー'),
+    userMessage: window.__t('sectionStateUI_04f25b', 'データの読み取りに失敗しました。再試行しても改善しない場合はサポートにお問い合わせください。'),
+    actionLabel: window.__t('videoListRetry', '再試行'),
     actionType: "retry",
   },
   unknown: {
@@ -93,9 +93,9 @@ const ERROR_STYLES = {
     text: "text-gray-600", subtext: "text-gray-400",
     icon: "help", iconBg: "bg-gray-100", iconColor: "text-gray-400",
     btn: "text-gray-600 bg-gray-100 hover:bg-gray-200",
-    label: "エラー",
-    userMessage: "予期しないエラーが発生しました。再試行してください。",
-    actionLabel: "再試行",
+    label: window.__t('sidebar_error', 'エラー'),
+    userMessage: window.__t('sectionStateUI_9be6cc', '予期しないエラーが発生しました。再試行してください。'),
+    actionLabel: window.__t('videoListRetry', '再試行'),
     actionType: "retry",
   },
 };
@@ -148,7 +148,7 @@ function ErrorIcon({ type }) {
 }
 
 // ── ローディングスピナー ──
-function LoadingSpinner({ text = "読み込み中...", compact = false }) {
+function LoadingSpinner({ text = window.__t('common_loading', '読み込み中...'), compact = false }) {
   if (compact) {
     return (
       <div className="flex items-center justify-center gap-2 py-4">
@@ -166,7 +166,7 @@ function LoadingSpinner({ text = "読み込み中...", compact = false }) {
 }
 
 // ── 空状態表示 ──
-function EmptyState({ text = "データがありません", icon = null, compact = false }) {
+function EmptyState({ text = window.__t('sectionStateUI_fb6503', 'データがありません'), icon = null, compact = false }) {
   if (compact) {
     return (
       <div className="flex items-center justify-center gap-2 py-4 text-gray-400">
@@ -215,7 +215,7 @@ function ErrorState({ error, onRetry, sectionName, compact = false }) {
             </div>
             <div>
               <span className={`${s.text} text-sm`}>
-                {sectionName ? `${sectionName}はまだ生成されていません` : "データが未生成です"}
+                {sectionName ? `${sectionName}${window.__t('sectionStateUI_d7fb4a', 'はまだ生成されていません')}` : window.__t('sectionStateUI_cf8672', 'データが未生成です')}
               </span>
               <div className={`${s.subtext} text-xs mt-0.5`}>
                 分析ボタンを押して生成を開始してください
@@ -267,7 +267,7 @@ function ErrorState({ error, onRetry, sectionName, compact = false }) {
             <div>
               <div className="flex items-center gap-2">
                 <span className={`${s.text} text-sm font-medium`}>
-                  {sectionName || "セクション"}
+                  {sectionName || window.__t('sectionStateUI_bf60b5', 'セクション')}
                 </span>
                 <span className={`${s.subtext} text-[10px] px-1.5 py-0.5 rounded ${s.iconBg}`}>
                   {s.label}
@@ -302,7 +302,7 @@ function ErrorState({ error, onRetry, sectionName, compact = false }) {
       <div className={`rounded-lg ${s.bg} border ${s.border} px-3 py-2 flex items-center justify-between`}>
         <div className="flex items-center gap-2">
           <span className={`${s.iconColor}`}><ErrorIcon type={errorType} /></span>
-          <span className={`${s.text} text-xs`}>{s.userMessage || error?.message || "エラーが発生しました"}</span>
+          <span className={`${s.text} text-xs`}>{s.userMessage || error?.message || window.__t('statusError', 'エラーが発生しました')}</span>
           <span className={`${s.subtext} text-[10px] px-1.5 py-0.5 rounded ${s.iconBg}`}>{s.label}</span>
         </div>
         {onRetry && (
@@ -327,14 +327,14 @@ function ErrorState({ error, onRetry, sectionName, compact = false }) {
           <div>
             <div className="flex items-center gap-2">
               <span className={`${s.text} text-sm font-medium`}>
-                {sectionName || "セクション"}
+                {sectionName || window.__t('sectionStateUI_bf60b5', 'セクション')}
               </span>
               <span className={`${s.subtext} text-[10px] px-1.5 py-0.5 rounded ${s.iconBg}`}>
                 {s.label}
               </span>
             </div>
             <div className={`${s.subtext} text-xs mt-0.5`}>
-              {s.userMessage || error?.message || "エラーが発生しました"}
+              {s.userMessage || error?.message || window.__t('statusError', 'エラーが発生しました')}
             </div>
             {error?.status && (
               <div className={`${s.subtext} text-[10px] mt-0.5 opacity-60`}>

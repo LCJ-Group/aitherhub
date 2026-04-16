@@ -121,7 +121,7 @@ const LightningClipEditor = ({ videoId, clip, onClose, onClipUpdated }) => {
       } catch (logErr) {
         console.warn('Edit tracking failed (non-blocking):', logErr);
       }
-      setStatusMessage({ type: "success", text: "トリム適用中... 新しいクリップを生成しています" });
+      setStatusMessage({ type: "success", text: window.__t('auto_319', 'トリム適用中... 新しいクリップを生成しています') });
       if (onClipUpdated) {
         onClipUpdated(res);
       }
@@ -173,7 +173,7 @@ const LightningClipEditor = ({ videoId, clip, onClose, onClipUpdated }) => {
       } catch (logErr) {
         console.warn('Edit tracking failed (non-blocking):', logErr);
       }
-      setStatusMessage({ type: "success", text: "字幕を保存しました" });
+      setStatusMessage({ type: "success", text: window.__t('auto_335', '字幕を保存しました') });
     } catch (e) {
       setStatusMessage({ type: "error", text: `字幕保存失敗: ${e.message}` });
     } finally {
@@ -362,7 +362,7 @@ const LightningClipEditor = ({ videoId, clip, onClose, onClipUpdated }) => {
             >
               {[
                 { key: "trim", label: "Trim", icon: "✂️" },
-                { key: "captions", label: "字幕編集", icon: "📝" },
+                { key: "captions", label: window.__t('auto_336', '字幕編集'), icon: "📝" },
               ].map((tab) => (
                 <button
                   key={tab.key}
@@ -574,7 +574,7 @@ const LightningClipEditor = ({ videoId, clip, onClose, onClipUpdated }) => {
                     opacity: isTrimming ? 0.6 : 1,
                   }}
                 >
-                  {isTrimming ? "⏳ 生成中..." : "✂️ トリムを適用して再生成"}
+                  {isTrimming ? window.__t('auto_303', '⏳ 生成中...') : window.__t('auto_304', '✂️ トリムを適用して再生成')}
                 </button>
               </div>
             )}
@@ -662,7 +662,7 @@ const LightningClipEditor = ({ videoId, clip, onClose, onClipUpdated }) => {
                         )}
                         <button
                           onClick={() => handleCaptionEmphasisToggle(idx)}
-                          title={cap.emphasis ? "強調を解除" : "強調する"}
+                          title={cap.emphasis ? window.__t('auto_339', '強調を解除') : window.__t('auto_338', '強調する')}
                           style={{
                             background: cap.emphasis ? "#FFD700" : "#333",
                             border: "none",
@@ -698,7 +698,7 @@ const LightningClipEditor = ({ videoId, clip, onClose, onClipUpdated }) => {
                       opacity: isSavingCaptions ? 0.6 : 1,
                     }}
                   >
-                    {isSavingCaptions ? "⏳ 保存中..." : "💾 字幕を保存"}
+                    {isSavingCaptions ? window.__t('auto_302', '⏳ 保存中...') : window.__t('auto_359', '💾 字幕を保存')}
                   </button>
                 )}
               </div>

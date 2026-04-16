@@ -649,7 +649,7 @@ export default function AnalyticsSection({ reports1, videoData, onPreviewSegment
       if (p.series.name.includes(window.__t('analytics_cumulativeSales', '売上（累積）').substring(0, 2))) val = "¥" + Math.round(p.y).toLocaleString();
       else if (p.series.name.includes(window.__t('analytics_viewerCount', '視聴者数').substring(0, 2))) val = p.y.toLocaleString() + window.__t('analytics_personUnit', '人');
       else val = p.y.toLocaleString();
-      s += `<span style="color:${p.color}">\u25CF</span> ${p.series.name}：<b>${val}</b><br/>`;
+      s += `<span style="color:${p.color}">\u25CF</span> ${p.series.name}${window.__t('analyticsSection_dec892', '：')}<b>${val}</b><br/>`;
     }
     // Show active products at this time with sales data
     const currentSec = this.x;

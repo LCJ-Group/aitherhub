@@ -149,7 +149,7 @@ export default function SalesMomentClips({ videoData, onRequestClip, clipStates 
                   disabled={isLoading}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-red-600 bg-white border border-red-200 hover:bg-red-50 transition-colors disabled:opacity-60"
                 >
-                  {isLoading ? "検出中..." : "再検出"}
+                  {isLoading ? window.__t('auto_346', '検出中...') : window.__t('videoDetail_reDetect', '再検出')}
                 </button>
                 <button
                   type="button"
@@ -178,8 +178,8 @@ export default function SalesMomentClips({ videoData, onRequestClip, clipStates 
           <div className="px-5 pb-5">
             <div className="text-center py-8 text-gray-400 text-sm">
               <div className="text-3xl mb-2">{"\u{1F4CA}"}</div>
-              <div>スパイクが検出されませんでした。</div>
-              <div className="mt-1 text-xs">売上データが均一な場合、スパイクは検出されません。</div>
+              <div>{window.__t('salesMomentClips_7d058e', window.__t('salesMomentClips_7d058e', 'スパイクが検出されませんでした。'))}</div>
+              <div className="mt-1 text-xs">{window.__t('salesMomentClips_ca01fc', window.__t('salesMomentClips_ca01fc', '売上データが均一な場合、スパイクは検出されません。'))}</div>
             </div>
           </div>
         )}
@@ -272,7 +272,7 @@ export default function SalesMomentClips({ videoData, onRequestClip, clipStates 
                         ) : clipState?.status === "generating_subtitles" ? (
                           <div className="flex-1 flex flex-col gap-1">
                             <div className="flex items-center justify-between">
-                              <span className="text-purple-600 text-xs font-medium">字幕生成中...</span>
+                              <span className="text-purple-600 text-xs font-medium">{window.__t('dockPlayer_e826b5', window.__t('dockPlayer_e826b5', '字幕生成中...'))}</span>
                               <span className="text-purple-500 text-xs font-bold">95%</span>
                             </div>
                             <div className="w-full h-1.5 bg-purple-100 rounded-full overflow-hidden">
@@ -284,17 +284,17 @@ export default function SalesMomentClips({ videoData, onRequestClip, clipStates 
                             const pct = clipState?.progress_pct || 0;
                             const step = clipState?.progress_step || '';
                             const stepLabels = {
-                              downloading: '取得中',
-                              speech_boundary: '音声検出',
-                              cutting: 'カット中',
-                              person_detection: '人物検出',
-                              silence_removal: '無音除去',
-                              transcribing: '文字起こし',
-                              refining_subtitles: '字幕最適化',
-                              creating_clip: '動画作成',
-                              uploading: 'アップロード',
+                              downloading: window.__t('momentClips_downloading', '取得中'),
+                              speech_boundary: window.__t('momentClips_speechBoundary', '音声検出'),
+                              cutting: window.__t('momentClips_cutting', 'カット中'),
+                              person_detection: window.__t('momentClips_personDetection', '人物検出'),
+                              silence_removal: window.__t('momentClips_silenceRemoval', '無音除去'),
+                              transcribing: window.__t('momentClips_transcribing', '文字起こし'),
+                              refining_subtitles: window.__t('momentClips_refiningSubtitles', '字幕最適化'),
+                              creating_clip: window.__t('momentClips_creatingClip', '動画作成'),
+                              uploading: window.__t('uploadButton', 'アップロード'),
                             };
-                            const label = stepLabels[step] || '生成中';
+                            const label = stepLabels[step] || window.__t('momentClips_generating', '生成中');
                             return (
                               <div className="flex-1 flex flex-col gap-1">
                                 <div className="flex items-center justify-between">

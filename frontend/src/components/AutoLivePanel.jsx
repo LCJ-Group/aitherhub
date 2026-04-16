@@ -19,16 +19,16 @@ import aiLiveCreatorService from "../base/services/aiLiveCreatorService";
 
 const LANGUAGES = [
   { code: "en", label: "English", flag: "🇬🇧" },
-  { code: "ja", label: "日本語", flag: "🇯🇵" },
-  { code: "zh", label: "中文", flag: "🇨🇳" },
+  { code: "ja", label: window.__t('language_japanese', '日本語'), flag: "🇯🇵" },
+  { code: "zh", label: window.__t('scriptGen_langZh', '中文'), flag: "🇨🇳" },
   { code: "th", label: "ไทย", flag: "🇹🇭" },
   { code: "ms", label: "Malay", flag: "🇲🇾" },
 ];
 
 const STYLES = [
-  { id: "professional", label: "Professional", icon: "👔", desc: "信頼感のあるプロの解説" },
-  { id: "casual", label: "Casual", icon: "😊", desc: "友達と話すようなカジュアル" },
-  { id: "energetic", label: "Energetic", icon: "🔥", desc: "テンション高めの販促トーク" },
+  { id: "professional", label: "Professional", icon: "👔", desc: window.__t('autoLivePanel_b930dd', '信頼感のあるプロの解説') },
+  { id: "casual", label: "Casual", icon: "😊", desc: window.__t('autoLivePanel_48c3d1', '友達と話すようなカジュアル') },
+  { id: "energetic", label: "Energetic", icon: "🔥", desc: window.__t('autoLivePanel_e70981', 'テンション高めの販促トーク') },
 ];
 
 export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }) {
@@ -65,7 +65,7 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
       }
     } catch (err) {
       console.error("[AutoLive] Failed to load products:", err);
-      setError("Shopee商品の取得に失敗しました。Sales Dashのブリッジ接続を確認してください。");
+      setError(window.__t('autoLivePanel_ac5479', 'Shopee商品の取得に失敗しました。Sales Dashのブリッジ接続を確認してください。'));
     } finally {
       setIsLoadingProducts(false);
     }
@@ -74,7 +74,7 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
   // ── Start Auto Live ──
   const handleStart = async () => {
     if (!sessionId) {
-      setError("ストリーミングを先に開始してください");
+      setError(window.__t('autoLivePanel_5e568f', 'ストリーミングを先に開始してください'));
       return;
     }
     setIsLoading(true);
@@ -116,7 +116,7 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
       onStatusChange?.("running");
     } catch (err) {
       console.error("[AutoLive] Failed to start:", err);
-      setError(err.response?.data?.detail || "自動配信の開始に失敗しました");
+      setError(err.response?.data?.detail || window.__t('autoLivePanel_a2190f', '自動配信の開始に失敗しました'));
     } finally {
       setIsLoading(false);
     }
@@ -306,7 +306,7 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
               </div>
             ) : products.length === 0 ? (
               <div className="text-center py-3">
-                <p className="text-[10px] text-gray-500 mb-2">商品データがありません</p>
+                <p className="text-[10px] text-gray-500 mb-2">{window.__t('autoLivePanel_32a50b', window.__t('autoLivePanel_32a50b', '商品データがありません'))}</p>
                 <button
                   onClick={loadProducts}
                   className="px-3 py-1 bg-amber-500/20 border border-amber-500/30 rounded text-[9px] text-amber-300 hover:bg-amber-500/30"
@@ -370,7 +370,7 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
             {isLoading ? (
               <><Loader2 className="w-3 h-3 animate-spin" />Starting...</>
             ) : (
-              <><Play className="w-3 h-3" />Auto Live 開始</>
+              <><Play className="w-3 h-3" />{window.__t('autoLivePanel_7508db', window.__t('autoLivePanel_7508db', 'Auto Live 開始'))}</>
             )}
           </button>
         ) : (

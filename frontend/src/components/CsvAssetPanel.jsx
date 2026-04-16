@@ -63,7 +63,7 @@ export default function CsvAssetPanel({ videoData, onReplace, onRefresh }) {
       setPreviewData(res);
     } catch (err) {
       console.warn("[CsvAssetPanel] Failed to load preview:", err);
-      setPreviewData({ available: false, message: "プレビューの読み込みに失敗しました" });
+      setPreviewData({ available: false, message: window.__t('csvAssetPanel_0e987b', 'プレビューの読み込みに失敗しました') });
     } finally {
       setPreviewLoading(false);
     }
@@ -96,17 +96,17 @@ export default function CsvAssetPanel({ videoData, onReplace, onRefresh }) {
     try {
       const res = await api.post(`/api/v1/admin/videos/${videoData.id}/recalc-csv-metrics`);
       if (res?.success || res?.status === 'recalculated') {
-        alert('CSVメトリクスの再計算が完了しました。ページを再読み込みします。');
+        alert(window.__t('csvAssetPanel_ccc667', 'CSVメトリクスの再計算が完了しました。ページを再読み込みします。'));
         // 親コンポーネントにリフレッシュを通知
         if (onRefresh) onRefresh();
         // ページをリロードしてグラフを更新
         window.location.reload();
       } else {
-        alert(`再検証に失敗しました: ${res?.detail || res?.message || '不明なエラー'}`);
+        alert(`再検証に失敗しました: ${res?.detail || res?.message || window.__t('csvAssetPanel_2d20c4', '不明なエラー')}`);
       }
     } catch (err) {
       console.error('[CsvAssetPanel] recalc-csv-metrics failed:', err);
-      const msg = err?.response?.data?.detail || err?.message || '不明なエラー';
+      const msg = err?.response?.data?.detail || err?.message || window.__t('csvAssetPanel_2d20c4', '不明なエラー');
       alert(`再検証に失敗しました: ${msg}`);
     } finally {
       setRevalidating(false);
@@ -119,10 +119,10 @@ export default function CsvAssetPanel({ videoData, onReplace, onRefresh }) {
   const ValidationBadge = ({ status }) => {
     const config = {
       ok: { bg: "bg-green-100", text: "text-green-700", label: "OK", icon: "check" },
-      warning: { bg: "bg-amber-100", text: "text-amber-700", label: "要確認", icon: "alert" },
-      error: { bg: "bg-red-100", text: "text-red-700", label: "不一致", icon: "x" },
-      mismatch: { bg: "bg-red-100", text: "text-red-700", label: "不一致", icon: "x" },
-      unknown: { bg: "bg-gray-100", text: "text-gray-500", label: "未検証", icon: "?" },
+      warning: { bg: "bg-amber-100", text: "text-amber-700", label: window.__t('csvAssetPanel_248521', '要確認'), icon: "alert" },
+      error: { bg: "bg-red-100", text: "text-red-700", label: window.__t('csvAssetPanel_a6f60d', '不一致'), icon: "x" },
+      mismatch: { bg: "bg-red-100", text: "text-red-700", label: window.__t('csvAssetPanel_a6f60d', '不一致'), icon: "x" },
+      unknown: { bg: "bg-gray-100", text: "text-gray-500", label: window.__t('videoDetail_unverified', '未検証'), icon: "?" },
     };
     const c = config[status] || config.unknown;
     return (
@@ -155,9 +155,9 @@ export default function CsvAssetPanel({ videoData, onReplace, onRefresh }) {
   // アップロードタイプバッジ
   const uploadTypeBadge = (type) => {
     const config = {
-      clean_video: { bg: "bg-green-100", text: "text-green-700", label: "クリーン動画" },
-      live_capture: { bg: "bg-red-100", text: "text-red-700", label: "ライブキャプチャ" },
-      screen_recording: { bg: "bg-gray-100", text: "text-gray-600", label: "画面収録" },
+      clean_video: { bg: "bg-green-100", text: "text-green-700", label: window.__t('csvAssetPanel_af4a16', 'クリーン動画') },
+      live_capture: { bg: "bg-red-100", text: "text-red-700", label: window.__t('csvAssetPanel_7a9bb9', 'ライブキャプチャ') },
+      screen_recording: { bg: "bg-gray-100", text: "text-gray-600", label: window.__t('videoDetail_screenRecording', '画面収録') },
     };
     const c = config[type] || config.screen_recording;
     return (
@@ -187,7 +187,7 @@ export default function CsvAssetPanel({ videoData, onReplace, onRefresh }) {
                   : "text-gray-400 hover:text-blue-600 hover:bg-blue-50"
               }`}
             >
-              {showPreview === assetType ? "閉じる" : "プレビュー"}
+              {showPreview === assetType ? window.__t('common_close', '閉じる') : window.__t('clip_preview', 'プレビュー')}
             </button>
           )}
         </div>
@@ -199,7 +199,7 @@ export default function CsvAssetPanel({ videoData, onReplace, onRefresh }) {
                 <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><polyline points="14 2 14 8 20 8"/>
               </svg>
               <span className="text-xs text-gray-600 truncate" title={filename || asset?.filename}>
-                {filename || asset?.filename || "不明"}
+                {filename || asset?.filename || window.__t('csvAssetPanel_efd626', '不明')}
               </span>
             </div>
             {asset && (
@@ -214,7 +214,7 @@ export default function CsvAssetPanel({ videoData, onReplace, onRefresh }) {
           </div>
         ) : (
           <div className="mt-1.5 pl-5">
-            <span className="text-xs text-gray-400">未添付</span>
+            <span className="text-xs text-gray-400">{window.__t('videoDetail_notAttached', window.__t('videoDetail_notAttached', '未添付'))}</span>
           </div>
         )}
 
@@ -227,7 +227,7 @@ export default function CsvAssetPanel({ videoData, onReplace, onRefresh }) {
                 プレビューを読み込み中...
               </div>
             ) : previewData?.available === false ? (
-              <div className="text-xs text-gray-400 text-center py-2">{previewData.message || "プレビューを利用できません"}</div>
+              <div className="text-xs text-gray-400 text-center py-2">{previewData.message || window.__t('csvAssetPanel_ea8239', 'プレビューを利用できません')}</div>
             ) : previewData ? (
               <div>
                 <div className="flex items-center justify-between mb-2">
@@ -329,14 +329,14 @@ export default function CsvAssetPanel({ videoData, onReplace, onRefresh }) {
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="text-sm font-semibold text-gray-800">CSVアセット管理</span>
+                <span className="text-sm font-semibold text-gray-800">{window.__t('videoDetail_csvAssetManagement', window.__t('videoDetail_csvAssetManagement', 'CSVアセット管理'))}</span>
                 {uploadTypeBadge(excelInfo.upload_type)}
                 <ValidationBadge status={overallValidation} />
               </div>
               <div className="flex items-center gap-3 mt-0.5">
                 <span className="text-[10px] text-gray-400">
-                  商品: {excelInfo.has_product ? "あり" : "なし"} / トレンド: {excelInfo.has_trend ? "あり" : "なし"}
-                  {excelInfo.asset_history?.length > 0 && ` / ${excelInfo.asset_history.length}件の履歴`}
+                  商品: {excelInfo.has_product ? window.__t('csvAssetPanel_beb409', 'あり') : window.__t('csvAssetPanel_3609f9', 'なし')} / トレンド: {excelInfo.has_trend ? window.__t('csvAssetPanel_beb409', 'あり') : window.__t('csvAssetPanel_3609f9', 'なし')}
+                  {excelInfo.asset_history?.length > 0 && ` / ${excelInfo.asset_history.length}${window.__t('csvAssetPanel_690db4', '件の履歴')}`}
                 </span>
               </div>
             </div>
@@ -373,7 +373,7 @@ export default function CsvAssetPanel({ videoData, onReplace, onRefresh }) {
             <div className="mt-3 space-y-3">
               {/* トレンドデータ */}
               <AssetRow
-                label="トレンドデータ"
+                label=={window.__t('videoDetail_trendData', window.__t('videoDetail_trendData', 'トレンドデータ'))}
                 hasFile={excelInfo.has_trend}
                 filename={excelInfo.trend_filename}
                 asset={excelInfo.current_assets?.trend_csv}
@@ -381,7 +381,7 @@ export default function CsvAssetPanel({ videoData, onReplace, onRefresh }) {
 
               {/* 商品データ */}
               <AssetRow
-                label="商品データ"
+                label=={window.__t('videoDetail_productData', window.__t('videoDetail_productData', '商品データ'))}
                 hasFile={excelInfo.has_product}
                 filename={excelInfo.product_filename}
                 asset={excelInfo.current_assets?.product_csv}
@@ -421,7 +421,7 @@ export default function CsvAssetPanel({ videoData, onReplace, onRefresh }) {
                   <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={revalidating ? "animate-spin" : ""}>
                     <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
                   </svg>
-                  {revalidating ? "検証中..." : "再検証"}
+                  {revalidating ? window.__t('csvAssetPanel_f5ae62', '検証中...') : window.__t('videoDetail_reVerify', '再検証')}
                 </button>
 
                 <button
@@ -443,7 +443,7 @@ export default function CsvAssetPanel({ videoData, onReplace, onRefresh }) {
               {showHistory && (
                 <div className="mt-2 rounded-xl border border-gray-200 overflow-hidden">
                   <div className="bg-gray-50 px-3 py-2 border-b border-gray-200">
-                    <span className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">バージョン履歴</span>
+                    <span className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{window.__t('csvAssetPanel_8514f2', window.__t('csvAssetPanel_8514f2', 'バージョン履歴'))}</span>
                   </div>
                   {historyLoading ? (
                     <div className="flex items-center gap-2 text-xs text-gray-400 p-4 justify-center">
@@ -461,13 +461,13 @@ export default function CsvAssetPanel({ videoData, onReplace, onRefresh }) {
                               }`}>
                                 {item.asset_type === "trend_csv" ? "トレンド" : "商品"}
                               </span>
-                              <span className="text-gray-600 truncate max-w-[200px]">{item.filename || "不明"}</span>
+                              <span className="text-gray-600 truncate max-w-[200px]">{item.filename || window.__t('csvAssetPanel_efd626', '不明')}</span>
                               <span className="text-gray-400">v{item.version}</span>
                             </div>
                             <div className="flex items-center gap-2">
                               <ValidationBadge status={item.validation_status} />
                               {item.is_active && (
-                                <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-700">現在</span>
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-700">{window.__t('csvAssetPanel_684a6b', window.__t('csvAssetPanel_684a6b', '現在'))}</span>
                               )}
                             </div>
                           </div>
@@ -482,7 +482,7 @@ export default function CsvAssetPanel({ videoData, onReplace, onRefresh }) {
                       {excelInfo.replace_history?.length > 0 ? (
                         // 旧形式の差し替え履歴を表示
                         <div className="text-left px-3">
-                          <p className="text-center mb-2">新形式の履歴はまだありません。旧形式の差し替え履歴:</p>
+                          <p className="text-center mb-2">{window.__t('csvAssetPanel_76b4cb', window.__t('csvAssetPanel_76b4cb', '新形式の履歴はまだありません。旧形式の差し替え履歴:'))}</p>
                           {excelInfo.replace_history.map((h) => (
                             <div key={h.id} className="py-2 border-b border-gray-100 last:border-0">
                               <div className="flex items-center justify-between">
@@ -506,7 +506,7 @@ export default function CsvAssetPanel({ videoData, onReplace, onRefresh }) {
                           ))}
                         </div>
                       ) : (
-                        "履歴がありません"
+                        window.__t('csvAssetPanel_71d318', '履歴がありません')
                       )}
                     </div>
                   )}

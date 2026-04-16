@@ -70,8 +70,8 @@ const MARKERS = {
 const SUBTITLE_PRESETS = {
   simple: {
     id: 'simple',
-    name: 'シンプル',
-    desc: 'ビジネス系におすすめ',
+    name: window.__t('clipEditorV2_8b806b', 'シンプル'),
+    desc: window.__t('clipEditorV2_0c5fa6', 'ビジネス系におすすめ'),
     icon: 'Aa',
     container: {},
     text: {
@@ -88,8 +88,8 @@ const SUBTITLE_PRESETS = {
   },
   box: {
     id: 'box',
-    name: 'ボックス',
-    desc: '視認性重視におすすめ',
+    name: window.__t('clipEditorV2_cc9aba', 'ボックス'),
+    desc: window.__t('clipEditorV2_e08cc3', '視認性重視におすすめ'),
     icon: '\u25A0',
     container: {},
     text: {
@@ -106,8 +106,8 @@ const SUBTITLE_PRESETS = {
   },
   outline: {
     id: 'outline',
-    name: '縁取り',
-    desc: '目立たせたい時におすすめ',
+    name: window.__t('clipEditorV2_46eb23', '縁取り'),
+    desc: window.__t('clipEditorV2_9e532b', '目立たせたい時におすすめ'),
     icon: 'A',
     container: {},
     text: {
@@ -126,8 +126,8 @@ const SUBTITLE_PRESETS = {
   },
   pop: {
     id: 'pop',
-    name: 'ポップ',
-    desc: 'TikTok投稿におすすめ',
+    name: window.__t('clipEditorV2_cdf397', 'ポップ'),
+    desc: window.__t('clipEditorV2_03484c', 'TikTok投稿におすすめ'),
     icon: '\u2728',
     container: {},
     text: {
@@ -146,8 +146,8 @@ const SUBTITLE_PRESETS = {
   },
   gradient: {
     id: 'gradient',
-    name: 'グラデーション',
-    desc: '美容系におすすめ',
+    name: window.__t('clipEditorV2_e7c9fd', 'グラデーション'),
+    desc: window.__t('clipEditorV2_aba4a1', '美容系におすすめ'),
     icon: '\u{1F308}',
     container: {},
     text: {
@@ -164,8 +164,8 @@ const SUBTITLE_PRESETS = {
   },
   karaoke: {
     id: 'karaoke',
-    name: 'カラオケ',
-    desc: '喋りに合わせてハイライト',
+    name: window.__t('clipEditorV2_00330b', 'カラオケ'),
+    desc: window.__t('clipEditorV2_66c6d6', '喋りに合わせてハイライト'),
     icon: '♪',
     container: {},
     text: {
@@ -465,8 +465,8 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
       // Find natural break points in Japanese text
       // Priority: punctuation > conjunctions > particles
       const breakPoints = [];
-      const PARTICLES = new Set(['は','が','を','に','で','と','も','や','か','ね','よ','な','へ','の','て','た']);
-      const CONJUNCTIONS = ['して','って','ので','から','けど','ても','たら','ながら','だけど','ですが'];
+      const PARTICLES = new Set([window.__t('clipEditorV2_b7a83b', 'は'),window.__t('clipEditorV2_2f9adf', 'が'),window.__t('clipEditorV2_96ac23', 'を'),window.__t('clipEditorV2_8b6362', 'に'),window.__t('clipEditorV2_3b9b37', 'で'),window.__t('and', 'と'),window.__t('clipEditorV2_ac50f8', 'も'),window.__t('clipEditorV2_3cb21c', 'や'),window.__t('clipEditorV2_b19ca8', 'か'),window.__t('clipEditorV2_448d36', 'ね'),window.__t('clipEditorV2_66cb79', 'よ'),window.__t('clipEditorV2_2b8cb2', 'な'),window.__t('clipEditorV2_40346e', 'へ'),window.__t('clipEditorV2_359ebe', 'の'),window.__t('clipEditorV2_66b649', 'て'),window.__t('clipEditorV2_14cc92', 'た')]);
+      const CONJUNCTIONS = [window.__t('clipEditorV2_afb2d2', 'して'),window.__t('clipEditorV2_df7dab', 'って'),window.__t('clipEditorV2_d3020d', 'ので'),window.__t('momentClips_from', 'から'),window.__t('clipEditorV2_5d6a58', 'けど'),window.__t('clipEditorV2_a93e17', 'ても'),window.__t('clipEditorV2_345c97', 'たら'),window.__t('clipEditorV2_2ec369', 'ながら'),window.__t('clipEditorV2_e2e614', 'だけど'),window.__t('clipEditorV2_5c39fe', 'ですが')];
       for (let i = 1; i < chars.length - 1; i++) {
         // After punctuation: highest priority
         if ('、。！？，'.includes(chars[i])) {
@@ -1295,7 +1295,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
     setStatus(null);
     try {
       const res = await VideoService.trimClip(videoId, clip.clip_id, trimStart, trimEnd);
-      setStatus({ ok: true, msg: "トリム適用中..." });
+      setStatus({ ok: true, msg: window.__t('clipEditorV2_7bc801', 'トリム適用中...') });
       if (onClipUpdated) onClipUpdated(res);
 
       // Log trim edits for AI learning
@@ -1344,7 +1344,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
 
   // Clear all captions
   const clearAllCaptions = () => {
-    if (!window.confirm('全ての字幕を削除しますか？この操作は保存するまで取り消せます。')) return;
+    if (!window.confirm(window.__t('clipEditorV2_66c01a', '全ての字幕を削除しますか？この操作は保存するまで取り消せます。'))) return;
     setCaptions([]);
   };
 
@@ -1363,25 +1363,25 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
   // Load captions from master timeline transcripts
   const loadFromMasterTranscripts = () => {
     if (!timelineData?.transcripts?.length) {
-      setStatus({ ok: false, msg: 'マスター文字起こしデータがありません' });
+      setStatus({ ok: false, msg: window.__t('clipEditorV2_2c5b15', 'マスター文字起こしデータがありません') });
       return;
     }
     if (!clip) return;
     const fromTranscripts = buildCaptionsFromTranscripts(timelineData.transcripts, clip);
     if (fromTranscripts.length > 0) {
       setCaptions(fromTranscripts);
-      setStatus({ ok: true, msg: `マスター文字起こしから${fromTranscripts.length}件の字幕を反映しました` });
+      setStatus({ ok: true, msg: `マスター文字起こしから${fromTranscripts.length}${window.__t('clipEditorV2_f8e82b', '件の字幕を反映しました')}` });
     } else {
       // Try audio_text fallback
       if (timelineData?.phases?.length > 0) {
         const fallback = buildCaptionsFromAudioText(timelineData.phases, clip);
         if (fallback.length > 0) {
           setCaptions(fallback);
-          setStatus({ ok: true, msg: `フェーズ音声テキストから${fallback.length}件の字幕を反映しました` });
+          setStatus({ ok: true, msg: `フェーズ音声テキストから${fallback.length}${window.__t('clipEditorV2_f8e82b', '件の字幕を反映しました')}` });
           return;
         }
       }
-      setStatus({ ok: false, msg: 'この区間に対応する文字起こしが見つかりません' });
+      setStatus({ ok: false, msg: window.__t('clipEditorV2_419c33', 'この区間に対応する文字起こしが見つかりません') });
     }
   };
 
@@ -1393,7 +1393,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
       // Handle empty captions (clear all)
       if (captions.length === 0) {
         await VideoService.updateClipCaptions(videoId, clip.clip_id, []);
-        setStatus({ ok: true, msg: '字幕を全て削除しました' });
+        setStatus({ ok: true, msg: window.__t('clipEditorV2_a72c04', '字幕を全て削除しました') });
         setSavingCaps(false);
         return;
       }
@@ -1432,7 +1432,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
         setCaptionOffset(0);
         setStatus({ ok: true, msg: `字幕を保存しました（タイミング${captionOffset > 0 ? '+' : ''}${captionOffset.toFixed(1)}sを適用済み）` });
       } else {
-        setStatus({ ok: true, msg: "字幕を保存しました（AI学習に反映）" });
+        setStatus({ ok: true, msg: window.__t('clipEditorV2_ca265f', '字幕を保存しました（AI学習に反映）') });
       }
     } catch (e) {
       setStatus({ ok: false, msg: `字幕保存失敗: ${e.message}` });
@@ -1448,7 +1448,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
     setStatus(null);
     try {
       const clipUrl = clip.clip_url || videoData?.video_url || clip.video_url;
-      if (!clipUrl) throw new Error("動画URLが見つかりません");
+      if (!clipUrl) throw new Error(window.__t('clipEditorV2_302abd', '動画URLが見つかりません'));
       const res = await VideoService.transcribeClip(videoId, {
         clip_url: clipUrl,
         time_start: clip.time_start || origStart,
@@ -1482,7 +1482,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
           } : {}),
         }));
         setCaptions(newCaps);
-        setStatus({ ok: true, msg: `${newCaps.length}件の字幕を生成しました` });
+        setStatus({ ok: true, msg: `${newCaps.length}${window.__t('clipEditorV2_e4d6f5', '件の字幕を生成しました')}` });
         // Auto-save generated subtitles so they persist on next load
         if (clip?.clip_id) {
           try {
@@ -1495,7 +1495,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
           }
         }
       } else {
-        setStatus({ ok: false, msg: "音声が検出されませんでした" });
+        setStatus({ ok: false, msg: window.__t('clipEditorV2_c3d740', '音声が検出されませんでした') });
       }
     } catch (e) {
       setStatus({ ok: false, msg: `字幕生成失敗: ${e.message}` });
@@ -1593,18 +1593,18 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
     const titleLower = title.toLowerCase();
 
     if (tags.some(t => /美容|コスメ|スキンケア|beauty/i.test(t)) || /美容|コスメ/i.test(titleLower)) {
-      return { style: 'gradient', reason: '美容系コンテンツに最適', source: 'local' };
+      return { style: 'gradient', reason: window.__t('clipEditorV2_a1f47e', '美容系コンテンツに最適'), source: 'local' };
     }
     if (tags.some(t => /エンタメ|お笑い|バラエティ|funny|viral/i.test(t)) || /バズ|爆笑/i.test(titleLower)) {
-      return { style: 'pop', reason: 'エンタメ系に最適・インパクト大', source: 'local' };
+      return { style: 'pop', reason: window.__t('clipEditorV2_5cf462', 'エンタメ系に最適・インパクト大'), source: 'local' };
     }
     if (tags.some(t => /ビジネス|解説|教育|business/i.test(t)) || /解説|まとめ/i.test(titleLower)) {
-      return { style: 'simple', reason: 'ビジネス系・読みやすさ重視', source: 'local' };
+      return { style: 'simple', reason: window.__t('clipEditorV2_ff35a8', 'ビジネス系・読みやすさ重視'), source: 'local' };
     }
     if (clip?.ai_score && clip.ai_score >= 80) {
-      return { style: 'outline', reason: '高スコアクリップ・目立たせるスタイル', source: 'local' };
+      return { style: 'outline', reason: window.__t('clipEditorV2_e18bec', '高スコアクリップ・目立たせるスタイル'), source: 'local' };
     }
-    return { style: 'box', reason: '万能型・どんな動画にも合う', source: 'local' };
+    return { style: 'box', reason: window.__t('clipEditorV2_73bc1e', '万能型・どんな動画にも合う'), source: 'local' };
   };
 
   const [aiRecommendation, setAiRecommendation] = useState(() => getAiRecommendedStyleLocal());
@@ -1634,8 +1634,8 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
 
   // ─── Feedback tags ───
   const FEEDBACK_TAGS = [
-    '見やすい', '目立つ', 'おしゃれ', 'ポップ',
-    '落ち着いた', '文字が小さい', '文字が大きい', '色を変えたい',
+    window.__t('clipEditorV2_47eeff', '見やすい'), window.__t('clipEditorV2_9991e2', '目立つ'), window.__t('clipEditorV2_6cb6cb', 'おしゃれ'), window.__t('clipEditorV2_cdf397', 'ポップ'),
+    window.__t('autoVideoPage_561ecb', '落ち着いた'), window.__t('clipEditorV2_698371', '文字が小さい'), window.__t('clipEditorV2_27cb24', '文字が大きい'), window.__t('clipEditorV2_0a3576', '色を変えたい'),
   ];
 
   const toggleFeedbackTag = (tag) => {
@@ -1663,7 +1663,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
         position_y: subtitlePos.y,
       });
       setFeedbackSaved(true);
-      setStatus({ ok: true, msg: 'フィードバックを保存しました' });
+      setStatus({ ok: true, msg: window.__t('clipEditorV2_5fbb86', 'フィードバックを保存しました') });
     } catch (e) {
       console.error('[SubtitleFeedback] Save failed:', e);
       setStatus({ ok: false, msg: `フィードバック保存失敗: ${e.message}` });
@@ -1733,13 +1733,13 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                 if (exporting) return;
                 setExporting(true);
                 setExportProgress(0);
-                setStatus({ ok: true, msg: '字幕付きMP4を生成中...' });
+                setStatus({ ok: true, msg: window.__t('clipEditorV2_488d3c', '字幕付きMP4を生成中...') });
                 const statusLabels = {
-                  queued: '順番待ち中...（他のエクスポートが完了次第開始します）',
-                  downloading: 'クリップをダウンロード中...',
-                  encoding: '字幕を焼き込み中...',
-                  uploading: 'アップロード中...',
-                  done: '完了！',
+                  queued: window.__t('clipEditorV2_553740', '順番待ち中...（他のエクスポートが完了次第開始します）'),
+                  downloading: window.__t('clipEditorV2_100c56', 'クリップをダウンロード中...'),
+                  encoding: window.__t('clipEditorV2_87baf3', '字幕を焼き込み中...'),
+                  uploading: window.__t('statusUploading', 'アップロード中...'),
+                  done: window.__t('clipEditorV2_bfa9d2', '完了！'),
                 };
                 try {
                   // ⚠️ PROTECTED: Filter out captions inside deleted ranges before export.
@@ -1782,7 +1782,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                   const progressCb = {
                     onProgress: (st, pct) => {
                       if (pct === -1) {
-                        setStatus({ ok: true, msg: '接続を再試行中...' });
+                        setStatus({ ok: true, msg: window.__t('clipEditorV2_eab627', '接続を再試行中...') });
                       } else {
                         setExportProgress(Math.max(0, Math.min(100, pct || 0)));
                         setStatus({ ok: true, msg: statusLabels[st] || `処理中 (${st})...` });
@@ -1826,10 +1826,10 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                       clip_id: clip.id || null,
                       export_type: 'subtitled',
                     });
-                    setStatus({ ok: true, msg: '字幕付きMP4のダウンロードを開始しました！' });
+                    setStatus({ ok: true, msg: window.__t('clipEditorV2_adfd89', '字幕付きMP4のダウンロードを開始しました！') });
                     setTimeout(() => setStatus(null), 5000);
                   } else {
-                    setStatus({ ok: true, msg: 'エクスポート完了' });
+                    setStatus({ ok: true, msg: window.__t('clipEditorV2_ae5b51', 'エクスポート完了') });
                     setTimeout(() => setStatus(null), 3000);
                   }
                 } catch (e) {
@@ -1872,7 +1872,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                 }} />
               )}
               <span style={{ position: 'relative', zIndex: 1 }}>
-                {exporting ? `${exportProgress}%` : '字幕付き Export'}
+                {exporting ? `${exportProgress}%` : window.__t('clipEditorV2_a04538', '字幕付き Export')}
               </span>
             </button>
           )}
@@ -2124,10 +2124,10 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
             }}
           >
             {[
-              { k: "captions", l: "字幕" },
-              { k: "info", l: "AI分析" },
+              { k: "captions", l: window.__t('auto_334', '字幕') },
+              { k: "info", l: window.__t('clipEditorV2_fcc18e', 'AI分析') },
               { k: "trim", l: "Trim" },
-              { k: "feedback", l: "評価" },
+              { k: "feedback", l: window.__t('clipEditorV2_6745a8', '評価') },
             ].map((t) => (
               <button
                 key={t.k}
@@ -2186,12 +2186,12 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                 </div>
 
                 {/* AI Score Cards */}
-                <Section title="AI 評価">
+                <Section title=={window.__t('clipEditorV2_a4a61c', window.__t('clipEditorV2_a4a61c', 'AI 評価'))}>
                   {[
-                    { l: "バイラル度", s: currentPhase?.viral_score, i: "🔥" },
-                    { l: "フック力", s: currentPhase?.hook_score, i: "🎣" },
-                    { l: "エンゲージメント", s: currentPhase?.engagement_score, i: "💬" },
-                    { l: "発話エネルギー", s: currentPhase?.speech_energy, i: "🎤" },
+                    { l: window.__t('clipEditorV2_eab3a2', 'バイラル度'), s: currentPhase?.viral_score, i: "🔥" },
+                    { l: window.__t('clipEditorV2_5245c0', 'フック力'), s: currentPhase?.hook_score, i: "🎣" },
+                    { l: window.__t('clipEditorV2_c9e6bc', 'エンゲージメント'), s: currentPhase?.engagement_score, i: "💬" },
+                    { l: window.__t('clipEditorV2_af5ec3', '発話エネルギー'), s: currentPhase?.speech_energy, i: "🎤" },
                   ].map((x, idx) => (
                     <ScoreRow key={idx} icon={x.i} label={x.l} score={x.s} />
                   ))}
@@ -2199,7 +2199,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
 
                 {/* AI Summary */}
                 {clip.description && (
-                  <Section title="AI要約">
+                  <Section title=={window.__t('clipEditorV2_bb6169', window.__t('clipEditorV2_bb6169', 'AI要約'))}>
                     <p
                       style={{
                         color: C.text,
@@ -2218,7 +2218,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
 
                 {/* Video Score */}
                 {videoScore?.overall_score != null && (
-                  <Section title="動画全体スコア">
+                  <Section title=={window.__t('clipEditorV2_b5c20b', window.__t('clipEditorV2_b5c20b', '動画全体スコア'))}>
                     <div
                       style={{
                         padding: 12,
@@ -2292,7 +2292,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
             {tab === "captions" && (
               <div>
                 {/* ═══ 字幕スタイル選択 ═══ */}
-                <SectionTitle>字幕スタイル</SectionTitle>
+                <SectionTitle>{window.__t('clipEditorV2_163132', window.__t('clipEditorV2_163132', '字幕スタイル'))}</SectionTitle>
 
                 {/* AIおすすめバッジ */}
                 <div
@@ -2468,7 +2468,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                 </p>
 
                 {/* ═══ フォントサイズ ═══ */}
-                <SectionTitle>フォントサイズ</SectionTitle>
+                <SectionTitle>{window.__t('clipEditorV2_61c13c', window.__t('clipEditorV2_61c13c', 'フォントサイズ'))}</SectionTitle>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
                   <span style={{ color: C.textDim, fontSize: 10, minWidth: 16 }}>A</span>
                   <input
@@ -2518,7 +2518,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                 </div>
 
                 {/* ═══ 字幕フィードバック ═══ */}
-                <SectionTitle>字幕フィードバック</SectionTitle>
+                <SectionTitle>{window.__t('clipEditorV2_a10aa2', window.__t('clipEditorV2_a10aa2', '字幕フィードバック'))}</SectionTitle>
                 <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
                   {['up', 'down'].map((vote) => (
                     <button
@@ -2597,10 +2597,10 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                 {/* ═══ 字幕タイミング調整 ═══ */}
                 {captions.length > 0 && (
                   <div style={{ marginBottom: 14 }}>
-                    <SectionTitle>字幕タイミング調整</SectionTitle>
+                    <SectionTitle>{window.__t('clipEditorV2_40fc77', window.__t('clipEditorV2_40fc77', '字幕タイミング調整'))}</SectionTitle>
                     <p style={{ color: C.textMuted, fontSize: 11, margin: '0 0 8px', lineHeight: 1.5 }}>
                       字幕が音声とずれている場合に調整できます。
-                      {captionOffset > 0 ? `+${captionOffset.toFixed(1)}s（字幕を遅らせる）` : captionOffset < 0 ? `${captionOffset.toFixed(1)}s（字幕を早める）` : '0s（調整なし）'}
+                      {captionOffset > 0 ? `+${captionOffset.toFixed(1)}s（字幕を遅らせる）` : captionOffset < 0 ? `${captionOffset.toFixed(1)}s（字幕を早める）` : window.__t('clipEditorV2_21491c', '0s（調整なし）')}
                     </p>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                       <span style={{ color: C.textDim, fontSize: 10, minWidth: 28 }}>-2s</span>
@@ -2644,18 +2644,18 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                 )}
 
                 {/* ═══ 字幕編集 ═══ */}
-                <SectionTitle>字幕編集</SectionTitle>
+                <SectionTitle>{window.__t('auto_336', window.__t('auto_336', '字幕編集'))}</SectionTitle>
                 <p style={{ color: C.textMuted, fontSize: 11, margin: "0 0 10px", lineHeight: 1.5 }}>
                   配信者の音声書き起こしです。テキストを直接編集・削除できます。タイムスタンプをクリックするとその位置にジャンプします。
                 </p>
 
                 {/* Language selector */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-                  <span style={{ color: C.textMuted, fontSize: 11, whiteSpace: 'nowrap' }}>字幕言語:</span>
+                  <span style={{ color: C.textMuted, fontSize: 11, whiteSpace: 'nowrap' }}>{window.__t('clipEditorV2_4d4921', window.__t('clipEditorV2_4d4921', '字幕言語:'))}</span>
                   <div style={{ display: 'flex', gap: 4 }}>
                     {[
-                      { value: 'ja', label: '🇯🇵 日本語' },
-                      { value: 'zh-TW', label: '🇹🇼 繁體中文' },
+                      { value: 'ja', label: window.__t('clipEditorV2_fd32f4', '🇯🇵 日本語') },
+                      { value: 'zh-TW', label: window.__t('clipEditorV2_7b39f2', '🇹🇼 繁體中文') },
                     ].map(lang => (
                       <button
                         key={lang.value}
@@ -2677,7 +2677,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                     ))}
                   </div>
                   {targetLanguage === 'zh-TW' && (
-                    <span style={{ color: C.textDim, fontSize: 10 }}>台湾語音声→繁體中文字幕</span>
+                    <span style={{ color: C.textDim, fontSize: 10 }}>{window.__t('clipEditorV2_155d2b', window.__t('clipEditorV2_155d2b', '台湾語音声→繁體中文字幕'))}</span>
                   )}
                 </div>
                 {captions.length > 0 && captions[0]?.source && (
@@ -2711,9 +2711,9 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                     }}
                   >
                     {transcribing ? (
-                      <><span style={{ animation: 'spin 1s linear infinite', display: 'inline-block' }}>{'⟳'}</span> 生成中...</>
+                      <><span style={{ animation: 'spin 1s linear infinite', display: 'inline-block' }}>{'⟳'}</span> {window.__t('script_generating', window.__t('script_generating', '生成中...'))}</>
                     ) : (
-                      <>{captions.length > 0 ? '🎤 AI再生成' : '🎤 AI生成'}</>
+                      <>{captions.length > 0 ? window.__t('clipEditorV2_4b39ae', '🎤 AI再生成') : window.__t('clipEditorV2_de99d4', '🎤 AI生成')}</>
                     )}
                   </button>
 
@@ -2783,7 +2783,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                   >
                     字幕がありません。
                     <br />
-                    <span style={{ fontSize: 11 }}>「AI生成」で音声認識、または「マスター反映」でタイムラインの文字起こしを使用できます。</span>
+                    <span style={{ fontSize: 11 }}>{window.__t('clipEditorV2_4a1c40', window.__t('clipEditorV2_4a1c40', '「AI生成」で音声認識、または「マスター反映」でタイムラインの文字起こしを使用できます。'))}</span>
                   </div>
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -2850,7 +2850,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                           {/* Delete single caption button */}
                           <button
                             onClick={() => deleteCap(i)}
-                            title="この字幕を削除"
+                            title=={window.__t('clipEditorV2_40dc07', window.__t('clipEditorV2_40dc07', 'この字幕を削除'))}
                             style={{
                               flexShrink: 0,
                               width: 24,
@@ -2921,7 +2921,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                           opacity: savingCaps ? 0.6 : 1,
                         }}
                       >
-                        {savingCaps ? '保存中...' : '字幕を保存'}
+                        {savingCaps ? window.__t('auto_330', '保存中...') : window.__t('clipEditorV2_811028', '字幕を保存')}
                       </button>
                     </div>
                   </div>
@@ -2932,7 +2932,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
             {/* ─── Trim ─── */}
             {tab === "trim" && (
               <div>
-                <SectionTitle>トリム編集</SectionTitle>
+                <SectionTitle>{window.__t('clipEditorV2_7ae953', window.__t('clipEditorV2_7ae953', 'トリム編集'))}</SectionTitle>
                 <div
                   style={{
                     display: "flex",
@@ -2944,12 +2944,12 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                   }}
                 >
                   <TrimControl
-                    label="開始時間"
+                    label=={window.__t('live_startTime', window.__t('live_startTime', '開始時間'))}
                     value={trimStart}
                     onChange={(v) => v < trimEnd - 1 && v >= 0 && setTrimStart(Math.round(v * 10) / 10)}
                   />
                   <TrimControl
-                    label="終了時間"
+                    label=={window.__t('live_endTime', window.__t('live_endTime', '終了時間'))}
                     value={trimEnd}
                     onChange={(v) => v > trimStart + 1 && setTrimEnd(Math.round(v * 10) / 10)}
                   />
@@ -2962,7 +2962,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                       borderRadius: 6,
                     }}
                   >
-                    <span style={{ color: C.textMuted, fontSize: 12 }}>クリップ長</span>
+                    <span style={{ color: C.textMuted, fontSize: 12 }}>{window.__t('clipEditorV2_d28cd4', window.__t('clipEditorV2_d28cd4', 'クリップ長'))}</span>
                     <span style={{ color: C.text, fontSize: 15, fontWeight: 700 }}>
                       {(duration > 0 ? Math.min(clipDur, duration) : clipDur).toFixed(1)}秒
                     </span>
@@ -2990,7 +2990,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                       width: "100%",
                     }}
                   >
-                    {isTrimming ? "生成中..." : "トリムを適用"}
+                    {isTrimming ? window.__t('script_generating', '生成中...') : window.__t('clipEditorV2_4117f4', 'トリムを適用')}
                   </button>
                 </div>
               </div>
@@ -3268,7 +3268,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               color: C.textDim, fontSize: 11,
             }}>
-              {waveformLoading ? '波形読み込み中...' : '波形なし'}
+              {waveformLoading ? window.__t('clipEditorV2_8c34af', '波形読み込み中...') : window.__t('clipEditorV2_7f5005', '波形なし')}
             </div>
           )}
           {/* Split point markers on waveform */}
@@ -3440,10 +3440,10 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
           flexWrap: 'wrap',
         }}>
           {[
-            { key: 'Space', label: '再生/停止', color: C.green },
-            { key: 'W', label: 'カーソル位置で分割', color: '#FFE135' },
-            { key: 'Del', label: '選択セグメント完全削除', color: C.red },
-            { key: '←→', label: '±5秒', color: C.blue },
+            { key: 'Space', label: window.__t('clipEditorV2_2f7d75', '再生/停止'), color: C.green },
+            { key: 'W', label: window.__t('clipEditorV2_76649a', 'カーソル位置で分割'), color: '#FFE135' },
+            { key: 'Del', label: window.__t('clipEditorV2_721a73', '選択セグメント完全削除'), color: C.red },
+            { key: '←→', label: window.__t('clipEditorV2_505aa4', '±5秒'), color: C.blue },
           ].map(({ key, label, color }) => (
             <span key={key} style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
               <kbd style={{
@@ -3459,9 +3459,9 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
               <span>{label}</span>
             </span>
           ))}
-          <span style={{ color: C.textMuted }}>セグメントクリックで選択</span>
-          <span style={{ color: C.textMuted }}>黄色線クリックで分割点削除</span>
-          {deletedRanges.length > 0 && <span style={{ color: C.red }}>赤セグメントクリックで復元</span>}
+          <span style={{ color: C.textMuted }}>{window.__t('clipEditorV2_35fc25', window.__t('clipEditorV2_35fc25', 'セグメントクリックで選択'))}</span>
+          <span style={{ color: C.textMuted }}>{window.__t('clipEditorV2_3d197e', window.__t('clipEditorV2_3d197e', '黄色線クリックで分割点削除'))}</span>
+          {deletedRanges.length > 0 && <span style={{ color: C.red }}>{window.__t('clipEditorV2_5bee1e', window.__t('clipEditorV2_5bee1e', '赤セグメントクリックで復元'))}</span>}
           {silentRegions.length > 0 && (
             <span style={{ color: C.red }}>赤 = 無音区間 ({silentRegions.length}箇所)</span>
           )}

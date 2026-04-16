@@ -84,7 +84,7 @@ export default function DigitalHumanPage() {
       setHealth(data);
     } catch (e) {
       console.error("Health check failed:", e);
-      setError("ヘルスチェックに失敗しました");
+      setError(window.__t('digitalHumanPage_cda582', 'ヘルスチェックに失敗しました'));
     } finally {
       setHealthLoading(false);
     }
@@ -132,7 +132,7 @@ export default function DigitalHumanPage() {
   // ─── Generate script ───
   const handleGenerateScript = async () => {
     if (!createForm.video_id) {
-      setError("動画IDを入力してください");
+      setError(window.__t('digitalHumanPage_5eff91', '動画IDを入力してください'));
       return;
     }
     setGeneratingScript(true);
@@ -145,9 +145,9 @@ export default function DigitalHumanPage() {
         language: createForm.language,
       });
       setGeneratedScript(data);
-      setSuccess("台本を生成しました");
+      setSuccess(window.__t('digitalHumanPage_b33d4d', '台本を生成しました'));
     } catch (e) {
-      setError(e.response?.data?.detail || "台本生成に失敗しました");
+      setError(e.response?.data?.detail || window.__t('digitalHumanPage_181728', '台本生成に失敗しました'));
     } finally {
       setGeneratingScript(false);
     }
@@ -170,7 +170,7 @@ export default function DigitalHumanPage() {
       setShowCreateForm(false);
       loadRooms();
     } catch (e) {
-      setError(e.response?.data?.detail || "ライブルーム作成に失敗しました");
+      setError(e.response?.data?.detail || window.__t('digitalHumanPage_c7b350', 'ライブルーム作成に失敗しました'));
     } finally {
       setCreating(false);
     }
@@ -184,7 +184,7 @@ export default function DigitalHumanPage() {
       setSuccess(`ルーム ${roomId} を閉じました`);
       loadRooms();
     } catch (e) {
-      setError(e.response?.data?.detail || "ルームの閉鎖に失敗しました");
+      setError(e.response?.data?.detail || window.__t('digitalHumanPage_bdc030', 'ルームの閉鎖に失敗しました'));
     }
   };
 
@@ -200,10 +200,10 @@ export default function DigitalHumanPage() {
         use_hybrid_voice: true,
         elevenlabs_voice_id: selectedVoice || undefined,
       });
-      setSuccess("テイクオーバーを送信しました");
+      setSuccess(window.__t('digitalHumanPage_8ae132', 'テイクオーバーを送信しました'));
       setTakeoverText("");
     } catch (e) {
-      setError(e.response?.data?.detail || "テイクオーバーに失敗しました");
+      setError(e.response?.data?.detail || window.__t('digitalHumanPage_580fa7', 'テイクオーバーに失敗しました'));
     } finally {
       setTakeoverSending(false);
     }
@@ -317,7 +317,7 @@ export default function DigitalHumanPage() {
             </div>
           ) : (
             <div className="flex items-center justify-center py-8 text-gray-400 text-sm">
-              {healthLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : "読み込み中..."}
+              {healthLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : window.__t('common_loading', '読み込み中...')}
             </div>
           )}
         </div>
@@ -342,7 +342,7 @@ export default function DigitalHumanPage() {
 
           {rooms.length === 0 ? (
             <div className="text-center py-8 text-gray-400 text-sm">
-              {roomsLoading ? <Loader2 className="w-5 h-5 animate-spin mx-auto" /> : "アクティブなルームはありません"}
+              {roomsLoading ? <Loader2 className="w-5 h-5 animate-spin mx-auto" /> : window.__t('digitalHumanPage_a3c823', 'アクティブなルームはありません')}
             </div>
           ) : (
             <div className="space-y-3">
@@ -370,7 +370,7 @@ export default function DigitalHumanPage() {
                     </div>
                   </div>
                   {room.created_at && (
-                    <p className="text-xs text-gray-400 mt-1">開始: {new Date(room.created_at).toLocaleString("ja-JP")}</p>
+                    <p className="text-xs text-gray-400 mt-1window.__t('digitalHumanPage_5d03ed', '>開始: {new Date(room.created_at).toLocaleString(')ja-JP")}</p>
                   )}
                 </div>
               ))}
@@ -396,7 +396,7 @@ export default function DigitalHumanPage() {
                 value={takeoverText}
                 onChange={(e) => setTakeoverText(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleTakeover()}
-                placeholder="ライブ配信に割り込むテキストを入力..."
+                placeholder=={window.__t('digitalHumanPage_0da8ab', window.__t('digitalHumanPage_0da8ab', 'ライブ配信に割り込むテキストを入力...'))}
                 className="flex-1 border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-300"
               />
               <button
@@ -421,55 +421,55 @@ export default function DigitalHumanPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {/* Video ID */}
               <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">動画ID（分析データ連携）</label>
+                <label className="block text-xs font-medium text-gray-500 mb-1">{window.__t('digitalHumanPage_13d768', window.__t('digitalHumanPage_13d768', '動画ID（分析データ連携）'))}</label>
                 <input
                   type="text"
                   value={createForm.video_id}
                   onChange={(e) => setCreateForm({ ...createForm, video_id: e.target.value })}
-                  placeholder="AitherHub動画ID"
+                  placeholder=={window.__t('digitalHumanPage_869740', window.__t('digitalHumanPage_869740', 'AitherHub動画ID'))}
                   className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-300"
                 />
               </div>
               {/* Product Focus */}
               <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">商品名</label>
+                <label className="block text-xs font-medium text-gray-500 mb-1">{window.__t('analyticsSection_de54', window.__t('analyticsSection_de54', '商品名'))}</label>
                 <input
                   type="text"
                   value={createForm.product_focus}
                   onChange={(e) => setCreateForm({ ...createForm, product_focus: e.target.value })}
-                  placeholder="強調する商品名"
+                  placeholder=={window.__t('digitalHumanPage_e5639e', window.__t('digitalHumanPage_e5639e', '強調する商品名'))}
                   className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-300"
                 />
               </div>
               {/* Tone */}
               <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">トーン</label>
+                <label className="block text-xs font-medium text-gray-500 mb-1">{window.__t('scriptGen_toneLabel', window.__t('scriptGen_toneLabel', 'トーン'))}</label>
                 <select
                   value={createForm.tone}
                   onChange={(e) => setCreateForm({ ...createForm, tone: e.target.value })}
                   className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-300"
                 >
-                  <option value="professional_friendly">プロフェッショナル</option>
-                  <option value="energetic">エネルギッシュ</option>
-                  <option value="calm">落ち着いた</option>
+                  <option value="professional_friendly">{window.__t('autoVideoPage_faaee7', window.__t('autoVideoPage_faaee7', 'プロフェッショナル'))}</option>
+                  <option value="energetic">{window.__t('autoVideoPage_3f558c', window.__t('autoVideoPage_3f558c', 'エネルギッシュ'))}</option>
+                  <option value="calm">{window.__t('autoVideoPage_561ecb', window.__t('autoVideoPage_561ecb', '落ち着いた'))}</option>
                 </select>
               </div>
               {/* Language */}
               <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">言語</label>
+                <label className="block text-xs font-medium text-gray-500 mb-1">{window.__t('script_language', window.__t('script_language', '言語'))}</label>
                 <select
                   value={createForm.language}
                   onChange={(e) => setCreateForm({ ...createForm, language: e.target.value })}
                   className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-300"
                 >
-                  <option value="ja">日本語</option>
+                  <option value="ja">{window.__t('language_japanese', window.__t('language_japanese', '日本語'))}</option>
                   <option value="en">English</option>
-                  <option value="zh">中文</option>
+                  <option value="zh">{window.__t('scriptGen_langZh', window.__t('scriptGen_langZh', '中文'))}</option>
                 </select>
               </div>
               {/* Voice */}
               <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">声</label>
+                <label className="block text-xs font-medium text-gray-500 mb-1">{window.__t('digitalHumanPage_52fe83', window.__t('digitalHumanPage_52fe83', '声'))}</label>
                 <select
                   value={selectedVoice}
                   onChange={(e) => setSelectedVoice(e.target.value)}
@@ -484,7 +484,7 @@ export default function DigitalHumanPage() {
               </div>
               {/* Cycle times */}
               <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">ループ回数</label>
+                <label className="block text-xs font-medium text-gray-500 mb-1">{window.__t('digitalHumanPage_99ea28', window.__t('digitalHumanPage_99ea28', 'ループ回数'))}</label>
                 <input
                   type="number"
                   min={1}
@@ -571,7 +571,7 @@ export default function DigitalHumanPage() {
                   const data = await digitalHumanService.getFaceSwapStreamStatus();
                   setFaceSwapStatus(data);
                 } catch (e) {
-                  setError("Face Swapステータス取得に失敗しました");
+                  setError(window.__t('digitalHumanPage_ef721b', 'Face Swapステータス取得に失敗しました'));
                 }
               }}
               className="border rounded-lg p-3 text-left hover:bg-gray-50 transition-colors"
@@ -581,7 +581,7 @@ export default function DigitalHumanPage() {
               </span>
               {faceSwapStatus && (
                 <div className="mt-2 text-xs text-gray-600">
-                  <p>状態: <StatusBadge status={faceSwapStatus.stream_status || faceSwapStatus.status || "unknown"} /></p>
+                  <p>{window.__t('digitalHumanPage_9aeabc', window.__t('digitalHumanPage_9aeabc', '状態:'))} <StatusBadge status={faceSwapStatus.stream_status || faceSwapStatus.status || "unknown"} /></p>
                   {faceSwapStatus.session_id && <p className="mt-1">Session: {faceSwapStatus.session_id}</p>}
                 </div>
               )}
@@ -593,7 +593,7 @@ export default function DigitalHumanPage() {
                   setFaceSwapStatus(data);
                   setSuccess("GPU Worker: OK");
                 } catch (e) {
-                  setError("Face Swap GPU Worker接続失敗");
+                  setError(window.__t('digitalHumanPage_7a8156', 'Face Swap GPU Worker接続失敗'));
                 }
               }}
               className="border rounded-lg p-3 text-left hover:bg-gray-50 transition-colors"

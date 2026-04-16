@@ -55,9 +55,9 @@ const [activeTab, setActiveTab] = useState(initialTab);
     } catch (err) {
       console.error("Dashboard fetch failed:", err);
       const msg = err.code === 'ECONNABORTED'
-        ? 'サーバー接続タイムアウト。リトライしてください。'
+        ? window.__t('adminDashboard_b2d586', 'サーバー接続タイムアウト。リトライしてください。')
         : err.response?.status === 401 || err.response?.status === 403
-          ? '認証エラー。再ログインしてください。'
+          ? window.__t('adminDashboard_bdf22f', '認証エラー。再ログインしてください。')
           : `データの取得に失敗しました (${err.message || 'Unknown'})`;
       setError(msg);
       // Auto-logout on auth error
@@ -82,7 +82,7 @@ const [activeTab, setActiveTab] = useState(initialTab);
     const timer = setTimeout(() => {
       setLoading(false);
       if (!stats) {
-        setError('読み込みがタイムアウトしました。リトライしてください。');
+        setError(window.__t('adminDashboard_41abbf', '読み込みがタイムアウトしました。リトライしてください。'));
       }
     }, 45000);
     return () => clearTimeout(timer);
@@ -139,7 +139,7 @@ const [activeTab, setActiveTab] = useState(initialTab);
       setAuthenticated(true);
       setLoginError("");
     } else {
-      setLoginError("IDまたはパスワードが正しくありません");
+      setLoginError(window.__t('adminDashboard_bcc470', 'IDまたはパスワードが正しくありません'));
     }
   };
 
@@ -150,7 +150,7 @@ const [activeTab, setActiveTab] = useState(initialTab);
         <div className="bg-white rounded-2xl shadow-lg p-8 w-full max-w-sm">
           <div className="text-center mb-6">
             <h1 className="text-xl font-bold text-gray-800">Aitherhub Admin</h1>
-            <p className="text-sm text-gray-400 mt-1">管理者ログイン</p>
+            <p className="text-sm text-gray-400 mt-1">{window.__t('adminDashboard_bdb529', window.__t('adminDashboard_bdb529', '管理者ログイン'))}</p>
           </div>
           <form onSubmit={handleLogin}>
             <div className="mb-4">
@@ -164,7 +164,7 @@ const [activeTab, setActiveTab] = useState(initialTab);
               />
             </div>
             <div className="mb-4">
-              <label className="block text-sm text-gray-600 mb-1">パスワード</label>
+              <label className="block text-sm text-gray-600 mb-1">{window.__t('password', window.__t('password', 'パスワード'))}</label>
               <input
                 type="password"
                 value={loginPass}
@@ -192,7 +192,7 @@ const [activeTab, setActiveTab] = useState(initialTab);
     return (
       <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center gap-4">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-orange-500"></div>
-        <p className="text-gray-400 text-sm">ダッシュボードを読み込み中...</p>
+        <p className="text-gray-400 text-sm">{window.__t('adminDashboard_4e4ae3', window.__t('adminDashboard_4e4ae3', 'ダッシュボードを読み込み中...'))}</p>
       </div>
     );
   }
@@ -379,14 +379,14 @@ const [activeTab, setActiveTab] = useState(initialTab);
             <section className="mb-8">
               <div className="flex items-center gap-2 mb-4">
                 <span className="text-lg">📊</span>
-                <h2 className="text-lg font-semibold text-gray-700">データ量</h2>
-                <span className="text-xs text-gray-400 ml-1">AI資産量</span>
+                <h2 className="text-lg font-semibold text-gray-700">{window.__t('adminDashboard_c95496', window.__t('adminDashboard_c95496', 'データ量'))}</h2>
+                <span className="text-xs text-gray-400 ml-1">{window.__t('adminDashboard_18646f', window.__t('adminDashboard_18646f', 'AI資産量'))}</span>
               </div>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <StatCard label="総動画数" value={data_volume.total_videos} unit="本" color="orange" />
-                <StatCard label="解析済" value={data_volume.analyzed_videos} unit="本" color="green" />
-                <StatCard label="解析待ち" value={data_volume.pending_videos} unit="本" color="yellow" />
-                <StatCard label="総動画時間" value={data_volume.total_duration_display} color="blue" />
+                <StatCard label=={window.__t('adminDashboard_2a3a61', window.__t('adminDashboard_2a3a61', '総動画数'))} value={data_volume.total_videos} unit=window.__t('adminDashboard_a4fb84', '本') color="orange" />
+                <StatCard label=={window.__t('adminDashboard_2f8bbb', window.__t('adminDashboard_2f8bbb', '解析済'))} value={data_volume.analyzed_videos} unit=window.__t('adminDashboard_a4fb84', '本') color="green" />
+                <StatCard label=={window.__t('adminDashboard_fbce43', window.__t('adminDashboard_fbce43', '解析待ち'))} value={data_volume.pending_videos} unit=window.__t('adminDashboard_a4fb84', '本') color="yellow" />
+                <StatCard label=={window.__t('adminDashboard_6eea5d', window.__t('adminDashboard_6eea5d', '総動画時間'))} value={data_volume.total_duration_display} color="blue" />
               </div>
             </section>
 
@@ -394,13 +394,13 @@ const [activeTab, setActiveTab] = useState(initialTab);
             <section className="mb-8">
               <div className="flex items-center gap-2 mb-4">
                 <span className="text-lg">🎬</span>
-                <h2 className="text-lg font-semibold text-gray-700">動画タイプ</h2>
-                <span className="text-xs text-gray-400 ml-1">データ構造</span>
+                <h2 className="text-lg font-semibold text-gray-700">{window.__t('adminDashboard_968485', window.__t('adminDashboard_968485', '動画タイプ'))}</h2>
+                <span className="text-xs text-gray-400 ml-1">{window.__t('adminDashboard_c1c727', window.__t('adminDashboard_c1c727', 'データ構造'))}</span>
               </div>
               <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                <StatCard label="画面収録数" value={video_types.screen_recording_count} unit="本" color="purple" />
-                <StatCard label="クリーン動画数" value={video_types.clean_video_count} unit="本" color="indigo" />
-                <StatCard label="最新アップ日" value={formatDate(video_types.latest_upload)} color="gray" small />
+                <StatCard label=={window.__t('adminDashboard_c5ee71', window.__t('adminDashboard_c5ee71', '画面収録数'))} value={video_types.screen_recording_count} unit=window.__t('adminDashboard_a4fb84', '本') color="purple" />
+                <StatCard label=={window.__t('adminDashboard_dfe0df', window.__t('adminDashboard_dfe0df', 'クリーン動画数'))} value={video_types.clean_video_count} unit=window.__t('adminDashboard_a4fb84', '本') color="indigo" />
+                <StatCard label=={window.__t('adminDashboard_4e2a37', window.__t('adminDashboard_4e2a37', '最新アップ日'))} value={formatDate(video_types.latest_upload)} color="gray" small />
               </div>
             </section>
 
@@ -408,13 +408,13 @@ const [activeTab, setActiveTab] = useState(initialTab);
             <section className="mb-8">
               <div className="flex items-center gap-2 mb-4">
                 <span className="text-lg">👥</span>
-                <h2 className="text-lg font-semibold text-gray-700">会員規模</h2>
-                <span className="text-xs text-gray-400 ml-1">母数</span>
+                <h2 className="text-lg font-semibold text-gray-700">{window.__t('adminDashboard_805412', window.__t('adminDashboard_805412', '会員規模'))}</h2>
+                <span className="text-xs text-gray-400 ml-1">{window.__t('adminDashboard_7c37c3', window.__t('adminDashboard_7c37c3', '母数'))}</span>
               </div>
               <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                <StatCard label="総ユーザー" value={user_scale.total_users} unit="人" color="orange" />
-                <StatCard label="配信者数" value={user_scale.total_streamers} unit="人" color="red" />
-                <StatCard label="今月アップ人数" value={user_scale.this_month_uploaders} unit="人" color="teal" />
+                <StatCard label=={window.__t('adminDashboard_0acdd7', window.__t('adminDashboard_0acdd7', '総ユーザー'))} value={user_scale.total_users} unit=window.__t('analytics_personUnit', '人') color="orange" />
+                <StatCard label=={window.__t('adminDashboard_114cea', window.__t('adminDashboard_114cea', '配信者数'))} value={user_scale.total_streamers} unit=window.__t('analytics_personUnit', '人') color="red" />
+                <StatCard label=={window.__t('adminDashboard_ed0dea', window.__t('adminDashboard_ed0dea', '今月アップ人数'))} value={user_scale.this_month_uploaders} unit=window.__t('analytics_personUnit', '人') color="teal" />
               </div>
             </section>
 
@@ -499,7 +499,7 @@ function UploadHealthSection({ data, loading }) {
   const [monitorHealth, setMonitorHealth] = useState(null);
 
   const handleBatchRetry = async () => {
-    if (!window.confirm(`スタック中の全動画(${stuck_videos}件)を一括リトライしますか？`)) return;
+    if (!window.confirm(`スタック中の全動画(${stuck_videos}${window.__t('errorLogCount', '件')})を一括リトライしますか？`)) return;
     setBatchRetrying(true);
     setBatchResult(null);
     try {
@@ -542,18 +542,18 @@ function UploadHealthSection({ data, loading }) {
       <section className="mb-8">
         <div className="flex items-center gap-2 mb-4">
           <span className="text-lg">&#x2705;</span>
-          <h2 className="text-lg font-semibold text-gray-700">Upload Health 概要</h2>
+          <h2 className="text-lg font-semibold text-gray-700">{window.__t('adminDashboard_19be33', window.__t('adminDashboard_19be33', 'Upload Health 概要'))}</h2>
         </div>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <StatCard label="総アップロード" value={overall.total_uploads} unit="件" color="orange" />
-          <StatCard label="成功" value={overall.done} unit="件" color="green" />
-          <StatCard label="エラー" value={overall.error} unit="件" color="red" />
-          <StatCard label="処理中" value={overall.processing} unit="件" color="yellow" />
+          <StatCard label=={window.__t('adminDashboard_5c75e6', window.__t('adminDashboard_5c75e6', '総アップロード'))} value={overall.total_uploads} unit=window.__t('errorLogCount', '件') color="orange" />
+          <StatCard label=={window.__t('common_success', window.__t('common_success', '成功'))} value={overall.done} unit=window.__t('errorLogCount', '件') color="green" />
+          <StatCard label=={window.__t('sidebar_error', window.__t('sidebar_error', 'エラー'))} value={overall.error} unit=window.__t('errorLogCount', '件') color="red" />
+          <StatCard label=={window.__t('clip_processing', window.__t('clip_processing', '処理中'))} value={overall.processing} unit=window.__t('errorLogCount', '件') color="yellow" />
         </div>
         <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mt-4">
-          <StatCard label="成功率" value={`${overall.success_rate_pct}%`} color="green" />
-          <StatCard label="エラー率" value={`${overall.error_rate_pct}%`} color="red" />
-          <StatCard label="スタック" value={stuck_videos} unit="件" color={stuck_videos > 0 ? "red" : "gray"} />
+          <StatCard label=={window.__t('adminDashboard_b66435', window.__t('adminDashboard_b66435', '成功率'))} value={`${overall.success_rate_pct}%`} color="green" />
+          <StatCard label=={window.__t('adminDashboard_148c3a', window.__t('adminDashboard_148c3a', 'エラー率'))} value={`${overall.error_rate_pct}%`} color="red" />
+          <StatCard label=={window.__t('adminDashboard_56ed9a', window.__t('adminDashboard_56ed9a', 'スタック'))} value={stuck_videos} unit=window.__t('errorLogCount', '件') color={stuck_videos > 0 ? "red" : "gray"} />
         </div>
 
         {/* Batch Retry + Monitor Health */}
@@ -564,7 +564,7 @@ function UploadHealthSection({ data, loading }) {
               disabled={batchRetrying}
               className="px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
-              {batchRetrying ? "リトライ中..." : `全${stuck_videos}件を一括リトライ`}
+              {batchRetrying ? window.__t('adminDashboard_3653a4', 'リトライ中...') : `全${stuck_videos}${window.__t('adminDashboard_4b1fa3', '件を一括リトライ')}`}
             </button>
             {batchResult && !batchResult.error && (
               <span className="text-sm text-green-600">
@@ -600,11 +600,11 @@ function UploadHealthSection({ data, loading }) {
       <section className="mb-8">
         <div className="flex items-center gap-2 mb-4">
           <span className="text-lg">&#x23F0;</span>
-          <h2 className="text-lg font-semibold text-gray-700">期間別</h2>
+          <h2 className="text-lg font-semibold text-gray-700">{window.__t('adminDashboard_9b146e', window.__t('adminDashboard_9b146e', '期間別'))}</h2>
         </div>
         <div className="grid grid-cols-2 gap-4">
           <div className="rounded-xl border border-blue-200 bg-blue-50 p-4">
-            <p className="text-xs text-gray-500 mb-2">過去24時間</p>
+            <p className="text-xs text-gray-500 mb-2">{window.__t('adminDashboard_95dde1', window.__t('adminDashboard_95dde1', '過去24時間'))}</p>
             <div className="flex gap-4">
               <div><span className="text-sm text-gray-500">UP</span> <span className="text-lg font-bold text-blue-600">{last_24h.uploads}</span></div>
               <div><span className="text-sm text-gray-500">OK</span> <span className="text-lg font-bold text-green-600">{last_24h.done}</span></div>
@@ -612,7 +612,7 @@ function UploadHealthSection({ data, loading }) {
             </div>
           </div>
           <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-4">
-            <p className="text-xs text-gray-500 mb-2">過去7日間</p>
+            <p className="text-xs text-gray-500 mb-2">{window.__t('adminDashboard_2ebda4', window.__t('adminDashboard_2ebda4', '過去7日間'))}</p>
             <div className="flex gap-4">
               <div><span className="text-sm text-gray-500">UP</span> <span className="text-lg font-bold text-indigo-600">{last_7d.uploads}</span></div>
               <div><span className="text-sm text-gray-500">OK</span> <span className="text-lg font-bold text-green-600">{last_7d.done}</span></div>
@@ -626,7 +626,7 @@ function UploadHealthSection({ data, loading }) {
       <section className="mb-8">
         <div className="flex items-center gap-2 mb-4">
           <span className="text-lg">&#x1F4CA;</span>
-          <h2 className="text-lg font-semibold text-gray-700">ステータス分布</h2>
+          <h2 className="text-lg font-semibold text-gray-700">{window.__t('adminDashboard_e05b15', window.__t('adminDashboard_e05b15', 'ステータス分布'))}</h2>
         </div>
         <div className="flex flex-wrap gap-2">
           {Object.entries(status_distribution).map(([status, count]) => (
@@ -641,17 +641,17 @@ function UploadHealthSection({ data, loading }) {
       <section className="mb-8">
         <div className="flex items-center gap-2 mb-4">
           <span className="text-lg">&#x1F4C4;</span>
-          <h2 className="text-lg font-semibold text-gray-700">最近のアップロード</h2>
+          <h2 className="text-lg font-semibold text-gray-700">{window.__t('adminDashboard_f3eea3', window.__t('adminDashboard_f3eea3', '最近のアップロード'))}</h2>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-200">
-                <th className="text-left py-2 px-3 text-gray-500 font-medium">ファイル名</th>
-                <th className="text-left py-2 px-3 text-gray-500 font-medium">ステータス</th>
-                <th className="text-left py-2 px-3 text-gray-500 font-medium">タイプ</th>
-                <th className="text-left py-2 px-3 text-gray-500 font-medium">ユーザー</th>
-                <th className="text-left py-2 px-3 text-gray-500 font-medium">日時</th>
+                <th className="text-left py-2 px-3 text-gray-500 font-medium">{window.__t('adminDashboard_620172', window.__t('adminDashboard_620172', 'ファイル名'))}</th>
+                <th className="text-left py-2 px-3 text-gray-500 font-medium">{window.__t('live_status', window.__t('live_status', 'ステータス'))}</th>
+                <th className="text-left py-2 px-3 text-gray-500 font-medium">{window.__t('adminDashboard_888167', window.__t('adminDashboard_888167', 'タイプ'))}</th>
+                <th className="text-left py-2 px-3 text-gray-500 font-medium">{window.__t('adminDashboard_597622', window.__t('adminDashboard_597622', 'ユーザー'))}</th>
+                <th className="text-left py-2 px-3 text-gray-500 font-medium">{window.__t('adminDashboard_46db7b', window.__t('adminDashboard_46db7b', '日時'))}</th>
               </tr>
             </thead>
             <tbody>
@@ -674,17 +674,17 @@ function UploadHealthSection({ data, loading }) {
         <section className="mb-8">
           <div className="flex items-center gap-2 mb-4">
             <span className="text-lg">&#x1F4E8;</span>
-            <h2 className="text-lg font-semibold text-gray-700">Enqueue 統計</h2>
+            <h2 className="text-lg font-semibold text-gray-700">{window.__t('adminDashboard_f0415a', window.__t('adminDashboard_f0415a', 'Enqueue 統計'))}</h2>
           </div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <StatCard label="Enqueue OK" value={enqueue_stats.total_ok} unit="件" color="green" />
-            <StatCard label="Enqueue FAILED" value={enqueue_stats.total_failed} unit="件" color="red" />
-            <StatCard label="OK (24h)" value={enqueue_stats.ok_last_24h} unit="件" color="green" />
-            <StatCard label="FAILED (24h)" value={enqueue_stats.failed_last_24h} unit="件" color="red" />
+            <StatCard label="Enqueue OK" value={enqueue_stats.total_ok} unit=window.__t('errorLogCount', '件') color="green" />
+            <StatCard label="Enqueue FAILED" value={enqueue_stats.total_failed} unit=window.__t('errorLogCount', '件') color="red" />
+            <StatCard label="OK (24h)" value={enqueue_stats.ok_last_24h} unit=window.__t('errorLogCount', '件') color="green" />
+            <StatCard label="FAILED (24h)" value={enqueue_stats.failed_last_24h} unit=window.__t('errorLogCount', '件') color="red" />
           </div>
           {enqueue_stats.enqueue_success_rate_pct != null && (
             <div className="mt-3">
-              <StatCard label="Enqueue 成功率" value={`${enqueue_stats.enqueue_success_rate_pct}%`} color={enqueue_stats.enqueue_success_rate_pct >= 95 ? "green" : "red"} />
+              <StatCard label=={window.__t('adminDashboard_309a5a', window.__t('adminDashboard_309a5a', 'Enqueue 成功率'))} value={`${enqueue_stats.enqueue_success_rate_pct}%`} color={enqueue_stats.enqueue_success_rate_pct >= 95 ? "green" : "red"} />
             </div>
           )}
         </section>
@@ -695,15 +695,15 @@ function UploadHealthSection({ data, loading }) {
         <section className="mb-8">
           <div className="flex items-center gap-2 mb-4">
             <span className="text-lg">&#x2699;&#xFE0F;</span>
-            <h2 className="text-lg font-semibold text-gray-700">パイプラインステージ</h2>
+            <h2 className="text-lg font-semibold text-gray-700">{window.__t('adminDashboard_05a00d', window.__t('adminDashboard_05a00d', 'パイプラインステージ'))}</h2>
           </div>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-            <StatCard label="アップロード待ち" value={pipeline_stages.uploaded_waiting} unit="件" color="blue" />
-            <StatCard label="処理中" value={pipeline_stages.processing} unit="件" color="yellow" />
-            <StatCard label="完了" value={pipeline_stages.done} unit="件" color="green" />
-            <StatCard label="エラー" value={pipeline_stages.error} unit="件" color="red" />
-            <StatCard label="Enqueue失敗" value={pipeline_stages.enqueue_failed} unit="件" color="red" />
-            <StatCard label="スタック(>2h)" value={pipeline_stages.stuck_gt_2h} unit="件" color={pipeline_stages.stuck_gt_2h > 0 ? "red" : "gray"} />
+            <StatCard label=={window.__t('statusNew', window.__t('statusNew', 'アップロード待ち'))} value={pipeline_stages.uploaded_waiting} unit=window.__t('errorLogCount', '件') color="blue" />
+            <StatCard label=={window.__t('clip_processing', window.__t('clip_processing', '処理中'))} value={pipeline_stages.processing} unit=window.__t('errorLogCount', '件') color="yellow" />
+            <StatCard label=={window.__t('clip_completed', window.__t('clip_completed', '完了'))} value={pipeline_stages.done} unit=window.__t('errorLogCount', '件') color="green" />
+            <StatCard label=={window.__t('sidebar_error', window.__t('sidebar_error', 'エラー'))} value={pipeline_stages.error} unit=window.__t('errorLogCount', '件') color="red" />
+            <StatCard label=={window.__t('adminDashboard_3f6b4e', window.__t('adminDashboard_3f6b4e', 'Enqueue失敗'))} value={pipeline_stages.enqueue_failed} unit=window.__t('errorLogCount', '件') color="red" />
+            <StatCard label=={window.__t('adminDashboard_3b3c0c', window.__t('adminDashboard_3b3c0c', 'スタック(>2h)'))} value={pipeline_stages.stuck_gt_2h} unit=window.__t('errorLogCount', '件') color={pipeline_stages.stuck_gt_2h > 0 ? "red" : "gray"} />
           </div>
         </section>
       )}
@@ -713,17 +713,17 @@ function UploadHealthSection({ data, loading }) {
         <section className="mb-8">
           <div className="flex items-center gap-2 mb-4">
             <span className="text-lg">&#x1F504;</span>
-            <h2 className="text-lg font-semibold text-orange-600">リトライ候補 (Enqueue失敗)</h2>
+            <h2 className="text-lg font-semibold text-orange-600">{window.__t('adminDashboard_bf9f4e', window.__t('adminDashboard_bf9f4e', 'リトライ候補 (Enqueue失敗)'))}</h2>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-200">
-                  <th className="text-left py-2 px-3 text-gray-500 font-medium">ファイル名</th>
-                  <th className="text-left py-2 px-3 text-gray-500 font-medium">ステータス</th>
-                  <th className="text-left py-2 px-3 text-gray-500 font-medium">エラー内容</th>
-                  <th className="text-left py-2 px-3 text-gray-500 font-medium">ユーザー</th>
-                  <th className="text-left py-2 px-3 text-gray-500 font-medium">日時</th>
+                  <th className="text-left py-2 px-3 text-gray-500 font-medium">{window.__t('adminDashboard_620172', window.__t('adminDashboard_620172', 'ファイル名'))}</th>
+                  <th className="text-left py-2 px-3 text-gray-500 font-medium">{window.__t('live_status', window.__t('live_status', 'ステータス'))}</th>
+                  <th className="text-left py-2 px-3 text-gray-500 font-medium">{window.__t('adminDashboard_a576c3', window.__t('adminDashboard_a576c3', 'エラー内容'))}</th>
+                  <th className="text-left py-2 px-3 text-gray-500 font-medium">{window.__t('adminDashboard_597622', window.__t('adminDashboard_597622', 'ユーザー'))}</th>
+                  <th className="text-left py-2 px-3 text-gray-500 font-medium">{window.__t('adminDashboard_46db7b', window.__t('adminDashboard_46db7b', '日時'))}</th>
                 </tr>
               </thead>
               <tbody>
@@ -747,18 +747,18 @@ function UploadHealthSection({ data, loading }) {
         <section className="mb-8">
           <div className="flex items-center gap-2 mb-4">
             <span className="text-lg">&#x1F6A8;</span>
-            <h2 className="text-lg font-semibold text-red-600">パイプラインステージエラー</h2>
+            <h2 className="text-lg font-semibold text-red-600">{window.__t('adminDashboard_d6ac36', window.__t('adminDashboard_d6ac36', 'パイプラインステージエラー'))}</h2>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-200">
-                  <th className="text-left py-2 px-3 text-gray-500 font-medium">ファイル名</th>
-                  <th className="text-left py-2 px-3 text-gray-500 font-medium">エラーステージ</th>
-                  <th className="text-left py-2 px-3 text-gray-500 font-medium">最終ステージ</th>
-                  <th className="text-left py-2 px-3 text-gray-500 font-medium">エラー内容</th>
-                  <th className="text-left py-2 px-3 text-gray-500 font-medium">ユーザー</th>
-                  <th className="text-left py-2 px-3 text-gray-500 font-medium">日時</th>
+                  <th className="text-left py-2 px-3 text-gray-500 font-medium">{window.__t('adminDashboard_620172', window.__t('adminDashboard_620172', 'ファイル名'))}</th>
+                  <th className="text-left py-2 px-3 text-gray-500 font-medium">{window.__t('adminDashboard_a74623', window.__t('adminDashboard_a74623', 'エラーステージ'))}</th>
+                  <th className="text-left py-2 px-3 text-gray-500 font-medium">{window.__t('adminDashboard_585f2c', window.__t('adminDashboard_585f2c', '最終ステージ'))}</th>
+                  <th className="text-left py-2 px-3 text-gray-500 font-medium">{window.__t('adminDashboard_a576c3', window.__t('adminDashboard_a576c3', 'エラー内容'))}</th>
+                  <th className="text-left py-2 px-3 text-gray-500 font-medium">{window.__t('adminDashboard_597622', window.__t('adminDashboard_597622', 'ユーザー'))}</th>
+                  <th className="text-left py-2 px-3 text-gray-500 font-medium">{window.__t('adminDashboard_46db7b', window.__t('adminDashboard_46db7b', '日時'))}</th>
                 </tr>
               </thead>
               <tbody>
@@ -783,17 +783,17 @@ function UploadHealthSection({ data, loading }) {
         <section className="mb-8">
           <div className="flex items-center gap-2 mb-4">
             <span className="text-lg">&#x1F4DD;</span>
-            <h2 className="text-lg font-semibold text-gray-700">最近のステージエラーログ</h2>
+            <h2 className="text-lg font-semibold text-gray-700">{window.__t('adminDashboard_716ea8', window.__t('adminDashboard_716ea8', '最近のステージエラーログ'))}</h2>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-200">
-                  <th className="text-left py-2 px-3 text-gray-500 font-medium">ステージ</th>
-                  <th className="text-left py-2 px-3 text-gray-500 font-medium">エラータイプ</th>
-                  <th className="text-left py-2 px-3 text-gray-500 font-medium">エラー内容</th>
-                  <th className="text-left py-2 px-3 text-gray-500 font-medium">所要時間</th>
-                  <th className="text-left py-2 px-3 text-gray-500 font-medium">日時</th>
+                  <th className="text-left py-2 px-3 text-gray-500 font-medium">{window.__t('adminDashboard_86a507', window.__t('adminDashboard_86a507', 'ステージ'))}</th>
+                  <th className="text-left py-2 px-3 text-gray-500 font-medium">{window.__t('adminDashboard_6fc9eb', window.__t('adminDashboard_6fc9eb', 'エラータイプ'))}</th>
+                  <th className="text-left py-2 px-3 text-gray-500 font-medium">{window.__t('adminDashboard_a576c3', window.__t('adminDashboard_a576c3', 'エラー内容'))}</th>
+                  <th className="text-left py-2 px-3 text-gray-500 font-medium">{window.__t('adminDashboard_4f21fa', window.__t('adminDashboard_4f21fa', '所要時間'))}</th>
+                  <th className="text-left py-2 px-3 text-gray-500 font-medium">{window.__t('adminDashboard_46db7b', window.__t('adminDashboard_46db7b', '日時'))}</th>
                 </tr>
               </thead>
               <tbody>
@@ -817,7 +817,7 @@ function UploadHealthSection({ data, loading }) {
         <section className="mb-8">
           <div className="flex items-center gap-2 mb-4">
             <span className="text-lg">&#x26A0;&#xFE0F;</span>
-            <h2 className="text-lg font-semibold text-red-600">最近のエラー (7日間)</h2>
+            <h2 className="text-lg font-semibold text-red-600">{window.__t('adminDashboard_14cd2b', window.__t('adminDashboard_14cd2b', '最近のエラー (7日間)'))}</h2>
           </div>
           <div className="space-y-2">
             {recent_errors.map((e, i) => (
@@ -867,15 +867,15 @@ function FeedbackSection({ data, loading }) {
       <section className="mb-8">
         <div className="flex items-center gap-2 mb-4">
           <span className="text-lg">⭐</span>
-          <h2 className="text-lg font-semibold text-gray-700">フィードバック概要</h2>
+          <h2 className="text-lg font-semibold text-gray-700">{window.__t('adminDashboard_446612', window.__t('adminDashboard_446612', 'フィードバック概要'))}</h2>
         </div>
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-          <StatCard label="総採点数" value={summary.total_feedbacks} unit="件" color="orange" />
-          <StatCard label="平均スコア" value={summary.average_rating} unit="/ 5" color="blue" />
-          <StatCard label="コメント付き" value={summary.with_comments} unit="件" color="green" />
-          <StatCard label="ダウンロード済" value={summary.downloaded_clips || 0} unit="件" color="teal" />
+          <StatCard label=={window.__t('adminDashboard_18ecb6', window.__t('adminDashboard_18ecb6', '総採点数'))} value={summary.total_feedbacks} unit=window.__t('errorLogCount', '件') color="orange" />
+          <StatCard label=={window.__t('adminDashboard_15e370', window.__t('adminDashboard_15e370', '平均スコア'))} value={summary.average_rating} unit="/ 5" color="blue" />
+          <StatCard label=={window.__t('adminDashboard_424176', window.__t('adminDashboard_424176', 'コメント付き'))} value={summary.with_comments} unit=window.__t('errorLogCount', '件') color="green" />
+          <StatCard label=={window.__t('adminDashboard_e919fe', window.__t('adminDashboard_e919fe', 'ダウンロード済'))} value={summary.downloaded_clips || 0} unit=window.__t('errorLogCount', '件') color="teal" />
           <div className="rounded-xl border p-4 border-purple-300 bg-purple-50 transition-all duration-200 hover:shadow-md">
-            <p className="text-xs text-gray-500 mb-2">スコア分布</p>
+            <p className="text-xs text-gray-500 mb-2">{window.__t('adminDashboard_804dd5', window.__t('adminDashboard_804dd5', 'スコア分布'))}</p>
             <div className="flex items-end gap-1 h-8">
               {[1, 2, 3, 4, 5].map((star) => {
                 const count = summary.rating_distribution[star] || 0;
@@ -886,7 +886,7 @@ function FeedbackSection({ data, loading }) {
                     <div
                       className="w-full bg-purple-400 rounded-t"
                       style={{ height: `${height}%` }}
-                      title={`${star}点: ${count}件`}
+                      title={`${star}${window.__t('pointSuffix', '点')}: ${count}${window.__t('errorLogCount', '件')}`}
                     />
                     <span className="text-[10px] text-gray-500 mt-1">{star}</span>
                   </div>
@@ -899,7 +899,7 @@ function FeedbackSection({ data, loading }) {
 
       {/* Filter */}
       <div className="flex items-center gap-2 mb-4">
-        <span className="text-sm text-gray-500">フィルタ:</span>
+        <span className="text-sm text-gray-500">{window.__t('adminDashboard_12bfab', window.__t('adminDashboard_12bfab', 'フィルタ:'))}</span>
         <button
           onClick={() => setFilterRating(0)}
           className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${
@@ -968,7 +968,7 @@ function FeedbackCard({ fb }) {
     <div
       className="bg-white rounded-xl border border-gray-200 p-4 hover:shadow-md hover:border-orange-300 transition-all cursor-pointer group"
       onClick={handleClick}
-      title="クリックしてクリップエディタを開く"
+      title=={window.__t('adminDashboard_8661e9', window.__t('adminDashboard_8661e9', 'クリックしてクリップエディタを開く'))}
     >
       <div className="flex items-start justify-between gap-4">
         {/* Left: Rating + Content */}
@@ -1081,10 +1081,10 @@ function ClipDBStatsSection() {
       <section className="mb-8">
         <div className="flex items-center gap-2 mb-4">
           <span className="text-lg">🎬</span>
-          <h2 className="text-lg font-semibold text-gray-700">クリップDB</h2>
-          <span className="text-xs text-gray-400 ml-1">売れる瞬間</span>
+          <h2 className="text-lg font-semibold text-gray-700">{window.__t('adminDashboard_f4f096', window.__t('adminDashboard_f4f096', 'クリップDB'))}</h2>
+          <span className="text-xs text-gray-400 ml-1">{window.__t('adminDashboard_d744f0', window.__t('adminDashboard_d744f0', '売れる瞬間'))}</span>
         </div>
-        <div className="text-sm text-gray-400">読み込み中...</div>
+        <div className="text-sm text-gray-400">{window.__t('common_loading', window.__t('common_loading', '読み込み中...'))}</div>
       </section>
     );
   }
@@ -1092,18 +1092,18 @@ function ClipDBStatsSection() {
   if (!clipStats) return null;
 
   const TAG_LABEL_MAP = {
-    HOOK: 'フック', EMPATHY: '共感', PROBLEM: '問題提起',
-    EDUCATION: '教育', SOLUTION: '解決策', DEMONSTRATION: '実演',
-    COMPARISON: '比較', PROOF: '証拠', TRUST: '信頼',
-    SOCIAL_PROOF: '社会的証明', OBJECTION_HANDLING: '反論処理',
-    URGENCY: '緊急性', LIMITED_OFFER: '限定オファー', BONUS: '特典',
-    CTA: '行動喚起', PRICE: '価格訴求', STORY: 'ストーリー',
+    HOOK: window.__t('adminDashboard_022430', 'フック'), EMPATHY: window.__t('empathy', '共感'), PROBLEM: window.__t('adminDashboard_3b0c9b', '問題提起'),
+    EDUCATION: window.__t('education', '教育'), SOLUTION: window.__t('adminDashboard_e88d65', '解決策'), DEMONSTRATION: window.__t('adminDashboard_f5b486', '実演'),
+    COMPARISON: window.__t('comparison', '比較'), PROOF: window.__t('proof', '証拠'), TRUST: window.__t('trust', '信頼'),
+    SOCIAL_PROOF: window.__t('adminDashboard_fe9111', '社会的証明'), OBJECTION_HANDLING: window.__t('objectionHandling', '反論処理'),
+    URGENCY: window.__t('adminDashboard_2ae709', '緊急性'), LIMITED_OFFER: window.__t('adminDashboard_6b429c', '限定オファー'), BONUS: window.__t('bonus', '特典'),
+    CTA: window.__t('adminDashboard_5670e9', '行動喚起'), PRICE: window.__t('adminDashboard_6049bc', '価格訴求'), STORY: window.__t('adminDashboard_cffaf2', 'ストーリー'),
   };
   const TAG_COLORS = {
-    '共感': '#92400E', '権威': '#1E40AF', '限定性': '#9D174D',
-    '実演': '#065F46', '比較': '#3730A3', 'ストーリー': '#991B1B',
-    'テンション': '#9A3412', '緊急性': '#854D0E', '社会的証明': '#166534',
-    '価格訴求': '#047857', '問題提起': '#9F1239', '解決提示': '#0C4A6E',
+    window.__t('empathy', '共感'): '#92400E', window.__t('adminDashboard_f983c2', '権威'): '#1E40AF', window.__t('adminDashboard_f8cd5e', '限定性'): '#9D174D',
+    window.__t('adminDashboard_f5b486', '実演'): '#065F46', window.__t('comparison', '比較'): '#3730A3', window.__t('adminDashboard_cffaf2', 'ストーリー'): '#991B1B',
+    window.__t('adminDashboard_1d9246', 'テンション'): '#9A3412', window.__t('adminDashboard_2ae709', '緊急性'): '#854D0E', window.__t('adminDashboard_fe9111', '社会的証明'): '#166534',
+    window.__t('adminDashboard_6049bc', '価格訴求'): '#047857', window.__t('adminDashboard_3b0c9b', '問題提起'): '#9F1239', window.__t('adminDashboard_7c11e2', '解決提示'): '#0C4A6E',
     // English key aliases
     HOOK: '#6D28D9', EMPATHY: '#92400E', PROBLEM: '#9F1239',
     EDUCATION: '#1E40AF', SOLUTION: '#065F46', DEMONSTRATION: '#0F766E',
@@ -1117,20 +1117,20 @@ function ClipDBStatsSection() {
     <section className="mb-8">
       <div className="flex items-center gap-2 mb-4">
         <span className="text-lg">🎬</span>
-        <h2 className="text-lg font-semibold text-gray-700">クリップDB</h2>
-        <span className="text-xs text-gray-400 ml-1">売れる瞬間</span>
+        <h2 className="text-lg font-semibold text-gray-700">{window.__t('adminDashboard_f4f096', window.__t('adminDashboard_f4f096', 'クリップDB'))}</h2>
+        <span className="text-xs text-gray-400 ml-1">{window.__t('adminDashboard_d744f0', window.__t('adminDashboard_d744f0', '売れる瞬間'))}</span>
       </div>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-        <StatCard label="総クリップ" value={clipStats.total_clips} unit="件" color="purple" />
-        <StatCard label="売れた" value={clipStats.sold_clips} unit="件" color="green" />
-        <StatCard label="未売" value={clipStats.unsold_clips} unit="件" color="gray" />
-        <StatCard label="総GMV" value={clipStats.total_gmv >= 10000 ? `¥${(clipStats.total_gmv / 10000).toFixed(1)}万` : `¥${Math.round(clipStats.total_gmv || 0).toLocaleString()}`} color="blue" />
+        <StatCard label=={window.__t('adminDashboard_03071d', window.__t('adminDashboard_03071d', '総クリップ'))} value={clipStats.total_clips} unit=window.__t('errorLogCount', '件') color="purple" />
+        <StatCard label=={window.__t('adminDashboard_e6443c', window.__t('adminDashboard_e6443c', '売れた'))} value={clipStats.sold_clips} unit=window.__t('errorLogCount', '件') color="green" />
+        <StatCard label=={window.__t('adminDashboard_2989b4', window.__t('adminDashboard_2989b4', '未売'))} value={clipStats.unsold_clips} unit=window.__t('errorLogCount', '件') color="gray" />
+        <StatCard label=={window.__t('adminDashboard_076fe3', window.__t('adminDashboard_076fe3', '総GMV'))} value={clipStats.total_gmv >= 10000 ? `¥${(clipStats.total_gmv / 10000).toFixed(1)}${window.__t('tenThousand', '万')}` : `¥${Math.round(clipStats.total_gmv || 0).toLocaleString()}`} color="blue" />
       </div>
 
       {/* Top tags */}
       {clipStats.top_tags && clipStats.top_tags.length > 0 && (
         <div className="bg-white rounded-xl border border-gray-200 p-4 mb-4">
-          <h3 className="text-sm font-semibold text-gray-600 mb-3">トップタグ（売れた理由）</h3>
+          <h3 className="text-sm font-semibold text-gray-600 mb-3">{window.__t('adminDashboard_7a08d5', window.__t('adminDashboard_7a08d5', 'トップタグ（売れた理由）'))}</h3>
           <div className="flex flex-wrap gap-2">
             {clipStats.top_tags.slice(0, 12).map((t, i) => {
               const color = TAG_COLORS[t.tag] || '#374151';
@@ -1152,14 +1152,14 @@ function ClipDBStatsSection() {
       {/* Top products */}
       {clipStats.top_products && clipStats.top_products.length > 0 && (
         <div className="bg-white rounded-xl border border-gray-200 p-4">
-          <h3 className="text-sm font-semibold text-gray-600 mb-3">トップ商品</h3>
+          <h3 className="text-sm font-semibold text-gray-600 mb-3">{window.__t('adminDashboard_f9cbbc', window.__t('adminDashboard_f9cbbc', 'トップ商品'))}</h3>
           <div className="space-y-1.5">
             {clipStats.top_products.slice(0, 6).map((p, i) => (
               <div key={i} className="flex items-center justify-between text-xs py-1 border-b border-gray-50 last:border-0">
                 <span className="text-gray-700 truncate flex-1">{p.product}</span>
                 <span className="text-gray-400 mx-2">{p.count}件</span>
                 <span className="font-semibold text-green-600">
-                  {p.gmv >= 10000 ? `¥${(p.gmv / 10000).toFixed(1)}万` : `¥${Math.round(p.gmv || 0).toLocaleString()}`}
+                  {p.gmv >= 10000 ? `¥${(p.gmv / 10000).toFixed(1)}${window.__t('tenThousand', '万')}` : `¥${Math.round(p.gmv || 0).toLocaleString()}`}
                 </span>
               </div>
             ))}

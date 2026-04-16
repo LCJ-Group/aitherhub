@@ -24,7 +24,7 @@ const VERDICT_CONFIG = {
         <polyline points="22 4 12 14.01 9 11.01" />
       </svg>
     ),
-    title: '日時チェック: 一致',
+    title: window.__t('csvValidationGate_d17ea1', '日時チェック: 一致'),
     titleColor: 'text-green-800',
   },
   warning: {
@@ -37,7 +37,7 @@ const VERDICT_CONFIG = {
         <line x1="12" y1="17" x2="12.01" y2="17" />
       </svg>
     ),
-    title: '日時チェック: 要確認',
+    title: window.__t('csvValidationGate_2c77bd', '日時チェック: 要確認'),
     titleColor: 'text-amber-800',
   },
   error: {
@@ -50,7 +50,7 @@ const VERDICT_CONFIG = {
         <line x1="9" y1="9" x2="15" y2="15" />
       </svg>
     ),
-    title: '日時チェック: 不一致',
+    title: window.__t('csvValidationGate_932e70', '日時チェック: 不一致'),
     titleColor: 'text-red-800',
   },
   unknown: {
@@ -63,16 +63,16 @@ const VERDICT_CONFIG = {
         <line x1="12" y1="17" x2="12.01" y2="17" />
       </svg>
     ),
-    title: '日時チェック: 判定不能',
+    title: window.__t('csvValidationGate_60f465', '日時チェック: 判定不能'),
     titleColor: 'text-gray-700',
   },
 };
 
 const CHECK_RESULT_BADGE = {
   ok: { bg: 'bg-green-100', text: 'text-green-700', label: 'OK' },
-  warning: { bg: 'bg-amber-100', text: 'text-amber-700', label: '要確認' },
-  error: { bg: 'bg-red-100', text: 'text-red-700', label: '不一致' },
-  unknown: { bg: 'bg-gray-100', text: 'text-gray-500', label: '不明' },
+  warning: { bg: 'bg-amber-100', text: 'text-amber-700', label: window.__t('csvAssetPanel_248521', '要確認') },
+  error: { bg: 'bg-red-100', text: 'text-red-700', label: window.__t('csvAssetPanel_a6f60d', '不一致') },
+  unknown: { bg: 'bg-gray-100', text: 'text-gray-500', label: window.__t('csvAssetPanel_efd626', '不明') },
 };
 
 export default function CsvValidationGate({
@@ -90,7 +90,7 @@ export default function CsvValidationGate({
         <div className="bg-white rounded-2xl p-8 max-w-md w-full mx-4 shadow-xl">
           <div className="flex flex-col items-center space-y-4">
             <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-[#7D01FF]" />
-            <p className="text-sm text-gray-600">CSVファイルの日時を確認中...</p>
+            <p className="text-sm text-gray-600">{window.__t('csvValidationGate_d13857', window.__t('csvValidationGate_d13857', 'CSVファイルの日時を確認中...'))}</p>
           </div>
         </div>
       </div>
@@ -118,25 +118,25 @@ export default function CsvValidationGate({
         <div className="px-6 py-4 overflow-y-auto flex-1">
           {/* 抽出情報サマリー */}
           <div className="mb-4">
-            <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">抽出された日時情報</h4>
+            <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">{window.__t('csvValidationGate_a9d16e', window.__t('csvValidationGate_a9d16e', '抽出された日時情報'))}</h4>
             <div className="space-y-2">
               <InfoRow
-                label="動画"
+                label=={window.__t('videoTitleFallback', window.__t('videoTitleFallback', '動画'))}
                 filename={extracted.video.filename}
-                value={extracted.video.date ? formatDateTime(extracted.video.date) : '取得不可'}
+                value={extracted.video.date ? formatDateTime(extracted.video.date) : window.__t('csvValidationGate_4176ad', '取得不可')}
                 confidence={extracted.video.confidence}
               />
               <InfoRow
-                label="トレンドCSV"
+                label=={window.__t('csvValidationGate_5070f7', window.__t('csvValidationGate_5070f7', 'トレンドCSV'))}
                 filename={extracted.trend.filename}
-                value={extracted.trend.startTime ? `開始 ${extracted.trend.startTime}${extracted.trend.lastTime ? ` 〜 ${extracted.trend.lastTime}` : ''}` : '取得不可'}
+                value={extracted.trend.startTime ? `開始 ${extracted.trend.startTime}${extracted.trend.lastTime ? ` 〜 ${extracted.trend.lastTime}` : ''}` : window.__t('csvValidationGate_4176ad', '取得不可')}
                 confidence={extracted.trend.confidence}
                 subValue={extracted.trend.fileDate ? `ファイル日付: ${formatDateOnly(extracted.trend.fileDate)}` : null}
               />
               <InfoRow
-                label="商品CSV"
+                label=={window.__t('csvValidationGate_ce3200', window.__t('csvValidationGate_ce3200', '商品CSV'))}
                 filename={extracted.product.filename}
-                value={extracted.product.date ? formatDateOnly(extracted.product.date) : '取得不可'}
+                value={extracted.product.date ? formatDateOnly(extracted.product.date) : window.__t('csvValidationGate_4176ad', '取得不可')}
                 confidence={extracted.product.confidence}
               />
             </div>
@@ -144,7 +144,7 @@ export default function CsvValidationGate({
 
           {/* 個別チェック結果 */}
           <div className="mb-2">
-            <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">チェック結果</h4>
+            <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">{window.__t('csvValidationGate_91364d', window.__t('csvValidationGate_91364d', 'チェック結果'))}</h4>
             <div className="space-y-1.5">
               {checks.map((check) => {
                 const badge = CHECK_RESULT_BADGE[check.result] || CHECK_RESULT_BADGE.unknown;
@@ -244,7 +244,7 @@ function InfoRow({ label, filename, value, confidence, subValue }) {
         )}
       </div>
       <span className={`text-[10px] ${confColor[confidence] || confColor.none} flex-shrink-0 pt-0.5`}>
-        {confidence === 'high' ? '高信頼' : confidence === 'medium' ? '中信頼' : confidence === 'low' ? '低信頼' : '不明'}
+        {confidence === 'high' ? window.__t('csvValidationGate_242abd', '高信頼') : confidence === 'medium' ? window.__t('csvValidationGate_a585a1', '中信頼') : confidence === 'low' ? window.__t('csvValidationGate_597cb3', '低信頼') : window.__t('csvAssetPanel_efd626', '不明')}
       </span>
     </div>
   );

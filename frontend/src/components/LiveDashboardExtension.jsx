@@ -14,9 +14,9 @@ import React, { useState, useEffect, useRef } from 'react';
 // ─── Comment Item ─────────────────────────────────────────────
 const CommentItem = ({ comment, isNew }) => {
   const badgeColors = {
-    '1位': 'bg-yellow-500',
-    '2位': 'bg-gray-400',
-    '3位': 'bg-orange-600',
+    window.__t('liveDashboardExtension_6cb266', '1位'): 'bg-yellow-500',
+    window.__t('liveDashboardExtension_4a1b24', '2位'): 'bg-gray-400',
+    window.__t('liveDashboardExtension_adf589', '3位'): 'bg-orange-600',
   };
 
   return (
@@ -31,7 +31,7 @@ const CommentItem = ({ comment, isNew }) => {
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5">
           <span className="text-[10px] font-semibold text-gray-300 truncate max-w-[100px]">
-            {comment.username || '匿名'}
+            {comment.username || window.__t('liveDashboardExtension_1a75c1', '匿名')}
           </span>
           {comment.badge && (
             <span className={`text-[8px] text-white px-1 py-0.5 rounded ${badgeColors[comment.badge] || 'bg-blue-500'}`}>
@@ -68,7 +68,7 @@ export const CommentsPanel = ({ comments = [], newCommentIds = new Set() }) => {
     <div className="flex flex-col h-full">
       <div className="px-3 py-2 border-b border-gray-800/30 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2">
-          <span className="text-xs font-semibold text-gray-300">コメント</span>
+          <span className="text-xs font-semibold text-gray-300">{window.__t('live_comments', window.__t('live_comments', 'コメント'))}</span>
           <span className="bg-cyan-500/20 text-cyan-400 text-[9px] px-1.5 py-0.5 rounded-full">
             {comments.length}
           </span>
@@ -100,7 +100,7 @@ export const CommentsPanel = ({ comments = [], newCommentIds = new Set() }) => {
       >
         {filteredComments.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center">
-            <p className="text-xs text-gray-500">コメントを受信中...</p>
+            <p className="text-xs text-gray-500">{window.__t('liveDashboardExtension_aac591', window.__t('liveDashboardExtension_aac591', 'コメントを受信中...'))}</p>
             <p className="text-[10px] text-gray-600 mt-1">
               Chrome拡張が接続されると表示されます
             </p>
@@ -158,7 +158,7 @@ const ProductItem = ({ product, rank }) => {
           {isPinned && (
             <span className="text-[8px] bg-orange-500/20 text-orange-400 px-1 py-0.5 rounded">PIN</span>
           )}
-          <p className="text-[10px] text-gray-300 truncate">{product.name || '商品名不明'}</p>
+          <p className="text-[10px] text-gray-300 truncate">{product.name || window.__t('liveDashboard_950ca9', '商品名不明')}</p>
         </div>
         <div className="flex items-center gap-2 mt-0.5">
           <span className="text-[10px] font-bold text-red-400">{product.price || ''}</span>
@@ -197,7 +197,7 @@ export const ProductsPanel = ({ products = [] }) => {
     <div className="flex flex-col h-full">
       <div className="px-3 py-2 border-b border-gray-800/30 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2">
-          <span className="text-xs font-semibold text-gray-300">商品</span>
+          <span className="text-xs font-semibold text-gray-300">{window.__t('csv_product', window.__t('csv_product', '商品'))}</span>
           <span className="bg-orange-500/20 text-orange-400 text-[9px] px-1.5 py-0.5 rounded-full">
             {products.length}
           </span>
@@ -207,17 +207,17 @@ export const ProductsPanel = ({ products = [] }) => {
           onChange={(e) => setSortBy(e.target.value)}
           className="text-[9px] bg-gray-800 border border-gray-700 rounded px-1.5 py-0.5 text-gray-400"
         >
-          <option value="default">デフォルト</option>
-          <option value="clicks">クリック順</option>
-          <option value="sold">販売数順</option>
-          <option value="ctr">CTR順</option>
+          <option value="default">{window.__t('liveDashboardExtension_646d71', window.__t('liveDashboardExtension_646d71', 'デフォルト'))}</option>
+          <option value="clicks">{window.__t('liveDashboardExtension_58f106', window.__t('liveDashboardExtension_58f106', 'クリック順'))}</option>
+          <option value="sold">{window.__t('liveDashboardExtension_2a20b4', window.__t('liveDashboardExtension_2a20b4', '販売数順'))}</option>
+          <option value="ctr">{window.__t('liveDashboardExtension_e4a8d2', window.__t('liveDashboardExtension_e4a8d2', 'CTR順'))}</option>
         </select>
       </div>
 
       <div className="flex-1 overflow-y-auto p-2 space-y-1">
         {sortedProducts.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center">
-            <p className="text-xs text-gray-500">商品データを受信中...</p>
+            <p className="text-xs text-gray-500">{window.__t('liveDashboard_f78365', window.__t('liveDashboard_f78365', '商品データを受信中...'))}</p>
           </div>
         ) : (
           sortedProducts.map((product, idx) => (
@@ -244,12 +244,12 @@ export const TrafficSourcesPanel = ({ trafficSources = [] }) => {
   return (
     <div className="flex flex-col h-full">
       <div className="px-3 py-2 border-b border-gray-800/30 shrink-0">
-        <span className="text-xs font-semibold text-gray-300">トラフィックソース</span>
+        <span className="text-xs font-semibold text-gray-300">{window.__t('liveDashboardExtension_c098e7', window.__t('liveDashboardExtension_c098e7', 'トラフィックソース'))}</span>
       </div>
       <div className="flex-1 overflow-y-auto p-3">
         {trafficSources.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center">
-            <p className="text-xs text-gray-500">トラフィックデータを受信中...</p>
+            <p className="text-xs text-gray-500">{window.__t('liveDashboardExtension_bec619', window.__t('liveDashboardExtension_bec619', 'トラフィックデータを受信中...'))}</p>
           </div>
         ) : (
           <div className="space-y-2">
@@ -278,12 +278,12 @@ export const TrafficSourcesPanel = ({ trafficSources = [] }) => {
 // ─── Activity Item ────────────────────────────────────────────
 const ActivityItem = ({ activity }) => {
   const typeConfig = {
-    join: { icon: '👋', color: 'text-blue-400', label: '参加' },
-    product_view: { icon: '👀', color: 'text-orange-400', label: '商品閲覧' },
-    order: { icon: '🛒', color: 'text-green-400', label: '注文' },
-    follow: { icon: '➕', color: 'text-purple-400', label: 'フォロー' },
-    share: { icon: '📤', color: 'text-cyan-400', label: 'シェア' },
-    gift: { icon: '🎁', color: 'text-pink-400', label: 'ギフト' },
+    join: { icon: '👋', color: 'text-blue-400', label: window.__t('liveDashboardExtension_fe0d7a', '参加') },
+    product_view: { icon: '👀', color: 'text-orange-400', label: window.__t('liveDashboardExtension_34471e', '商品閲覧') },
+    order: { icon: '🛒', color: 'text-green-400', label: window.__t('scriptGen_order', '注文') },
+    follow: { icon: '➕', color: 'text-purple-400', label: window.__t('liveDashboardExtension_02c98a', 'フォロー') },
+    share: { icon: '📤', color: 'text-cyan-400', label: window.__t('live_shares', 'シェア') },
+    gift: { icon: '🎁', color: 'text-pink-400', label: window.__t('liveDashboardExtension_065738', 'ギフト') },
     default: { icon: '📌', color: 'text-gray-400', label: '' },
   };
 
@@ -310,7 +310,7 @@ export const ActivitiesPanel = ({ activities = [] }) => {
   return (
     <div className="flex flex-col h-full">
       <div className="px-3 py-2 border-b border-gray-800/30 flex items-center gap-2 shrink-0">
-        <span className="text-xs font-semibold text-gray-300">アクティビティ</span>
+        <span className="text-xs font-semibold text-gray-300">{window.__t('liveDashboard_ee2abe', window.__t('liveDashboard_ee2abe', 'アクティビティ'))}</span>
         <span className="bg-green-500/20 text-green-400 text-[9px] px-1.5 py-0.5 rounded-full">
           {activities.length}
         </span>
@@ -318,7 +318,7 @@ export const ActivitiesPanel = ({ activities = [] }) => {
       <div ref={scrollRef} className="flex-1 overflow-y-auto divide-y divide-gray-800/20">
         {activities.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center p-4">
-            <p className="text-xs text-gray-500">アクティビティを受信中...</p>
+            <p className="text-xs text-gray-500">{window.__t('liveDashboardExtension_031a76', window.__t('liveDashboardExtension_031a76', 'アクティビティを受信中...'))}</p>
           </div>
         ) : (
           activities.map((activity, idx) => (
@@ -355,7 +355,7 @@ export const ExtensionStatusBadge = ({ isConnected, source, account }) => {
 function formatLargeNum(n) {
   if (!n && n !== 0) return '--';
   if (typeof n === 'string') return n;
-  if (n >= 10000) return (n / 10000).toFixed(1) + '万';
+  if (n >= 10000) return (n / 10000).toFixed(1) + window.__t('tenThousand', '万');
   if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
   return String(n);
 }

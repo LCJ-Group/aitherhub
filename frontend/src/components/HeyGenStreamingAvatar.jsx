@@ -93,7 +93,7 @@ export default function HeyGenStreamingAvatar({
   // ── Start Session ──
   const startSession = useCallback(async () => {
     if (!avatarId) {
-      setError("アバターを選択してください");
+      setError(window.__t('auto_311', 'アバターを選択してください'));
       return;
     }
 
@@ -289,7 +289,7 @@ export default function HeyGenStreamingAvatar({
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-900/80">
             <Radio className="w-12 h-12 text-gray-600 mb-3" />
             <p className="text-sm text-gray-400 mb-1">Realtime Streaming</p>
-            <p className="text-xs text-gray-500">アバターを選択して接続開始</p>
+            <p className="text-xs text-gray-500">{window.__t('auto_312', window.__t('auto_312', 'アバターを選択して接続開始'))}</p>
           </div>
         )}
 
@@ -297,8 +297,8 @@ export default function HeyGenStreamingAvatar({
         {isConnecting && (
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-900/80">
             <Loader2 className="w-10 h-10 text-green-400 animate-spin mb-3" />
-            <p className="text-sm text-green-300">接続中...</p>
-            <p className="text-xs text-gray-400 mt-1">LiveKit WebRTC セッション確立中</p>
+            <p className="text-sm text-green-300">{window.__t('auto_342', window.__t('auto_342', '接続中...'))}</p>
+            <p className="text-xs text-gray-400 mt-1">{window.__t('auto_301', window.__t('auto_301', 'LiveKit WebRTC セッション確立中'))}</p>
           </div>
         )}
 
@@ -341,9 +341,9 @@ export default function HeyGenStreamingAvatar({
             }`}
           >
             {isConnecting ? (
-              <><Loader2 className="w-3.5 h-3.5 animate-spin" />接続中...</>
+              <><Loader2 className="w-3.5 h-3.5 animate-spin" />{window.__t('auto_342', window.__t('auto_342', '接続中...'))}</>
             ) : (
-              <><Wifi className="w-3.5 h-3.5" />ストリーミング開始</>
+              <><Wifi className="w-3.5 h-3.5" />{window.__t('auto_314', window.__t('auto_314', 'ストリーミング開始'))}</>
             )}
           </button>
         ) : (
@@ -365,7 +365,7 @@ export default function HeyGenStreamingAvatar({
               value={speakText}
               onChange={(e) => setSpeakText(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="テキストを入力してEnterで送信..."
+              placeholder=={window.__t('auto_317', window.__t('auto_317', 'テキストを入力してEnterで送信...'))}
               rows={2}
               className="flex-1 px-3 py-2 bg-gray-900/50 border border-gray-700/30 rounded-lg text-sm text-gray-200 outline-none focus:border-green-500/50 resize-none placeholder-gray-500"
             />
@@ -378,7 +378,7 @@ export default function HeyGenStreamingAvatar({
                     ? "bg-green-500 hover:bg-green-600 text-white"
                     : "bg-gray-700/50 text-gray-500 cursor-not-allowed"
                 }`}
-                title="送信 (Enter)"
+                title=={window.__t('auto_352', window.__t('auto_352', '送信 (Enter)'))}
               >
                 {isSpeaking ? (
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -389,7 +389,7 @@ export default function HeyGenStreamingAvatar({
               <button
                 onClick={handleInterrupt}
                 className="px-3 py-2 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-all bg-orange-500/20 hover:bg-orange-500/30 text-orange-400 border border-orange-500/30"
-                title="中断"
+                title=={window.__t('auto_327', window.__t('auto_327', '中断'))}
               >
                 <Square className="w-3 h-3" />
               </button>
@@ -415,7 +415,7 @@ export default function HeyGenStreamingAvatar({
       {/* ── Speak History ── */}
       {speakHistory.length > 0 && (
         <div className="bg-gray-800/50 rounded-xl border border-gray-700/30 p-3 max-h-40 overflow-y-auto" style={{ scrollbarWidth: "thin" }}>
-          <h5 className="text-[10px] font-medium text-gray-400 mb-2">発話履歴</h5>
+          <h5 className="text-[10px] font-medium text-gray-400 mb-2">{window.__t('auto_349', window.__t('auto_349', '発話履歴'))}</h5>
           <div className="space-y-1.5">
             {speakHistory.map((item, i) => (
               <div key={i} className="flex items-start gap-2">

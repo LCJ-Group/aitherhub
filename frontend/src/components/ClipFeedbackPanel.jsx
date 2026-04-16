@@ -12,14 +12,14 @@ import VideoService from '../base/services/videoService';
  */
 
 const REASON_TAGS = [
-  { key: 'hook_weak', label: 'フック弱い', emoji: '🎣' },
-  { key: 'too_long', label: '長すぎ', emoji: '⏱️' },
-  { key: 'too_short', label: '短すぎ', emoji: '⚡' },
-  { key: 'cut_position', label: 'カット位置', emoji: '✂️' },
-  { key: 'subtitle', label: '字幕', emoji: '💬' },
-  { key: 'audio', label: '音声', emoji: '🔊' },
-  { key: 'irrelevant', label: '関係ない', emoji: '❌' },
-  { key: 'perfect', label: '完璧', emoji: '✨' },
+  { key: 'hook_weak', label: window.__t('auto_322', 'フック弱い'), emoji: '🎣' },
+  { key: 'too_long', label: window.__t('auto_354', '長すぎ'), emoji: '⏱️' },
+  { key: 'too_short', label: window.__t('auto_350', '短すぎ'), emoji: '⚡' },
+  { key: 'cut_position', label: window.__t('auto_313', 'カット位置'), emoji: '✂️' },
+  { key: 'subtitle', label: window.__t('auto_334', '字幕'), emoji: '💬' },
+  { key: 'audio', label: window.__t('auto_356', '音声'), emoji: '🔊' },
+  { key: 'irrelevant', label: window.__t('auto_355', '関係ない'), emoji: '❌' },
+  { key: 'perfect', label: window.__t('auto_337', '完璧'), emoji: '✨' },
 ];
 
 const ClipFeedbackPanel = ({
@@ -199,7 +199,7 @@ const ClipFeedbackPanel = ({
 
     if (ratingOk && salesOk) {
       setDirty(false);
-      setSuccessMsg('保存しました');
+      setSuccessMsg(window.__t('auto_329', '保存しました'));
       onFeedbackSubmitted({
         type: 'all',
         rating,
@@ -209,7 +209,7 @@ const ClipFeedbackPanel = ({
       // Clear success message after 3 seconds
       setTimeout(() => setSuccessMsg(null), 3000);
     } else {
-      setError('一部の保存に失敗しました。もう一度お試しください。');
+      setError(window.__t('auto_326', '一部の保存に失敗しました。もう一度お試しください。'));
     }
   }, [videoId, phaseIndex, timeStart, timeEnd, clipId, aiScore, scoreBreakdown, rating, selectedReasons, salesConfirm, salesNote, onFeedbackSubmitted]);
 
@@ -234,7 +234,7 @@ const ClipFeedbackPanel = ({
             transition: 'all 0.2s',
           }}
         >
-          {'\uD83D\uDC4D'} {rating === 'good' && submitted ? '使える' : 'Good'}
+          {'\uD83D\uDC4D'} {rating === 'good' && submitted ? window.__t('auto_328', '使える') : 'Good'}
         </button>
         <button
           onClick={() => { handleRatingSelect('bad'); }}
@@ -247,7 +247,7 @@ const ClipFeedbackPanel = ({
             transition: 'all 0.2s',
           }}
         >
-          {'\uD83D\uDC4E'} {rating === 'bad' && submitted ? '微妙' : 'Fix'}
+          {'\uD83D\uDC4E'} {rating === 'bad' && submitted ? window.__t('auto_340', '微妙') : 'Fix'}
         </button>
         {dirty && canSave && (
           <button
@@ -259,7 +259,7 @@ const ClipFeedbackPanel = ({
               background: '#6366f1', color: '#fff',
             }}
           >
-            {submitting ? '...' : '保存'}
+            {submitting ? '...' : window.__t('common_save', '保存')}
           </button>
         )}
       </div>
@@ -340,7 +340,7 @@ const ClipFeedbackPanel = ({
           <div style={{
             fontSize: '12px', color: '#6b7280', marginBottom: '8px', fontWeight: 600,
           }}>
-            {rating === 'bad' ? 'なぜ微妙？（複数選択可）' : 'どこが良い？（任意）'}
+            {rating === 'bad' ? window.__t('auto_309', 'なぜ微妙？（複数選択可）') : window.__t('auto_308', 'どこが良い？（任意）')}
           </div>
           <div style={{
             display: 'flex', flexWrap: 'wrap', gap: '6px',
@@ -423,7 +423,7 @@ const ClipFeedbackPanel = ({
             type="text"
             value={salesNote}
             onChange={handleSalesNoteChange}
-            placeholder="メモ（任意）: 例「商品紹介の瞬間」"
+            placeholder=={window.__t('auto_323', window.__t('auto_323', 'メモ（任意）: 例「商品紹介の瞬間」'))}
             style={{
               width: '100%', padding: '6px 10px', borderRadius: '6px',
               border: '1px solid #d1d5db', fontSize: '12px',
@@ -465,13 +465,13 @@ const ClipFeedbackPanel = ({
           }}
         >
           {submitting ? (
-            <>保存中...</>
+            <>{window.__t('auto_330', window.__t('auto_330', '保存中...'))}</>
           ) : dirty ? (
-            <>💾 評価を保存</>
+            <>{window.__t('auto_360', window.__t('auto_360', '💾 評価を保存'))}</>
           ) : submitted || salesSubmitted ? (
-            <>✅ 保存済み</>
+            <>{window.__t('auto_305', window.__t('auto_305', '✅ 保存済み'))}</>
           ) : (
-            <>💾 評価を保存</>
+            <>{window.__t('auto_360', window.__t('auto_360', '💾 評価を保存'))}</>
           )}
         </button>
       </div>

@@ -71,7 +71,7 @@ export default function CsvInfoPanel({ videoData, onReplace }) {
             あり
           </span>
           <span className="text-xs text-gray-500 truncate max-w-[200px]" title={filename}>
-            {filename || "不明"}
+            {filename || window.__t('csvAssetPanel_efd626', '不明')}
           </span>
         </div>
       );
@@ -119,12 +119,12 @@ export default function CsvInfoPanel({ videoData, onReplace }) {
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="text-sm font-semibold text-gray-800">CSV / Excelデータ</span>
+                <span className="text-sm font-semibold text-gray-800">{window.__t('csvInfoPanel_6452b6', window.__t('csvInfoPanel_6452b6', 'CSV / Excelデータ'))}</span>
                 {uploadTypeBadge(excelInfo.upload_type)}
               </div>
               <div className="flex items-center gap-3 mt-1">
                 <span className="text-xs text-gray-400">
-                  商品: {excelInfo.has_product ? "あり" : "なし"} / トレンド: {excelInfo.has_trend ? "あり" : "なし"}
+                  商品: {excelInfo.has_product ? window.__t('csvAssetPanel_beb409', 'あり') : window.__t('csvAssetPanel_3609f9', 'なし')} / トレンド: {excelInfo.has_trend ? window.__t('csvAssetPanel_beb409', 'あり') : window.__t('csvAssetPanel_3609f9', 'なし')}
                 </span>
               </div>
             </div>
@@ -161,19 +161,19 @@ export default function CsvInfoPanel({ videoData, onReplace }) {
             <div className="mt-3 space-y-3">
               {/* 商品データ */}
               <div className="flex items-center justify-between">
-                <span className="text-xs font-medium text-gray-500 w-24">商品データ</span>
+                <span className="text-xs font-medium text-gray-500 w-24">{window.__t('videoDetail_productData', window.__t('videoDetail_productData', '商品データ'))}</span>
                 {fileBadge(excelInfo.has_product, excelInfo.product_filename)}
               </div>
 
               {/* トレンドデータ */}
               <div className="flex items-center justify-between">
-                <span className="text-xs font-medium text-gray-500 w-24">トレンドデータ</span>
+                <span className="text-xs font-medium text-gray-500 w-24">{window.__t('videoDetail_trendData', window.__t('videoDetail_trendData', 'トレンドデータ'))}</span>
                 {fileBadge(excelInfo.has_trend, excelInfo.trend_filename)}
               </div>
 
               {/* メタ情報 */}
               <div className="flex items-center justify-between">
-                <span className="text-xs font-medium text-gray-500 w-24">アップロード日</span>
+                <span className="text-xs font-medium text-gray-500 w-24">{window.__t('csvInfoPanel_d721e8', window.__t('csvInfoPanel_d721e8', 'アップロード日'))}</span>
                 <span className="text-xs text-gray-500">
                   {excelInfo.created_at ? new Date(excelInfo.created_at).toLocaleString("ja-JP") : "-"}
                 </span>
@@ -181,7 +181,7 @@ export default function CsvInfoPanel({ videoData, onReplace }) {
 
               {excelInfo.updated_at && excelInfo.updated_at !== excelInfo.created_at && (
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium text-gray-500 w-24">最終更新</span>
+                  <span className="text-xs font-medium text-gray-500 w-24">{window.__t('csvInfoPanel_c2a798', window.__t('csvInfoPanel_c2a798', '最終更新'))}</span>
                   <span className="text-xs text-gray-500">
                     {new Date(excelInfo.updated_at).toLocaleString("ja-JP")}
                   </span>

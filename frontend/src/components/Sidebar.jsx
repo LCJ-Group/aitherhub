@@ -674,7 +674,7 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
                                     {video.total_gmv != null && video.total_gmv > 0 && (
                                       <span className="inline-flex items-center gap-0.5 text-[10px] text-orange-600">
                                         <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
-                                        {video.total_gmv >= 10000 ? `¥${(video.total_gmv / 10000).toFixed(1)}万` : `¥${Math.round(video.total_gmv).toLocaleString()}`}
+                                        {video.total_gmv >= 10000 ? `¥${(video.total_gmv / 10000).toFixed(1)}${window.__t('tenThousand', '万')}` : `¥${Math.round(video.total_gmv).toLocaleString()}`}
                                       </span>
                                     )}
                                   </div>
@@ -796,7 +796,7 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
                                       ) : (
                                         <span className="inline-flex items-center gap-1 text-[11px] text-amber-600 font-medium leading-normal">
                                           <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3 flex-shrink-0 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
-                                          {video.status === 'QUEUED' ? 'キュー待ち' : video.status === 'UPLOADED' ? 'アップロード済み' : video.status.startsWith('STEP_') ? `解析中 ${(() => { const m = { STEP_COMPRESS_1080P: 1, STEP_0_EXTRACT_FRAMES: 5, STEP_1_DETECT_PHASES: 10, STEP_2_EXTRACT_METRICS: 20, STEP_3_TRANSCRIBE_AUDIO: 55, STEP_4_IMAGE_CAPTION: 70, STEP_5_BUILD_PHASE_UNITS: 80, STEP_6_BUILD_PHASE_DESCRIPTION: 85, STEP_7_GROUPING: 90, STEP_8_UPDATE_BEST_PHASE: 92, STEP_9_BUILD_VIDEO_STRUCTURE_FEATURES: 94, STEP_10_ASSIGN_VIDEO_STRUCTURE_GROUP: 95, STEP_11_UPDATE_VIDEO_STRUCTURE_GROUP_STATS: 96, STEP_12_UPDATE_VIDEO_STRUCTURE_BEST: 97, STEP_12_5_PRODUCT_DETECTION: 98, STEP_13_BUILD_REPORTS: 98, STEP_14_FINALIZE: 99, STEP_14_SPLIT_VIDEO: 99 }; return m[video.status] || 0; })()}%` : video.status}
+                                          {video.status === 'QUEUED' ? window.__t('sidebar_queued', 'キュー待ち') : video.status === 'UPLOADED' ? window.__t('sidebar_uploaded', 'アップロード済み') : video.status.startsWith('STEP_') ? `解析中 ${(() => { const m = { STEP_COMPRESS_1080P: 1, STEP_0_EXTRACT_FRAMES: 5, STEP_1_DETECT_PHASES: 10, STEP_2_EXTRACT_METRICS: 20, STEP_3_TRANSCRIBE_AUDIO: 55, STEP_4_IMAGE_CAPTION: 70, STEP_5_BUILD_PHASE_UNITS: 80, STEP_6_BUILD_PHASE_DESCRIPTION: 85, STEP_7_GROUPING: 90, STEP_8_UPDATE_BEST_PHASE: 92, STEP_9_BUILD_VIDEO_STRUCTURE_FEATURES: 94, STEP_10_ASSIGN_VIDEO_STRUCTURE_GROUP: 95, STEP_11_UPDATE_VIDEO_STRUCTURE_GROUP_STATS: 96, STEP_12_UPDATE_VIDEO_STRUCTURE_BEST: 97, STEP_12_5_PRODUCT_DETECTION: 98, STEP_13_BUILD_REPORTS: 98, STEP_14_FINALIZE: 99, STEP_14_SPLIT_VIDEO: 99 }; return m[video.status] || 0; })()}%` : video.status}
                                         </span>
                                       )}
                                       {video.updated_at && (() => {
@@ -806,7 +806,7 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
                                         if (diffMin < 1) return null;
                                         const diffH = Math.floor(diffMin / 60);
                                         const diffD = Math.floor(diffH / 24);
-                                        const elapsed = diffD > 0 ? `${diffD}日${diffH % 24}時間` : diffH > 0 ? `${diffH}時間${diffMin % 60}分` : `${diffMin}分`;
+                                        const elapsed = diffD > 0 ? `${diffD}${window.__t('common_days', '日')}${diffH % 24}${window.__t('script_duration', '時間')}` : diffH > 0 ? `${diffH}${window.__t('script_duration', '時間')}${diffMin % 60}${window.__t('common_minutes', '分')}` : `${diffMin}${window.__t('common_minutes', '分')}`;
                                         return (
                                           <span className={`text-[10px] leading-normal ${diffMin > 30 ? 'text-red-400' : 'text-gray-400'}`}>
                                             ({elapsed}経過)
@@ -832,9 +832,9 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
                                           const now = new Date();
                                           const diffMs = now - d;
                                           const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-                                          if (diffDays === 0) return '今日';
-                                          if (diffDays === 1) return '昨日';
-                                          if (diffDays < 7) return `${diffDays}日前`;
+                                          if (diffDays === 0) return window.__t('sidebar_today', '今日');
+                                          if (diffDays === 1) return window.__t('sidebar_yesterday', '昨日');
+                                          if (diffDays < 7) return `${diffDays}${window.__t('sidebar_daysAgo', '日前')}`;
                                           return `${(d.getMonth() + 1)}/${d.getDate()}`;
                                         })()}
                                       </span>
@@ -842,7 +842,7 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
                                     {video.total_gmv != null && video.total_gmv > 0 && (
                                       <span className="inline-flex items-center gap-1 text-[11px] text-orange-600 font-medium leading-normal">
                                         <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
-                                        {video.total_gmv >= 10000 ? `¥${(video.total_gmv / 10000).toFixed(1)}万` : `¥${Math.round(video.total_gmv).toLocaleString()}`}
+                                        {video.total_gmv >= 10000 ? `¥${(video.total_gmv / 10000).toFixed(1)}${window.__t('tenThousand', '万')}` : `¥${Math.round(video.total_gmv).toLocaleString()}`}
                                       </span>
                                     )}
                                     {video.stream_duration != null && video.stream_duration > 0 && (

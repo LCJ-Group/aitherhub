@@ -28,12 +28,12 @@ async function clipDbFetch(path, params = {}) {
 
 // ─── English → Japanese tag label mapping ───
 const TAG_LABEL_MAP = {
-  HOOK: "フック", EMPATHY: "共感", PROBLEM: "問題提起",
-  EDUCATION: "教育", SOLUTION: "解決策", DEMONSTRATION: "実演",
-  COMPARISON: "比較", PROOF: "証拠", TRUST: "信頼",
-  SOCIAL_PROOF: "社会的証明", OBJECTION_HANDLING: "反論処理",
-  URGENCY: "緊急性", LIMITED_OFFER: "限定オファー", BONUS: "特典",
-  CTA: "行動喚起", PRICE: "価格訴求", STORY: "ストーリー",
+  HOOK: window.__t('adminDashboard_022430', 'フック'), EMPATHY: window.__t('empathy', '共感'), PROBLEM: window.__t('adminDashboard_3b0c9b', '問題提起'),
+  EDUCATION: window.__t('education', '教育'), SOLUTION: window.__t('adminDashboard_e88d65', '解決策'), DEMONSTRATION: window.__t('adminDashboard_f5b486', '実演'),
+  COMPARISON: window.__t('comparison', '比較'), PROOF: window.__t('proof', '証拠'), TRUST: window.__t('trust', '信頼'),
+  SOCIAL_PROOF: window.__t('adminDashboard_fe9111', '社会的証明'), OBJECTION_HANDLING: window.__t('objectionHandling', '反論処理'),
+  URGENCY: window.__t('adminDashboard_2ae709', '緊急性'), LIMITED_OFFER: window.__t('adminDashboard_6b429c', '限定オファー'), BONUS: window.__t('bonus', '特典'),
+  CTA: window.__t('adminDashboard_5670e9', '行動喚起'), PRICE: window.__t('adminDashboard_6049bc', '価格訴求'), STORY: window.__t('adminDashboard_cffaf2', 'ストーリー'),
 };
 function getTagLabel(tag) {
   return TAG_LABEL_MAP[tag] || tag;
@@ -41,18 +41,18 @@ function getTagLabel(tag) {
 
 // ─── Tag color mapping ───
 const TAG_COLORS = {
-  "共感": { bg: "#FEF3C7", text: "#92400E", border: "#FDE68A" },
-  "権威": { bg: "#DBEAFE", text: "#1E40AF", border: "#93C5FD" },
-  "限定性": { bg: "#FCE7F3", text: "#9D174D", border: "#F9A8D4" },
-  "実演": { bg: "#D1FAE5", text: "#065F46", border: "#6EE7B7" },
-  "比較": { bg: "#E0E7FF", text: "#3730A3", border: "#A5B4FC" },
-  "ストーリー": { bg: "#FEE2E2", text: "#991B1B", border: "#FCA5A5" },
-  "テンション": { bg: "#FFF7ED", text: "#9A3412", border: "#FDBA74" },
-  "緊急性": { bg: "#FEF9C3", text: "#854D0E", border: "#FDE047" },
-  "社会的証明": { bg: "#F0FDF4", text: "#166534", border: "#86EFAC" },
-  "価格訴求": { bg: "#ECFDF5", text: "#047857", border: "#6EE7B7" },
-  "問題提起": { bg: "#FFF1F2", text: "#9F1239", border: "#FDA4AF" },
-  "解決提示": { bg: "#F0F9FF", text: "#0C4A6E", border: "#7DD3FC" },
+  window.__t('empathy', '共感'): { bg: "#FEF3C7", text: "#92400E", border: "#FDE68A" },
+  window.__t('adminDashboard_f983c2', '権威'): { bg: "#DBEAFE", text: "#1E40AF", border: "#93C5FD" },
+  window.__t('adminDashboard_f8cd5e', '限定性'): { bg: "#FCE7F3", text: "#9D174D", border: "#F9A8D4" },
+  window.__t('adminDashboard_f5b486', '実演'): { bg: "#D1FAE5", text: "#065F46", border: "#6EE7B7" },
+  window.__t('comparison', '比較'): { bg: "#E0E7FF", text: "#3730A3", border: "#A5B4FC" },
+  window.__t('adminDashboard_cffaf2', 'ストーリー'): { bg: "#FEE2E2", text: "#991B1B", border: "#FCA5A5" },
+  window.__t('adminDashboard_1d9246', 'テンション'): { bg: "#FFF7ED", text: "#9A3412", border: "#FDBA74" },
+  window.__t('adminDashboard_2ae709', '緊急性'): { bg: "#FEF9C3", text: "#854D0E", border: "#FDE047" },
+  window.__t('adminDashboard_fe9111', '社会的証明'): { bg: "#F0FDF4", text: "#166534", border: "#86EFAC" },
+  window.__t('adminDashboard_6049bc', '価格訴求'): { bg: "#ECFDF5", text: "#047857", border: "#6EE7B7" },
+  window.__t('adminDashboard_3b0c9b', '問題提起'): { bg: "#FFF1F2", text: "#9F1239", border: "#FDA4AF" },
+  window.__t('adminDashboard_7c11e2', '解決提示'): { bg: "#F0F9FF", text: "#0C4A6E", border: "#7DD3FC" },
   // English key aliases (same colors mapped via Japanese label)
   HOOK: { bg: "#F5F3FF", text: "#6D28D9", border: "#C4B5FD" },
   EMPATHY: { bg: "#FEF3C7", text: "#92400E", border: "#FDE68A" },
@@ -85,7 +85,7 @@ function formatDuration(sec) {
 }
 function formatGMV(val) {
   if (!val) return "¥0";
-  if (val >= 10000) return `¥${(val / 10000).toFixed(1)}万`;
+  if (val >= 10000) return `¥${(val / 10000).toFixed(1)}${window.__t('tenThousand', '万')}`;
   return `¥${Math.round(val).toLocaleString()}`;
 }
 function formatDate(d) {
@@ -256,28 +256,28 @@ function StatsOverview({ stats }) {
     <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 mb-6">
       <div className="bg-white rounded-xl border border-gray-200 p-4 text-center">
         <div className="text-2xl font-bold text-gray-900">{stats.total_clips}</div>
-        <div className="text-xs text-gray-500 mt-1">総クリップ数</div>
+        <div className="text-xs text-gray-500 mt-1">{window.__t('clipDBPage_ddf417', window.__t('clipDBPage_ddf417', '総クリップ数'))}</div>
       </div>
       <div className="bg-white rounded-xl border border-green-200 p-4 text-center">
         <div className="text-2xl font-bold text-green-600">{stats.sold_clips}</div>
-        <div className="text-xs text-gray-500 mt-1">売れたクリップ</div>
+        <div className="text-xs text-gray-500 mt-1">{window.__t('clipDBPage_dd7ee8', window.__t('clipDBPage_dd7ee8', '売れたクリップ'))}</div>
       </div>
       <div className="bg-white rounded-xl border border-gray-200 p-4 text-center">
         <div className="text-2xl font-bold text-gray-400">{stats.unsold_clips}</div>
-        <div className="text-xs text-gray-500 mt-1">未売クリップ</div>
+        <div className="text-xs text-gray-500 mt-1">{window.__t('clipDBPage_13bd78', window.__t('clipDBPage_13bd78', '未売クリップ'))}</div>
       </div>
       <div className="bg-white rounded-xl border border-purple-200 p-4 text-center">
         <div className="text-2xl font-bold text-purple-600">{formatGMV(stats.total_gmv)}</div>
-        <div className="text-xs text-gray-500 mt-1">総GMV</div>
+        <div className="text-xs text-gray-500 mt-1">{window.__t('adminDashboard_076fe3', window.__t('adminDashboard_076fe3', '総GMV'))}</div>
       </div>
       <div className="bg-white rounded-xl border border-blue-200 p-4 text-center">
         <div className="text-2xl font-bold text-blue-600">{formatGMV(stats.avg_gmv)}</div>
-        <div className="text-xs text-gray-500 mt-1">平均GMV</div>
+        <div className="text-xs text-gray-500 mt-1">{window.__t('clipDBPage_6c08b5', window.__t('clipDBPage_6c08b5', '平均GMV'))}</div>
       </div>
       {stats.avg_cta_score != null && (
         <div className="bg-white rounded-xl border border-orange-200 p-4 text-center">
           <div className="text-2xl font-bold text-orange-600">{Math.round(stats.avg_cta_score)}</div>
-          <div className="text-xs text-gray-500 mt-1">平均CTA</div>
+          <div className="text-xs text-gray-500 mt-1">{window.__t('clipDBPage_9e6ffd', window.__t('clipDBPage_9e6ffd', '平均CTA'))}</div>
         </div>
       )}
     </div>
@@ -519,7 +519,7 @@ export default function ClipDBPage() {
       loadClips();
       loadStats();
     } catch (e) {
-      alert("エンリッチ失敗: " + e.message);
+      alert(window.__t('clipDBPage_9820b7', 'エンリッチ失敗: ') + e.message);
     } finally {
       setEnriching(false);
     }
@@ -563,7 +563,7 @@ export default function ClipDBPage() {
                 <button
                   onClick={() => setShowStats(!showStats)}
                   className={`p-2 rounded-lg transition ${showStats ? "bg-purple-100 text-purple-700" : "hover:bg-gray-100 text-gray-500"}`}
-                  title="統計表示"
+                  title=={window.__t('clipDBPage_201829', window.__t('clipDBPage_201829', '統計表示'))}
                 >
                   <BarChart3 className="w-4 h-4" />
                 </button>
@@ -571,7 +571,7 @@ export default function ClipDBPage() {
                   onClick={handleEnrichAll}
                   disabled={enriching}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-purple-600 text-white text-xs font-medium hover:bg-purple-700 disabled:opacity-50 transition"
-                  title="全クリップのメタデータを自動付与"
+                  title=={window.__t('clipDBPage_0aae80', window.__t('clipDBPage_0aae80', '全クリップのメタデータを自動付与'))}
                 >
                   {enriching ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
                   DB更新
@@ -613,8 +613,8 @@ export default function ClipDBPage() {
                   onKeyDown={(e) => e.key === "Enter" && handleSearch()}
                   placeholder={
                     searchMode === "semantic"
-                      ? "例: 「シャンプーの効果を実演しながら説明」"
-                      : "テキスト検索..."
+                      ? window.__t('clipDBPage_9c4dcc', '例: 「シャンプーの効果を実演しながら説明」')
+                      : window.__t('clipDBPage_31f8dd', 'テキスト検索...')
                   }
                   className="w-full pl-9 pr-4 py-2 rounded-lg border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
                 />
@@ -648,7 +648,7 @@ export default function ClipDBPage() {
                   onChange={(e) => { setSelectedTag(e.target.value); setPage(1); }}
                   className="px-3 py-1.5 rounded-lg border border-gray-300 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-purple-500"
                 >
-                  <option value="">タグ: すべて</option>
+                  <option value="">{window.__t('clipDBPage_7cbd5e', window.__t('clipDBPage_7cbd5e', 'タグ: すべて'))}</option>
                   {allTags.map((t) => (
                     <option key={t.tag} value={t.tag}>{t.tag} ({t.count})</option>
                   ))}
@@ -664,9 +664,9 @@ export default function ClipDBPage() {
                   }}
                   className="px-3 py-1.5 rounded-lg border border-gray-300 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-purple-500"
                 >
-                  <option value="">売上: すべて</option>
-                  <option value="true">売れた</option>
-                  <option value="false">売れてない</option>
+                  <option value="">{window.__t('clipDBPage_71f21d', window.__t('clipDBPage_71f21d', '売上: すべて'))}</option>
+                  <option value="true">{window.__t('adminDashboard_e6443c', window.__t('adminDashboard_e6443c', '売れた'))}</option>
+                  <option value="false">{window.__t('clipDBPage_40a96b', window.__t('clipDBPage_40a96b', '売れてない'))}</option>
                 </select>
 
                 {/* Rating filter */}
@@ -675,7 +675,7 @@ export default function ClipDBPage() {
                   onChange={(e) => { setRatingFilter(e.target.value); setPage(1); }}
                   className="px-3 py-1.5 rounded-lg border border-gray-300 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-purple-500"
                 >
-                  <option value="">評価: すべて</option>
+                  <option value="">{window.__t('clipDBPage_ebcbe0', window.__t('clipDBPage_ebcbe0', '評価: すべて'))}</option>
                   <option value="good">Good</option>
                   <option value="bad">Bad</option>
                 </select>
@@ -686,11 +686,11 @@ export default function ClipDBPage() {
                   onChange={(e) => { setSortBy(e.target.value); setPage(1); }}
                   className="px-3 py-1.5 rounded-lg border border-gray-300 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-purple-500"
                 >
-                  <option value="created_at">作成日順</option>
-                  <option value="gmv">GMV順</option>
-                  <option value="cta_score">CTAスコア順</option>
-                  <option value="importance_score">重要度順</option>
-                  <option value="duration_sec">長さ順</option>
+                  <option value="created_at">{window.__t('clipDBPage_4cc522', window.__t('clipDBPage_4cc522', '作成日順'))}</option>
+                  <option value="gmv">{window.__t('clipDBPage_00013f', window.__t('clipDBPage_00013f', 'GMV順'))}</option>
+                  <option value="cta_score">{window.__t('clipDBPage_7918da', window.__t('clipDBPage_7918da', 'CTAスコア順'))}</option>
+                  <option value="importance_score">{window.__t('clipDBPage_3e8de7', window.__t('clipDBPage_3e8de7', '重要度順'))}</option>
+                  <option value="duration_sec">{window.__t('clipDBPage_3195e4', window.__t('clipDBPage_3195e4', '長さ順'))}</option>
                 </select>
 
                 <button
@@ -707,7 +707,7 @@ export default function ClipDBPage() {
                   value={selectedProduct}
                   onChange={(e) => setSelectedProduct(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-                  placeholder="商品名..."
+                  placeholder=={window.__t('clipDBPage_ddf17d', window.__t('clipDBPage_ddf17d', '商品名...'))}
                   className="px-3 py-1.5 rounded-lg border border-gray-300 text-xs w-32 focus:outline-none focus:ring-2 focus:ring-purple-500"
                 />
 
@@ -717,7 +717,7 @@ export default function ClipDBPage() {
                   value={selectedLiver}
                   onChange={(e) => setSelectedLiver(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-                  placeholder="ライバー名..."
+                  placeholder=={window.__t('clipDBPage_7acd53', window.__t('clipDBPage_7acd53', 'ライバー名...'))}
                   className="px-3 py-1.5 rounded-lg border border-gray-300 text-xs w-32 focus:outline-none focus:ring-2 focus:ring-purple-500"
                 />
 
@@ -756,15 +756,15 @@ export default function ClipDBPage() {
           {loading ? (
             <div className="flex items-center justify-center py-20">
               <Loader2 className="w-8 h-8 animate-spin text-purple-500" />
-              <span className="ml-3 text-gray-500">検索中...</span>
+              <span className="ml-3 text-gray-500">{window.__t('clipDBPage_1e06f9', window.__t('clipDBPage_1e06f9', '検索中...'))}</span>
             </div>
           ) : clips.length === 0 ? (
             <div className="text-center py-20">
               <Database className="w-12 h-12 text-gray-300 mx-auto mb-3" />
               <p className="text-gray-500 text-sm">
                 {searchQuery || selectedTag || soldFilter !== null
-                  ? "条件に一致するクリップが見つかりませんでした"
-                  : "「検索」をクリックしてクリップを表示"}
+                  ? window.__t('clipDBPage_3cfb04', '条件に一致するクリップが見つかりませんでした')
+                  : window.__t('clipDBPage_99d2ce', '「検索」をクリックしてクリップを表示')}
               </p>
               <p className="text-gray-400 text-xs mt-1">
                 まず「DB更新」ボタンで既存クリップのメタデータを付与してください

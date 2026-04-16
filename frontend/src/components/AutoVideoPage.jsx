@@ -175,12 +175,12 @@ export default function AutoVideoPage() {
     if (!file) return;
 
     if (!file.type.startsWith("video/")) {
-      setError("動画ファイルを選択してください");
+      setError(window.__t('autoVideoPage_79a5a3', '動画ファイルを選択してください'));
       return;
     }
 
     if (file.size > 500 * 1024 * 1024) {
-      setError("ファイルサイズは500MB以下にしてください");
+      setError(window.__t('autoVideoPage_9c0081', 'ファイルサイズは500MB以下にしてください'));
       return;
     }
 
@@ -205,12 +205,12 @@ export default function AutoVideoPage() {
     if (!file) return;
 
     if (!file.type.startsWith("image/")) {
-      setError("画像ファイルを選択してください");
+      setError(window.__t('autoVideoPage_80b7f5', '画像ファイルを選択してください'));
       return;
     }
 
     if (file.size > 20 * 1024 * 1024) {
-      setError("顔画像は20MB以下にしてください");
+      setError(window.__t('autoVideoPage_22ce55', '顔画像は20MB以下にしてください'));
       return;
     }
 
@@ -226,7 +226,7 @@ export default function AutoVideoPage() {
 
     const validFiles = files.filter((f) => f.type.startsWith("image/"));
     if (validFiles.length === 0) {
-      setError("画像ファイルを選択してください");
+      setError(window.__t('autoVideoPage_80b7f5', '画像ファイルを選択してください'));
       return;
     }
 
@@ -266,25 +266,25 @@ export default function AutoVideoPage() {
       }
 
       if (!finalVideoUrl) {
-        setError("動画ファイルをアップロードするか、URLを入力してください");
+        setError(window.__t('autoVideoPage_ab8bdf', '動画ファイルをアップロードするか、URLを入力してください'));
         setIsSubmitting(false);
         return;
       }
 
       if (scriptMode === "ai" && !topic.trim()) {
-        setError("商品名またはテーマを入力してください");
+        setError(window.__t('autoVideoPage_21eaf7', '商品名またはテーマを入力してください'));
         setIsSubmitting(false);
         return;
       }
 
       if (scriptMode === "manual" && !scriptText.trim()) {
-        setError("台本を入力してください");
+        setError(window.__t('autoVideoPage_7b6666', '台本を入力してください'));
         setIsSubmitting(false);
         return;
       }
 
       if (!sourceFaceFile) {
-        setError("ソース顔画像をアップロードしてください（動画に合成する顔）");
+        setError(window.__t('autoVideoPage_33192a', 'ソース顔画像をアップロードしてください（動画に合成する顔）'));
         setIsSubmitting(false);
         return;
       }
@@ -338,7 +338,7 @@ export default function AutoVideoPage() {
       setCurrentJobId(result.job_id);
       setJobStatus({ status: "pending", step: "queued", progress: 0 });
     } catch (err) {
-      const msg = err.response?.data?.detail || err.message || "エラーが発生しました";
+      const msg = err.response?.data?.detail || err.message || window.__t('statusError', 'エラーが発生しました');
       setError(msg);
     } finally {
       setIsSubmitting(false);
@@ -378,13 +378,13 @@ export default function AutoVideoPage() {
 
   // ── Status labels (matches backend AutoVideoStatus + step values) ──
   const statusLabels = {
-    pending: "準備中...",
-    generating_script: "台本を生成中 (GPT)...",
-    face_swapping: "顔を合成中 (FaceFusion GPU)...",
-    lip_syncing: "リップシンク + 音声合成中 (Sync.so)...",
-    finalizing: "最終処理中...",
-    completed: "完了",
-    error: "エラー",
+    pending: window.__t('autoVideoPage_0114a5', '準備中...'),
+    generating_script: window.__t('autoVideoPage_56b637', '台本を生成中 (GPT)...'),
+    face_swapping: window.__t('autoVideoPage_88991c', '顔を合成中 (FaceFusion GPU)...'),
+    lip_syncing: window.__t('autoVideoPage_fad2b2', 'リップシンク + 音声合成中 (Sync.so)...'),
+    finalizing: window.__t('autoVideoPage_55320f', '最終処理中...'),
+    completed: window.__t('clip_completed', '完了'),
+    error: window.__t('sidebar_error', 'エラー'),
   };
 
   // ── Progress bar color ──
@@ -430,7 +430,7 @@ export default function AutoVideoPage() {
             <button
               onClick={checkHealth}
               className="p-2 hover:bg-gray-800 rounded-lg transition"
-              title="ヘルスチェック"
+              title=={window.__t('autoVideoPage_586a11', window.__t('autoVideoPage_586a11', 'ヘルスチェック'))}
             >
               <RefreshCw size={16} />
             </button>
@@ -447,17 +447,17 @@ export default function AutoVideoPage() {
               <div className="flex items-center gap-6 text-sm text-gray-300">
                 <div className="flex items-center gap-1.5">
                   <FileText size={14} className="text-purple-400" />
-                  <span>台本生成</span>
+                  <span>{window.__t('autoVideoPage_996fe3', window.__t('autoVideoPage_996fe3', '台本生成'))}</span>
                 </div>
                 <span className="text-gray-600">→</span>
                 <div className="flex items-center gap-1.5">
                   <Video size={14} className="text-green-400" />
-                  <span>顔合成</span>
+                  <span>{window.__t('autoVideoPage_ddd411', window.__t('autoVideoPage_ddd411', '顔合成'))}</span>
                 </div>
                 <span className="text-gray-600">→</span>
                 <div className="flex items-center gap-1.5">
                   <Mic size={14} className="text-orange-400" />
-                  <span>リップシンク + 音声</span>
+                  <span>{window.__t('autoVideoPage_69b289', window.__t('autoVideoPage_69b289', 'リップシンク + 音声'))}</span>
                 </div>
               </div>
             </div>
@@ -530,7 +530,7 @@ export default function AutoVideoPage() {
               <div className="mt-3">
                 <input
                   type="text"
-                  placeholder="または動画URLを直接入力..."
+                  placeholder=={window.__t('autoVideoPage_71df75', window.__t('autoVideoPage_71df75', 'または動画URLを直接入力...'))}
                   value={videoUrl}
                   onChange={(e) => setVideoUrl(e.target.value)}
                   className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-purple-500"
@@ -644,7 +644,7 @@ export default function AutoVideoPage() {
                     </label>
                     <input
                       type="text"
-                      placeholder="例: KYOGOKUカラーシャンプー、春のヘアケアおすすめ"
+                      placeholder=={window.__t('autoVideoPage_b7343f', window.__t('autoVideoPage_b7343f', '例: KYOGOKUカラーシャンプー、春のヘアケアおすすめ'))}
                       value={topic}
                       onChange={(e) => setTopic(e.target.value)}
                       className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2.5 focus:outline-none focus:border-purple-500"
@@ -688,7 +688,7 @@ export default function AutoVideoPage() {
                       >
                         <ImageIcon size={16} />
                         {productImages.length === 0
-                          ? "商品写真をアップロード"
+                          ? window.__t('autoVideoPage_dba7ee', '商品写真をアップロード')
                           : `さらに追加（${productImages.length}/5）`}
                       </button>
                     )}
@@ -777,7 +777,7 @@ export default function AutoVideoPage() {
                       onChange={(e) => setSelectedVoiceId(e.target.value)}
                       className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2.5 focus:outline-none focus:border-green-500"
                     >
-                      <option value="">デフォルト音声</option>
+                      <option value="">{window.__t('autoVideoPage_fb9e16', window.__t('autoVideoPage_fb9e16', 'デフォルト音声'))}</option>
                       {voices.map((v) => (
                         <option key={v.voice_id || v.id} value={v.voice_id || v.id}>
                           {v.name} {v.labels?.accent ? `(${v.labels.accent})` : ""}
@@ -797,16 +797,16 @@ export default function AutoVideoPage() {
                     onChange={(e) => setQuality(e.target.value)}
                     className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2.5 focus:outline-none focus:border-green-500"
                   >
-                    <option value="fast">Standard（プレビュー・高速）</option>
-                    <option value="pro">Pro（高品質・推奨）</option>
-                    <option value="cinema">Cinema（最高品質・時間がかかります）</option>
+                    <option value="fast">{window.__t('autoVideoPage_36b102', window.__t('autoVideoPage_36b102', 'Standard（プレビュー・高速）'))}</option>
+                    <option value="pro">{window.__t('autoVideoPage_1b41cf', window.__t('autoVideoPage_1b41cf', 'Pro（高品質・推奨）'))}</option>
+                    <option value="cinema">{window.__t('autoVideoPage_55278b', window.__t('autoVideoPage_55278b', 'Cinema（最高品質・時間がかかります）'))}</option>
                   </select>
                 </div>
 
                 {/* Lip sync toggle */}
                 <div className="flex items-center justify-between md:col-span-2 bg-gray-800/50 rounded-lg px-4 py-3">
                   <div>
-                    <p className="text-sm font-medium">リップシンク</p>
+                    <p className="text-sm font-medium">{window.__t('aiLiveCreatorPage_c8ac37', window.__t('aiLiveCreatorPage_c8ac37', 'リップシンク'))}</p>
                     <p className="text-xs text-gray-500">
                       音声に合わせて口の動きを同期（Sync.so + ElevenLabs TTS）
                     </p>
@@ -838,27 +838,27 @@ export default function AutoVideoPage() {
               {showAdvanced && (
                 <div className="mt-3 grid grid-cols-2 gap-3 p-3 bg-gray-800/30 rounded-lg border border-gray-700/50">
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1">言語</label>
+                    <label className="block text-xs text-gray-500 mb-1">{window.__t('script_language', window.__t('script_language', '言語'))}</label>
                     <select
                       value={language}
                       onChange={(e) => setLanguage(e.target.value)}
                       className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm focus:outline-none"
                     >
-                      <option value="ja">日本語</option>
+                      <option value="ja">{window.__t('language_japanese', window.__t('language_japanese', '日本語'))}</option>
                       <option value="en">English</option>
-                      <option value="zh">中文</option>
+                      <option value="zh">{window.__t('scriptGen_langZh', window.__t('scriptGen_langZh', '中文'))}</option>
                     </select>
                   </div>
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1">トーン</label>
+                    <label className="block text-xs text-gray-500 mb-1">{window.__t('scriptGen_toneLabel', window.__t('scriptGen_toneLabel', 'トーン'))}</label>
                     <select
                       value={tone}
                       onChange={(e) => setTone(e.target.value)}
                       className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm focus:outline-none"
                     >
-                      <option value="professional_friendly">プロフェッショナル</option>
-                      <option value="energetic">エネルギッシュ</option>
-                      <option value="calm">落ち着いた</option>
+                      <option value="professional_friendly">{window.__t('autoVideoPage_faaee7', window.__t('autoVideoPage_faaee7', 'プロフェッショナル'))}</option>
+                      <option value="energetic">{window.__t('autoVideoPage_3f558c', window.__t('autoVideoPage_3f558c', 'エネルギッシュ'))}</option>
+                      <option value="calm">{window.__t('autoVideoPage_561ecb', window.__t('autoVideoPage_561ecb', '落ち着いた'))}</option>
                     </select>
                   </div>
                 </div>
@@ -906,7 +906,7 @@ export default function AutoVideoPage() {
                     )}
                     {jobStatus?.step_detail && jobStatus?.status !== "completed" && jobStatus?.status !== "error"
                       ? jobStatus.step_detail
-                      : statusLabels[jobStatus?.status] || jobStatus?.step || "処理中..."}
+                      : statusLabels[jobStatus?.status] || jobStatus?.step || window.__t('statusProcessing', '処理中...')}
                   </h3>
                   <span className="text-sm text-gray-400">
                     {jobStatus?.progress || 0}%
@@ -953,7 +953,7 @@ export default function AutoVideoPage() {
                                 : "bg-gray-800 text-gray-600"
                             }`}
                           >
-                            {["台本", "顔合成", "リップシンク + 音声"][i]}
+                            {[window.__t('autoVideoPage_4b8c58', '台本'), window.__t('autoVideoPage_ddd411', '顔合成'), window.__t('autoVideoPage_69b289', 'リップシンク + 音声')][i]}
                           </span>
                         </div>
                       );
@@ -964,7 +964,7 @@ export default function AutoVideoPage() {
                 {/* Generated script preview */}
                 {jobStatus?.generated_script && (
                   <div className="bg-gray-800/50 rounded-lg p-3 mb-3">
-                    <p className="text-xs text-gray-500 mb-1">生成された台本:</p>
+                    <p className="text-xs text-gray-500 mb-1">{window.__t('autoVideoPage_4869f1', window.__t('autoVideoPage_4869f1', '生成された台本:'))}</p>
                     <p className="text-sm text-gray-300 line-clamp-3">
                       {jobStatus.generated_script}
                     </p>
@@ -1019,7 +1019,7 @@ export default function AutoVideoPage() {
           <div className="space-y-4">
             <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
               <div className="flex items-center justify-between mb-3">
-                <h3 className="font-semibold text-sm">生成履歴</h3>
+                <h3 className="font-semibold text-sm">{window.__t('autoVideoPage_0c10ff', window.__t('autoVideoPage_0c10ff', '生成履歴'))}</h3>
                 <button
                   onClick={loadJobs}
                   className="p-1.5 hover:bg-gray-800 rounded transition"
@@ -1064,9 +1064,9 @@ export default function AutoVideoPage() {
                           }`}
                         >
                           {job.status === "completed"
-                            ? "完了"
+                            ? window.__t('clip_completed', '完了')
                             : job.status === "failed" || job.status === "error"
-                            ? "失敗"
+                            ? window.__t('clip_failed', '失敗')
                             : `${job.progress}%`}
                         </span>
                       </div>
@@ -1094,7 +1094,7 @@ export default function AutoVideoPage() {
                               href={autoVideoService.getDownloadUrl(job.job_id)}
                               onClick={(e) => e.stopPropagation()}
                               className="p-1 hover:bg-gray-700 rounded transition"
-                              title="ダウンロード"
+                              title=={window.__t('clip_download', window.__t('clip_download', 'ダウンロード'))}
                             >
                               <Download size={12} className="text-green-400" />
                             </a>
@@ -1105,7 +1105,7 @@ export default function AutoVideoPage() {
                               handleDeleteJob(job.job_id);
                             }}
                             className="p-1 hover:bg-gray-700 rounded transition"
-                            title="削除"
+                            title=={window.__t('sidebar_delete', window.__t('sidebar_delete', '削除'))}
                           >
                             <Trash2 size={12} className="text-gray-500" />
                           </button>

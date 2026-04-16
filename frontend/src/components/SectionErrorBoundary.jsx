@@ -61,8 +61,8 @@ export default class SectionErrorBoundary extends React.Component {
       }
 
       // デフォルトfallback UI - コンポーネントクラッシュ用
-      const sectionName = this.props.sectionName || "このセクション";
-      const errorMessage = this.state.error?.message || "予期しないエラーが発生しました";
+      const sectionName = this.props.sectionName || window.__t('sectionErrorBoundary_82709e', 'このセクション');
+      const errorMessage = this.state.error?.message || window.__t('sectionErrorBoundary_3a6e68', '予期しないエラーが発生しました');
 
       return (
         <div className="w-full my-2 mx-auto">

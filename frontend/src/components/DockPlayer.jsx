@@ -12,32 +12,32 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 
 // ── Phase Behavior Tag Config (常時展開・1タップ選択・即保存) ──────
 const PHASE_TAG_CONFIG = {
-  HOOK: { label: "つかみ", color: "bg-purple-100 text-purple-700 border-purple-300" },
-  CHAT: { label: "雑談", color: "bg-pink-100 text-pink-700 border-pink-300" },
-  PREP: { label: "準備", color: "bg-blue-100 text-blue-700 border-blue-300" },
-  PHONE_OP: { label: "スマホ操作", color: "bg-cyan-100 text-cyan-700 border-cyan-300" },
-  LONG_GREET: { label: "挨拶長い", color: "bg-amber-100 text-amber-700 border-amber-300" },
-  COMMENT_READ: { label: "コメント読み", color: "bg-green-100 text-green-700 border-green-300" },
-  SILENCE: { label: "沈黙", color: "bg-gray-100 text-gray-700 border-gray-300" },
-  PRICE_SHOW: { label: "価格提示", color: "bg-red-100 text-red-700 border-red-300" },
+  HOOK: { label: window.__t('dockPlayer_595696', 'つかみ'), color: "bg-purple-100 text-purple-700 border-purple-300" },
+  CHAT: { label: window.__t('dockPlayer_f40f8e', '雑談'), color: "bg-pink-100 text-pink-700 border-pink-300" },
+  PREP: { label: window.__t('dockPlayer_8985c9', '準備'), color: "bg-blue-100 text-blue-700 border-blue-300" },
+  PHONE_OP: { label: window.__t('dockPlayer_32147c', 'スマホ操作'), color: "bg-cyan-100 text-cyan-700 border-cyan-300" },
+  LONG_GREET: { label: window.__t('dockPlayer_c3c7a0', '挨拶長い'), color: "bg-amber-100 text-amber-700 border-amber-300" },
+  COMMENT_READ: { label: window.__t('dockPlayer_dac3d5', 'コメント読み'), color: "bg-green-100 text-green-700 border-green-300" },
+  SILENCE: { label: window.__t('dockPlayer_063bd9', '沈黙'), color: "bg-gray-100 text-gray-700 border-gray-300" },
+  PRICE_SHOW: { label: window.__t('priceMention', '価格提示'), color: "bg-red-100 text-red-700 border-red-300" },
 };
 
 // Sales Psychology Tag Config (常時展開・1タップ選択・即保存)
 const SALES_TAG_CONFIG = {
   HOOK: { label: "HOOK", color: "bg-purple-100 text-purple-700 border-purple-300" },
-  EMPATHY: { label: "共感", color: "bg-pink-100 text-pink-700 border-pink-300" },
-  PROBLEM: { label: "問題", color: "bg-red-50 text-red-600 border-red-200" },
-  EDUCATION: { label: "教育", color: "bg-blue-100 text-blue-700 border-blue-300" },
-  SOLUTION: { label: "解決", color: "bg-green-100 text-green-700 border-green-300" },
-  DEMONSTRATION: { label: "デモ", color: "bg-teal-100 text-teal-700 border-teal-300" },
-  COMPARISON: { label: "比較", color: "bg-indigo-100 text-indigo-700 border-indigo-300" },
-  PROOF: { label: "証拠", color: "bg-cyan-100 text-cyan-700 border-cyan-300" },
-  TRUST: { label: "信頼", color: "bg-emerald-100 text-emerald-700 border-emerald-300" },
-  SOCIAL_PROOF: { label: "社会証明", color: "bg-violet-100 text-violet-700 border-violet-300" },
-  OBJECTION_HANDLING: { label: "反論処理", color: "bg-amber-100 text-amber-700 border-amber-300" },
-  URGENCY: { label: "緊急", color: "bg-orange-100 text-orange-700 border-orange-300" },
-  LIMITED_OFFER: { label: "限定", color: "bg-rose-100 text-rose-700 border-rose-300" },
-  BONUS: { label: "特典", color: "bg-lime-100 text-lime-700 border-lime-300" },
+  EMPATHY: { label: window.__t('empathy', '共感'), color: "bg-pink-100 text-pink-700 border-pink-300" },
+  PROBLEM: { label: window.__t('problem', '問題'), color: "bg-red-50 text-red-600 border-red-200" },
+  EDUCATION: { label: window.__t('education', '教育'), color: "bg-blue-100 text-blue-700 border-blue-300" },
+  SOLUTION: { label: window.__t('solution', '解決'), color: "bg-green-100 text-green-700 border-green-300" },
+  DEMONSTRATION: { label: window.__t('demonstration', 'デモ'), color: "bg-teal-100 text-teal-700 border-teal-300" },
+  COMPARISON: { label: window.__t('comparison', '比較'), color: "bg-indigo-100 text-indigo-700 border-indigo-300" },
+  PROOF: { label: window.__t('proof', '証拠'), color: "bg-cyan-100 text-cyan-700 border-cyan-300" },
+  TRUST: { label: window.__t('trust', '信頼'), color: "bg-emerald-100 text-emerald-700 border-emerald-300" },
+  SOCIAL_PROOF: { label: window.__t('socialProof', '社会証明'), color: "bg-violet-100 text-violet-700 border-violet-300" },
+  OBJECTION_HANDLING: { label: window.__t('objectionHandling', '反論処理'), color: "bg-amber-100 text-amber-700 border-amber-300" },
+  URGENCY: { label: window.__t('urgency', '緊急'), color: "bg-orange-100 text-orange-700 border-orange-300" },
+  LIMITED_OFFER: { label: window.__t('limitedOffer', '限定'), color: "bg-rose-100 text-rose-700 border-rose-300" },
+  BONUS: { label: window.__t('bonus', '特典'), color: "bg-lime-100 text-lime-700 border-lime-300" },
   CTA: { label: "CTA", color: "bg-red-100 text-red-700 border-red-300" },
 };
 
@@ -713,10 +713,10 @@ export default function DockPlayer({
           await onTagConfirm(pk, newTags);
         }
         setPhaseTagsSaved(prev => ({ ...prev, [pk]: true }));
-        showDockToast('保存しました');
+        showDockToast(window.__t('auto_329', '保存しました'));
       } catch (e) {
         console.error('Failed to auto-save tags:', e);
-        showDockToast('保存に失敗しました', 'error');
+        showDockToast(window.__t('saveFailed', '保存に失敗しました'), 'error');
       } finally {
         setPhaseTagsSaving(prev => ({ ...prev, [pk]: false }));
       }
@@ -804,7 +804,7 @@ export default function DockPlayer({
             <div className="text-xs text-white/80 truncate">
               {currentPhase
                 ? `${formatTime(currentPhase.time_start)} – ${formatTime(currentPhase.time_end)}`
-                : "再生中..."}
+                : window.__t('dockPlayer_8ee747', '再生中...')}
             </div>
           </div>
           <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/10 text-white/70">{playbackRate}x</span>
@@ -846,7 +846,7 @@ export default function DockPlayer({
           <button
             onClick={() => setIsMinimized(true)}
             className="p-1.5 rounded-lg hover:bg-white/10 transition-colors"
-            title="最小化"
+            title=={window.__t('dockPlayer_a7d846', window.__t('dockPlayer_a7d846', '最小化'))}
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <polyline points="6 9 12 15 18 9" />
@@ -863,7 +863,7 @@ export default function DockPlayer({
             onClick={(e) => { e.stopPropagation(); e.preventDefault(); onClose?.(); }}
             className="flex items-center justify-center rounded-lg hover:bg-white/10 transition-colors"
             style={{ position: 'relative', zIndex: 9999, width: 44, height: 44, minWidth: 44, pointerEvents: 'auto' }}
-            title="閉じる (Esc)"
+            title=={window.__t('dockPlayer_9299b2', window.__t('dockPlayer_9299b2', '閉じる (Esc)'))}
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
@@ -981,7 +981,7 @@ export default function DockPlayer({
                 <div className="absolute inset-0 bg-black/60 flex items-center justify-center">
                   <div className="flex flex-col items-center gap-2">
                     <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white" />
-                    <p className="text-white/70 text-xs">動画を準備中...</p>
+                    <p className="text-white/70 text-xs">{window.__t('auto_332', window.__t('auto_332', '動画を準備中...'))}</p>
                   </div>
                 </div>
               )}
@@ -1174,25 +1174,25 @@ export default function DockPlayer({
               <div className="grid grid-cols-2 xl:grid-cols-4 gap-2">
                 {csv.gmv > 0 && (
                   <div className="rounded-xl bg-yellow-500/10 border border-yellow-500/20 px-4 py-3">
-                    <div className="text-[10px] text-yellow-400/70 mb-0.5">売上</div>
+                    <div className="text-[10px] text-yellow-400/70 mb-0.5">{window.__t('live_sales', window.__t('live_sales', '売上'))}</div>
                     <div className="text-base font-bold text-yellow-300">{"\u00A5"}{Math.round(csv.gmv).toLocaleString()}</div>
                   </div>
                 )}
                 {csv.order_count > 0 && (
                   <div className="rounded-xl bg-green-500/10 border border-green-500/20 px-4 py-3">
-                    <div className="text-[10px] text-green-400/70 mb-0.5">注文</div>
+                    <div className="text-[10px] text-green-400/70 mb-0.5">{window.__t('scriptGen_order', window.__t('scriptGen_order', '注文'))}</div>
                     <div className="text-base font-bold text-green-300">{csv.order_count}件</div>
                   </div>
                 )}
                 {csv.viewer_count > 0 && (
                   <div className="rounded-xl bg-blue-500/10 border border-blue-500/20 px-4 py-3">
-                    <div className="text-[10px] text-blue-400/70 mb-0.5">視聴者</div>
+                    <div className="text-[10px] text-blue-400/70 mb-0.5">{window.__t('live_viewers', window.__t('live_viewers', '視聴者'))}</div>
                     <div className="text-base font-bold text-blue-300">{csv.viewer_count.toLocaleString()}</div>
                   </div>
                 )}
                 {csv.like_count > 0 && (
                   <div className="rounded-xl bg-pink-500/10 border border-pink-500/20 px-4 py-3">
-                    <div className="text-[10px] text-pink-400/70 mb-0.5">いいね</div>
+                    <div className="text-[10px] text-pink-400/70 mb-0.5">{window.__t('live_likes', window.__t('live_likes', 'いいね'))}</div>
                     <div className="text-base font-bold text-pink-300">{csv.like_count.toLocaleString()}</div>
                   </div>
                 )}
@@ -1259,12 +1259,12 @@ export default function DockPlayer({
                {/* ── Product Exposures (from timeline) ────────── */}
             {phaseProducts.length > 0 ? (
               <div>
-                <div className="text-[11px] text-white/40 mb-1.5 font-medium">商品露出</div>
+                <div className="text-[11px] text-white/40 mb-1.5 font-medium">{window.__t('dockPlayer_cedb46', window.__t('dockPlayer_cedb46', '商品露出'))}</div>
                 <div className="flex flex-col gap-1.5">
                   {phaseProducts.slice(0, 5).map((prod, idx) => {
                     const mins = Math.floor(prod.duration / 60);
                     const secs = Math.floor(prod.duration % 60);
-                    const durStr = mins > 0 ? `${mins}分${secs}秒` : `${secs}秒`;
+                    const durStr = mins > 0 ? `${mins}${window.__t('common_minutes', '分')}${secs}${window.__t('common_seconds', '秒')}` : `${secs}${window.__t('common_seconds', '秒')}`;
                     return (
                       <div key={idx} className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-indigo-500/10 border border-indigo-500/20">
                         <span className="text-[11px] font-medium text-indigo-300 truncate flex-1">{prod.name}</span>
@@ -1279,7 +1279,7 @@ export default function DockPlayer({
               </div>
             ) : productNames.length > 0 ? (
               <div>
-                <div className="text-[11px] text-white/40 mb-1.5 font-medium">商品</div>
+                <div className="text-[11px] text-white/40 mb-1.5 font-medium">{window.__t('csv_product', window.__t('csv_product', '商品'))}</div>
                 <div className="flex flex-wrap gap-1.5">
                   {productNames.slice(0, 3).map((name, idx) => (
                     <span key={idx} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium bg-indigo-500/15 text-indigo-300 border border-indigo-500/25">
@@ -1296,7 +1296,7 @@ export default function DockPlayer({
             {/* ── AI Summary ───────────────────────────────── */}
             {phaseDesc && (
               <div>
-                <div className="text-[11px] text-white/40 mb-1.5 font-medium">AI要約</div>
+                <div className="text-[11px] text-white/40 mb-1.5 font-medium">{window.__t('clipEditorV2_bb6169', window.__t('clipEditorV2_bb6169', 'AI要約'))}</div>
                 <p className="text-sm text-white/75 leading-relaxed">{phaseDesc}</p>
               </div>
             )}
@@ -1362,7 +1362,7 @@ export default function DockPlayer({
                     <div className="grid grid-cols-2 gap-2 mb-3">
                       {clickScore != null && (
                         <div className="bg-white/5 rounded-lg p-2">
-                          <div className="text-[9px] text-blue-400/60 mb-0.5">Click興味</div>
+                          <div className="text-[9px] text-blue-400/60 mb-0.5">{window.__t('dockPlayer_d03339', window.__t('dockPlayer_d03339', 'Click興味'))}</div>
                           <div className="flex items-center gap-1.5">
                             <span className="text-sm font-bold text-blue-300">{Math.round(clickScore * 100)}%</span>
                             <div className="flex-1 h-1 rounded-full bg-white/10 overflow-hidden">
@@ -1373,7 +1373,7 @@ export default function DockPlayer({
                       )}
                       {orderScore != null && (
                         <div className="bg-white/5 rounded-lg p-2">
-                          <div className="text-[9px] text-green-400/60 mb-0.5">Order決断</div>
+                          <div className="text-[9px] text-green-400/60 mb-0.5">{window.__t('dockPlayer_0ee4b3', window.__t('dockPlayer_0ee4b3', 'Order決断'))}</div>
                           <div className="flex items-center gap-1.5">
                             <span className="text-sm font-bold text-green-300">{Math.round(orderScore * 100)}%</span>
                             <div className="flex-1 h-1 rounded-full bg-white/10 overflow-hidden">
@@ -1397,7 +1397,7 @@ export default function DockPlayer({
                   )}
                   <div className="flex items-center justify-between text-[10px] text-white/35">
                     <span>ランク: {rank} / {total}フェーズ</span>
-                    {isHot && <span className="text-orange-400 font-semibold">売れやすい瞬間</span>}
+                    {isHot && <span className="text-orange-400 font-semibold">{window.__t('dockPlayer_883375', window.__t('dockPlayer_883375', '売れやすい瞬間'))}</span>}
                   </div>
                 </div>
               );
@@ -1423,7 +1423,7 @@ export default function DockPlayer({
                             setIsEditingReviewer(false);
                           }
                         }}
-                        placeholder="あなたの名前を入力"
+                        placeholder=={window.__t('dockPlayer_f1868b', window.__t('dockPlayer_f1868b', 'あなたの名前を入力'))}
                         autoFocus
                         className="flex-1 bg-white/5 border border-white/15 rounded-lg px-2.5 py-1.5 text-xs text-white/80 placeholder-white/25 focus:outline-none focus:border-white/30 focus:ring-1 focus:ring-white/20"
                       />
@@ -1459,7 +1459,7 @@ export default function DockPlayer({
             {/* ── Star Rating (inline in panel) ─────────────── */}
             {phaseKey >= 0 && (
               <div className="rounded-xl bg-white/5 border border-white/10 p-4">
-                <div className="text-[11px] text-white/40 mb-2 font-medium">この区間を採点</div>
+                <div className="text-[11px] text-white/40 mb-2 font-medium">{window.__t('dockPlayer_e7fe79', window.__t('dockPlayer_e7fe79', 'この区間を採点'))}</div>
                 <div className="flex items-center gap-2">
                   <div className="flex items-center gap-1">
                     {[1, 2, 3, 4, 5].map((star) => (
@@ -1468,7 +1468,7 @@ export default function DockPlayer({
                         onClick={() => {
                           if (!isSavingRating && onRatePhase && phaseKey >= 0) {
                             onRatePhase(phaseKey, star);
-                            showDockToast('保存しました');
+                            showDockToast(window.__t('auto_329', '保存しました'));
                           }
                         }}
                         disabled={isSavingRating || phaseKey < 0}
@@ -1477,7 +1477,7 @@ export default function DockPlayer({
                             ? "opacity-30 cursor-not-allowed"
                             : "hover:scale-125 cursor-pointer"
                         }`}
-                        title={`${star}点`}
+                        title={`${star}${window.__t('pointSuffix', '点')}`}
                       >
                         <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
                           fill={star <= currentRating ? "#f59e0b" : "none"}
@@ -1493,10 +1493,10 @@ export default function DockPlayer({
                     <div className="w-4 h-4 rounded-full border-2 border-gray-500 border-t-amber-500 animate-spin" />
                   )}
                   {phaseRatings[phaseKey]?.saved && !isSavingRating && (
-                    <span className="text-xs text-green-400 font-medium">保存済</span>
+                    <span className="text-xs text-green-400 font-medium">{window.__t('dockPlayer_832eed', window.__t('dockPlayer_832eed', '保存済'))}</span>
                   )}
                   {!currentRating && (
-                    <span className="text-xs text-white/30">タップで採点</span>
+                    <span className="text-xs text-white/30">{window.__t('dockPlayer_c5ebb8', window.__t('dockPlayer_c5ebb8', 'タップで採点'))}</span>
                   )}
                 </div>
               </div>
@@ -1520,16 +1520,16 @@ export default function DockPlayer({
                       if (e.key === 'Enter' && ratingComments[phaseKey]?.trim()) {
                         e.preventDefault();
                         onSaveComment?.(phaseKey);
-                        showDockToast('保存しました');
+                        showDockToast(window.__t('auto_329', '保存しました'));
                       }
                     }}
-                    placeholder="この区間へのメモ（任意）"
+                    placeholder=={window.__t('dockPlayer_7dc32d', window.__t('dockPlayer_7dc32d', 'この区間へのメモ（任意）'))}
                     className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 placeholder-white/25 focus:outline-none focus:border-white/30 focus:ring-1 focus:ring-white/20 transition-colors"
                   />
                   <button
                     onClick={() => {
                       onSaveComment?.(phaseKey);
-                      if (ratingComments[phaseKey]?.trim()) showDockToast('保存しました');
+                      if (ratingComments[phaseKey]?.trim()) showDockToast(window.__t('auto_329', '保存しました'));
                     }}
                     disabled={!ratingComments[phaseKey]?.trim()}
                     className="px-3 py-2 rounded-lg text-xs font-medium bg-white/10 text-white/70 hover:bg-white/20 transition-colors disabled:opacity-30 disabled:cursor-not-allowed flex-shrink-0"
@@ -1562,7 +1562,7 @@ export default function DockPlayer({
 
                 {/* ── 行動タグ (Behavior Tags) ──────────────── */}
                 <div className="mb-3">
-                  <div className="text-[10px] text-white/25 mb-1.5 uppercase tracking-wider">行動</div>
+                  <div className="text-[10px] text-white/25 mb-1.5 uppercase tracking-wider">{window.__t('dockPlayer_5d50fb', window.__t('dockPlayer_5d50fb', '行動'))}</div>
                   <div className="flex flex-wrap gap-1.5">
                     {ALL_PHASE_TAGS.map((tag) => {
                       const cfg = PHASE_TAG_CONFIG[tag] || { label: tag };
@@ -1592,7 +1592,7 @@ export default function DockPlayer({
 
                 {/* ── 販売心理タグ (Sales Psychology Tags) ──── */}
                 <div>
-                  <div className="text-[10px] text-white/25 mb-1.5 uppercase tracking-wider">販売心理</div>
+                  <div className="text-[10px] text-white/25 mb-1.5 uppercase tracking-wider">{window.__t('dockPlayer_eb6b2c', window.__t('dockPlayer_eb6b2c', '販売心理'))}</div>
                   <div className="flex flex-wrap gap-1.5">
                     {ALL_SALES_TAGS.map((tag) => {
                       const cfg = SALES_TAG_CONFIG[tag] || { label: tag };
@@ -1649,7 +1649,7 @@ export default function DockPlayer({
                     return (
                       <div className="flex flex-col gap-1 min-w-[140px]">
                         <div className="flex items-center justify-between">
-                          <span className="text-xs text-purple-300">字幕生成中...</span>
+                          <span className="text-xs text-purple-300">{window.__t('dockPlayer_e826b5', window.__t('dockPlayer_e826b5', '字幕生成中...'))}</span>
                           <span className="text-xs text-purple-400 font-bold">95%</span>
                         </div>
                         <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
@@ -1675,7 +1675,7 @@ export default function DockPlayer({
                           </svg>
                           ダウンロード
                         </a>
-                        <span className="text-[10px] text-green-400">生成完了</span>
+                        <span className="text-[10px] text-green-400">{window.__t('dockPlayer_477a4e', window.__t('dockPlayer_477a4e', '生成完了'))}</span>
                       </div>
                     );
                   }
@@ -1684,17 +1684,17 @@ export default function DockPlayer({
                     const pct = clipState?.progress_pct || 0;
                     const step = clipState?.progress_step || '';
                     const stepLabels = {
-                      downloading: '取得中',
-                      speech_boundary: '音声検出',
-                      cutting: 'カット中',
-                      person_detection: '人物検出',
-                      silence_removal: '無音除去',
-                      transcribing: '文字起こし',
-                      refining_subtitles: '字幕最適化',
-                      creating_clip: '動画作成',
-                      uploading: 'アップロード',
+                      downloading: window.__t('momentClips_downloading', '取得中'),
+                      speech_boundary: window.__t('momentClips_speechBoundary', '音声検出'),
+                      cutting: window.__t('momentClips_cutting', 'カット中'),
+                      person_detection: window.__t('momentClips_personDetection', '人物検出'),
+                      silence_removal: window.__t('momentClips_silenceRemoval', '無音除去'),
+                      transcribing: window.__t('momentClips_transcribing', '文字起こし'),
+                      refining_subtitles: window.__t('momentClips_refiningSubtitles', '字幕最適化'),
+                      creating_clip: window.__t('momentClips_creatingClip', '動画作成'),
+                      uploading: window.__t('uploadButton', 'アップロード'),
                     };
-                    const label = stepLabels[step] || '生成中';
+                    const label = stepLabels[step] || window.__t('momentClips_generating', '生成中');
                     return (
                       <div className="flex flex-col gap-1 min-w-[140px]">
                         <div className="flex items-center justify-between">
@@ -1727,7 +1727,7 @@ export default function DockPlayer({
                         {formatTime(currentPhase.time_start)} – {formatTime(currentPhase.time_end)} の区間を切り抜き動画として生成
                       </div>
                       {isClipFailed && (
-                        <div className="text-[10px] text-red-400">生成に失敗しました。再度お試しください。</div>
+                        <div className="text-[10px] text-red-400">{window.__t('dockPlayer_ce3280', window.__t('dockPlayer_ce3280', '生成に失敗しました。再度お試しください。'))}</div>
                       )}
                     </div>
                   );
@@ -1741,7 +1741,7 @@ export default function DockPlayer({
                 <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                   <polygon points="5 3 19 12 5 21 5 3" />
                 </svg>
-                <span className="text-sm">動画を再生すると区間データが表示されます</span>
+                <span className="text-sm">{window.__t('dockPlayer_4b25a5', window.__t('dockPlayer_4b25a5', '動画を再生すると区間データが表示されます'))}</span>
               </div>
             )}
           </div>
@@ -1796,7 +1796,7 @@ export default function DockPlayer({
             <div className="flex items-center gap-1.5">
               <div
                 className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[10px] font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/30"
-                title="Phase Lock: フェーズロック再生（自動ループ）"
+                title=={window.__t('dockPlayer_be0844', window.__t('dockPlayer_be0844', 'Phase Lock: フェーズロック再生（自動ループ）'))}
               >
                 <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M17 1l4 4-4 4" /><path d="M3 11V9a4 4 0 0 1 4-4h14" /><path d="M7 23l-4-4 4-4" /><path d="M21 13v2a4 4 0 0 1-4 4H3" />

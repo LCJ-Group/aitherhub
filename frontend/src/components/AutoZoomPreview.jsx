@@ -129,9 +129,9 @@ export default function AutoZoomPreview({ autoZoomData = [], videoData, onApplyZ
             {/* ターゲット選択 */}
             <div className="flex gap-2 mb-4">
               {[
-                { key: "face", label: "🎯 顔にズーム", desc: "配信者の顔を中心に" },
-                { key: "product", label: "📦 商品にズーム", desc: "商品を中心に" },
-                { key: "auto", label: "✨ 自動選択", desc: "AIが最適な対象を選択" },
+                { key: "face", label: window.__t('auto_357', '🎯 顔にズーム'), desc: window.__t('auto_353', '配信者の顔を中心に') },
+                { key: "product", label: window.__t('auto_361', '📦 商品にズーム'), desc: window.__t('auto_333', '商品を中心に') },
+                { key: "auto", label: window.__t('auto_306', '✨ 自動選択'), desc: window.__t('auto_300', 'AIが最適な対象を選択') },
               ].map((opt) => (
                 <button
                   key={opt.key}

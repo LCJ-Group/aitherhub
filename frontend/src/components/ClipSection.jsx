@@ -265,7 +265,7 @@ export default function ClipSection({ videoData, clipStates, reports1, editorPar
         }
 
         // Poll for completion
-        setAutoGenerateStatus('クリップを生成中... (0%)');
+        setAutoGenerateStatus(window.__t('clipSection_84e712', 'クリップを生成中... (0%)'));
         const pollId = setInterval(async () => {
           try {
             const statusRes = await VideoService.getClipStatus(videoData.id, phaseIdx);
@@ -285,7 +285,7 @@ export default function ClipSection({ videoData, clipStates, reports1, editorPar
               clearInterval(pollId);
               autoGenPollingRef.current = null;
               setAutoGenerating(false);
-              setAutoGenerateStatus('クリップ生成に失敗しました');
+              setAutoGenerateStatus(window.__t('clipSection_f80a03', 'クリップ生成に失敗しました'));
             } else {
               const pct = statusRes.progress_pct || 0;
               const step = statusRes.progress_step || '';
@@ -299,7 +299,7 @@ export default function ClipSection({ videoData, clipStates, reports1, editorPar
       } catch (e) {
         console.error('[ClipSection] Auto-generate failed:', e);
         setAutoGenerating(false);
-        setAutoGenerateStatus('クリップ生成リクエストに失敗しました');
+        setAutoGenerateStatus(window.__t('clipSection_c34c5d', 'クリップ生成リクエストに失敗しました'));
       }
     })();
 
@@ -330,8 +330,8 @@ export default function ClipSection({ videoData, clipStates, reports1, editorPar
     if (dur <= 0) return "";
     const m = Math.floor(dur / 60);
     const s = dur % 60;
-    if (m > 0) return `${m}分${s}秒`;
-    return `${s}秒`;
+    if (m > 0) return `${m}${window.__t('common_minutes', '分')}${s}${window.__t('common_seconds', '秒')}`;
+    return `${s}${window.__t('common_seconds', '秒')}`;
   };
 
   const handleOpenEditor = (clip) => {
@@ -351,7 +351,7 @@ export default function ClipSection({ videoData, clipStates, reports1, editorPar
     "Moment": "from-purple-500 to-pink-500",
     "Sales Spike": "from-orange-500 to-red-500",
     "Hook": "from-red-500 to-rose-500",
-    "AI推薦": "from-amber-500 to-orange-500",
+    window.__t('clipSectionAiRecommend', 'AI推薦'): "from-amber-500 to-orange-500",
   };
 
   return (
@@ -461,10 +461,10 @@ export default function ClipSection({ videoData, clipStates, reports1, editorPar
                         if (typeof tags === 'string') { try { tags = JSON.parse(tags); } catch { tags = []; } }
                         if (!Array.isArray(tags) || tags.length === 0) return null;
                         const TAG_COLORS = {
-                          '共感': '#92400E', '権威': '#1E40AF', '限定性': '#9D174D',
-                          '実演': '#065F46', '比較': '#3730A3', 'ストーリー': '#991B1B',
-                          'テンション': '#9A3412', '緊急性': '#854D0E', '社会的証明': '#166534',
-                          '価格訴求': '#047857', '問題提起': '#9F1239', '解決提示': '#0C4A6E',
+                          window.__t('empathy', '共感'): '#92400E', window.__t('adminDashboard_f983c2', '権威'): '#1E40AF', window.__t('adminDashboard_f8cd5e', '限定性'): '#9D174D',
+                          window.__t('adminDashboard_f5b486', '実演'): '#065F46', window.__t('comparison', '比較'): '#3730A3', window.__t('adminDashboard_cffaf2', 'ストーリー'): '#991B1B',
+                          window.__t('adminDashboard_1d9246', 'テンション'): '#9A3412', window.__t('adminDashboard_2ae709', '緊急性'): '#854D0E', window.__t('adminDashboard_fe9111', '社会的証明'): '#166534',
+                          window.__t('adminDashboard_6049bc', '価格訴求'): '#047857', window.__t('adminDashboard_3b0c9b', '問題提起'): '#9F1239', window.__t('adminDashboard_7c11e2', '解決提示'): '#0C4A6E',
                         };
                         return (
                           <div className="flex flex-wrap gap-1 mb-2">
@@ -491,7 +491,7 @@ export default function ClipSection({ videoData, clipStates, reports1, editorPar
                         <div className="flex items-center gap-2 mb-2 text-[11px]">
                           {clip.phase.gmv > 0 && (
                             <span className="font-bold text-green-600">
-                              ¥{clip.phase.gmv >= 10000 ? `${(clip.phase.gmv / 10000).toFixed(1)}万` : Math.round(clip.phase.gmv).toLocaleString()}
+                              ¥{clip.phase.gmv >= 10000 ? `${(clip.phase.gmv / 10000).toFixed(1)}${window.__t('tenThousand', '万')}` : Math.round(clip.phase.gmv).toLocaleString()}
                             </span>
                           )}
                           {clip.phase.product_names && (
