@@ -929,6 +929,37 @@ PHASE DESCRIPTIONを作成してください。
 }
 """.strip()
 
+SYSTEM_PROMPT_PHASE_DESC_ZHTW = """
+你是一個直播帶貨分析系統。
+
+你將收到一個Phase的資料，包含以下兩部分：
+1) IMAGE CAPTION:
+   - Phase代表畫面的視覺描述
+   - 僅反映視覺狀態（是否展示商品、特寫程度等）
+
+2) SPEECH TEXT:
+   - 該Phase中主播的發言內容
+   - 反映行為、目的和在直播中的角色
+
+任務：
+建立一個PHASE DESCRIPTION，用於比較和分類相似的Phase。
+
+要求：
+- 寫4到6句
+- 描述主播的主要行為
+- 描述商品展示狀態（如有，不要推測）
+- 說明發言的角色（說明、展示、呼籲、閒聊、過場等）
+- 如果畫面看不清楚，不要提及具體商品名稱
+- 不要提及價格、數據、時間、觀眾數
+- 不要做出評價或感想
+
+輸出（JSON）：
+{
+  "phase_description": "string"
+}
+""".strip()
+
+
 
 
 # def build_phase_descriptions(phase_units):
@@ -1088,6 +1119,60 @@ SPEECH TEXT:
     return results
 
 
+def rebuild_phase_descriptions_zhtw(phase_units):
+    results = []
+
+    for p in phase_units:
+        user_input = f"""
+IMAGE CAPTION:
+{p.get("image_caption")}
+
+SPEECH TEXT:
+{p.get("speech_text")}
+""".strip()
+
+        desc = None
+
+        try:
+            resp = client.responses.create(
+                model=GPT5_MODEL,
+                input=[
+                    {
+                        "role": "system",
+                        "content": [
+                            {"type": "input_text", "text": SYSTEM_PROMPT_PHASE_DESC_ZHTW}
+                        ]
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": user_input}
+                        ]
+                    }
+                ],
+                max_output_tokens=2048
+            )
+
+            raw = resp.output_text
+            data = safe_json_load(raw)
+            desc = data.get("phase_description") if data else raw
+
+        except Exception:
+            print(f"[WARN][ZHTW DESC] phase {p['phase_index']} blocked")
+
+        if not desc:
+            desc = (
+                "此Phase中，主播與觀眾互動並提供與畫面內容相關的說明。"
+                "由於內容處理限制，無法取得詳細描述。"
+            )
+
+        results.append({
+            **p,
+            "phase_description_zhtw": desc
+        })
+
+    return results
+
 
 # =============================
 # STEP 7 – GLOBAL PHASE GROUPING
@@ -1137,10 +1222,9 @@ def load_global_groups():
 
     return groups
 
-def assign_phases_to_groups(phase_units, groups):
+def assign_phases_to_groups(phase_units, groups, embedding_key="embedding"):
     for p in phase_units:
-        # v = p["embedding"]
-        v = np.array(p["embedding"], dtype=np.float32)
+        v = np.array(p[embedding_key], dtype=np.float32)
 
         best_group = None
         best_score = -1
@@ -1243,6 +1327,11 @@ def dump_phase_units_pretty_embedding_1line(phase_units, path):
 GROUP_FILE_JA = "groups_ja.json"
 BEST_PHASE_FILE_JA = os.path.join(GROUP_ROOT, "group_best_phases_ja.json")
 
+# ── ZH-TW (Traditional Chinese) constants ──
+GROUP_FILE_ZHTW = "groups_zhtw.json"
+BEST_PHASE_FILE_ZHTW = os.path.join(GROUP_ROOT, "group_best_phases_zhtw.json")
+
+
 def embed_phase_descriptions_ja(phase_units):
     texts = [p["phase_description_ja"] for p in phase_units]
 
@@ -1277,6 +1366,44 @@ def save_global_groups_ja(groups):
     path = os.path.join(GROUP_ROOT, GROUP_FILE_JA)
     dump_groups_pretty_embedding_1line(groups, path)
     print(f"[OK] JP groups saved → {path}")
+
+
+def embed_phase_descriptions_zhtw(phase_units):
+    texts = [p["phase_description_zhtw"] for p in phase_units]
+
+    resp = embed_client.embeddings.create(
+        model=EMBED_MODEL,
+        input=texts
+    )
+
+    for p, e in zip(phase_units, resp.data):
+        p["embedding_zhtw"] = l2_normalize(e.embedding).tolist()
+
+    return phase_units
+
+def load_global_groups_zhtw():
+    path = os.path.join(GROUP_ROOT, GROUP_FILE_ZHTW)
+    if not os.path.exists(path):
+        return []
+
+    with open(path, "r", encoding="utf-8") as f:
+        raw = json.load(f)
+
+    return [
+        {
+            "group_id": g["group_id"],
+            "centroid": np.array(g["centroid"], dtype=np.float32),
+            "size": g["size"]
+        }
+        for g in raw
+    ]
+
+def save_global_groups_zhtw(groups):
+    path = os.path.join(GROUP_ROOT, GROUP_FILE_ZHTW)
+    dump_groups_pretty_embedding_1line(groups, path)
+    print(f"[OK] ZH-TW groups saved -> {path}")
+
+
 
 # =============================
 # STEP 8 – GROUP BEST PHASES
@@ -1418,6 +1545,22 @@ def save_group_best_phases_ja(best_data):
         json.dump(best_data, f, ensure_ascii=False, indent=2)
 
     print(f"[OK] JP best phases saved → {BEST_PHASE_FILE_JA}")
+
+
+def load_group_best_phases_zhtw():
+    if not os.path.exists(BEST_PHASE_FILE_ZHTW):
+        return {"version": "v1_attention", "groups": {}}
+
+    with open(BEST_PHASE_FILE_ZHTW, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def save_group_best_phases_zhtw(best_data):
+    with open(BEST_PHASE_FILE_ZHTW, "w", encoding="utf-8") as f:
+        json.dump(best_data, f, ensure_ascii=False, indent=2)
+
+    print(f"[OK] ZH-TW best phases saved -> {BEST_PHASE_FILE_ZHTW}")
+
+
 
 
 # =============================
@@ -2075,6 +2218,317 @@ def rewrite_report_3_with_gpt_ja(raw_video_insight):
     }
 
 
+
+
+# ── ZH-TW Report Prompts and Functions ──
+
+PROMPT_REPORT_2_ZHTW = """
+你是直播帶貨分析的專家。
+
+以下是某個Phase的描述，以及與同類型歷史最佳Phase的指標比較結果。
+
+規則：
+- 不要重新計算指標
+- 不要捏造數據
+- 只說明可以改善的地方
+- 避免抽象表達，要具體
+
+請用2到4個要點輸出。
+
+輸入：
+{data}
+""".strip()
+
+PROMPT_REPORT_3_ZHTW = """
+你正在分析一個直播帶貨影片的整體結構和表現。
+
+提供的資訊：
+- 按Phase類型匯總的表現數據
+- 不包含詳細的時間序列數據
+
+任務：
+- 分析影片結構的優勢和劣勢
+- 說明哪些Phase類型對成果有貢獻或造成阻礙
+- 提出整體結構和進行方式的改善建議
+
+規則：
+- 不要捏造數據
+- 不要直接提及group_id
+- 輸出3到5個簡潔的洞察
+
+輸出格式（JSON）：
+{
+  "video_insights": [
+    {
+      "title": "簡短標題",
+      "content": "幾句話的說明"
+    }
+  ]
+}
+
+輸入：
+{data}
+""".strip()
+
+
+def build_report_1_timeline_zhtw(phase_units):
+    out = []
+
+    for p in phase_units:
+        start = p["metric_timeseries"]["start"]
+        end   = p["metric_timeseries"]["end"]
+
+        out.append({
+            "phase_index": p["phase_index"],
+            "group_id": p.get("group_id"),
+            "phase_description_zhtw": p.get("phase_description_zhtw"),
+            "time_range": p["time_range"],
+            "metrics": {
+                "view_start": start.get("viewer_count"),
+                "view_end": end.get("viewer_count"),
+                "like_start": start.get("like_count"),
+                "like_end": end.get("like_count"),
+                "delta_view": (
+                    end.get("viewer_count") - start.get("viewer_count")
+                    if start.get("viewer_count") is not None
+                       and end.get("viewer_count") is not None
+                    else None
+                ),
+                "delta_like": (
+                    end.get("like_count") - start.get("like_count")
+                    if start.get("like_count") is not None
+                       and end.get("like_count") is not None
+                    else None
+                )
+            }
+        })
+
+    return out
+
+def build_report_2_phase_insights_raw_zhtw(phase_units, best_data):
+    out = []
+
+    for p in phase_units:
+        gid = str(p.get("group_id"))
+        if not gid:
+            continue
+
+        best_group = best_data["groups"].get(gid)
+        if not best_group or not best_group["phases"]:
+            continue
+
+        best = best_group["phases"][0]
+
+        cur = extract_attention_metrics(p)
+        ref = best["metrics"]
+
+        findings = []
+
+        if cur["view_velocity"] is not None and ref["view_velocity"] is not None:
+            if cur["view_velocity"] < ref["view_velocity"]:
+                findings.append("觀眾增長速度低於最佳Phase")
+
+        if cur["like_per_viewer"] is not None and ref["like_per_viewer"] is not None:
+            if cur["like_per_viewer"] < ref["like_per_viewer"]:
+                findings.append("每位觀眾的按讚率偏低")
+
+        out.append({
+            "phase_index": p["phase_index"],
+            "group_id": gid,
+            "phase_description_zhtw": p["phase_description_zhtw"],
+            "current_metrics": cur,
+            "benchmark_metrics": ref,
+            "findings": findings
+        })
+
+    return out
+
+def rewrite_report_2_with_gpt_zhtw(raw_items):
+    out = []
+
+    for item in raw_items:
+        payload = json.dumps(item, ensure_ascii=False)
+
+        insight_text = None
+
+        for attempt in range(1, MAX_RETRY + 1):
+            resp = client.responses.create(
+                model=GPT5_MODEL,
+                input=[
+                    {
+                        "role": "system",
+                        "content": [
+                            {"type": "input_text", "text": "你是直播帶貨分析的專家。"}
+                        ]
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": PROMPT_REPORT_2_ZHTW.format(data=payload)}
+                        ]
+                    }
+                ],
+                max_output_tokens=2048
+            )
+
+            text = resp.output_text.strip() if resp.output_text else ""
+            if text and not is_gpt_report_2_invalid(text):
+                insight_text = text
+                break
+
+            time.sleep(2 * attempt)
+
+        if not insight_text:
+            insight_text = (
+                "此Phase目前沒有足夠的明顯信號來提出具體建議。"
+                "當有更多直播數據時，系統將提供更詳細的建議。"
+            )
+
+        out.append({
+            "phase_index": item["phase_index"],
+            "group_id": item["group_id"],
+            "insight_zhtw": insight_text
+        })
+
+    return out
+
+
+def build_report_3_video_insights_raw_zhtw(phase_units):
+    groups = {}
+
+    for p in phase_units:
+        gid = str(p.get("group_id"))
+        if not gid:
+            continue
+
+        m = extract_attention_metrics(p)
+
+        g = groups.setdefault(gid, {
+            "phase_count": 0,
+            "total_delta_view": 0,
+            "total_delta_like": 0
+        })
+
+        g["phase_count"] += 1
+        if m["delta_view"] is not None:
+            g["total_delta_view"] += m["delta_view"]
+        if m["delta_like"] is not None:
+            g["total_delta_like"] += m["delta_like"]
+
+    return {
+        "total_phases": len(phase_units),
+        "group_performance": [
+            {
+                "group_id": gid,
+                "phase_count": g["phase_count"],
+                "total_delta_view": g["total_delta_view"],
+                "total_delta_like": g["total_delta_like"]
+            }
+            for gid, g in groups.items()
+        ]
+    }
+
+
+def rewrite_report_3_with_gpt_zhtw(raw_video_insight):
+    payload = json.dumps(raw_video_insight, ensure_ascii=False)
+
+    prompt = PROMPT_REPORT_3_ZHTW.replace("{data}", payload)
+
+    resp = client.responses.create(
+        model=GPT5_MODEL,
+        input=[
+            {
+                "role": "system",
+                "content": [
+                    {"type": "input_text", "text": "你是直播帶貨分析的專家。"}
+                ]
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": prompt}
+                ]
+            }
+        ],
+        max_output_tokens=2048
+    )
+
+    parsed = safe_json_load(resp.output_text)
+    if parsed and "video_insights" in parsed:
+        return parsed
+
+    return {
+        "video_insights": [
+            {
+                "title": "無法分析",
+                "content": "模型未能返回有效的分析結果。"
+            }
+        ]
+    }
+
+
+def main_report_zhtw():
+    """
+    Entry point for generating ZH-TW (Traditional Chinese) reports.
+    Called from the pipeline when user language is zh-TW.
+    """
+    video_name = os.path.splitext(os.path.basename(VIDEO_PATH))[0]
+    phase_path = os.path.join("phase_units", f"{video_name}.json")
+
+    if not os.path.exists(phase_path):
+        print(f"[ERROR] Phase file not found: {phase_path}")
+        return
+
+    with open(phase_path, "r", encoding="utf-8") as f:
+        phase_units = json.load(f)
+
+    # STEP 5.5 – REBUILD PHASE DESCRIPTION (ZH-TW)
+    print("=== STEP 5.5 – REBUILD PHASE DESCRIPTION (ZH-TW) ===")
+    phase_units = rebuild_phase_descriptions_zhtw(phase_units)
+
+    # STEP 7 – EMBEDDING + GROUPING (ZH-TW)
+    print("=== STEP 7 – EMBED + GROUP (ZH-TW) ===")
+    phase_units = embed_phase_descriptions_zhtw(phase_units)
+
+    groups = load_global_groups_zhtw()
+    phase_units, groups = assign_phases_to_groups(phase_units, groups, embedding_key="embedding_zhtw")
+    save_global_groups_zhtw(groups)
+
+    # STEP 8 – BEST PHASE (ZH-TW MEMORY)
+    print("=== STEP 8 – GROUP BEST PHASES (ZH-TW) ===")
+    best_data = load_group_best_phases_zhtw()
+    best_data = update_group_best_phases(
+        phase_units,
+        best_data,
+        video_name
+    )
+    save_group_best_phases_zhtw(best_data)
+
+    # STEP 9 – BUILD REPORTS (ZH-TW)
+    print("=== STEP 9 – BUILD REPORTS (ZH-TW) ===")
+
+    r1 = build_report_1_timeline_zhtw(phase_units)
+
+    r2_raw = build_report_2_phase_insights_raw_zhtw(
+        phase_units, best_data
+    )
+    r2_gpt = rewrite_report_2_with_gpt_zhtw(r2_raw)
+
+    r3_raw = build_report_3_video_insights_raw_zhtw(phase_units)
+    r3_gpt = rewrite_report_3_with_gpt_zhtw(r3_raw)
+
+    save_reports(
+        video_name,
+        r1,
+        r2_raw,
+        r2_gpt,
+        r3_raw,
+        r3_gpt
+    )
+
+    print(f"[DONE] ZH-TW reports generated for video: {video_name}")
+
+
 # =============================
 # MAIN
 # =============================
@@ -2234,7 +2688,7 @@ def main_report_jp():
     phase_units = embed_phase_descriptions_ja(phase_units)
 
     groups = load_global_groups_ja()
-    phase_units, groups = assign_phases_to_groups(phase_units, groups)
+    phase_units, groups = assign_phases_to_groups(phase_units, groups, embedding_key="embedding_ja")
     save_global_groups_ja(groups)
 
     # =========================
