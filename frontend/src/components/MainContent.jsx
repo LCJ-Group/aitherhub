@@ -62,10 +62,10 @@ function formatRelativeTime(date) {
   const diffMin = Math.floor(diffMs / 60000);
   const diffHour = Math.floor(diffMs / 3600000);
   const diffDay = Math.floor(diffMs / 86400000);
-  if (diffMin < 1) return 'たった今';
-  if (diffMin < 60) return `${diffMin}分前`;
-  if (diffHour < 24) return `${diffHour}時間前`;
-  if (diffDay < 7) return `${diffDay}日前`;
+  if (diffMin < 1) return window.__t('justNow');
+  if (diffMin < 60) return `${diffMin}${window.__t('minutesAgo')}`;
+  if (diffHour < 24) return `${diffHour}${window.__t('hoursAgo')}`;
+  if (diffDay < 7) return `${diffDay}${window.__t('daysAgo')}`;
   return date.toLocaleDateString('ja-JP');
 }
 
@@ -112,7 +112,7 @@ function ErrorLogPanel({ videoId, autoOpen = false }) {
           <line x1="16" y1="13" x2="8" y2="13"/>
           <line x1="16" y1="17" x2="8" y2="17"/>
         </svg>
-        エラーログ {errorLogs.length > 0 ? `(${errorLogs.length}件)` : ''}
+        {window.__t('errorLog')} {errorLogs.length > 0 ? `(${errorLogs.length}${window.__t('errorLogCount')})` : ''}
         <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
           className={`transition-transform duration-200 ${showLogs ? 'rotate-180' : ''}`}>
           <polyline points="6 9 12 15 18 9"/>
@@ -122,11 +122,11 @@ function ErrorLogPanel({ videoId, autoOpen = false }) {
       {showLogs && (
         <div className="mt-2 max-h-60 overflow-y-auto space-y-2">
           {loading && (
-            <p className="text-xs text-gray-400 text-center py-2">読み込み中...</p>
+            <p className="text-xs text-gray-400 text-center py-2">{window.__t('loading')}</p>
           )}
           {!loading && errorLogs.length === 0 && (
             <p className="text-xs text-gray-500 text-center py-2">
-              エラーの詳細が記録されていません。「解析を再試行」ボタンで再実行してください。
+              {window.__t('noErrorDetails')}
             </p>
           )}
           {errorLogs.map((log, idx) => (
@@ -160,7 +160,7 @@ function ErrorLogPanel({ videoId, autoOpen = false }) {
             disabled={loading}
             className="text-[11px] text-gray-500 hover:text-gray-300 underline transition-colors"
           >
-            {loading ? '読み込み中...' : 'エラーログを更新'}
+            {loading ? window.__t('loading') : window.__t('refreshErrorLog')}
           </button>
         </div>
       )}
@@ -592,7 +592,7 @@ export default function MainContent({
     setProductExcelFile(null);
     setTrendExcelFile(null);
     logCsvValidationDecision(result, 'replace');
-    toast.info('CSVファイルを再選択してください');
+    toast.info(window.__t('selectCsvFile'));
   };
 
   const handleCsvValidationForce = async () => {
@@ -670,7 +670,7 @@ export default function MainContent({
       // Reset state to go back to normal upload mode
       setResumeUploadId(null);
       setResumeInfo(null);
-      toast.info('前回のアップロードを削除しました。新しい動画を選択してください。');
+      toast.info(window.__t('deletedPreviousUpload'));
     } catch (error) {
       console.error('Failed to clear resume for new file:', error);
       setResumeUploadId(null);
@@ -725,12 +725,12 @@ export default function MainContent({
       // Get metadata from IndexedDB
       const metadata = await UploadService.getUploadMetadata(resumeUploadId);
       if (!metadata) {
-        throw new Error('アップロード情報が見つかりません。新しいアップロードを開始してください。');
+        throw new Error(window.__t('uploadInfoNotFound'));
       }
 
       // Validate that the selected file is the same as the original file
       if (file.name !== metadata.fileName || file.size !== metadata.fileSize) {
-        throw new Error(`選択したファイルが元のファイルと一致しません。\nファイル名: ${metadata.fileName}\nサイズ: ${formatFileSize(metadata.fileSize)}`);
+        throw new Error(`${window.__t("fileMismatch")}\n${metadata.fileName}\n${formatFileSize(metadata.fileSize)}`);
       }
 
       const uploadedBlockIds = metadata.uploadedBlocks || [];
@@ -888,7 +888,7 @@ export default function MainContent({
   // =========================================================
   const handleLiveCheck = async () => {
     if (!liveUrl.trim()) {
-      setMessage('URLを入力してください');
+      setMessage(window.__t('enterUrl'));
       setMessageType('error');
       return;
     }
@@ -899,11 +899,11 @@ export default function MainContent({
       const result = await VideoService.checkLiveStatus(liveUrl.trim());
       setLiveInfo(result);
       if (!result.is_live) {
-        setMessage(`@${result.username || 'unknown'} は現在ライブ配信していません`);
+        setMessage(`@${result.username || 'unknown'} ${window.__t('notLiveStreaming')}`);
         setMessageType('error');
       }
     } catch (err) {
-      const detail = err?.response?.data?.detail || err.message || 'ライブチェックに失敗しました';
+      const detail = err?.response?.data?.detail || err.message || window.__t('liveCheckFailed');
       setMessage(detail);
       setMessageType('error');
     } finally {
@@ -917,13 +917,13 @@ export default function MainContent({
     setMessage('');
     try {
       const result = await VideoService.startLiveCapture(liveUrl.trim());
-      setMessage(`@${result.username} のライブ録画を開始しました`);
+      setMessage(`@${result.username} ${window.__t('liveRecordingStarted')}`);
       setMessageType('success');
       setUploadedVideoId(result.video_id);
       // Navigate to LiveDashboard page
       navigate(`/live/${result.video_id}`);
     } catch (err) {
-      const detail = err?.response?.data?.detail || err.message || 'ライブキャプチャの開始に失敗しました';
+      const detail = err?.response?.data?.detail || err.message || window.__t('liveCaptureFailed');
       setMessage(detail);
       setMessageType('error');
     } finally {
@@ -1298,7 +1298,7 @@ export default function MainContent({
                   </svg>
                 </div>
                 <p className="text-red-600 text-sm font-medium">
-                  {videoLoadError === 'timeout' ? '読み込みがタイムアウトしました' : videoLoadError === 'auth' ? 'ログイン状態を確認してください' : '動画の読み込みに失敗しました'}
+                  {videoLoadError === 'timeout' ? window.__t('videoLoadTimeout') : videoLoadError === 'auth' ? window.__t('checkLoginStatus') : window.__t('videoLoadFailed')}
                 </p>
                 <button
                   onClick={() => {
@@ -1341,7 +1341,7 @@ export default function MainContent({
                   }}
                   className="px-4 py-2 text-sm font-medium text-white bg-red-500 hover:bg-red-600 rounded-lg transition-colors"
                 >
-                  再試行
+                  {window.__t('retry')}
                 </button>
               </div>
             </div>
@@ -1351,7 +1351,7 @@ export default function MainContent({
             <div className="rounded-2xl p-8 border transition-all duration-200 border-gray-200 bg-gray-50">
               <div className="flex flex-col items-center text-center space-y-4">
                 <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gray-600"></div>
-                <p className="text-gray-700 text-sm">読み込み中...</p>
+                <p className="text-gray-700 text-sm">{window.__t('loading')}</p>
               </div>
             </div>
           </div>
@@ -1440,7 +1440,7 @@ export default function MainContent({
                         className="px-6 py-3 text-sm text-white bg-gradient-to-r from-[#FF0050] to-[#00F2EA] rounded-lg hover:opacity-90 transition-opacity cursor-pointer shadow-sm flex items-center gap-2"
                       >
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="M2 12h2"/><path d="M20 12h2"/></svg>
-                        ライブURLで分析
+                        {window.__t('analyzeWithLiveUrl')}
                       </button>
                     </div>
                   )}
@@ -1462,7 +1462,7 @@ export default function MainContent({
                       {window.__t('errorAnalysisMessage') || '解析中にエラーが発生しました。'}
                     </p>
                     <p className="text-sm text-gray-300">
-                      動画データは保存されています。解析のみ再試行できます。
+                      {window.__t('videoDataSaved')}
                     </p>
                     <p className="text-xs text-gray-400">
                       {videoData.original_filename || ''}
@@ -1476,24 +1476,24 @@ export default function MainContent({
                         try {
                           const btn = e.currentTarget;
                           btn.disabled = true;
-                          btn.textContent = '再試行中...';
+                          btn.textContent = window.__t('retrying');
                           const result = await VideoService.retryAnalysis(videoData.id);
                           // Use resume status from API response
                           const resumeStatus = result?.new_status || 'uploaded';
                           setVideoData({ ...videoData, status: resumeStatus });
                           // Trigger Sidebar refresh immediately (optimistic UI)
                           if (onUploadSuccess) onUploadSuccess();
-                          toast({ title: '解析を再開しました', description: '動画データはそのまま保持されています。' });
+                          toast({ title: window.__t('analysisRestarted'), description: window.__t('videoDataPreserved') });
                         } catch (err) {
                           console.error('Retry analysis failed:', err);
-                          toast({ title: '再試行に失敗しました', description: err?.message || 'しばらくしてからもう一度お試しください。', variant: 'destructive' });
+                          toast({ title: window.__t('retryFailed'), description: err?.message || window.__t('tryAgainLater'), variant: 'destructive' });
                           e.currentTarget.disabled = false;
-                          e.currentTarget.textContent = '解析を再試行';
+                          e.currentTarget.textContent = window.__t('retryAnalysis');
                         }
                       }}
                       className="mt-2 px-6 py-3 text-sm text-white bg-[#7D01FF] rounded-lg hover:bg-[#6B00DD] transition-colors cursor-pointer shadow-sm font-semibold"
                     >
-                      解析を再試行
+                      {window.__t('retryAnalysis')}
                     </button>
                     {/* Secondary: New Upload */}
                     <button
@@ -1563,10 +1563,10 @@ export default function MainContent({
                             </div>
                             <div>
                               <p className="text-sm font-semibold text-gray-800">
-                                この動画はすでに解析済みです
+                                {window.__t('videoAlreadyAnalyzed')}
                               </p>
                               <p className="text-xs text-gray-500 mt-1">
-                                「{duplicateVideo.original_filename}」の解析結果が見つかりました
+                                「{duplicateVideo.original_filename}」{window.__t('analysisResultFound')}
                               </p>
                             </div>
                             <div className="flex flex-col sm:flex-row gap-2 w-full max-w-xs">
@@ -1579,7 +1579,7 @@ export default function MainContent({
                                 }}
                                 className="flex-1 h-[41px] flex items-center justify-center bg-[#7D01FF] text-white rounded-md text-sm cursor-pointer hover:bg-[#6a01d9] transition-colors"
                               >
-                                解析結果を見る
+                                {window.__t('viewAnalysisResult')}
                               </button>
                               <button
                                 onClick={() => {
@@ -1592,13 +1592,13 @@ export default function MainContent({
                                 }}
                                 className="flex-1 h-[41px] flex items-center justify-center bg-white text-gray-600 border border-gray-300 rounded-md text-sm cursor-pointer hover:bg-gray-50 transition-colors"
                               >
-                                再解析する
+                                {window.__t('reanalyze')}
                               </button>
                               <button
                                 onClick={handleCancel}
                                 className="flex-1 h-[41px] bg-gray-200 text-gray-500 rounded-md text-sm cursor-pointer hover:bg-gray-300 transition-colors"
                               >
-                                キャンセル
+                                {window.__t('cancel')}
                               </button>
                             </div>
                           </div>
@@ -1653,7 +1653,7 @@ export default function MainContent({
                                   </div>
                                   <div className="flex-1 min-w-0">
                                     <p className="text-xs font-medium text-gray-800 truncate" title={resumeInfo.fileName}>
-                                      {resumeInfo.fileName || '不明なファイル'}
+                                      {resumeInfo.fileName || window.__t('unknownFile')}
                                     </p>
                                     <div className="flex items-center gap-2 mt-1">
                                       <span className="text-[10px] text-gray-500">
@@ -1668,7 +1668,7 @@ export default function MainContent({
                                     {/* Progress bar */}
                                     <div className="mt-2">
                                       <div className="flex justify-between text-[10px] text-gray-500 mb-0.5">
-                                        <span>アップロード済み</span>
+                                        <span>{window.__t('uploaded')}</span>
                                         <span>{resumeInfo.progress}%</span>
                                       </div>
                                       <div className="w-full bg-gray-200 rounded-full h-1.5">
@@ -1690,8 +1690,8 @@ export default function MainContent({
                                 className="w-full h-[41px] flex items-center justify-center bg-[#7D01FF] text-white rounded-md text-sm font-medium hover:bg-[#6a01d9] transition-colors"
                               >
                                 {resumeInfo?.hasFileHandle
-                                  ? '続きから再開'
-                                  : 'ファイルを選んで再開'
+                                  ? window.__t('resumeFromContinue')
+                                  : window.__t('selectFileToResume')
                                 }
                               </button>
                               <div className="flex gap-2">
@@ -1700,14 +1700,14 @@ export default function MainContent({
                                   disabled={uploading || processingResume}
                                   className="flex-1 h-[36px] flex items-center justify-center bg-white text-gray-600 border border-gray-300 rounded-md text-xs hover:bg-gray-50 transition-colors"
                                 >
-                                  別の動画を選ぶ
+                                  {window.__t('selectAnotherVideo')}
                                 </button>
                                 <button
                                   onClick={handleSkipResume}
                                   disabled={uploading || processingResume}
                                   className="flex-1 h-[36px] flex items-center justify-center bg-white text-red-500 border border-red-200 rounded-md text-xs hover:bg-red-50 transition-colors"
                                 >
-                                  削除
+                                  {window.__t('delete')}
                                 </button>
                               </div>
                             </div>
@@ -1721,10 +1721,10 @@ export default function MainContent({
                             </div>
                             <div>
                               <p className="text-sm font-semibold text-gray-800">
-                                この動画はすでに解析済みです
+                                {window.__t("videoAlreadyAnalyzed")}
                               </p>
                               <p className="text-xs text-gray-500 mt-1">
-                                「{duplicateVideo.original_filename}」の解析結果が見つかりました
+                                「{duplicateVideo.original_filename}」{window.__t("analysisResultFound")}
                               </p>
                             </div>
                             <div className="flex flex-col sm:flex-row gap-2 w-full max-w-xs">
@@ -1740,7 +1740,7 @@ export default function MainContent({
                                 }}
                                 className="flex-1 h-[41px] flex items-center justify-center bg-[#7D01FF] text-white rounded-md text-sm cursor-pointer hover:bg-[#6a01d9] transition-colors"
                               >
-                                解析結果を見る
+                                {window.__t('viewAnalysisResult')}
                               </button>
                               <button
                                 onClick={() => {
@@ -1748,13 +1748,13 @@ export default function MainContent({
                                 }}
                                 className="flex-1 h-[41px] flex items-center justify-center bg-white text-gray-600 border border-gray-300 rounded-md text-sm cursor-pointer hover:bg-gray-50 transition-colors"
                               >
-                                再解析する
+                                {window.__t('reanalyze')}
                               </button>
                               <button
                                 onClick={handleCancelCleanVideo}
                                 className="flex-1 h-[41px] bg-gray-200 text-gray-500 rounded-md text-sm cursor-pointer hover:bg-gray-300 transition-colors"
                               >
-                                キャンセル
+                                {window.__t('cancel')}
                               </button>
                             </div>
                           </div>
@@ -1763,17 +1763,17 @@ export default function MainContent({
                         <>
                           <div className="flex flex-col items-center text-center space-y-4">
                             <div className="text-3xl">🎬</div>
-                            <p className="text-gray-800 text-sm font-semibold">クリーン動画 + Excelデータ</p>
+                            <p className="text-gray-800 text-sm font-semibold">{window.__t('cleanVideoAndExcel')}</p>
 
                             {/* Clean Video Files (multiple) */}
                             <div className="w-full">
-                              <label className="block text-left text-xs text-gray-400 mb-1">クリーン動画（複数選択可）</label>
+                              <label className="block text-left text-xs text-gray-400 mb-1">{window.__t('cleanVideoMultiple')}</label>
                               <label className="w-full h-[38px] flex items-center justify-center bg-gray-100 border border-gray-300 rounded-md text-sm text-gray-700 cursor-pointer hover:bg-gray-200 transition-colors">
                                 {cleanVideoFiles.length > 1
-                                  ? `${cleanVideoFiles.length}本の動画を選択中`
+                                  ? `${cleanVideoFiles.length}${window.__t('videosSelected')}`
                                   : cleanVideoFile
                                     ? cleanVideoFile.name
-                                    : "動画を選択"}
+                                    : window.__t("selectVideo")}
                                 <input type="file" accept="video/*" multiple onChange={handleCleanVideoFilesSelect} className="hidden" />
                               </label>
                               {/* Show file list when multiple files selected */}
@@ -1799,25 +1799,25 @@ export default function MainContent({
 
                             {/* Product Excel */}
                             <div className="w-full">
-                              <label className="block text-left text-xs text-gray-400 mb-1">商品データ (product.xlsx)</label>
+                              <label className="block text-left text-xs text-gray-400 mb-1">{window.__t('productData')}</label>
                               <label className="w-full h-[38px] flex items-center justify-center bg-gray-100 border border-gray-300 rounded-md text-sm text-gray-700 cursor-pointer hover:bg-gray-200 transition-colors">
-                                {productExcelFile ? productExcelFile.name : "Excelを選択"}
+                                {productExcelFile ? productExcelFile.name : "{window.__t('selectExcel')}"}
                                 <input type="file" accept=".xlsx,.xls" onChange={handleProductExcelSelect} className="hidden" />
                               </label>
                             </div>
 
                             {/* Trend Stats Excel */}
                             <div className="w-full">
-                              <label className="block text-left text-xs text-gray-400 mb-1">トレンドデータ (trend_stats.xlsx)</label>
+                              <label className="block text-left text-xs text-gray-400 mb-1">{window.__t('trendData')}</label>
                               <label className="w-full h-[38px] flex items-center justify-center bg-gray-100 border border-gray-300 rounded-md text-sm text-gray-700 cursor-pointer hover:bg-gray-200 transition-colors">
-                                {trendExcelFile ? trendExcelFile.name : "Excelを選択"}
+                                {trendExcelFile ? trendExcelFile.name : window.__t("selectExcel")}
                                 <input type="file" accept=".xlsx,.xls" onChange={handleTrendExcelSelect} className="hidden" />
                               </label>
                             </div>
 
                             {cleanVideoFiles.length > 1 && (
                               <p className="text-xs text-gray-400">
-                                同じExcelデータが全{cleanVideoFiles.length}本の動画に適用されます
+                                {window.__t("sameExcelApplied")}{cleanVideoFiles.length}{window.__t("videosApplied")}
                               </p>
                             )}
 
@@ -1827,7 +1827,7 @@ export default function MainContent({
                                 disabled={uploading || (!cleanVideoFile && cleanVideoFiles.length === 0) || !productExcelFile || !trendExcelFile}
                                 className="w-[143px] h-[41px] flex items-center justify-center bg-white text-[#7D01FF] border border-[#7D01FF] rounded-md leading-[28px] cursor-pointer hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
                               >
-                                {cleanVideoFiles.length > 1 ? `${cleanVideoFiles.length}本アップロード` : 'アップロード'}
+                                {cleanVideoFiles.length > 1 ? `${cleanVideoFiles.length}${window.__t("uploadMultiple")}` : window.__t("upload")}
                               </button>
                               <button
                                 onClick={handleCancelCleanVideo}
@@ -1846,7 +1846,7 @@ export default function MainContent({
                             </div>
                             <div className="w-full max-w-sm">
                               <p className="text-sm font-semibold text-gray-800 mb-3">
-                                TikTokライブURLを貼り付け
+                                {window.__t('pasteTiktokUrl')}
                               </p>
                               <input
                                 type="text"
@@ -1869,7 +1869,7 @@ export default function MainContent({
                                       <span className="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span>
                                     </span>
                                     <span className="text-sm font-medium text-green-800">
-                                      @{liveInfo.username} がライブ配信中
+                                      @{liveInfo.username} {window.__t('isLiveStreaming')}
                                     </span>
                                   </div>
                                   {liveInfo.title && (
@@ -1890,10 +1890,10 @@ export default function MainContent({
                                   {liveCapturing ? (
                                     <>
                                       <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                                      接続中...
+                                      {window.__t('connecting')}
                                     </>
                                   ) : (
-                                    <>録画・解析開始</>
+                                    <>{window.__t('startRecordingAnalysis')}</>
                                   )}
                                 </button>
                               ) : (
@@ -1905,10 +1905,10 @@ export default function MainContent({
                                   {liveChecking ? (
                                     <>
                                       <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-[#7D01FF]" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                                      チェック中...
+                                      {window.__t('checking')}
                                     </>
                                   ) : (
-                                    <>ライブチェック</>
+                                    <>{window.__t('liveCheck')}</>
                                   )}
                                 </button>
                               )}
@@ -1917,7 +1917,7 @@ export default function MainContent({
                                 disabled={liveCapturing}
                                 className="w-[143px] h-[41px] bg-gray-300 text-gray-700 rounded-md text-sm cursor-pointer hover:bg-gray-100 disabled:opacity-50"
                               >
-                                戻る
+                                {window.__t('goBack')}
                               </button>
                             </div>
                           </div>
@@ -1954,7 +1954,7 @@ export default function MainContent({
                                   }
                                 }}
                               >
-                                画面収録アップ
+                                {window.__t('screenRecordUpload')}
                                 <input
                                   type="file"
                                   accept="video/*"
@@ -1999,7 +1999,7 @@ export default function MainContent({
                                   setUploadMode('clean_video');
                                 }}
                               >
-                                クリーン動画アップ
+                                {window.__t('cleanVideoUpload')}
                               </button>
                               <button
                                 className="
@@ -2025,7 +2025,7 @@ export default function MainContent({
                                 }}
                               >
                                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mr-1"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="M2 12h2"/><path d="M20 12h2"/></svg>
-                                ライブURL
+                                {window.__t('liveUrl')}
                               </button>
                             </div>
                           </div>
