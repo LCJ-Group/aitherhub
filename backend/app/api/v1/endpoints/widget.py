@@ -334,7 +334,7 @@ async def list_widget_clients(
                 FROM widget_clip_assignments wca
                 LEFT JOIN video_clips vc ON vc.id = wca.clip_id
                 WHERE wca.client_id = :cid AND wca.is_active = TRUE
-                ORDER BY wca.display_order ASC, wca.created_at DESC
+                ORDER BY wca.sort_order ASC, wca.created_at DESC
                 LIMIT 5
             """),
             {"cid": row["client_id"]},
