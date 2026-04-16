@@ -1092,7 +1092,7 @@ async def mark_clip_unusable(
                 SET is_unusable = TRUE,
                     unusable_reason = :reason,
                     unusable_at = NOW()
-                WHERE id = :clip_id::uuid
+                WHERE id = CAST(:clip_id AS uuid)
             """),
             {"clip_id": clip_id, "reason": reason_text},
         )
@@ -1110,7 +1110,7 @@ async def mark_clip_unusable(
                     SELECT
                         :fid, vc.video_id, vc.phase_index, 'rejected', 'bad',
                         :reason_tags, :clip_id, NOW(), NOW()
-                    FROM video_clips vc WHERE vc.id = :clip_id_uuid::uuid
+                    FROM video_clips vc WHERE vc.id = CAST(:clip_id_uuid AS uuid)
                     ON CONFLICT (video_id, phase_index)
                     DO UPDATE SET
                         feedback = 'rejected',
@@ -1155,7 +1155,7 @@ async def unmark_clip_unusable(
                 SET is_unusable = FALSE,
                     unusable_reason = NULL,
                     unusable_at = NULL
-                WHERE id = :clip_id::uuid
+                WHERE id = CAST(:clip_id AS uuid)
             """),
             {"clip_id": clip_id},
         )
