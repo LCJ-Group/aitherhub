@@ -1,8 +1,8 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import {
   Search, Filter, Tag, Play, X, BarChart3, ShoppingBag, Users,
   Star, ThumbsUp, ThumbsDown, ArrowUpDown, Database, Sparkles,
-  Loader2, RefreshCw, ChevronLeft, ChevronRight,
+  Loader2, RefreshCw, ChevronLeft, ChevronRight, Building2, Plus, Minus,
 } from "lucide-react";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
@@ -48,7 +48,6 @@ const TAG_COLORS = {
   "価格訴求": { bg: "#ECFDF5", text: "#047857", border: "#6EE7B7" },
   "問題提起": { bg: "#FFF1F2", text: "#9F1239", border: "#FDA4AF" },
   "解決提示": { bg: "#F0F9FF", text: "#0C4A6E", border: "#7DD3FC" },
-  // English key aliases
   HOOK: { bg: "#F5F3FF", text: "#6D28D9", border: "#C4B5FD" },
   EMPATHY: { bg: "#FEF3C7", text: "#92400E", border: "#FDE68A" },
   PROBLEM: { bg: "#FFF1F2", text: "#9F1239", border: "#FDA4AF" },
@@ -84,10 +83,66 @@ function formatGMV(val) {
   return `¥${Math.round(val).toLocaleString()}`;
 }
 
+// ─── Brand Badge Colors ───
+const BRAND_COLORS = [
+  { bg: "#DBEAFE", text: "#1E40AF", border: "#93C5FD" },
+  { bg: "#D1FAE5", text: "#065F46", border: "#6EE7B7" },
+  { bg: "#FEF3C7", text: "#92400E", border: "#FDE68A" },
+  { bg: "#FCE7F3", text: "#9D174D", border: "#F9A8D4" },
+  { bg: "#E0E7FF", text: "#3730A3", border: "#A5B4FC" },
+  { bg: "#CCFBF1", text: "#0F766E", border: "#5EEAD4" },
+];
+function getBrandColor(idx) {
+  return BRAND_COLORS[idx % BRAND_COLORS.length];
+}
+
 // ─── Clip Card Component ───
-function ClipCard({ clip, onPlay }) {
+function ClipCard({ clip, onPlay, brands, adminKey, onBrandChange }) {
   const [expanded, setExpanded] = useState(false);
+  const [showBrandPicker, setShowBrandPicker] = useState(false);
+  const [assigning, setAssigning] = useState(false);
   const tags = clip.tags || clip.sales_psychology_tags || [];
+  const assignments = clip.brand_assignments || [];
+
+  const handleAssignBrand = async (clientId) => {
+    setAssigning(true);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/v1/clip-db/assign-brand?clip_id=${clip.clip_id}&client_id=${clientId}`,
+        { method: "POST", headers: { "X-Admin-Key": adminKey } }
+      );
+      if (res.ok) {
+        onBrandChange?.();
+      }
+    } catch (e) {
+      console.error("Assign brand failed:", e);
+    } finally {
+      setAssigning(false);
+      setShowBrandPicker(false);
+    }
+  };
+
+  const handleUnassignBrand = async (clientId) => {
+    setAssigning(true);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/v1/clip-db/unassign-brand?clip_id=${clip.clip_id}&client_id=${clientId}`,
+        { method: "DELETE", headers: { "X-Admin-Key": adminKey } }
+      );
+      if (res.ok) {
+        onBrandChange?.();
+      }
+    } catch (e) {
+      console.error("Unassign brand failed:", e);
+    } finally {
+      setAssigning(false);
+    }
+  };
+
+  // Brands not yet assigned
+  const unassignedBrands = brands.filter(
+    (b) => !assignments.some((a) => a.client_id === b.client_id)
+  );
 
   return (
     <div className="bg-white rounded-xl border border-gray-200 overflow-hidden hover:shadow-lg transition-all duration-300 group">
@@ -159,6 +214,75 @@ function ClipCard({ clip, onPlay }) {
             </span>
           )}
         </div>
+
+        {/* Brand assignments */}
+        <div className="relative">
+          <div className="flex flex-wrap gap-1 items-center">
+            {assignments.map((a, i) => {
+              const c = getBrandColor(i);
+              return (
+                <span
+                  key={a.client_id}
+                  className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium border cursor-default group/brand"
+                  style={{ backgroundColor: c.bg, color: c.text, borderColor: c.border }}
+                >
+                  <Building2 className="w-2.5 h-2.5" />
+                  {a.brand_name}
+                  <button
+                    onClick={(e) => { e.stopPropagation(); handleUnassignBrand(a.client_id); }}
+                    className="ml-0.5 opacity-0 group-hover/brand:opacity-100 hover:text-red-600 transition-opacity"
+                    title="ブランド解除"
+                  >
+                    <X className="w-2.5 h-2.5" />
+                  </button>
+                </span>
+              );
+            })}
+            {/* Add brand button */}
+            <button
+              onClick={(e) => { e.stopPropagation(); setShowBrandPicker(!showBrandPicker); }}
+              className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium border border-dashed border-gray-300 text-gray-400 hover:border-blue-400 hover:text-blue-500 transition"
+              title="ブランドを追加"
+            >
+              <Plus className="w-2.5 h-2.5" />
+              {assignments.length === 0 ? "ブランド" : ""}
+            </button>
+          </div>
+
+          {/* Brand picker dropdown */}
+          {showBrandPicker && (
+            <div className="absolute z-20 top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[160px] max-h-[200px] overflow-y-auto">
+              {assigning && (
+                <div className="px-3 py-2 text-xs text-gray-400 flex items-center gap-1">
+                  <Loader2 className="w-3 h-3 animate-spin" /> 処理中...
+                </div>
+              )}
+              {!assigning && unassignedBrands.length === 0 && (
+                <div className="px-3 py-2 text-xs text-gray-400">全ブランド割当済み</div>
+              )}
+              {!assigning && unassignedBrands.map((b) => (
+                <button
+                  key={b.client_id}
+                  onClick={() => handleAssignBrand(b.client_id)}
+                  className="w-full text-left px-3 py-1.5 text-xs hover:bg-blue-50 flex items-center gap-1.5 transition"
+                >
+                  <Building2 className="w-3 h-3 text-gray-400" />
+                  <span className="truncate">{b.name}</span>
+                  <span className="text-gray-300 ml-auto">({b.clip_count})</span>
+                </button>
+              ))}
+              <div className="border-t border-gray-100 mt-1 pt-1">
+                <button
+                  onClick={() => setShowBrandPicker(false)}
+                  className="w-full text-left px-3 py-1 text-[10px] text-gray-400 hover:text-gray-600"
+                >
+                  閉じる
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
         {clip.product_name && (
           <div className="flex items-center gap-1 text-xs text-gray-600">
             <ShoppingBag className="w-3 h-3 text-gray-400" />
@@ -244,33 +368,32 @@ function StatsOverview({ stats }) {
 // ─── Top Tags Chart ───
 function TopTagsChart({ tags }) {
   if (!tags || tags.length === 0) return null;
-  const maxCount = Math.max(...tags.map(t => t.count));
+  const maxCount = Math.max(...tags.map((t) => t.count));
   return (
     <div className="bg-white rounded-xl border border-gray-200 p-4">
-      <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-1.5">
+      <h3 className="text-sm font-bold text-gray-700 mb-3 flex items-center gap-1.5">
         <Tag className="w-4 h-4 text-purple-500" />
         トップタグ（売れた理由）
       </h3>
       <div className="space-y-2">
-        {tags.slice(0, 10).map((t, i) => {
+        {tags.slice(0, 10).map((t) => {
           const c = getTagColor(t.tag);
           const pct = (t.count / maxCount) * 100;
           return (
-            <div key={i} className="flex items-center gap-2">
+            <div key={t.tag} className="flex items-center gap-2">
               <span
-                className="text-[11px] font-medium w-24 text-right px-1.5 py-0.5 rounded border shrink-0"
+                className="text-[11px] font-medium px-2 py-0.5 rounded border whitespace-nowrap min-w-[70px] text-center"
                 style={{ backgroundColor: c.bg, color: c.text, borderColor: c.border }}
-                title={t.tag}
               >
                 {getTagLabel(t.tag)}
               </span>
-              <div className="flex-1 h-5 bg-gray-100 rounded-full overflow-hidden">
+              <div className="flex-1 h-4 bg-gray-100 rounded-full overflow-hidden">
                 <div
-                  className="h-full rounded-full transition-all duration-500"
-                  style={{ width: `${pct}%`, backgroundColor: c.text + "33" }}
+                  className="h-full rounded-full transition-all"
+                  style={{ width: `${pct}%`, backgroundColor: c.border }}
                 />
               </div>
-              <span className="text-[11px] text-gray-500 w-8 text-right">{t.count}</span>
+              <span className="text-xs text-gray-500 min-w-[30px] text-right">{t.count}</span>
             </div>
           );
         })}
@@ -284,16 +407,16 @@ function TopProductsChart({ products }) {
   if (!products || products.length === 0) return null;
   return (
     <div className="bg-white rounded-xl border border-gray-200 p-4">
-      <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-1.5">
+      <h3 className="text-sm font-bold text-gray-700 mb-3 flex items-center gap-1.5">
         <ShoppingBag className="w-4 h-4 text-blue-500" />
         トップ商品
       </h3>
       <div className="space-y-2">
-        {products.slice(0, 8).map((p, i) => (
-          <div key={i} className="flex items-center justify-between text-xs py-1.5 border-b border-gray-50 last:border-0">
-            <span className="text-gray-700 truncate flex-1">{p.product}</span>
-            <span className="text-gray-400 mx-2">{p.count}件</span>
-            <span className="font-semibold text-green-600">{formatGMV(p.gmv)}</span>
+        {products.slice(0, 10).map((p, i) => (
+          <div key={i} className="flex items-center justify-between text-xs">
+            <span className="truncate text-gray-700 flex-1">{p.product || "不明"}</span>
+            <span className="text-gray-400 ml-2">{p.count}件</span>
+            <span className="text-green-600 font-medium ml-2">{formatGMV(p.gmv)}</span>
           </div>
         ))}
       </div>
@@ -336,6 +459,7 @@ export default function AdminClipDB({ adminKey }) {
   const [selectedTag, setSelectedTag] = useState("");
   const [selectedProduct, setSelectedProduct] = useState("");
   const [selectedLiver, setSelectedLiver] = useState("");
+  const [selectedBrand, setSelectedBrand] = useState("");
   const [soldFilter, setSoldFilter] = useState(null);
   const [ratingFilter, setRatingFilter] = useState("");
   const [sortBy, setSortBy] = useState("created_at");
@@ -349,6 +473,7 @@ export default function AdminClipDB({ adminKey }) {
   const [loading, setLoading] = useState(false);
   const [stats, setStats] = useState(null);
   const [allTags, setAllTags] = useState([]);
+  const [brands, setBrands] = useState([]);
   const [playerClip, setPlayerClip] = useState(null);
   const [enriching, setEnriching] = useState(false);
   const [enrichStatus, setEnrichStatus] = useState(null);
@@ -370,7 +495,7 @@ export default function AdminClipDB({ adminKey }) {
     if (searchMode === "structured" && enrichTriggered.current) {
       loadClips();
     }
-  }, [page, sortBy, sortOrder, selectedTag, soldFilter, ratingFilter]);
+  }, [page, sortBy, sortOrder, selectedTag, soldFilter, ratingFilter, selectedBrand]);
 
   async function autoEnrichAndLoad() {
     // 1. Auto enrich (non-blocking for already-enriched clips)
@@ -390,9 +515,10 @@ export default function AdminClipDB({ adminKey }) {
       setEnriching(false);
     }
 
-    // 2. Load stats, tags, clips
+    // 2. Load stats, tags, brands, clips
     loadStats();
     loadTags();
+    loadBrands();
     loadClips();
   }
 
@@ -414,6 +540,15 @@ export default function AdminClipDB({ adminKey }) {
     }
   }
 
+  async function loadBrands() {
+    try {
+      const data = await clipDbFetch("/brands", {}, adminKey);
+      setBrands(data.brands || []);
+    } catch (e) {
+      console.warn("[ClipDB] Failed to load brands:", e);
+    }
+  }
+
   async function loadClips() {
     setLoading(true);
     try {
@@ -427,6 +562,7 @@ export default function AdminClipDB({ adminKey }) {
       if (selectedTag) params.tag = selectedTag;
       if (selectedProduct) params.product = selectedProduct;
       if (selectedLiver) params.liver = selectedLiver;
+      if (selectedBrand) params.brand = selectedBrand;
       if (soldFilter !== null) params.is_sold = soldFilter;
       if (ratingFilter) params.rating = ratingFilter;
 
@@ -485,6 +621,12 @@ export default function AdminClipDB({ adminKey }) {
       setEnriching(false);
     }
   }
+
+  const handleBrandChange = useCallback(() => {
+    // Reload clips and brands after brand assignment change
+    loadClips();
+    loadBrands();
+  }, [searchQuery, selectedTag, selectedProduct, selectedLiver, selectedBrand, soldFilter, ratingFilter, page, sortBy, sortOrder]);
 
   return (
     <div>
@@ -585,6 +727,20 @@ export default function AdminClipDB({ adminKey }) {
         {/* Filter row */}
         {showFilters && searchMode === "structured" && (
           <div className="flex flex-wrap gap-2 mt-3">
+            {/* Brand filter */}
+            <select
+              value={selectedBrand}
+              onChange={(e) => { setSelectedBrand(e.target.value); setPage(1); }}
+              className="px-3 py-1.5 rounded-lg border border-blue-300 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 font-medium"
+            >
+              <option value="">ブランド: すべて</option>
+              {brands.map((b) => (
+                <option key={b.client_id} value={b.client_id}>
+                  {b.name} ({b.clip_count})
+                </option>
+              ))}
+            </select>
+
             <select
               value={selectedTag}
               onChange={(e) => { setSelectedTag(e.target.value); setPage(1); }}
@@ -658,11 +814,11 @@ export default function AdminClipDB({ adminKey }) {
               className="px-3 py-1.5 rounded-lg border border-gray-300 text-xs w-32 focus:outline-none focus:ring-2 focus:ring-purple-500"
             />
 
-            {(selectedTag || selectedProduct || selectedLiver || soldFilter !== null || ratingFilter) && (
+            {(selectedTag || selectedProduct || selectedLiver || selectedBrand || soldFilter !== null || ratingFilter) && (
               <button
                 onClick={() => {
                   setSelectedTag(""); setSelectedProduct(""); setSelectedLiver("");
-                  setSoldFilter(null); setRatingFilter(""); setPage(1);
+                  setSelectedBrand(""); setSoldFilter(null); setRatingFilter(""); setPage(1);
                 }}
                 className="px-2 py-1.5 rounded-lg text-xs text-red-500 hover:bg-red-50 border border-red-200"
               >
@@ -693,7 +849,7 @@ export default function AdminClipDB({ adminKey }) {
         <div className="text-center py-20">
           <Database className="w-12 h-12 text-gray-300 mx-auto mb-3" />
           <p className="text-gray-500 text-sm">
-            {searchQuery || selectedTag || soldFilter !== null
+            {searchQuery || selectedTag || soldFilter !== null || selectedBrand
               ? "条件に一致するクリップが見つかりませんでした"
               : "クリップデータを読み込み中..."}
           </p>
@@ -708,7 +864,14 @@ export default function AdminClipDB({ adminKey }) {
 
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
             {clips.map((clip) => (
-              <ClipCard key={clip.clip_id} clip={clip} onPlay={setPlayerClip} />
+              <ClipCard
+                key={clip.clip_id}
+                clip={clip}
+                onPlay={setPlayerClip}
+                brands={brands}
+                adminKey={adminKey}
+                onBrandChange={handleBrandChange}
+              />
             ))}
           </div>
 

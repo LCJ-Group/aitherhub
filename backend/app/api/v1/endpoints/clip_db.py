@@ -109,6 +109,8 @@ class ClipSearchResult(BaseModel):
     # Video metadata
     video_filename: Optional[str] = None
     created_at: Optional[str] = None
+    # Brand assignments
+    brand_assignments: Optional[list] = None  # [{client_id, brand_name}]
 
 
 class ClipSearchResponse(BaseModel):
@@ -155,6 +157,7 @@ async def search_clips(
     min_cta: Optional[int] = Query(None, description="Minimum CTA score"),
     rating: Optional[str] = Query(None, description="Filter by rating (good/bad)"),
     video_id: Optional[str] = Query(None, description="Filter by video ID"),
+    brand: Optional[str] = Query(None, description="Filter by brand client_id"),
     # Sorting
     sort_by: str = Query("created_at", description="Sort field: created_at, gmv, cta_score, importance_score, duration_sec"),
     sort_order: str = Query("desc", description="Sort order: asc or desc"),
@@ -231,6 +234,16 @@ async def search_clips(
     if video_id:
         conditions.append("vc.video_id = :video_id")
         params["video_id"] = video_id
+
+    # Brand filter (via widget_clip_assignments)
+    if brand:
+        conditions.append("""
+            vc.id::text IN (
+                SELECT wca.clip_id FROM widget_clip_assignments wca
+                WHERE wca.client_id = :brand_filter AND wca.is_active = TRUE
+            )
+        """)
+        params["brand_filter"] = brand
 
     where_clause = " AND ".join(conditions)
 
@@ -318,6 +331,23 @@ async def search_clips(
         result = await db.execute(main_sql, params)
         rows = result.fetchall()
 
+        # Batch load brand assignments for all clip_ids
+        clip_ids_for_brands = [str(row.clip_id) for row in rows]
+        brand_map = {}  # clip_id -> [{client_id, brand_name}]
+        if clip_ids_for_brands:
+            brand_sql = text("""
+                SELECT wca.clip_id, wca.client_id, wc.name as brand_name
+                FROM widget_clip_assignments wca
+                JOIN widget_clients wc ON wc.client_id = wca.client_id
+                WHERE wca.clip_id = ANY(:cids) AND wca.is_active = TRUE
+            """)
+            brand_result = await db.execute(brand_sql, {"cids": clip_ids_for_brands})
+            for br in brand_result.mappings().all():
+                cid = br["clip_id"]
+                if cid not in brand_map:
+                    brand_map[cid] = []
+                brand_map[cid].append({"client_id": br["client_id"], "brand_name": br["brand_name"]})
+
         clips = []
         for row in rows:
             # Build clip URL (with SAS if needed)
@@ -387,6 +417,7 @@ async def search_clips(
                 rating=row.rating,
                 video_filename=row.video_filename,
                 created_at=row.created_at.isoformat() if row.created_at else None,
+                brand_assignments=brand_map.get(str(row.clip_id)),
             ))
 
         return ClipSearchResponse(
@@ -861,3 +892,112 @@ async def _enrich_clip_metadata(db: AsyncSession, clip_id: str) -> bool:
 
     logger.info(f"[clip-db] Enriched clip {clip_id}: {list(updates.keys())}")
     return True
+
+
+# ─── Brand-related endpoints ───
+
+@router.get("/brands")
+async def list_brands_for_clips(
+    db: AsyncSession = Depends(get_db),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """List all active widget clients (brands) for clip assignment dropdown."""
+    if not _check_admin_or_user(x_admin_key=x_admin_key):
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    result = await db.execute(
+        text("""
+            SELECT wc.client_id, wc.name,
+                   COUNT(wca.id) FILTER (WHERE wca.is_active = TRUE) as clip_count
+            FROM widget_clients wc
+            LEFT JOIN widget_clip_assignments wca ON wca.client_id = wc.client_id
+            WHERE wc.is_active = TRUE
+            GROUP BY wc.client_id, wc.name
+            ORDER BY wc.name
+        """)
+    )
+    brands = [
+        {"client_id": r["client_id"], "name": r["name"], "clip_count": r["clip_count"]}
+        for r in result.mappings().all()
+    ]
+    return {"brands": brands}
+
+
+@router.post("/assign-brand")
+async def assign_clip_to_brand(
+    clip_id: str = Query(..., description="Clip ID to assign"),
+    client_id: str = Query(..., description="Brand client_id to assign to"),
+    db: AsyncSession = Depends(get_db),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """Assign a clip to a brand (widget client). Creates widget_clip_assignment."""
+    if not _check_admin_or_user(x_admin_key=x_admin_key):
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    import uuid
+
+    # Check clip exists
+    clip_check = await db.execute(
+        text("SELECT id FROM video_clips WHERE id = :cid"),
+        {"cid": clip_id},
+    )
+    if not clip_check.first():
+        raise HTTPException(status_code=404, detail="Clip not found")
+
+    # Check brand exists
+    brand_check = await db.execute(
+        text("SELECT client_id FROM widget_clients WHERE client_id = :bid AND is_active = TRUE"),
+        {"bid": client_id},
+    )
+    if not brand_check.first():
+        raise HTTPException(status_code=404, detail="Brand not found")
+
+    # Get next sort order
+    max_order = await db.execute(
+        text("SELECT COALESCE(MAX(sort_order), -1) + 1 FROM widget_clip_assignments WHERE client_id = :cid"),
+        {"cid": client_id},
+    )
+    next_order = max_order.scalar() or 0
+
+    # Insert or reactivate
+    await db.execute(
+        text("""
+            INSERT INTO widget_clip_assignments (id, client_id, clip_id, sort_order, is_active, created_at)
+            VALUES (:id, :client_id, :clip_id, :sort_order, TRUE, NOW())
+            ON CONFLICT (client_id, clip_id) DO UPDATE
+            SET is_active = TRUE, sort_order = :sort_order
+        """),
+        {
+            "id": str(uuid.uuid4()),
+            "client_id": client_id,
+            "clip_id": clip_id,
+            "sort_order": next_order,
+        },
+    )
+    await db.commit()
+
+    return {"status": "assigned", "clip_id": clip_id, "client_id": client_id}
+
+
+@router.delete("/unassign-brand")
+async def unassign_clip_from_brand(
+    clip_id: str = Query(..., description="Clip ID to unassign"),
+    client_id: str = Query(..., description="Brand client_id to unassign from"),
+    db: AsyncSession = Depends(get_db),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """Remove a clip from a brand assignment."""
+    if not _check_admin_or_user(x_admin_key=x_admin_key):
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    await db.execute(
+        text("""
+            UPDATE widget_clip_assignments
+            SET is_active = FALSE
+            WHERE client_id = :client_id AND clip_id = :clip_id
+        """),
+        {"client_id": client_id, "clip_id": clip_id},
+    )
+    await db.commit()
+
+    return {"status": "unassigned", "clip_id": clip_id, "client_id": client_id}
