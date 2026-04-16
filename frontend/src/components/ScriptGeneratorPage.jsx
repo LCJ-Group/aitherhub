@@ -778,7 +778,7 @@ export default function ScriptGeneratorPage() {
                 {error}
               </div>
             )}
-          </div>>
+          </div>
 
           {/* ── Right: Output & Patterns ── */}
           <div className="lg:col-span-3 space-y-4">
