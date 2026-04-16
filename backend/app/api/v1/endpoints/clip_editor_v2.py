@@ -1166,6 +1166,7 @@ async def transcribe_clip(
             "end": seg["end"],
             "text": seg["text"],
             "source": "whisper",
+            "language": req.target_language or "ja",
             **({
                 "words": seg["words"]
             } if seg.get("words") else {}),

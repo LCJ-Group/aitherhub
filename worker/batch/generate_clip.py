@@ -2093,6 +2093,8 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
                     {"word": w.get("word", ""), "start": round(w.get("start", 0), 3), "end": round(w.get("end", 0), 3)}
                     for w in seg.get("words", [])
                 ] if seg.get("words") else [],
+                "source": "whisper",
+                "language": "ja",
             })
         update_clip_status(clip_id, "completed", clip_url=uploaded_url, captions=captions_data if captions_data else None)
         logger.info(f"=== Clip generation completed successfully ({len(captions_data)} captions saved) ===")
