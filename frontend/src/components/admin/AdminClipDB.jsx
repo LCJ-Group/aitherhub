@@ -3,7 +3,7 @@ import {
   Search, Filter, Tag, Play, X, BarChart3, ShoppingBag, Users,
   Star, ThumbsUp, ThumbsDown, ArrowUpDown, Database, Sparkles,
   Loader2, RefreshCw, ChevronLeft, ChevronRight, Building2, Plus, Minus,
-  Download, Subtitles, Scissors, CheckCircle,
+  Download, Subtitles, Scissors, CheckCircle, Ban, AlertTriangle, Undo2,
 } from "lucide-react";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
@@ -98,13 +98,75 @@ function getBrandColor(idx) {
 }
 
 // ─── Clip Card Component ───
+// ─── NG Reason labels ───
+const NG_REASONS = [
+  { key: "low_quality", label: "画質が悪い" },
+  { key: "audio_bad", label: "音声が悪い" },
+  { key: "irrelevant", label: "内容が無関係" },
+  { key: "too_short", label: "短すぎる" },
+  { key: "too_long", label: "長すぎる" },
+  { key: "cut_position_bad", label: "カット位置が悪い" },
+  { key: "duplicate", label: "重複" },
+  { key: "no_product", label: "商品が映っていない" },
+  { key: "blurry", label: "ぼやけている" },
+  { key: "other", label: "その他" },
+];
+
 function ClipCard({ clip, onPlay, brands, adminKey, onBrandChange }) {
   const [expanded, setExpanded] = useState(false);
   const [showBrandPicker, setShowBrandPicker] = useState(false);
   const [assigning, setAssigning] = useState(false);
   const [brandSearch, setBrandSearch] = useState("");
+  const [showNgPicker, setShowNgPicker] = useState(false);
+  const [ngLoading, setNgLoading] = useState(false);
+  const [localUnusable, setLocalUnusable] = useState(clip.is_unusable || false);
+  const [localReason, setLocalReason] = useState(clip.unusable_reason || "");
   const tags = clip.tags || clip.sales_psychology_tags || [];
   const assignments = clip.brand_assignments || [];
+
+  const handleMarkNG = async (reasonKey) => {
+    setNgLoading(true);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/v1/clip-db/mark-unusable?clip_id=${clip.clip_id}`,
+        {
+          method: "POST",
+          headers: { "X-Admin-Key": adminKey, "Content-Type": "application/json" },
+          body: JSON.stringify({ reason: reasonKey }),
+        }
+      );
+      if (res.ok) {
+        setLocalUnusable(true);
+        setLocalReason(reasonKey);
+        setShowNgPicker(false);
+      }
+    } catch (e) {
+      console.error("Mark NG failed:", e);
+    } finally {
+      setNgLoading(false);
+    }
+  };
+
+  const handleUnmarkNG = async () => {
+    setNgLoading(true);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/v1/clip-db/unmark-unusable?clip_id=${clip.clip_id}`,
+        {
+          method: "POST",
+          headers: { "X-Admin-Key": adminKey },
+        }
+      );
+      if (res.ok) {
+        setLocalUnusable(false);
+        setLocalReason("");
+      }
+    } catch (e) {
+      console.error("Unmark NG failed:", e);
+    } finally {
+      setNgLoading(false);
+    }
+  };
 
   const handleAssignBrand = async (clientId) => {
     setAssigning(true);
@@ -148,8 +210,24 @@ function ClipCard({ clip, onPlay, brands, adminKey, onBrandChange }) {
     (b) => !brandSearch || b.name.toLowerCase().includes(brandSearch.toLowerCase())
   );
 
+  // Get NG reason label
+  const ngReasonLabel = localReason
+    ? (NG_REASONS.find(r => localReason.startsWith(r.key))?.label || localReason)
+    : "";
+
   return (
-    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden hover:shadow-lg transition-all duration-300 group">
+    <div className={`rounded-xl border overflow-hidden hover:shadow-lg transition-all duration-300 group relative ${
+      localUnusable ? "border-red-300 bg-red-50 opacity-75" : "border-gray-200 bg-white"
+    }`}>
+      {/* NG overlay */}
+      {localUnusable && (
+        <div className="absolute inset-0 z-10 pointer-events-none">
+          <div className="absolute inset-0 bg-red-500/10" />
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 rotate-[-20deg]">
+            <span className="text-red-500/30 text-5xl font-black tracking-widest select-none">NG</span>
+          </div>
+        </div>
+      )}
       {/* Video preview area */}
       <div className="relative aspect-[9/16] max-h-[280px] bg-gradient-to-br from-gray-900 to-gray-800 overflow-hidden">
         {clip.clip_url ? (
@@ -359,6 +437,59 @@ function ClipCard({ clip, onPlay, brands, adminKey, onBrandChange }) {
             {clip.transcript_text}
           </p>
         )}
+
+        {/* NG mark / unmark section */}
+        <div className="relative pt-1 border-t border-gray-100 mt-1">
+          {localUnusable ? (
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] text-red-500 font-medium flex items-center gap-0.5">
+                <Ban className="w-3 h-3" /> NG: {ngReasonLabel}
+              </span>
+              <button
+                onClick={(e) => { e.stopPropagation(); handleUnmarkNG(); }}
+                disabled={ngLoading}
+                className="text-[10px] text-blue-500 hover:text-blue-700 flex items-center gap-0.5 z-20 relative"
+              >
+                {ngLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Undo2 className="w-3 h-3" />}
+                NG解除
+              </button>
+            </div>
+          ) : (
+            <div className="relative">
+              <button
+                onClick={(e) => { e.stopPropagation(); setShowNgPicker(!showNgPicker); }}
+                className="text-[10px] text-gray-400 hover:text-red-500 flex items-center gap-0.5 transition"
+              >
+                <Ban className="w-3 h-3" /> 使えない
+              </button>
+              {showNgPicker && (
+                <div className="absolute z-30 bottom-full left-0 mb-1 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[180px]">
+                  <div className="px-3 py-1.5 text-[10px] font-semibold text-gray-500 border-b border-gray-100 flex items-center gap-1">
+                    <AlertTriangle className="w-3 h-3 text-red-400" /> NG理由を選択
+                  </div>
+                  {NG_REASONS.map((r) => (
+                    <button
+                      key={r.key}
+                      onClick={(e) => { e.stopPropagation(); handleMarkNG(r.key); }}
+                      disabled={ngLoading}
+                      className="w-full text-left px-3 py-1.5 text-xs hover:bg-red-50 hover:text-red-600 transition flex items-center gap-1.5"
+                    >
+                      {r.label}
+                    </button>
+                  ))}
+                  <div className="border-t border-gray-100 pt-0.5">
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setShowNgPicker(false); }}
+                      className="w-full text-left px-3 py-1 text-[10px] text-gray-400 hover:text-gray-600"
+                    >
+                      閉じる
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -496,6 +627,7 @@ export default function AdminClipDB({ adminKey }) {
   const [selectedBrand, setSelectedBrand] = useState("");
   const [soldFilter, setSoldFilter] = useState(null);
   const [ratingFilter, setRatingFilter] = useState("");
+  const [unusableFilter, setUnusableFilter] = useState(null);
   const [sortBy, setSortBy] = useState("created_at");
   const [sortOrder, setSortOrder] = useState("desc");
   const [page, setPage] = useState(1);
@@ -529,7 +661,7 @@ export default function AdminClipDB({ adminKey }) {
     if (searchMode === "structured" && enrichTriggered.current) {
       loadClips();
     }
-  }, [page, sortBy, sortOrder, selectedTag, soldFilter, ratingFilter, selectedBrand]);
+  }, [page, sortBy, sortOrder, selectedTag, soldFilter, ratingFilter, selectedBrand, unusableFilter]);
 
   async function autoEnrichAndLoad() {
     // 1. Auto enrich (non-blocking for already-enriched clips)
@@ -599,6 +731,7 @@ export default function AdminClipDB({ adminKey }) {
       if (selectedBrand) params.brand = selectedBrand;
       if (soldFilter !== null) params.is_sold = soldFilter;
       if (ratingFilter) params.rating = ratingFilter;
+      if (unusableFilter !== null) params.is_unusable = unusableFilter;
 
       const data = await clipDbFetch("/search", params, adminKey);
       setClips(data.clips || []);
@@ -660,7 +793,7 @@ export default function AdminClipDB({ adminKey }) {
     // Reload clips and brands after brand assignment change
     loadClips();
     loadBrands();
-  }, [searchQuery, selectedTag, selectedProduct, selectedLiver, selectedBrand, soldFilter, ratingFilter, page, sortBy, sortOrder]);
+  }, [searchQuery, selectedTag, selectedProduct, selectedLiver, selectedBrand, soldFilter, ratingFilter, unusableFilter, page, sortBy, sortOrder]);
 
   return (
     <div>
@@ -811,6 +944,20 @@ export default function AdminClipDB({ adminKey }) {
             </select>
 
             <select
+              value={unusableFilter === null ? "" : unusableFilter.toString()}
+              onChange={(e) => {
+                const v = e.target.value;
+                setUnusableFilter(v === "" ? null : v === "true");
+                setPage(1);
+              }}
+              className="px-3 py-1.5 rounded-lg border border-gray-300 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+            >
+              <option value="">NG: すべて</option>
+              <option value="true">NGのみ</option>
+              <option value="false">使えるのみ</option>
+            </select>
+
+            <select
               value={sortBy}
               onChange={(e) => { setSortBy(e.target.value); setPage(1); }}
               className="px-3 py-1.5 rounded-lg border border-gray-300 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-purple-500"
@@ -848,11 +995,11 @@ export default function AdminClipDB({ adminKey }) {
               className="px-3 py-1.5 rounded-lg border border-gray-300 text-xs w-32 focus:outline-none focus:ring-2 focus:ring-purple-500"
             />
 
-            {(selectedTag || selectedProduct || selectedLiver || selectedBrand || soldFilter !== null || ratingFilter) && (
+            {(selectedTag || selectedProduct || selectedLiver || selectedBrand || soldFilter !== null || ratingFilter || unusableFilter !== null) && (
               <button
                 onClick={() => {
                   setSelectedTag(""); setSelectedProduct(""); setSelectedLiver("");
-                  setSelectedBrand(""); setSoldFilter(null); setRatingFilter(""); setPage(1);
+                  setSelectedBrand(""); setSoldFilter(null); setRatingFilter(""); setUnusableFilter(null); setPage(1);
                 }}
                 className="px-2 py-1.5 rounded-lg text-xs text-red-500 hover:bg-red-50 border border-red-200"
               >

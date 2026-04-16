@@ -114,6 +114,9 @@ class ClipSearchResult(BaseModel):
     # Popularity / edit status
     has_subtitle: Optional[bool] = None  # True if exported_url exists
     download_count: Optional[int] = None  # Number of times downloaded
+    # Unusable marking
+    is_unusable: Optional[bool] = None
+    unusable_reason: Optional[str] = None
 
 
 class ClipSearchResponse(BaseModel):
@@ -161,6 +164,7 @@ async def search_clips(
     rating: Optional[str] = Query(None, description="Filter by rating (good/bad)"),
     video_id: Optional[str] = Query(None, description="Filter by video ID"),
     brand: Optional[str] = Query(None, description="Filter by brand client_id"),
+    is_unusable: Optional[bool] = Query(None, description="Filter by unusable status"),
     # Sorting
     sort_by: str = Query("created_at", description="Sort field: created_at, gmv, cta_score, importance_score, duration_sec"),
     sort_order: str = Query("desc", description="Sort order: asc or desc"),
@@ -248,6 +252,10 @@ async def search_clips(
         """)
         params["brand_filter"] = brand
 
+    if is_unusable is not None:
+        conditions.append("COALESCE(vc.is_unusable, FALSE) = :is_unusable")
+        params["is_unusable"] = is_unusable
+
     where_clause = " AND ".join(conditions)
 
     # Validate sort
@@ -314,7 +322,9 @@ async def search_clips(
             cf.rating,
             v.original_filename as video_filename,
             vc.exported_url,
-            COALESCE(cdl.download_count, 0) as download_count
+            COALESCE(cdl.download_count, 0) as download_count,
+            COALESCE(vc.is_unusable, FALSE) as is_unusable,
+            vc.unusable_reason
         FROM video_clips vc
         LEFT JOIN video_phases vp ON vp.video_id = vc.video_id
             AND vp.phase_index = CASE
@@ -430,6 +440,8 @@ async def search_clips(
                 brand_assignments=brand_map.get(str(row.clip_id)),
                 has_subtitle=bool(row.exported_url) if hasattr(row, 'exported_url') else None,
                 download_count=row.download_count if hasattr(row, 'download_count') else 0,
+                is_unusable=bool(row.is_unusable) if hasattr(row, 'is_unusable') else False,
+                unusable_reason=row.unusable_reason if hasattr(row, 'unusable_reason') else None,
             ))
 
         return ClipSearchResponse(
@@ -1026,3 +1038,152 @@ async def unassign_clip_from_brand(
     await db.commit()
 
     return {"status": "unassigned", "clip_id": clip_id, "client_id": client_id}
+
+
+# ─── Unusable Clip Marking ───
+
+UNUSABLE_REASONS = [
+    "low_quality",       # 画質が悪い
+    "audio_bad",         # 音声が悪い
+    "irrelevant",        # 内容が無関係
+    "too_short",         # 短すぎる
+    "too_long",          # 長すぎる
+    "cut_position_bad",  # カット位置が悪い
+    "duplicate",         # 重複
+    "no_product",        # 商品が映っていない
+    "blurry",            # ぼやけている
+    "other",             # その他
+]
+
+class MarkUnusableRequest(BaseModel):
+    reason: str = Field(..., description="Reason for marking as unusable")
+    note: Optional[str] = Field(None, description="Optional free-text note")
+
+
+@router.post("/mark-unusable")
+async def mark_clip_unusable(
+    clip_id: str = Query(..., description="Clip ID to mark as unusable"),
+    req: MarkUnusableRequest = None,
+    db: AsyncSession = Depends(get_db),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """
+    Mark a clip as unusable with a reason.
+    This is used for AI learning — unusable clips are excluded from
+    training data and widget distribution.
+    """
+    if not _check_admin_or_user(x_admin_key=x_admin_key):
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    if req.reason not in UNUSABLE_REASONS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid reason: {req.reason}. Valid: {UNUSABLE_REASONS}",
+        )
+
+    reason_text = req.reason
+    if req.note:
+        reason_text = f"{req.reason}: {req.note}"
+
+    try:
+        await db.execute(
+            text("""
+                UPDATE video_clips
+                SET is_unusable = TRUE,
+                    unusable_reason = :reason,
+                    unusable_at = NOW()
+                WHERE id = :clip_id::uuid
+            """),
+            {"clip_id": clip_id, "reason": reason_text},
+        )
+        await db.commit()
+
+        # Also record as 'bad' rating in clip_feedback for AI training
+        try:
+            feedback_id = str(__import__('uuid').uuid4())
+            await db.execute(
+                text("""
+                    INSERT INTO clip_feedback (
+                        id, video_id, phase_index, feedback, rating,
+                        reason_tags, clip_id, created_at, updated_at
+                    )
+                    SELECT
+                        :fid, vc.video_id, vc.phase_index, 'rejected', 'bad',
+                        :reason_tags, :clip_id, NOW(), NOW()
+                    FROM video_clips vc WHERE vc.id = :clip_id_uuid::uuid
+                    ON CONFLICT (video_id, phase_index)
+                    DO UPDATE SET
+                        feedback = 'rejected',
+                        rating = 'bad',
+                        reason_tags = EXCLUDED.reason_tags,
+                        updated_at = NOW()
+                """),
+                {
+                    "fid": feedback_id,
+                    "clip_id": clip_id,
+                    "clip_id_uuid": clip_id,
+                    "reason_tags": json.dumps([req.reason]),
+                },
+            )
+            await db.commit()
+        except Exception as e:
+            logger.warning(f"[clip-db] Failed to record feedback for unusable clip: {e}")
+
+        logger.info(f"[clip-db] Marked clip {clip_id} as unusable: {reason_text}")
+        return {"status": "marked", "clip_id": clip_id, "reason": reason_text}
+
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"[clip-db] Failed to mark unusable: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to mark unusable: {str(e)}")
+
+
+@router.post("/unmark-unusable")
+async def unmark_clip_unusable(
+    clip_id: str = Query(..., description="Clip ID to unmark"),
+    db: AsyncSession = Depends(get_db),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """Remove the unusable mark from a clip."""
+    if not _check_admin_or_user(x_admin_key=x_admin_key):
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    try:
+        await db.execute(
+            text("""
+                UPDATE video_clips
+                SET is_unusable = FALSE,
+                    unusable_reason = NULL,
+                    unusable_at = NULL
+                WHERE id = :clip_id::uuid
+            """),
+            {"clip_id": clip_id},
+        )
+        await db.commit()
+        logger.info(f"[clip-db] Unmarked clip {clip_id} as usable")
+        return {"status": "unmarked", "clip_id": clip_id}
+
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"[clip-db] Failed to unmark unusable: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to unmark: {str(e)}")
+
+
+@router.get("/unusable-reasons")
+async def list_unusable_reasons(
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """Return the list of valid unusable reasons with Japanese labels."""
+    REASON_LABELS = {
+        "low_quality": "画質が悪い",
+        "audio_bad": "音声が悪い",
+        "irrelevant": "内容が無関係",
+        "too_short": "短すぎる",
+        "too_long": "長すぎる",
+        "cut_position_bad": "カット位置が悪い",
+        "duplicate": "重複",
+        "no_product": "商品が映っていない",
+        "blurry": "ぼやけている",
+        "other": "その他",
+    }
+    return {"reasons": [{"key": k, "label": v} for k, v in REASON_LABELS.items()]}

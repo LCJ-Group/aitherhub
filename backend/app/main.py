@@ -271,6 +271,10 @@ async def ensure_tables_exist():
                 "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS enriched_at TIMESTAMPTZ",
                 "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS exported_url TEXT",
                 "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS exported_at TIMESTAMPTZ",
+                # ── Unusable clip marking ──
+                "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS is_unusable BOOLEAN DEFAULT FALSE",
+                "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS unusable_reason TEXT",
+                "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS unusable_at TIMESTAMPTZ",
             ]:
                 try:
                     await conn.execute(text(col_sql))
