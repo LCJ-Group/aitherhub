@@ -111,6 +111,9 @@ class ClipSearchResult(BaseModel):
     created_at: Optional[str] = None
     # Brand assignments
     brand_assignments: Optional[list] = None  # [{client_id, brand_name}]
+    # Popularity / edit status
+    has_subtitle: Optional[bool] = None  # True if exported_url exists
+    download_count: Optional[int] = None  # Number of times downloaded
 
 
 class ClipSearchResponse(BaseModel):
@@ -309,7 +312,9 @@ async def search_clips(
             COALESCE(vp.gmv, 0) as vp_gmv,
             COALESCE(vp.viewer_count, 0) as vp_viewer_count,
             cf.rating,
-            v.original_filename as video_filename
+            v.original_filename as video_filename,
+            vc.exported_url,
+            COALESCE(cdl.download_count, 0) as download_count
         FROM video_clips vc
         LEFT JOIN video_phases vp ON vp.video_id = vc.video_id
             AND vp.phase_index = CASE
@@ -319,6 +324,11 @@ async def search_clips(
         LEFT JOIN clip_feedback cf ON cf.video_id = vc.video_id
             AND cf.phase_index = vc.phase_index
         LEFT JOIN videos v ON v.id = vc.video_id
+        LEFT JOIN (
+            SELECT clip_id, COUNT(*) as download_count
+            FROM clip_download_log
+            GROUP BY clip_id
+        ) cdl ON cdl.clip_id = vc.id
         WHERE {where_clause}
         ORDER BY vc.id, {sort_col} {sort_dir}
         LIMIT :limit OFFSET :offset
@@ -418,6 +428,8 @@ async def search_clips(
                 video_filename=row.video_filename,
                 created_at=row.created_at.isoformat() if row.created_at else None,
                 brand_assignments=brand_map.get(str(row.clip_id)),
+                has_subtitle=bool(row.exported_url) if hasattr(row, 'exported_url') else None,
+                download_count=row.download_count if hasattr(row, 'download_count') else 0,
             ))
 
         return ClipSearchResponse(
@@ -907,17 +919,30 @@ async def list_brands_for_clips(
 
     result = await db.execute(
         text("""
-            SELECT wc.client_id, wc.name,
-                   COUNT(wca.id) FILTER (WHERE wca.is_active = TRUE) as clip_count
+            SELECT wc.client_id, wc.name, wc.logo_url, wc.theme_color,
+                   COUNT(wca.id) FILTER (WHERE wca.is_active = TRUE) as clip_count,
+                   COUNT(wca.id) FILTER (WHERE wca.is_active = TRUE AND vc.is_sold = TRUE) as sold_count,
+                   COALESCE(SUM(vc.gmv) FILTER (WHERE wca.is_active = TRUE), 0) as total_gmv,
+                   COUNT(wca.id) FILTER (WHERE wca.is_active = TRUE AND vc.exported_url IS NOT NULL) as subtitle_count
             FROM widget_clients wc
             LEFT JOIN widget_clip_assignments wca ON wca.client_id = wc.client_id
+            LEFT JOIN video_clips vc ON vc.id::text = wca.clip_id AND wca.is_active = TRUE
             WHERE wc.is_active = TRUE
-            GROUP BY wc.client_id, wc.name
-            ORDER BY wc.name
+            GROUP BY wc.client_id, wc.name, wc.logo_url, wc.theme_color
+            ORDER BY clip_count DESC, wc.name
         """)
     )
     brands = [
-        {"client_id": r["client_id"], "name": r["name"], "clip_count": r["clip_count"]}
+        {
+            "client_id": r["client_id"],
+            "name": r["name"],
+            "logo_url": r["logo_url"],
+            "theme_color": r["theme_color"],
+            "clip_count": r["clip_count"],
+            "sold_count": r["sold_count"],
+            "total_gmv": float(r["total_gmv"] or 0),
+            "subtitle_count": r["subtitle_count"],
+        }
         for r in result.mappings().all()
     ]
     return {"brands": brands}

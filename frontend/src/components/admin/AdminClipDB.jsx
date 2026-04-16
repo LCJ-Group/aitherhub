@@ -3,6 +3,7 @@ import {
   Search, Filter, Tag, Play, X, BarChart3, ShoppingBag, Users,
   Star, ThumbsUp, ThumbsDown, ArrowUpDown, Database, Sparkles,
   Loader2, RefreshCw, ChevronLeft, ChevronRight, Building2, Plus, Minus,
+  Download, Subtitles, Scissors, CheckCircle,
 } from "lucide-react";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
@@ -181,6 +182,19 @@ function ClipCard({ clip, onPlay, brands, adminKey, onBrandChange }) {
           {clip.rating === "bad" && (
             <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-red-500 text-white shadow flex items-center gap-0.5">
               <ThumbsDown className="w-2.5 h-2.5" /> Bad
+            </span>
+          )}
+        </div>
+        {/* Edit/Download status badges - top right */}
+        <div className="absolute top-2 right-2 flex flex-col gap-1 items-end">
+          {clip.has_subtitle && (
+            <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-purple-500 text-white shadow flex items-center gap-0.5">
+              <Subtitles className="w-2.5 h-2.5" /> 字幕済
+            </span>
+          )}
+          {clip.download_count > 0 && (
+            <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-orange-500 text-white shadow flex items-center gap-0.5">
+              <Download className="w-2.5 h-2.5" /> DL {clip.download_count}
             </span>
           )}
         </div>
@@ -856,6 +870,73 @@ export default function AdminClipDB({ adminKey }) {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
           <TopTagsChart tags={stats.top_tags} />
           <TopProductsChart products={stats.top_products} />
+        </div>
+      )}
+
+      {/* Brand Cards - Horizontal scrollable */}
+      {brands.length > 0 && (
+        <div className="mb-6">
+          <h3 className="text-sm font-bold text-gray-700 mb-3 flex items-center gap-1.5">
+            <Building2 className="w-4 h-4 text-blue-500" />
+            \u30D6\u30E9\u30F3\u30C9\u4E00\u89A7
+            <span className="text-xs font-normal text-gray-400">\u30AF\u30EA\u30C3\u30AF\u3067\u30D5\u30A3\u30EB\u30BF</span>
+          </h3>
+          <div className="flex gap-3 overflow-x-auto pb-3 scrollbar-thin">
+            {/* All brands button */}
+            <button
+              onClick={() => { setSelectedBrand(""); setPage(1); }}
+              className={`flex-shrink-0 px-4 py-3 rounded-xl border-2 transition-all duration-200 min-w-[120px] text-center ${
+                !selectedBrand
+                  ? "border-purple-500 bg-purple-50 shadow-md"
+                  : "border-gray-200 bg-white hover:border-gray-300 hover:shadow-sm"
+              }`}
+            >
+              <div className="text-lg font-bold text-gray-900">{brands.reduce((s, b) => s + b.clip_count, 0)}</div>
+              <div className="text-[11px] text-gray-500">\u5168\u30D6\u30E9\u30F3\u30C9</div>
+            </button>
+            {brands.filter(b => b.clip_count > 0).map((b) => {
+              const isActive = selectedBrand === b.client_id;
+              return (
+                <button
+                  key={b.client_id}
+                  onClick={() => { setSelectedBrand(isActive ? "" : b.client_id); setPage(1); }}
+                  className={`flex-shrink-0 px-4 py-3 rounded-xl border-2 transition-all duration-200 min-w-[140px] text-left ${
+                    isActive
+                      ? "border-blue-500 bg-blue-50 shadow-md"
+                      : "border-gray-200 bg-white hover:border-gray-300 hover:shadow-sm"
+                  }`}
+                >
+                  <div className="flex items-center gap-2 mb-1">
+                    {b.logo_url ? (
+                      <img src={b.logo_url} alt={b.name} className="w-6 h-6 rounded-full object-cover border border-gray-200" />
+                    ) : (
+                      <div className="w-6 h-6 rounded-full bg-gradient-to-br from-blue-400 to-purple-500 flex items-center justify-center text-white text-[10px] font-bold">
+                        {b.name?.charAt(0)}
+                      </div>
+                    )}
+                    <span className="text-xs font-medium text-gray-800 truncate max-w-[100px]">{b.name}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg font-bold text-gray-900">{b.clip_count}</span>
+                    <span className="text-[10px] text-gray-400">\u30AF\u30EA\u30C3\u30D7</span>
+                  </div>
+                  <div className="flex items-center gap-2 mt-1 text-[10px]">
+                    {b.sold_count > 0 && (
+                      <span className="text-green-600 font-medium">\u2713 {b.sold_count}\u58F2</span>
+                    )}
+                    {b.subtitle_count > 0 && (
+                      <span className="text-purple-600 font-medium flex items-center gap-0.5">
+                        <Subtitles className="w-2.5 h-2.5" />{b.subtitle_count}
+                      </span>
+                    )}
+                    {b.total_gmv > 0 && (
+                      <span className="text-blue-600 font-medium">{formatGMV(b.total_gmv)}</span>
+                    )}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
         </div>
       )}
 
