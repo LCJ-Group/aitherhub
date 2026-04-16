@@ -101,6 +101,7 @@ function ClipCard({ clip, onPlay, brands, adminKey, onBrandChange }) {
   const [expanded, setExpanded] = useState(false);
   const [showBrandPicker, setShowBrandPicker] = useState(false);
   const [assigning, setAssigning] = useState(false);
+  const [brandSearch, setBrandSearch] = useState("");
   const tags = clip.tags || clip.sales_psychology_tags || [];
   const assignments = clip.brand_assignments || [];
 
@@ -139,9 +140,11 @@ function ClipCard({ clip, onPlay, brands, adminKey, onBrandChange }) {
     }
   };
 
-  // Brands not yet assigned
+  // Brands not yet assigned, filtered by search
   const unassignedBrands = brands.filter(
     (b) => !assignments.some((a) => a.client_id === b.client_id)
+  ).filter(
+    (b) => !brandSearch || b.name.toLowerCase().includes(brandSearch.toLowerCase())
   );
 
   return (
@@ -251,29 +254,46 @@ function ClipCard({ clip, onPlay, brands, adminKey, onBrandChange }) {
 
           {/* Brand picker dropdown */}
           {showBrandPicker && (
-            <div className="absolute z-20 top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[160px] max-h-[200px] overflow-y-auto">
-              {assigning && (
-                <div className="px-3 py-2 text-xs text-gray-400 flex items-center gap-1">
-                  <Loader2 className="w-3 h-3 animate-spin" /> 処理中...
-                </div>
-              )}
-              {!assigning && unassignedBrands.length === 0 && (
-                <div className="px-3 py-2 text-xs text-gray-400">全ブランド割当済み</div>
-              )}
-              {!assigning && unassignedBrands.map((b) => (
+            <div className="absolute z-20 top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[200px] max-h-[280px] flex flex-col">
+              {/* Search input */}
+              <div className="px-2 py-1.5 border-b border-gray-100">
+                <input
+                  type="text"
+                  placeholder="ブランド検索..."
+                  value={brandSearch}
+                  onChange={(e) => setBrandSearch(e.target.value)}
+                  onClick={(e) => e.stopPropagation()}
+                  className="w-full px-2 py-1 text-xs border border-gray-200 rounded focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-200"
+                  autoFocus
+                />
+              </div>
+              {/* Brand list */}
+              <div className="overflow-y-auto flex-1 max-h-[200px]">
+                {assigning && (
+                  <div className="px-3 py-2 text-xs text-gray-400 flex items-center gap-1">
+                    <Loader2 className="w-3 h-3 animate-spin" /> 処理中...
+                  </div>
+                )}
+                {!assigning && unassignedBrands.length === 0 && (
+                  <div className="px-3 py-2 text-xs text-gray-400">
+                    {brandSearch ? "該当なし" : "全ブランド割当済み"}
+                  </div>
+                )}
+                {!assigning && unassignedBrands.map((b) => (
+                  <button
+                    key={b.client_id}
+                    onClick={() => handleAssignBrand(b.client_id)}
+                    className="w-full text-left px-3 py-1.5 text-xs hover:bg-blue-50 flex items-center gap-1.5 transition"
+                  >
+                    <Building2 className="w-3 h-3 text-gray-400 flex-shrink-0" />
+                    <span className="truncate">{b.name}</span>
+                    <span className="text-gray-300 ml-auto flex-shrink-0">({b.clip_count})</span>
+                  </button>
+                ))}
+              </div>
+              <div className="border-t border-gray-100 pt-1 pb-0.5">
                 <button
-                  key={b.client_id}
-                  onClick={() => handleAssignBrand(b.client_id)}
-                  className="w-full text-left px-3 py-1.5 text-xs hover:bg-blue-50 flex items-center gap-1.5 transition"
-                >
-                  <Building2 className="w-3 h-3 text-gray-400" />
-                  <span className="truncate">{b.name}</span>
-                  <span className="text-gray-300 ml-auto">({b.clip_count})</span>
-                </button>
-              ))}
-              <div className="border-t border-gray-100 mt-1 pt-1">
-                <button
-                  onClick={() => setShowBrandPicker(false)}
+                  onClick={() => { setShowBrandPicker(false); setBrandSearch(""); }}
                   className="w-full text-left px-3 py-1 text-[10px] text-gray-400 hover:text-gray-600"
                 >
                   閉じる
