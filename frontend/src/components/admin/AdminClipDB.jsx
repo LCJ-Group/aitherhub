@@ -878,8 +878,8 @@ export default function AdminClipDB({ adminKey }) {
         <div className="mb-6">
           <h3 className="text-sm font-bold text-gray-700 mb-3 flex items-center gap-1.5">
             <Building2 className="w-4 h-4 text-blue-500" />
-            \u30D6\u30E9\u30F3\u30C9\u4E00\u89A7
-            <span className="text-xs font-normal text-gray-400">\u30AF\u30EA\u30C3\u30AF\u3067\u30D5\u30A3\u30EB\u30BF</span>
+            ブランド一覧
+            <span className="text-xs font-normal text-gray-400">クリックでフィルタ</span>
           </h3>
           <div className="flex gap-3 overflow-x-auto pb-3 scrollbar-thin">
             {/* All brands button */}
@@ -892,7 +892,7 @@ export default function AdminClipDB({ adminKey }) {
               }`}
             >
               <div className="text-lg font-bold text-gray-900">{brands.reduce((s, b) => s + b.clip_count, 0)}</div>
-              <div className="text-[11px] text-gray-500">\u5168\u30D6\u30E9\u30F3\u30C9</div>
+              <div className="text-[11px] text-gray-500">全ブランド</div>
             </button>
             {brands.filter(b => b.clip_count > 0).map((b) => {
               const isActive = selectedBrand === b.client_id;
@@ -918,11 +918,11 @@ export default function AdminClipDB({ adminKey }) {
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="text-lg font-bold text-gray-900">{b.clip_count}</span>
-                    <span className="text-[10px] text-gray-400">\u30AF\u30EA\u30C3\u30D7</span>
+                    <span className="text-[10px] text-gray-400">クリップ</span>
                   </div>
                   <div className="flex items-center gap-2 mt-1 text-[10px]">
                     {b.sold_count > 0 && (
-                      <span className="text-green-600 font-medium">\u2713 {b.sold_count}\u58F2</span>
+                      <span className="text-green-600 font-medium">{"\u2713"} {b.sold_count}売</span>
                     )}
                     {b.subtitle_count > 0 && (
                       <span className="text-purple-600 font-medium flex items-center gap-0.5">
