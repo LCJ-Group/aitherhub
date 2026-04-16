@@ -333,6 +333,7 @@ async def list_widget_clients(
                     SELECT * FROM (
                         SELECT wca.client_id, wca.clip_id, vc.thumbnail_url,
                                wca.product_name, vc.duration_sec,
+                               vc.clip_url, vc.exported_url,
                                ROW_NUMBER() OVER (PARTITION BY wca.client_id ORDER BY wca.sort_order ASC, wca.created_at DESC) as rn
                         FROM widget_clip_assignments wca
                         LEFT JOIN video_clips vc ON vc.id::text = wca.clip_id
@@ -341,13 +342,25 @@ async def list_widget_clients(
                 """),
                 {"cids": active_cids},
             )
+            from app.services.storage_service import generate_read_sas_from_url as _sas
             for cr in cp_result.mappings().all():
                 cid = cr["client_id"]
                 if cid not in clips_by_client:
                     clips_by_client[cid] = []
+                # Prefer exported_url (subtitled) over clip_url
+                raw_url = cr.get("exported_url") or cr.get("clip_url") or ""
+                thumb_url = cr.get("thumbnail_url") or ""
+                try:
+                    if raw_url and "blob.core.windows.net" in raw_url:
+                        raw_url = _sas(raw_url)
+                    if thumb_url and "blob.core.windows.net" in thumb_url:
+                        thumb_url = _sas(thumb_url)
+                except Exception:
+                    pass
                 clips_by_client[cid].append({
                     "clip_id": cr["clip_id"],
-                    "thumbnail_url": cr.get("thumbnail_url") or "",
+                    "clip_url": raw_url,
+                    "thumbnail_url": thumb_url,
                     "product_name": cr.get("product_name"),
                     "duration_sec": cr.get("duration_sec"),
                 })

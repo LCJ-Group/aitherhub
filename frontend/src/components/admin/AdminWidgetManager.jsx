@@ -396,7 +396,12 @@ export default function AdminWidgetManager({ adminKey }) {
             <div key={client.client_id} className="bg-white rounded-lg border p-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <div className="w-4 h-4 rounded-full" style={{ backgroundColor: client.theme_color || "#FF2D55" }} />
+                  {client.logo_url ? (
+                    <img src={client.logo_url} alt={client.name} className="w-8 h-8 rounded-full object-cover border border-gray-200" onError={(e) => { e.target.style.display = 'none'; e.target.nextElementSibling.style.display = 'flex'; }} />
+                  ) : null}
+                  <div className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold" style={{ backgroundColor: client.theme_color || "#FF2D55", display: client.logo_url ? 'none' : 'flex' }}>
+                    {client.name?.charAt(0)}
+                  </div>
                   <div>
                     <h4 className="font-semibold text-gray-800">{client.name}</h4>
                     <p className="text-xs text-gray-500">{client.domain} — ID: {client.client_id}</p>
