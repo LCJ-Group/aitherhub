@@ -1,5 +1,5 @@
 /**
- * AitherHub Widget Loader v2.6 — TikTok-Style Fullscreen Feed + Product Card + Subtitles
+ * AitherHub Widget Loader v2.7 — TikTok-Style Fullscreen Feed + Product Card + Subtitles
  *
  * GTM経由で配信される軽量エントリーポイント。
  * 先方のECサイトに1行のタグを追加するだけで、
@@ -45,6 +45,10 @@
  *   - Mute button pulse animation when muted to draw attention
  *   - localStorage remembers user sound preference for next visit
  *   - Returning users with sound ON get auto-unmute attempt
+ *
+ * v2.7 Changes:
+ *   - CTA buttons hidden when clip has no product_url/product_cart_url (no dead links)
+ *   - Video counter no longer shows total count (prevents "I've seen enough" effect)
  */
 (function () {
   "use strict";
@@ -870,14 +874,14 @@
     // ── FAB (Floating Action Button) with Video Preview ──
     var fab = document.createElement("div");
     fab.className = "ath-fab";
-    // Use thumbnail for FAB to avoid downloading huge video file on page load
+    // Use thumbnail for FAB if available, otherwise use lightweight video
     if (clips[0] && clips[0].thumbnail_url) {
       var fabImg = document.createElement("img");
       fabImg.src = clips[0].thumbnail_url;
       fabImg.alt = "Watch video";
       fabImg.style.cssText = "width:100%;height:100%;object-fit:cover;border-radius:50%;";
       fab.appendChild(fabImg);
-    } else if (clips[0] && clips[0].clip_url) {
+    } else if (clips[0] && (clips[0].clip_url || clips[0].widget_url)) {
       fabVideo = document.createElement("video");
       fabVideo.setAttribute("playsinline", "");
       fabVideo.setAttribute("webkit-playsinline", "");
@@ -885,7 +889,7 @@
       fabVideo.setAttribute("loop", "");
       fabVideo.setAttribute("autoplay", "");
       fabVideo.muted = true;
-      fabVideo.src = clips[0].clip_url;
+      fabVideo.src = getClipUrl(clips[0]);
       fab.appendChild(fabVideo);
       fabVideo.addEventListener("loadeddata", function () {
         fabVideo.play().catch(function () { });
@@ -1284,11 +1288,16 @@
           productCard.style.display = "none";
         }
 
-        // Show dual CTA buttons
+        // Show CTA buttons only when actual link destinations exist
         var cartUrl = clip.product_cart_url || clip.product_url;
         var buyUrl = clip.product_url;
 
-        if (cartUrl && buyUrl && cartUrl !== buyUrl) {
+        if (!cartUrl && !buyUrl) {
+          // Has product info but no link → hide all CTA buttons
+          cartBtn.style.display = "none";
+          buyBtn.style.display = "none";
+          singleCta.style.display = "none";
+        } else if (cartUrl && buyUrl && cartUrl !== buyUrl) {
           // Both cart and buy URLs are different → show both
           cartBtn.style.display = "flex";
           buyBtn.style.display = "flex";
@@ -1308,12 +1317,11 @@
           product_price: clip.product_price,
         });
       } else {
-        // No product info → hide product card, show single CTA (v2.2 behavior)
+        // No product info → hide product card AND all CTA buttons
         productCard.style.display = "none";
         cartBtn.style.display = "none";
         buyBtn.style.display = "none";
-        singleCta.style.display = "flex";
-        singleCta.innerHTML = ICONS.cart + '<span>' + ctaText + '</span>';
+        singleCta.style.display = "none";
       }
     }
 
@@ -1449,7 +1457,7 @@
       var showingProductCard = hasProductInfo(clip) && (clip.product_name || clip.product_price);
       infoTitle.textContent = showingProductCard ? (clip.liver_name || brandName) : (clip.product_name || clip.liver_name || brandName);
       infoDesc.textContent = clip.transcript_text ? clip.transcript_text.substring(0, 80) + (clip.transcript_text.length > 80 ? "..." : "") : "";
-      counter.textContent = (currentIndex + 1) + " / " + clips.length;
+      counter.textContent = (currentIndex + 1);
       progressBar.style.width = "0%";
 
       // Update product card and CTA buttons
