@@ -1,5 +1,5 @@
 /**
- * AitherHub Widget Loader v2.5 — TikTok-Style Fullscreen Feed + Product Card + Subtitles
+ * AitherHub Widget Loader v2.6 — TikTok-Style Fullscreen Feed + Product Card + Subtitles
  *
  * GTM経由で配信される軽量エントリーポイント。
  * 先方のECサイトに1行のタグを追加するだけで、
@@ -39,6 +39,12 @@
  *   - CTA button shows only action text (e.g. "購入する"), no product name
  *   - Info title avoids duplicating product name when product card is visible
  *   - Info description limited to 1 line
+ *
+ * v2.6 Changes:
+ *   - "Tap to unmute" hint overlay on first open (auto-hides after 4s)
+ *   - Mute button pulse animation when muted to draw attention
+ *   - localStorage remembers user sound preference for next visit
+ *   - Returning users with sound ON get auto-unmute attempt
  */
 (function () {
   "use strict";
@@ -572,6 +578,52 @@
       }\
       .ath-speed-indicator.show { display: flex; align-items: center; gap: 6px; }\
       \
+      /* ── Sound hint overlay ── */\
+      .ath-sound-hint {\
+        position: absolute;\
+        top: 0; left: 0; right: 0; bottom: 0;\
+        z-index: 35;\
+        display: flex;\
+        flex-direction: column;\
+        align-items: center;\
+        justify-content: center;\
+        background: rgba(0,0,0,0.4);\
+        pointer-events: auto;\
+        cursor: pointer;\
+        transition: opacity 0.3s ease;\
+      }\
+      .ath-sound-hint.hidden { opacity: 0; pointer-events: none; }\
+      .ath-sound-hint-icon {\
+        width: 64px; height: 64px;\
+        background: rgba(255,255,255,0.2);\
+        border-radius: 50%;\
+        display: flex; align-items: center; justify-content: center;\
+        backdrop-filter: blur(8px);\
+        -webkit-backdrop-filter: blur(8px);\
+        animation: ath-sound-pulse 1.5s ease-in-out infinite;\
+      }\
+      .ath-sound-hint-icon svg { width: 32px; height: 32px; }\
+      .ath-sound-hint-text {\
+        color: white;\
+        font-size: 14px;\
+        font-weight: 600;\
+        margin-top: 12px;\
+        text-shadow: 0 1px 4px rgba(0,0,0,0.5);\
+      }\
+      @keyframes ath-sound-pulse {\
+        0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(255,255,255,0.3); }\
+        50% { transform: scale(1.08); box-shadow: 0 0 0 12px rgba(255,255,255,0); }\
+      }\
+      \
+      /* ── Mute button pulse when muted ── */\
+      .ath-action-btn.ath-mute-pulse .ath-action-icon {\
+        animation: ath-mute-glow 2s ease-in-out infinite;\
+      }\
+      @keyframes ath-mute-glow {\
+        0%, 100% { transform: scale(1); filter: drop-shadow(0 0 0 transparent); }\
+        50% { transform: scale(1.15); filter: drop-shadow(0 0 6px rgba(255,255,255,0.6)); }\
+      }\
+      \
       /* ── Swipe hint ── */\
       .ath-swipe-hint {\
         position: absolute;\
@@ -633,9 +685,13 @@
     shadow.appendChild(style);
 
     // ── State ──
+    var SOUND_PREF_KEY = "ath_sound_on";
     var currentIndex = 0;
     var isOpen = false;
-    var isMuted = true;
+    var userPreferSound = false;
+    try { userPreferSound = localStorage.getItem(SOUND_PREF_KEY) === "1"; } catch (e) { }
+    var isMuted = true; // Always start muted (autoplay policy), unmute after user interaction
+    var soundHintDismissed = false;
     var isLiked = {};
     var dragStartY = 0;
     var dragOffset = 0;
@@ -870,6 +926,45 @@
     swipeHint.innerHTML = ICONS.chevronUp + '上にスワイプ';
     swipeHint.style.display = "none";
     overlay.appendChild(swipeHint);
+
+    // Sound hint overlay ("tap to unmute")
+    var soundHint = document.createElement("div");
+    soundHint.className = "ath-sound-hint hidden";
+    var soundHintIcon = document.createElement("div");
+    soundHintIcon.className = "ath-sound-hint-icon";
+    soundHintIcon.innerHTML = ICONS.volumeOff;
+    soundHint.appendChild(soundHintIcon);
+    var soundHintText = document.createElement("div");
+    soundHintText.className = "ath-sound-hint-text";
+    soundHintText.textContent = "\u30BF\u30C3\u30D7\u3067\u97F3\u58F0ON";
+    soundHint.appendChild(soundHintText);
+    overlay.appendChild(soundHint);
+
+    // Sound hint click → unmute
+    soundHint.addEventListener("click", function (e) {
+      e.stopPropagation();
+      isMuted = false;
+      soundHintDismissed = true;
+      var video = videoElements[currentIndex];
+      if (video) video.muted = false;
+      updateMuteButton();
+      hideSoundHint();
+      // Remember preference
+      try { localStorage.setItem(SOUND_PREF_KEY, "1"); } catch (e) { }
+      userPreferSound = true;
+    });
+
+    function showSoundHint() {
+      soundHint.className = "ath-sound-hint";
+      // Auto-hide after 4 seconds if not tapped
+      setTimeout(function () {
+        if (!soundHintDismissed) hideSoundHint();
+      }, 4000);
+    }
+
+    function hideSoundHint() {
+      soundHint.className = "ath-sound-hint hidden";
+    }
 
     // Subtitle overlay
     var subtitleEl = document.createElement("div");
@@ -1149,6 +1244,18 @@
     function updateMuteButton() {
       var iconEl = muteBtn.querySelector(".ath-action-icon");
       iconEl.innerHTML = isMuted ? ICONS.volumeOff : ICONS.volumeOn;
+      // Pulse animation: show when muted, hide when unmuted
+      if (isMuted) {
+        muteBtn.classList.add("ath-mute-pulse");
+      } else {
+        muteBtn.classList.remove("ath-mute-pulse");
+        // Remember user preference for sound ON
+        try { localStorage.setItem(SOUND_PREF_KEY, "1"); } catch (e) { }
+        userPreferSound = true;
+        // Hide sound hint if visible
+        hideSoundHint();
+        soundHintDismissed = true;
+      }
     }
 
     // ── Video progress ──
@@ -1191,6 +1298,32 @@
       updateSlidePositions(false);
       playCurrentVideo();
       trackEvent("widget_open");
+
+      // Sound UX: if user previously chose sound ON, try to unmute
+      if (userPreferSound) {
+        isMuted = false;
+        var video = videoElements[currentIndex];
+        if (video) {
+          video.muted = false;
+          // If browser blocks unmuted playback, fall back to muted
+          video.play().then(function () {
+            updateMuteButton();
+          }).catch(function () {
+            video.muted = true;
+            isMuted = true;
+            updateMuteButton();
+            // Show hint since autoplay policy blocked unmuted
+            if (!soundHintDismissed) showSoundHint();
+          });
+        }
+      } else {
+        // First-time user: show "tap to unmute" hint
+        soundHintDismissed = false;
+        showSoundHint();
+      }
+
+      // Mute button pulse animation when muted
+      if (isMuted) muteBtn.classList.add("ath-mute-pulse");
     });
 
     closeBtn.addEventListener("click", function (e) {
@@ -1207,9 +1340,10 @@
       // Unlock body scroll
       document.body.style.overflow = "";
       document.documentElement.style.overflow = "";
-      // Hide subtitle
+      // Hide subtitle & sound hint
       subtitleEl.className = "ath-subtitle hidden";
       lastSubtitleText = "";
+      hideSoundHint();
       // Pause all videos
       Object.keys(videoElements).forEach(function (key) {
         videoElements[key].pause();
