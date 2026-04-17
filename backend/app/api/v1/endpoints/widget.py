@@ -324,6 +324,27 @@ async def list_widget_clients(
         for r in cc_result.mappings().all():
             clip_counts[r["client_id"]] = r["cnt"]
 
+        # 2b) Batch: page_view counts + last_seen for connection status
+        page_view_stats = {}
+        try:
+            pv_result = await db.execute(
+                text("""
+                    SELECT client_id,
+                           COUNT(*) as page_view_count,
+                           MAX(created_at)::text as last_seen_at
+                    FROM widget_tracking_events
+                    WHERE event_type = 'page_view'
+                    GROUP BY client_id
+                """)
+            )
+            for r in pv_result.mappings().all():
+                page_view_stats[r["client_id"]] = {
+                    "page_view_count": r["page_view_count"],
+                    "last_seen_at": r["last_seen_at"],
+                }
+        except Exception as pv_err:
+            logger.warning(f"page_view stats query failed: {pv_err}")
+
         # 3) Batch: clip previews (up to 5 per client with clips)
         clips_by_client = {}
         active_cids = [r["client_id"] for r in rows if clip_counts.get(r["client_id"], 0) > 0]
@@ -369,10 +390,13 @@ async def list_widget_clients(
         clients = []
         for row in rows:
             cid = row["client_id"]
+            pv = page_view_stats.get(cid, {})
             clients.append({
                 **dict(row),
                 "clip_count": clip_counts.get(cid, 0),
                 "clips_preview": clips_by_client.get(cid, []),
+                "page_view_count": pv.get("page_view_count", 0),
+                "last_seen_at": pv.get("last_seen_at"),
             })
 
         return {"clients": clients}

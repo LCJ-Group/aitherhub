@@ -414,6 +414,18 @@ export default function AdminWidgetManager({ adminKey }) {
                       {client.clip_count}本
                     </span>
                   )}
+                  {/* Connection status badge */}
+                  {client.page_view_count > 0 ? (
+                    <span className="px-2 py-0.5 rounded-full text-xs bg-emerald-100 text-emerald-700 flex items-center gap-1" title={`最終検知: ${client.last_seen_at || '不明'}`}>
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                      接続済み ({client.page_view_count}PV)
+                    </span>
+                  ) : (
+                    <span className="px-2 py-0.5 rounded-full text-xs bg-red-100 text-red-600 flex items-center gap-1" title="page_viewイベントが検出されていません">
+                      <span className="w-1.5 h-1.5 rounded-full bg-red-400"></span>
+                      未接続
+                    </span>
+                  )}
                 </div>
                 <div className="flex gap-2">
                   <button
