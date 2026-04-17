@@ -309,9 +309,7 @@ async def stream_video_status(
                 yield f"data: {json.dumps({'error': 'Video not found'})}\n\n"
                 return
 
-            if current_user and current_user.get("id") != video.user_id:
-                yield f"data: {json.dumps({'error': 'Forbidden'})}\n\n"
-                return
+            # Any authenticated user can view video status (removed owner-only restriction)
 
             # Stream status updates
             # ── Keep-alive strategy ──
@@ -735,8 +733,7 @@ async def get_video_detail(
         if not video_row:
             raise HTTPException(status_code=404, detail="Video not found")
 
-        if current_user and current_user.get("id") != video_row.user_id:
-            raise HTTPException(status_code=403, detail="Forbidden")
+        # Any authenticated user can view video details (removed owner-only restriction)
 
         email = video_row.email
         compressed_blob = video_row.compressed_blob_url
@@ -1296,10 +1293,9 @@ async def rate_phase(
         video = await video_repo.get_video_by_id(video_id)
         if not video:
             raise HTTPException(status_code=404, detail="Video not found")
-        if str(getattr(video, "user_id", None)) != str(user_id):
-            raise HTTPException(status_code=403, detail="Forbidden")
+        # Any authenticated user can rate phases (removed owner-only restriction)
 
-        # Map rating (1-5) to importance_score (0.0-1.0)
+        # Validate rating(1-5) to importance_score (0.0-1.0)
         importance_score = (rating - 1) / 4.0  # 1->0.0, 2->0.25, 3->0.5, 4->0.75, 5->1.0
 
         # Update video_phases with user rating, comment, and importance_score
@@ -1410,9 +1406,9 @@ async def save_phase_comment(
         video = await video_repo.get_video_by_id(video_id)
         if not video:
             raise HTTPException(status_code=404, detail="Video not found")
-        if str(getattr(video, "user_id", None)) != str(user_id):
-            raise HTTPException(status_code=403, detail="Forbidden")
+        # Any authenticated user can comment on phases (removed owner-only restriction)
 
+        # Upsert comment
         sql_update = text("""
             UPDATE video_phases
             SET user_comment = :comment,
@@ -1494,8 +1490,7 @@ async def update_human_sales_tags(
         video = await video_repo.get_video_by_id(video_id)
         if not video:
             raise HTTPException(status_code=404, detail="Video not found")
-        if str(getattr(video, "user_id", None)) != str(user_id):
-            raise HTTPException(status_code=403, detail="Forbidden")
+        # Any authenticated user can tag phases (removed owner-only restriction)
 
         tags_json = json.dumps(tags)
 
@@ -1675,10 +1670,9 @@ async def retry_analysis(
 
         if not row:
             raise HTTPException(status_code=404, detail="Video not found")
-        if str(row.user_id) != str(user_id):
-            raise HTTPException(status_code=403, detail="Forbidden")
+        # Any authenticated user can retry analysis (removed owner-only restriction)
 
-        # Allow retry for ERROR, stuck QUEUED, stalled processing states
+        # Determine analysis type: stuck QUEUED, stalled processing states
         # DONE/COMPLETED videos should NOT be retried — CSV metrics are
         # auto-recalculated on page view via _auto_recalc_csv_metrics.
         allowed_statuses = ("ERROR", "error", "uploaded", "UPLOADED", "QUEUED")
@@ -2006,7 +2000,7 @@ async def generate_script_for_video(
     This analyzes the video's sales moments, product exposures, and audio transcripts
     to create a script grounded in actual sales data — not generic AI guesses.
     """
-    # Verify video belongs to user
+     # Verify video exists (any authenticated user can generate scripts)
     result = await db.execute(
         text("SELECT id, user_id FROM videos WHERE id = :vid"),
         {"vid": video_id},
@@ -2014,9 +2008,6 @@ async def generate_script_for_video(
     video = result.fetchone()
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
-    if video.user_id != current_user.get("id"):
-        raise HTTPException(status_code=403, detail="Not authorized")
-
     from app.services.winning_patterns_service import generate_data_driven_script
 
     try:
@@ -2047,17 +2038,14 @@ async def get_video_winning_patterns(
     Get winning patterns (CTA phrases, product durations, top phases)
     extracted from this video's real performance data.
     """
-    # Verify video belongs to user
+     # Verify video exists (any authenticated user can view winning patterns)
     result = await db.execute(
-        text("SELECT id, user_id FROM videos WHERE id = :vid"),
+        text("SELECT id FROM videos WHERE id = :vid"),
         {"vid": video_id},
     )
     video = result.fetchone()
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
-    if video.user_id != current_user.get("id"):
-        raise HTTPException(status_code=403, detail="Not authorized")
-
     from app.services.winning_patterns_service import (
         extract_cta_phrases,
         analyze_product_durations,

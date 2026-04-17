@@ -116,19 +116,18 @@ async def request_clip_generation(
                     }
             # If failed or stuck, create a new one
 
-        # Verify video belongs to user (also fetch compressed_blob_url for faster clip generation)
+        # Fetch video info (any authenticated user can generate clips)
         video_sql = text("SELECT id, user_id, original_filename, compressed_blob_url FROM videos WHERE id = :video_id")
         vres = await db.execute(video_sql, {"video_id": video_id})
         video_row = vres.fetchone()
 
         if not video_row:
             raise HTTPException(status_code=404, detail="Video not found")
-        if video_row.user_id != user_id:
-            raise HTTPException(status_code=403, detail="Not authorized")
 
-        # Get user email for blob path
+        # Get video OWNER's email for blob path (blob is stored under owner's email folder)
+        video_owner_id = video_row.user_id
         user_sql = text("SELECT email FROM users WHERE id = :user_id")
-        ures = await db.execute(user_sql, {"user_id": user_id})
+        ures = await db.execute(user_sql, {"user_id": video_owner_id})
         user_row = ures.fetchone()
         email = user_row.email if user_row else None
 
@@ -521,12 +520,12 @@ async def trim_clip(
         if not clip_row:
             raise HTTPException(status_code=404, detail="Clip not found")
 
-        # Verify video ownership
+        # Fetch video info (any authenticated user can re-edit clips)
         video_sql = text("SELECT id, user_id, original_filename FROM videos WHERE id = :video_id")
         vres = await db.execute(video_sql, {"video_id": video_id})
         video_row = vres.fetchone()
-        if not video_row or video_row.user_id != user_id:
-            raise HTTPException(status_code=403, detail="Not authorized")
+        if not video_row:
+            raise HTTPException(status_code=404, detail="Video not found")
 
         # Create new clip record (keep old one for history)
         new_clip_id = str(uuid_module.uuid4())
@@ -544,9 +543,10 @@ async def trim_clip(
         })
         await db.commit()
 
-        # Get user email for blob path
+        # Get video OWNER's email for blob path (blob is stored under owner's email folder)
+        video_owner_id = video_row.user_id
         user_sql = text("SELECT email FROM users WHERE id = :user_id")
-        ures = await db.execute(user_sql, {"user_id": user_id})
+        ures = await db.execute(user_sql, {"user_id": video_owner_id})
         user_row = ures.fetchone()
         email = user_row.email if user_row else None
 
@@ -891,10 +891,10 @@ async def get_video_error_logs(
     Each entry includes: error_code, error_step, error_message, source, created_at.
     """
     try:
-        # Verify the video belongs to the current user
+        # Verify the video exists (any authenticated user can view error logs)
         ownership = await db.execute(
-            text("SELECT id FROM videos WHERE id = :vid AND user_id = :uid"),
-            {"vid": video_id, "uid": user["id"]},
+            text("SELECT id FROM videos WHERE id = :vid"),
+            {"vid": video_id},
         )
         if not ownership.fetchone():
             raise HTTPException(status_code=404, detail="Video not found")
