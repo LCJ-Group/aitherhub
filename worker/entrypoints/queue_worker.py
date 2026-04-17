@@ -33,6 +33,8 @@ without understanding the root causes they fix (commits 225cbd1, a75622b):
 3. poll_and_process() — Priority sort (video_analysis before generate_clip).
    DO NOT remove the _priority_key sort.
    Reason: generate_clip floods cause video_analysis queue starvation.
+   NOTE: Clip jobs now use a DEDICATED clip_executor (separate from heavy jobs).
+   This ensures clips never block on video_analysis and vice versa.
 
 4. _is_video_retried() — Stale message detection.
    DO NOT simplify to only check dequeue_count==0.
@@ -75,6 +77,7 @@ if _VENV_SP.exists():
 
 from shared.config import (
     WORKER_MAX_CONCURRENT,
+    WORKER_CLIP_CONCURRENT,
     WORKER_MAX_RETRIES,
     WORKER_VIDEO_TIMEOUT,
     WORKER_CLIP_TIMEOUT,
@@ -93,7 +96,8 @@ from shared.schemas.video_status import VideoStatus, ClipStatus
 # Constants
 # =============================================================================
 
-MAX_WORKERS = WORKER_MAX_CONCURRENT
+MAX_WORKERS = WORKER_MAX_CONCURRENT          # Heavy jobs (video_analysis, video_pipeline)
+MAX_CLIP_WORKERS = WORKER_CLIP_CONCURRENT    # Lightweight clip generation (dedicated executor)
 MAX_DEQUEUE_COUNT = WORKER_MAX_RETRIES
 VISIBILITY_TIMEOUT = 15 * 60  # 900 seconds
 VISIBILITY_RENEW_INTERVAL = 5 * 60  # 300 seconds
@@ -102,9 +106,13 @@ VISIBILITY_RENEW_INTERVAL = 5 * 60  # 300 seconds
 BATCH_DIR = str(PROJECT_ROOT / "worker" / "batch")
 REALTIME_DIR = str(PROJECT_ROOT / "worker" / "realtime")
 
-# Track active jobs
+# Track active heavy jobs (video_analysis, video_pipeline)
 active_jobs: dict = {}
 active_jobs_lock = Lock()
+
+# Track active clip jobs (dedicated executor, separate from heavy jobs)
+active_clip_jobs: dict = {}
+active_clip_jobs_lock = Lock()
 
 # Separate executor for lightweight live_monitor jobs
 live_monitor_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="live-monitor")
@@ -282,8 +290,17 @@ def renew_visibility(msg_id: str, pop_receipt: str, job_id: str):
 def visibility_renewal_loop():
     while not shutdown_requested:
         time.sleep(VISIBILITY_RENEW_INTERVAL)
+        # Renew heavy jobs
         with active_jobs_lock:
             for job_id, info in list(active_jobs.items()):
+                if info["future"].done():
+                    continue
+                new_receipt = renew_visibility(info["msg_id"], info["pop_receipt"], job_id)
+                if new_receipt:
+                    info["pop_receipt"] = new_receipt
+        # Renew clip jobs (dedicated executor)
+        with active_clip_jobs_lock:
+            for job_id, info in list(active_clip_jobs.items()):
                 if info["future"].done():
                     continue
                 new_receipt = renew_visibility(info["msg_id"], info["pop_receipt"], job_id)
@@ -468,9 +485,10 @@ def process_job(payload: dict, msg_id: str, pop_receipt: str) -> bool:
     """Process a single job. Runs in a thread."""
     job_type = payload.get("job_type", "video_analysis")
     job_id = payload.get("video_id", payload.get("clip_id", "unknown"))
+    is_clip = (job_type == "generate_clip")
 
     try:
-        if job_type == "generate_clip":
+        if is_clip:
             success = _run_clip_job(payload)
         elif job_type == "video_pipeline":
             success = _run_pipeline_job(payload)
@@ -485,9 +503,15 @@ def process_job(payload: dict, msg_id: str, pop_receipt: str) -> bool:
             success = _run_video_job(payload)
 
         if success:
-            with active_jobs_lock:
-                info = active_jobs.get(job_id, {})
-                current_receipt = info.get("pop_receipt", pop_receipt)
+            # Get latest pop_receipt from the correct tracking dict
+            if is_clip:
+                with active_clip_jobs_lock:
+                    info = active_clip_jobs.get(job_id, {})
+                    current_receipt = info.get("pop_receipt", pop_receipt)
+            else:
+                with active_jobs_lock:
+                    info = active_jobs.get(job_id, {})
+                    current_receipt = info.get("pop_receipt", pop_receipt)
             delete_message_safe(msg_id, current_receipt)
         else:
             print(f"[worker] Job {job_id} failed, will retry after visibility timeout")
@@ -497,8 +521,13 @@ def process_job(payload: dict, msg_id: str, pop_receipt: str) -> bool:
         log_error_type(job_id, job_type, "UNKNOWN", f"EXC={type(e).__name__} {e}")
         return False
     finally:
-        with active_jobs_lock:
-            active_jobs.pop(job_id, None)
+        # Clean up from the correct tracking dict
+        if is_clip:
+            with active_clip_jobs_lock:
+                active_clip_jobs.pop(job_id, None)
+        else:
+            with active_jobs_lock:
+                active_jobs.pop(job_id, None)
 
 
 def _mark_clip_failed(clip_id: str, error_message: str):
@@ -1167,6 +1196,7 @@ def _run_live_analysis_job(payload: dict) -> bool:
 # =============================================================================
 
 def get_active_count() -> int:
+    """Count active heavy jobs (video_analysis, video_pipeline, etc.)."""
     with active_jobs_lock:
         completed = [k for k, v in active_jobs.items() if v["future"].done()]
         for k in completed:
@@ -1174,20 +1204,35 @@ def get_active_count() -> int:
         return len(active_jobs)
 
 
+def get_active_clip_count() -> int:
+    """Count active clip generation jobs (dedicated executor)."""
+    with active_clip_jobs_lock:
+        completed = [k for k, v in active_clip_jobs.items() if v["future"].done()]
+        for k in completed:
+            active_clip_jobs.pop(k, None)
+        return len(active_clip_jobs)
+
+
 # Job types considered "high priority" — processed before lower-priority jobs.
 # This prevents queue starvation when many generate_clip jobs flood the queue.
 _HIGH_PRIORITY_JOB_TYPES = {"video_analysis", "video_pipeline", "live_analysis"}
 
 
-def poll_and_process(executor: ThreadPoolExecutor):
+def poll_and_process(executor: ThreadPoolExecutor, clip_executor: ThreadPoolExecutor):
     """Poll queue and submit jobs to thread pool.
 
+    Architecture: Two separate executors for isolation.
+    - executor (heavy): video_analysis, video_pipeline, live_analysis (MAX_WORKERS slots)
+    - clip_executor: generate_clip only (MAX_CLIP_WORKERS slots)
+    This ensures clip generation never blocks on heavy video processing.
+
     Priority logic: messages are sorted so that video_analysis / video_pipeline /
-    live_analysis jobs are dispatched before generate_clip jobs.  This prevents
-    queue starvation when many clip generation jobs are queued.
+    live_analysis jobs are dispatched before generate_clip jobs.
     """
     active_count = get_active_count()
     heavy_slots_full = active_count >= MAX_WORKERS
+    clip_count = get_active_clip_count()
+    clip_slots_full = clip_count >= MAX_CLIP_WORKERS
 
     client = get_queue_client()
     messages = list(client.receive_messages(
@@ -1257,6 +1302,22 @@ def poll_and_process(executor: ThreadPoolExecutor):
                     live_monitor_jobs[job_id] = {
                         "future": future, "msg_id": msg.id, "pop_receipt": msg.pop_receipt,
                     }
+                continue
+
+            # --- Clip jobs: dedicated clip_executor (never blocked by heavy jobs) ---
+            if job_type == "generate_clip":
+                if clip_slots_full:
+                    continue
+                with active_clip_jobs_lock:
+                    if job_id in active_clip_jobs and not active_clip_jobs[job_id]["future"].done():
+                        continue
+                print(f"[worker] Received CLIP: id={job_id} (clips: {get_active_clip_count()}/{MAX_CLIP_WORKERS})")
+                future = clip_executor.submit(process_job, payload, msg.id, msg.pop_receipt)
+                with active_clip_jobs_lock:
+                    active_clip_jobs[job_id] = {
+                        "future": future, "msg_id": msg.id, "pop_receipt": msg.pop_receipt,
+                    }
+                clip_slots_full = get_active_clip_count() >= MAX_CLIP_WORKERS
                 continue
 
             # --- Heavy jobs: subject to MAX_WORKERS ---
@@ -1443,12 +1504,17 @@ def poll_pending_clips_from_db():
             clip_id = str(row.id)
             payload = row.job_payload if isinstance(row.job_payload, dict) else json.loads(row.job_payload)
 
-            # Skip if already being processed
-            with active_jobs_lock:
-                if clip_id in active_jobs and not active_jobs[clip_id]["future"].done():
+            # Skip if already being processed (check clip-specific tracker)
+            with active_clip_jobs_lock:
+                if clip_id in active_clip_jobs and not active_clip_jobs[clip_id]["future"].done():
                     continue
 
-            print(f"[worker] DB fallback: found pending clip {clip_id}, submitting")
+            # Skip if clip executor is full
+            if get_active_clip_count() >= MAX_CLIP_WORKERS:
+                print(f"[worker] DB fallback: clip executor full ({MAX_CLIP_WORKERS}), skipping")
+                break
+
+            print(f"[worker] DB fallback: found pending clip {clip_id}, submitting to clip executor")
 
             # Mark as processing to prevent duplicate pickup
             _cid = clip_id
@@ -1469,10 +1535,10 @@ def poll_pending_clips_from_db():
             except Exception as mark_err:
                 print(f"[worker] DB fallback: failed to mark {clip_id} as processing: {mark_err}")
 
-            # Submit to executor
-            future = executor_ref[0].submit(process_job, payload, "db-fallback", "db-fallback")
-            with active_jobs_lock:
-                active_jobs[clip_id] = {
+            # Submit to dedicated clip executor (not the heavy job executor)
+            future = clip_executor_ref[0].submit(process_job, payload, "db-fallback", "db-fallback")
+            with active_clip_jobs_lock:
+                active_clip_jobs[clip_id] = {
                     "future": future,
                     "msg_id": None,
                     "pop_receipt": None,
@@ -1482,8 +1548,9 @@ def poll_pending_clips_from_db():
         print(f"[worker] DB fallback error: {e}")
 
 
-# Reference to executor for DB fallback
-executor_ref = [None]
+# References to executors for DB fallback
+executor_ref = [None]       # Heavy job executor
+clip_executor_ref = [None]  # Dedicated clip executor
 
 
 # =============================================================================
@@ -1534,7 +1601,8 @@ def main():
 
     print(f"[worker] === AitherHub Queue Worker ===")
     print(f"[worker] Instance: {WORKER_INSTANCE_ID}")
-    print(f"[worker] Max concurrent: {MAX_WORKERS}")
+    print(f"[worker] Heavy job workers: {MAX_WORKERS}")
+    print(f"[worker] Clip workers: {MAX_CLIP_WORKERS} (dedicated executor)")
     print(f"[worker] Storage account: {storage_account}")
     print(f"[worker] Queue: {AZURE_QUEUE_NAME}")
     print(f"[worker] Dead-letter queue: {AZURE_DEAD_LETTER_QUEUE_NAME}")
@@ -1597,8 +1665,13 @@ def main():
     except Exception as e:
         print(f"[worker] Warning: Systemd watchdog failed to start: {e}")
 
-    executor = ThreadPoolExecutor(max_workers=MAX_WORKERS)
-    executor_ref[0] = executor  # Set reference for DB fallback
+    # Heavy job executor (video_analysis, video_pipeline, live_analysis)
+    executor = ThreadPoolExecutor(max_workers=MAX_WORKERS, thread_name_prefix="heavy")
+    executor_ref[0] = executor
+
+    # Dedicated clip executor (generate_clip only — isolated from heavy jobs)
+    clip_executor = ThreadPoolExecutor(max_workers=MAX_CLIP_WORKERS, thread_name_prefix="clip")
+    clip_executor_ref[0] = clip_executor
 
     print(f"[worker] DB fallback: check pending clips every {CLIP_FALLBACK_INTERVAL}s (age > {CLIP_FALLBACK_AGE}s)")
 
@@ -1610,15 +1683,18 @@ def main():
                     _systemd_watchdog.notify()
 
                 periodic_disk_cleanup()
-                poll_and_process(executor)
+                poll_and_process(executor, clip_executor)
                 poll_pending_clips_from_db()  # DB fallback for lost queue messages
                 time.sleep(5)
             except Exception as e:
                 print(f"[worker] Unexpected error: {e}")
                 time.sleep(10)
     finally:
-        print(f"[worker] Waiting for {get_active_count()} active jobs...")
+        heavy_count = get_active_count()
+        clip_count = get_active_clip_count()
+        print(f"[worker] Waiting for {heavy_count} heavy jobs + {clip_count} clip jobs...")
         executor.shutdown(wait=True)
+        clip_executor.shutdown(wait=True)
 
         # Stop stability modules
         if _heartbeat_manager:
