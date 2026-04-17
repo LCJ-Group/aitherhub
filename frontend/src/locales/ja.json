@@ -1354,5 +1354,14 @@
   "sectionStateUI_fb6503": "データがありません",
   "sectionStateUI_d7fb4a": "はまだ生成されていません",
   "sectionStateUI_cf8672": "データが未生成です",
-  "sectionStateUI_bf60b5": "セクション"
+  "sectionStateUI_bf60b5": "セクション",
+  "sidebar_uploading": "アップロード中",
+  "sidebar_uploadDone": "解析開始済み",
+  "uploadStartedToast": "アップロード開始",
+  "uploadStartedToastDesc": "{name} をバックグラウンドでアップロード中。サイドバーで進捗を確認できます。",
+  "uploadCompleteToast": "アップロード完了",
+  "uploadCompleteToastDesc": "解析を開始しました。サイドバーの解析履歴で進捗を確認できます。",
+  "uploadCompleteToastDescWithName": "{name} の解析を開始しました。",
+  "batchUploadCompleteToastDesc": "{count}件の動画の解析を開始しました。",
+  "maxConcurrentUploads": "最大{max}件まで同時アップロードできます。前のアップロードが完了するまでお待ちください。"
 }

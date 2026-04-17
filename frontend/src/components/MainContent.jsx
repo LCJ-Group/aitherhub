@@ -2,6 +2,7 @@ import { Header, Body, Footer } from "./main";
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import UploadService from "../base/services/uploadService";
+import backgroundUploadManager, { MAX_CONCURRENT_UPLOADS } from "../base/services/backgroundUploadManager";
 import VideoService from "../base/services/videoService";
 import { formatUploadError, logUploadError } from "../base/services/uploadErrors";
 import { toast } from "../hooks/use-toast";
@@ -488,96 +489,104 @@ export default function MainContent({
     }
     if (filesToUpload.length === 0) return;
 
-    setUploading(true);
-    setUploadStartTime(Date.now());
-    setUploadDurationMs(null);
-    setMessage("");
-    setProgress(0);
-
-    try {
-      // Map UI language to analysis language (en UI → ja analysis)
-      const analysisLang = i18n.language === 'zh-TW' ? 'zh-TW' : 'ja';
-      if (filesToUpload.length === 1) {
-        // Single video: use existing flow
-        const video_id = await UploadService.uploadCleanVideo(
-          filesToUpload[0],
-          productExcelFile,
-          trendExcelFile,
-          user.email,
-          (percentage) => {
-            setProgress(percentage);
-          },
-          ({ uploadId }) => {
-            const storageKey = buildResumeUploadStorageKey(user?.id, uploadId);
-            if (storageKey) {
-              activeResumeUploadStorageKeyRef.current = storageKey;
-              localStorage.setItem(storageKey, "active");
-            }
-          },
-          analysisLang,
-        );
-        setMessageType("success");
-        setUploadDurationMs(Date.now() - (uploadStartTime || Date.now()));
-        setCleanVideoFile(null);
-        setCleanVideoFiles([]);
-        setProductExcelFile(null);
-        setTrendExcelFile(null);
-        setUploadMode(null);
-        setResumeUploadId(null);
-        setUploadedVideoId(video_id);
-        if (onUploadSuccess) {
-          onUploadSuccess(video_id);
-        }
-      } else {
-        // Multiple videos: use batch upload with auto time offsets
-        // Auto-calculate time offsets: we don't know durations upfront,
-        // so we set offset=0 for all and let the user optionally adjust.
-        // For now, offset is 0 for all (user can set manually if needed).
-        const videoItems = filesToUpload.map((file, idx) => ({
-          file,
-          timeOffsetSeconds: 0, // Will be enhanced later with duration detection
-        }));
-
-        const videoIds = await UploadService.batchUploadCleanVideos(
-          videoItems,
-          productExcelFile,
-          trendExcelFile,
-          user.email,
-          (percentage) => {
-            setProgress(percentage);
-          },
-          ({ uploadId }) => {
-            const storageKey = buildResumeUploadStorageKey(user?.id, uploadId);
-            if (storageKey) {
-              activeResumeUploadStorageKeyRef.current = storageKey;
-              localStorage.setItem(storageKey, "active");
-            }
-          },
-          analysisLang,
-        );
-        setMessageType("success");
-        setUploadDurationMs(Date.now() - (uploadStartTime || Date.now()));
-        setCleanVideoFile(null);
-        setCleanVideoFiles([]);
-        setProductExcelFile(null);
-        setTrendExcelFile(null);
-        setUploadMode(null);
-        setResumeUploadId(null);
-        // Navigate to first video
-        if (videoIds.length > 0) {
-          setUploadedVideoId(videoIds[0]);
-          if (onUploadSuccess) {
-            onUploadSuccess(videoIds[0]);
-          }
-        }
-      }
-    } catch (error) {
-      logUploadError('handleCleanVideoUpload', error);
-      toast.error(formatUploadError(error));
-    } finally {
-      clearActiveResumeUploadStorageKey();
-      setUploading(false);
+    // Check concurrent upload limit
+    const canStart = backgroundUploadManager.canStartUpload();
+    if (!canStart.allowed) {
+      toast.error(
+        (window.__t('maxConcurrentUploads') || '最大{max}件まで同時アップロードできます。前のアップロードが完了するまでお待ちください。')
+          .replace('{max}', MAX_CONCURRENT_UPLOADS)
+      );
+      return;
     }
+
+    // Capture files and settings before resetting UI
+    const capturedFiles = [...filesToUpload];
+    const capturedProductExcel = productExcelFile;
+    const capturedTrendExcel = trendExcelFile;
+    const userEmail = user.email;
+    const analysisLang = i18n.language === 'zh-TW' ? 'zh-TW' : 'ja';
+    const userId = user?.id;
+
+    // Reset UI immediately
+    setCleanVideoFile(null);
+    setCleanVideoFiles([]);
+    setProductExcelFile(null);
+    setTrendExcelFile(null);
+    setUploadMode(null);
+    setResumeUploadId(null);
+    setUploadedVideoId(null);
+    setVideoData(null);
+    setSelectedFile(null);
+    setProgress(0);
+    setMessage("");
+    setUploadDurationMs(null);
+    setDuplicateVideo(null);
+    setUploading(false);
+
+    const displayName = capturedFiles.length === 1
+      ? capturedFiles[0].name
+      : `${capturedFiles.length} 件の動画`;
+
+    toast({
+      title: window.__t('uploadStartedToast') || 'アップロード開始',
+      description: (window.__t('uploadStartedToastDesc') || '{name} をバックグラウンドでアップロード中。サイドバーで進捗を確認できます。').replace('{name}', displayName),
+    });
+
+    // Start background upload
+    backgroundUploadManager.startUpload({
+      fileName: displayName,
+      fileSize: capturedFiles.reduce((sum, f) => sum + (f.size || 0), 0),
+      uploadMode: capturedFiles.length === 1 ? 'clean_video' : 'batch_clean_video',
+      executeFn: async ({ onProgress, onVideoId }) => {
+        if (capturedFiles.length === 1) {
+          const video_id = await UploadService.uploadCleanVideo(
+            capturedFiles[0],
+            capturedProductExcel,
+            capturedTrendExcel,
+            userEmail,
+            (percentage) => onProgress(percentage),
+            ({ uploadId }) => {
+              const storageKey = buildResumeUploadStorageKey(userId, uploadId);
+              if (storageKey) localStorage.setItem(storageKey, "active");
+            },
+            analysisLang,
+          );
+          onVideoId(video_id);
+          return video_id;
+        } else {
+          const videoItems = capturedFiles.map((file) => ({
+            file,
+            timeOffsetSeconds: 0,
+          }));
+          const videoIds = await UploadService.batchUploadCleanVideos(
+            videoItems,
+            capturedProductExcel,
+            capturedTrendExcel,
+            userEmail,
+            (percentage) => onProgress(percentage),
+            ({ uploadId }) => {
+              const storageKey = buildResumeUploadStorageKey(userId, uploadId);
+              if (storageKey) localStorage.setItem(storageKey, "active");
+            },
+            analysisLang,
+          );
+          if (videoIds.length > 0) onVideoId(videoIds[0]);
+          return videoIds[0];
+        }
+      },
+      onComplete: (videoId) => {
+        console.log(`[BGUpload] Clean video upload completed: ${videoId}`);
+        if (onUploadSuccess) onUploadSuccess(videoId);
+        toast({
+          title: window.__t('uploadCompleteToast') || 'アップロード完了',
+          description: (window.__t('uploadCompleteToastDescWithName') || '{name} の解析を開始しました。').replace('{name}', displayName),
+        });
+      },
+      onError: (err) => {
+        logUploadError('handleCleanVideoUpload_bg', err);
+        toast.error(formatUploadError(err));
+      },
+    });
   };
 
   // CSV Validation Gate: コールバックハンドラー
@@ -712,107 +721,121 @@ export default function MainContent({
    * Core resume execution - shared by both cached file handle and file picker resume
    */
   const executeResume = async (file) => {
-    if (!file || !resumeUploadId || uploading) return;
+    if (!file || !resumeUploadId) return;
 
-    setProcessingResume(true);
-    setUploading(true);
-    setUploadStartTime(Date.now());
-    setUploadDurationMs(null);
-    setMessage("");
-    setProgress(0);
-
-    try {
-      const storageKey = buildResumeUploadStorageKey(user?.id, resumeUploadId);
-      if (storageKey) {
-        activeResumeUploadStorageKeyRef.current = storageKey;
-        localStorage.setItem(storageKey, "active");
-      }
-      // Get metadata from IndexedDB
-      const metadata = await UploadService.getUploadMetadata(resumeUploadId);
-      if (!metadata) {
-        throw new Error(window.__t('uploadInfoNotFound'));
-      }
-
-      // Validate that the selected file is the same as the original file
-      if (file.name !== metadata.fileName || file.size !== metadata.fileSize) {
-        throw new Error(`${window.__t("fileMismatch")}\n${metadata.fileName}\n${formatFileSize(metadata.fileSize)}`);
-      }
-
-      const uploadedBlockIds = metadata.uploadedBlocks || [];
-      const maxUploadedIndex = uploadedBlockIds.length > 0
-        ? Math.max(...uploadedBlockIds.map(id => {
-          const decoded = atob(id);
-          return parseInt(decoded, 10);
-        }))
-        : -1;
-      const startFrom = maxUploadedIndex + 1;
-
-      // Resume upload from where it left off
-      await UploadService.uploadToAzure(
-        file,
-        metadata.uploadUrl,
-        resumeUploadId,
-        (percentage) => {
-          setProgress(percentage);
-        },
-        startFrom
-      );
-
-      const video_id = metadata.videoId;
-      if (!video_id) {
-        throw new Error('Video ID not found in metadata. Please start a new upload.');
-      }
-
-      // Use correct completion method based on upload mode
-      const uploadMode = metadata.uploadMode || 'screen_recording';
-      // Map UI language to analysis language (en UI → ja analysis)
-      const analysisLang = i18n.language === 'zh-TW' ? 'zh-TW' : 'ja';
-      if (uploadMode === 'clean_video') {
-        // Clean video: include upload_type and Excel URLs from metadata
-        await UploadService.uploadCompleteWithType(
-          user.email,
-          video_id,
-          file.name,
-          resumeUploadId,
-          'clean_video',
-          metadata.excelProductBlobUrl || null,
-          metadata.excelTrendBlobUrl || null,
-          analysisLang
-        );
-      } else {
-        // Screen recording: simple completion
-        await UploadService.uploadComplete(
-          user.email,
-          video_id,
-          file.name,
-          resumeUploadId,
-          analysisLang
-        );
-      }
-
-      await UploadService.clearUploadMetadata(resumeUploadId);
-
-      setMessageType("success");
-      setUploadDurationMs(Date.now() - (uploadStartTime || Date.now()));
-      setSelectedFile(null);
-      setResumeUploadId(null);
-      setResumeInfo(null);
-      setUploadedVideoId(video_id);
-
-      if (onUploadSuccess) {
-        onUploadSuccess(video_id);
-      }
-    } catch (error) {
-      logUploadError('executeResume', error);
-      toast.error(formatUploadError(error));
-    } finally {
-      clearActiveResumeUploadStorageKey();
-      setUploading(false);
+    // Validate metadata synchronously before going to background
+    const metadata = await UploadService.getUploadMetadata(resumeUploadId);
+    if (!metadata) {
+      toast.error(window.__t('uploadInfoNotFound') || 'アップロード情報が見つかりません');
       setProcessingResume(false);
-      if (resumeFileInputRef.current) {
-        resumeFileInputRef.current.value = '';
-      }
+      return;
     }
+    if (file.name !== metadata.fileName || file.size !== metadata.fileSize) {
+      toast.error(`${window.__t("fileMismatch")}\n${metadata.fileName}\n${formatFileSize(metadata.fileSize)}`);
+      setProcessingResume(false);
+      return;
+    }
+
+    // Check concurrent upload limit
+    const canStart = backgroundUploadManager.canStartUpload();
+    if (!canStart.allowed) {
+      toast.error(
+        (window.__t('maxConcurrentUploads') || '最大{max}件まで同時アップロードできます。前のアップロードが完了するまでお待ちください。')
+          .replace('{max}', MAX_CONCURRENT_UPLOADS)
+      );
+      setProcessingResume(false);
+      return;
+    }
+
+    // Capture values before resetting UI
+    const capturedFile = file;
+    const capturedResumeUploadId = resumeUploadId;
+    const capturedMetadata = metadata;
+    const userEmail = user.email;
+    const userId = user?.id;
+    const analysisLang = i18n.language === 'zh-TW' ? 'zh-TW' : 'ja';
+
+    // Reset UI immediately
+    setSelectedFile(null);
+    setResumeUploadId(null);
+    setResumeInfo(null);
+    setUploadedVideoId(null);
+    setVideoData(null);
+    setProgress(0);
+    setMessage("");
+    setUploadDurationMs(null);
+    setDuplicateVideo(null);
+    setCleanVideoFile(null);
+    setCleanVideoFiles([]);
+    setProductExcelFile(null);
+    setTrendExcelFile(null);
+    setUploadMode(null);
+    setUploading(false);
+    setProcessingResume(false);
+    if (resumeFileInputRef.current) resumeFileInputRef.current.value = '';
+
+    toast({
+      title: window.__t('uploadStartedToast') || 'アップロード再開',
+      description: (window.__t('uploadStartedToastDesc') || '{name} をバックグラウンドでアップロード中。サイドバーで進捗を確認できます。').replace('{name}', capturedFile.name),
+    });
+
+    backgroundUploadManager.startUpload({
+      fileName: capturedFile.name,
+      fileSize: capturedFile.size,
+      uploadMode: capturedMetadata.uploadMode || 'screen_recording',
+      executeFn: async ({ onProgress, onVideoId }) => {
+        const uploadedBlockIds = capturedMetadata.uploadedBlocks || [];
+        const maxUploadedIndex = uploadedBlockIds.length > 0
+          ? Math.max(...uploadedBlockIds.map(id => {
+            const decoded = atob(id);
+            return parseInt(decoded, 10);
+          }))
+          : -1;
+        const startFrom = maxUploadedIndex + 1;
+
+        await UploadService.uploadToAzure(
+          capturedFile,
+          capturedMetadata.uploadUrl,
+          capturedResumeUploadId,
+          (percentage) => onProgress(percentage),
+          startFrom
+        );
+
+        const video_id = capturedMetadata.videoId;
+        if (!video_id) throw new Error('Video ID not found in metadata.');
+        onVideoId(video_id);
+
+        const uploadMode = capturedMetadata.uploadMode || 'screen_recording';
+        if (uploadMode === 'clean_video') {
+          await UploadService.uploadCompleteWithType(
+            userEmail, video_id, capturedFile.name, capturedResumeUploadId,
+            'clean_video',
+            capturedMetadata.excelProductBlobUrl || null,
+            capturedMetadata.excelTrendBlobUrl || null,
+            analysisLang
+          );
+        } else {
+          await UploadService.uploadComplete(
+            userEmail, video_id, capturedFile.name, capturedResumeUploadId, analysisLang
+          );
+        }
+
+        await UploadService.clearUploadMetadata(capturedResumeUploadId);
+        return video_id;
+      },
+      onComplete: (videoId) => {
+        console.log(`[BGUpload] Resume upload completed: ${videoId}`);
+        if (onUploadSuccess) onUploadSuccess(videoId);
+        toast({
+          title: window.__t('uploadCompleteToast') || 'アップロード完了',
+          description: (window.__t('uploadCompleteToastDescWithName') || '{name} の解析を開始しました。').replace('{name}', capturedFile.name),
+        });
+      },
+      onError: (err) => {
+        logUploadError('executeResume_bg', err);
+        toast.error(formatUploadError(err));
+      },
+    });
   };
 
   const handleResumeFileSelect = async (e) => {
@@ -834,55 +857,74 @@ export default function MainContent({
       return;
     }
 
-    if (uploading) return;
-
-    setUploading(true);
-    setUploadStartTime(Date.now());
-    setUploadDurationMs(null);
-    setMessage("");
-    setProgress(0);
-
-    try {
-      // Map UI language to analysis language (en UI → ja analysis)
-      const analysisLang = i18n.language === 'zh-TW' ? 'zh-TW' : 'ja';
-      const video_id = await UploadService.uploadFile(
-        selectedFile,
-        user.email,
-        (percentage) => {
-          setProgress(percentage);
-        },
-        ({ uploadId }) => {
-          const storageKey = buildResumeUploadStorageKey(user?.id, uploadId);
-          if (storageKey) {
-            activeResumeUploadStorageKeyRef.current = storageKey;
-            localStorage.setItem(storageKey, "active");
-          }
-        },
-        analysisLang,
+    // Check concurrent upload limit
+    const canStart = backgroundUploadManager.canStartUpload();
+    if (!canStart.allowed) {
+      toast.error(
+        (window.__t('maxConcurrentUploads') || '最大{max}件まで同時アップロードできます。前のアップロードが完了するまでお待ちください。')
+          .replace('{max}', MAX_CONCURRENT_UPLOADS)
       );
-      setMessageType("success");
-
-      // Record upload duration
-      const duration = Date.now() - (uploadStartTime || Date.now());
-      setUploadDurationMs(duration);
-      console.log(`[Upload] Upload completed: video_id=${video_id}, file=${selectedFile?.name}, size=${((selectedFile?.size || 0) / (1024*1024)).toFixed(1)}MB, duration=${(duration/1000).toFixed(1)}s`);
-
-      setSelectedFile(null);
-      setResumeUploadId(null);
-      // Set uploaded video ID to start processing tracking
-      setUploadedVideoId(video_id);
-
-      // Trigger refresh sidebar
-      if (onUploadSuccess) {
-        onUploadSuccess(video_id);
-      }
-    } catch (error) {
-      logUploadError('handleUpload', error);
-      toast.error(formatUploadError(error));
-    } finally {
-      clearActiveResumeUploadStorageKey();
-      setUploading(false);
+      return;
     }
+
+    // Capture file and settings before resetting UI
+    const fileToUpload = selectedFile;
+    const userEmail = user.email;
+    const analysisLang = i18n.language === 'zh-TW' ? 'zh-TW' : 'ja';
+    const userId = user?.id;
+
+    // Reset UI immediately so user can start next upload
+    setSelectedFile(null);
+    setResumeUploadId(null);
+    setUploadedVideoId(null);
+    setVideoData(null);
+    setProgress(0);
+    setMessage("");
+    setUploadDurationMs(null);
+    setDuplicateVideo(null);
+    setUploading(false);
+
+    toast({
+      title: window.__t('uploadStartedToast') || 'アップロード開始',
+      description: (window.__t('uploadStartedToastDesc') || '{name} をバックグラウンドでアップロード中。サイドバーで進捗を確認できます。').replace('{name}', fileToUpload.name),
+    });
+
+    // Start background upload
+    backgroundUploadManager.startUpload({
+      fileName: fileToUpload.name,
+      fileSize: fileToUpload.size,
+      uploadMode: 'screen_recording',
+      executeFn: async ({ onProgress, onVideoId }) => {
+        const video_id = await UploadService.uploadFile(
+          fileToUpload,
+          userEmail,
+          (percentage) => {
+            onProgress(percentage);
+          },
+          ({ uploadId }) => {
+            const storageKey = buildResumeUploadStorageKey(userId, uploadId);
+            if (storageKey) {
+              localStorage.setItem(storageKey, "active");
+            }
+          },
+          analysisLang,
+        );
+        onVideoId(video_id);
+        return video_id;
+      },
+      onComplete: (videoId) => {
+        console.log(`[BGUpload] Screen recording upload completed: ${videoId}`);
+        if (onUploadSuccess) onUploadSuccess(videoId);
+        toast({
+          title: window.__t('uploadCompleteToast') || 'アップロード完了',
+          description: (window.__t('uploadCompleteToastDescWithName') || '{name} の解析を開始しました。').replace('{name}', fileToUpload.name),
+        });
+      },
+      onError: (err) => {
+        logUploadError('handleUpload_bg', err);
+        toast.error(formatUploadError(err));
+      },
+    });
   };
 
   const handleCancel = () => {

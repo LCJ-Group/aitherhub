@@ -9,10 +9,11 @@ import library from "../assets/icons/Library.png";
 import "../assets/css/sidebar.css";
 import ForgotPasswordModal from "./modals/ForgotPasswordModal";
 import AuthService from "../base/services/userService";
+import backgroundUploadManager from "../base/services/backgroundUploadManager";
 import VideoService from "../base/services/videoService";
 import personaService from "../base/services/personaService";
 
-import { ChevronDown, LogOut, Settings, User, Users, X, MoreHorizontal, Pencil, Trash2, Scissors, MessageSquareText, Radio, Video, Eye, Calendar, Sparkles, UserCircle, Clapperboard, Wand2, Brain, Check, FileText, Globe } from "lucide-react";
+import { ChevronDown, LogOut, Settings, User, Users, X, MoreHorizontal, Pencil, Trash2, Scissors, MessageSquareText, Radio, Video, Eye, Calendar, Sparkles, UserCircle, Clapperboard, Wand2, Brain, Check, FileText, Globe, Upload, AlertCircle, CheckCircle2 } from "lucide-react";
 import { useTranslation } from 'react-i18next';
 import { changeLanguage } from '../i18n';
 import {
@@ -44,6 +45,15 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
   const [videoPersonaTags, setVideoPersonaTags] = useState({}); // { videoId: [personaId, ...] }
   const [personaMenuVideoId, setPersonaMenuVideoId] = useState(null);
   const [taggingInProgress, setTaggingInProgress] = useState(false);
+
+  // Background upload tasks state
+  const [bgUploadTasks, setBgUploadTasks] = useState([]);
+  useEffect(() => {
+    const unsub = backgroundUploadManager.subscribe((tasks) => {
+      setBgUploadTasks(tasks);
+    });
+    return unsub;
+  }, []);
 
   // Close menu when clicking outside
   useEffect(() => {
@@ -746,6 +756,56 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
                     {/* ── Separator between sections ── */}
                     {hasLiveContent && regularVideos.length > 0 && (
                       <div className="w-full border-t border-gray-200 my-1"></div>
+                    )}
+
+                    {/* ── Background Upload Progress ── */}
+                    {bgUploadTasks.length > 0 && (
+                      <>
+                        <div className="flex items-center gap-2 w-full px-1 pt-2 pb-1 shrink-0">
+                          <Upload className="w-3.5 h-3.5 text-blue-400" />
+                          <span className="text-xs font-semibold text-blue-500">{window.__t('sidebar_uploading') || 'アップロード中'}</span>
+                          <span className="text-[10px] text-blue-400 bg-blue-50 px-1.5 py-0.5 rounded-full font-medium">{bgUploadTasks.length}</span>
+                        </div>
+                        {bgUploadTasks.map((task) => (
+                          <div key={task.id} className="w-full px-2.5 py-2.5 rounded-lg border border-blue-100 bg-blue-50/50 mb-1">
+                            <div className="flex items-center gap-2 min-w-0">
+                              {task.status === 'uploading' && (
+                                <svg className="w-3.5 h-3.5 flex-shrink-0 animate-spin text-blue-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+                              )}
+                              {task.status === 'done' && <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0 text-green-500" />}
+                              {task.status === 'error' && <AlertCircle className="w-3.5 h-3.5 flex-shrink-0 text-red-500" />}
+                              <span className="text-[12px] font-medium text-gray-700 truncate flex-1" title={task.fileName}>
+                                {task.fileName}
+                              </span>
+                            </div>
+                            {task.status === 'uploading' && (
+                              <div className="mt-1.5">
+                                <div className="w-full h-1.5 bg-blue-100 rounded-full overflow-hidden">
+                                  <div
+                                    className="h-full bg-gradient-to-r from-blue-400 to-blue-600 rounded-full transition-all duration-300 ease-out"
+                                    style={{ width: `${task.progress}%` }}
+                                  />
+                                </div>
+                                <div className="flex justify-between items-center mt-1">
+                                  <span className="text-[10px] text-blue-500 font-medium">{Math.round(task.progress)}%</span>
+                                  <span className="text-[10px] text-gray-400">
+                                    {task.fileSize ? (task.fileSize / (1024*1024) >= 1024 ? `${(task.fileSize / (1024*1024*1024)).toFixed(1)}GB` : `${(task.fileSize / (1024*1024)).toFixed(0)}MB`) : ''}
+                                  </span>
+                                </div>
+                              </div>
+                            )}
+                            {task.status === 'done' && (
+                              <span className="text-[10px] text-green-600 mt-1 block">{window.__t('sidebar_uploadDone') || '解析開始済み'}</span>
+                            )}
+                            {task.status === 'error' && (
+                              <span className="text-[10px] text-red-500 mt-1 block truncate" title={task.error}>{task.error || 'エラー'}</span>
+                            )}
+                          </div>
+                        ))}
+                        {regularVideos.length > 0 && (
+                          <div className="w-full border-t border-gray-200 my-1"></div>
+                        )}
+                      </>
                     )}
 
                     {/* ── Video Analysis Section ── */}

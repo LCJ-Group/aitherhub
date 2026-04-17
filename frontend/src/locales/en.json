@@ -1354,5 +1354,14 @@
   "sectionStateUI_fb6503": "No data",
   "sectionStateUI_d7fb4a": "has not been generated yet",
   "sectionStateUI_cf8672": "Data is not generated",
-  "sectionStateUI_bf60b5": "Section"
+  "sectionStateUI_bf60b5": "Section",
+  "sidebar_uploading": "Uploading",
+  "sidebar_uploadDone": "Analysis started",
+  "uploadStartedToast": "Upload started",
+  "uploadStartedToastDesc": "{name} is uploading in the background. Check progress in the sidebar.",
+  "uploadCompleteToast": "Upload complete",
+  "uploadCompleteToastDesc": "Analysis has started. Check progress in the analysis history.",
+  "uploadCompleteToastDescWithName": "Analysis started for {name}.",
+  "batchUploadCompleteToastDesc": "Analysis started for {count} videos.",
+  "maxConcurrentUploads": "Maximum {max} simultaneous uploads allowed. Please wait for a previous upload to complete."
 }

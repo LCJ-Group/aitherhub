@@ -1354,5 +1354,14 @@
   "sectionStateUI_fb6503": "無資料",
   "sectionStateUI_d7fb4a": "尚未生成",
   "sectionStateUI_cf8672": "資料未生成",
-  "sectionStateUI_bf60b5": "區塊"
+  "sectionStateUI_bf60b5": "區塊",
+  "sidebar_uploading": "上傳中",
+  "sidebar_uploadDone": "已開始解析",
+  "uploadStartedToast": "開始上傳",
+  "uploadStartedToastDesc": "{name} 正在背景上傳中。可在側邊欄查看進度。",
+  "uploadCompleteToast": "上傳完成",
+  "uploadCompleteToastDesc": "已開始解析。可在側邊欄的解析歷史中查看進度。",
+  "uploadCompleteToastDescWithName": "{name} 已開始解析。",
+  "batchUploadCompleteToastDesc": "已開始解析 {count} 個影片。",
+  "maxConcurrentUploads": "最多可同時上傳 {max} 個檔案。請等待前一個上傳完成。"
 }
