@@ -1260,11 +1260,19 @@
       var playPromise = video.play();
       if (playPromise !== undefined) {
         playPromise.catch(function () {
-          // If blocked, try muted
+          // If autoplay blocked, play muted but preserve user's sound preference
           video.muted = true;
-          isMuted = true;
-          updateMuteButton();
-          video.play().catch(function () { });
+          video.play().then(function () {
+            // If user had sound ON, try to unmute after muted play starts
+            if (!isMuted) {
+              try {
+                video.muted = false;
+              } catch (e) {
+                // If unmute fails, keep muted but don't change isMuted state
+                video.muted = true;
+              }
+            }
+          }).catch(function () { });
         });
       }
 
