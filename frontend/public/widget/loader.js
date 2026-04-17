@@ -744,6 +744,27 @@
         color: white;\
       }\
       \
+      /* ── Loading Spinner ── */\
+      .ath-loading-spinner {\
+        position: absolute;\
+        top: 0; left: 0; right: 0; bottom: 0;\
+        display: flex;\
+        align-items: center;\
+        justify-content: center;\
+        z-index: 5;\
+        pointer-events: none;\
+      }\
+      .ath-spinner-ring {\
+        width: 40px; height: 40px;\
+        border: 3px solid rgba(255,255,255,0.2);\
+        border-top-color: white;\
+        border-radius: 50%;\
+        animation: ath-spin 0.8s linear infinite;\
+      }\
+      @keyframes ath-spin {\
+        to { transform: rotate(360deg); }\
+      }\
+      \
       /* ── Powered by ── */\
       .ath-powered {\
         position: absolute;\
@@ -1266,20 +1287,35 @@
     // ── Helper: Preload adjacent videos for seamless swiping ──
     function preloadAdjacent(idx) {
       var next = (idx + 1) % clips.length;
+      var next2 = (idx + 2) % clips.length;
       var prev = ((idx - 1) + clips.length) % clips.length;
-      // Load src for next and previous
+      // Load src for next 2 and previous
       ensureVideoSrc(next);
+      ensureVideoSrc(next2);
       ensureVideoSrc(prev);
-      // Set preload to auto for next video so it buffers ahead
+      // Set preload to auto for next 2 videos so they buffer ahead
       var nextV = videoElements[next];
-      if (nextV) nextV.setAttribute("preload", "auto");
+      if (nextV) { nextV.setAttribute("preload", "auto"); nextV.load(); }
+      var next2V = videoElements[next2];
+      if (next2V) { next2V.setAttribute("preload", "auto"); next2V.load(); }
       var prevV = videoElements[prev];
-      if (prevV) prevV.setAttribute("preload", "metadata");
+      if (prevV) { prevV.setAttribute("preload", "metadata"); prevV.load(); }
     }
 
     function playCurrentVideo() {
       var video = videoElements[currentIndex];
       if (!video) return;
+
+      // Show loading spinner
+      var slide = video.closest(".ath-slide") || video.parentElement.parentElement;
+      var spinner = slide.querySelector(".ath-loading-spinner");
+      if (!spinner) {
+        spinner = document.createElement("div");
+        spinner.className = "ath-loading-spinner";
+        spinner.innerHTML = '<div class="ath-spinner-ring"></div>';
+        (video.parentElement || slide).appendChild(spinner);
+      }
+      spinner.style.display = "flex";
 
       // Ensure current video has src loaded
       ensureVideoSrc(currentIndex);
@@ -1293,6 +1329,18 @@
       });
 
       video.currentTime = 0;
+
+      // Hide spinner once enough data is buffered
+      var hideSpinner = function () {
+        if (spinner) spinner.style.display = "none";
+        video.removeEventListener("canplay", hideSpinner);
+        video.removeEventListener("playing", hideSpinner);
+      };
+      video.addEventListener("canplay", hideSpinner);
+      video.addEventListener("playing", hideSpinner);
+      // Safety timeout: hide spinner after 5s regardless
+      setTimeout(function () { if (spinner) spinner.style.display = "none"; }, 5000);
+
       // Always start muted to guarantee autoplay works on mobile
       video.muted = true;
       var playPromise = video.play();
