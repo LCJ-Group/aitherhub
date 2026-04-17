@@ -672,6 +672,78 @@
       .ath-subtitle.hidden { opacity: 0; }\
       .ath-subtitle.visible { opacity: 1; }\
       \
+      /* ── Sound confirm popup ── */\
+      .ath-sound-confirm {\
+        position: absolute;\
+        top: 0; left: 0; right: 0; bottom: 0;\
+        z-index: 60;\
+        display: flex;\
+        align-items: center;\
+        justify-content: center;\
+        background: rgba(0,0,0,0.6);\
+        backdrop-filter: blur(4px);\
+        -webkit-backdrop-filter: blur(4px);\
+        opacity: 0;\
+        pointer-events: none;\
+        transition: opacity 0.25s ease;\
+      }\
+      .ath-sound-confirm.visible { opacity: 1; pointer-events: auto; }\
+      .ath-sound-confirm-box {\
+        background: rgba(30,30,30,0.95);\
+        border-radius: 16px;\
+        padding: 24px 28px;\
+        text-align: center;\
+        max-width: 280px;\
+        width: 80%;\
+        box-shadow: 0 8px 32px rgba(0,0,0,0.4);\
+        transform: scale(0.9);\
+        transition: transform 0.25s ease;\
+      }\
+      .ath-sound-confirm.visible .ath-sound-confirm-box { transform: scale(1); }\
+      .ath-sound-confirm-icon {\
+        width: 56px; height: 56px;\
+        margin: 0 auto 16px;\
+        background: rgba(255,255,255,0.1);\
+        border-radius: 50%;\
+        display: flex; align-items: center; justify-content: center;\
+      }\
+      .ath-sound-confirm-icon svg { width: 28px; height: 28px; }\
+      .ath-sound-confirm-title {\
+        color: white;\
+        font-size: 16px;\
+        font-weight: 700;\
+        margin-bottom: 8px;\
+      }\
+      .ath-sound-confirm-desc {\
+        color: rgba(255,255,255,0.6);\
+        font-size: 12px;\
+        margin-bottom: 20px;\
+        line-height: 1.4;\
+      }\
+      .ath-sound-confirm-btns {\
+        display: flex;\
+        gap: 10px;\
+      }\
+      .ath-sound-confirm-btn {\
+        flex: 1;\
+        padding: 12px 0;\
+        border-radius: 10px;\
+        border: none;\
+        font-size: 14px;\
+        font-weight: 600;\
+        cursor: pointer;\
+        transition: transform 0.15s ease, opacity 0.15s ease;\
+      }\
+      .ath-sound-confirm-btn:active { transform: scale(0.95); }\
+      .ath-sound-confirm-btn.cancel {\
+        background: rgba(255,255,255,0.15);\
+        color: rgba(255,255,255,0.8);\
+      }\
+      .ath-sound-confirm-btn.confirm {\
+        background: #FF2D55;\
+        color: white;\
+      }\
+      \
       /* ── Powered by ── */\
       .ath-powered {\
         position: absolute;\
@@ -940,18 +1012,12 @@
     soundHint.appendChild(soundHintText);
     overlay.appendChild(soundHint);
 
-    // Sound hint click → unmute
+    // Sound hint click → show confirm popup
     soundHint.addEventListener("click", function (e) {
       e.stopPropagation();
-      isMuted = false;
       soundHintDismissed = true;
-      var video = videoElements[currentIndex];
-      if (video) video.muted = false;
-      updateMuteButton();
       hideSoundHint();
-      // Remember preference
-      try { localStorage.setItem(SOUND_PREF_KEY, "1"); } catch (e) { }
-      userPreferSound = true;
+      soundConfirm.className = "ath-sound-confirm visible";
     });
 
     function showSoundHint() {
@@ -1405,11 +1471,8 @@
       var isLeftHalf = clickX < feedRect.width / 2;
 
       if (isLeftHalf && isMuted) {
-        // First tap on left: unmute
-        isMuted = false;
-        video.muted = false;
-        updateMuteButton();
-        showPlayIndicator(ICONS.volumeOn);
+        // First tap on left: show sound confirm popup
+        soundConfirm.className = "ath-sound-confirm visible";
         return;
       }
 
@@ -1514,13 +1577,60 @@
       trackEvent("share", { clip_id: clip.clip_id });
     });
 
+    // ── Sound confirm popup DOM ──
+    var soundConfirm = document.createElement("div");
+    soundConfirm.className = "ath-sound-confirm";
+    soundConfirm.innerHTML = '<div class="ath-sound-confirm-box">' +
+      '<div class="ath-sound-confirm-icon">' + ICONS.volumeOn + '</div>' +
+      '<div class="ath-sound-confirm-title">\u97F3\u58F0\u3092ON\u306B\u3057\u307E\u3059\u304B\uFF1F</div>' +
+      '<div class="ath-sound-confirm-desc">\u52D5\u753B\u306E\u97F3\u58F0\u304C\u518D\u751F\u3055\u308C\u307E\u3059</div>' +
+      '<div class="ath-sound-confirm-btns">' +
+        '<button class="ath-sound-confirm-btn cancel">\u3044\u3044\u3048</button>' +
+        '<button class="ath-sound-confirm-btn confirm">\u97F3\u58F0ON</button>' +
+      '</div>' +
+    '</div>';
+    overlay.appendChild(soundConfirm);
+
+    // Popup backdrop click → close
+    soundConfirm.addEventListener("click", function (e) {
+      if (e.target === soundConfirm) {
+        soundConfirm.className = "ath-sound-confirm";
+      }
+    });
+
+    // Cancel button
+    soundConfirm.querySelector(".ath-sound-confirm-btn.cancel").addEventListener("click", function (e) {
+      e.stopPropagation();
+      soundConfirm.className = "ath-sound-confirm";
+    });
+
+    // Confirm button → unmute
+    soundConfirm.querySelector(".ath-sound-confirm-btn.confirm").addEventListener("click", function (e) {
+      e.stopPropagation();
+      isMuted = false;
+      var video = videoElements[currentIndex];
+      if (video) video.muted = false;
+      updateMuteButton();
+      soundConfirm.className = "ath-sound-confirm";
+      try { localStorage.setItem(SOUND_PREF_KEY, "1"); } catch (e) { }
+      userPreferSound = true;
+    });
+
     // ── Action: Mute/Unmute ──
     muteBtn.addEventListener("click", function (e) {
       e.stopPropagation();
-      isMuted = !isMuted;
-      var video = videoElements[currentIndex];
-      if (video) video.muted = isMuted;
-      updateMuteButton();
+      if (isMuted) {
+        // Show confirmation popup before unmuting
+        soundConfirm.className = "ath-sound-confirm visible";
+      } else {
+        // Muting doesn't need confirmation
+        isMuted = true;
+        var video = videoElements[currentIndex];
+        if (video) video.muted = true;
+        updateMuteButton();
+        try { localStorage.setItem(SOUND_PREF_KEY, "0"); } catch (e) { }
+        userPreferSound = false;
+      }
     });
 
     // ── Product card click → navigate to product page ──
