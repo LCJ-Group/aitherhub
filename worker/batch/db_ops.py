@@ -2274,3 +2274,34 @@ def get_phase_human_sales_tags_sync(video_id: str, user_id: int) -> dict:
     return loop.run_until_complete(
         get_phase_human_sales_tags(video_id, user_id)
     )
+
+
+async def get_unusable_phases(video_id: str) -> dict:
+    """Return {phase_index: unusable_reason} for phases that have unusable clips."""
+    sql = text("""
+        SELECT DISTINCT
+            CASE
+                WHEN vc.phase_index ~ '^[0-9]+$' THEN CAST(vc.phase_index AS INTEGER)
+                ELSE -1
+            END AS phase_index,
+            vc.unusable_reason
+        FROM video_clips vc
+        WHERE vc.video_id = :video_id
+          AND COALESCE(vc.is_unusable, FALSE) = TRUE
+        ORDER BY phase_index ASC
+    """)
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(sql, {"video_id": video_id})
+        rows = result.fetchall()
+
+    out = {}
+    for r in rows:
+        if r.phase_index >= 0:
+            out[r.phase_index] = r.unusable_reason or "unknown"
+    return out
+
+
+def get_unusable_phases_sync(video_id: str) -> dict:
+    loop = get_event_loop()
+    return loop.run_until_complete(get_unusable_phases(video_id))

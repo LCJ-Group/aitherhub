@@ -1856,6 +1856,21 @@ def main():
                 except Exception as e:
                     logger.warning("[REPORT][WARN] Failed to load human_sales_tags: %s", e)
 
+            # Enrich phase_units with NG (unusable) clip info from DB
+            # so GPT can factor in which phases were marked as bad
+            try:
+                from db_ops import get_unusable_phases_sync
+                _ng_map = get_unusable_phases_sync(video_id)
+                if _ng_map:
+                    for p in phase_units:
+                        pi = p["phase_index"]
+                        if pi in _ng_map:
+                            p["is_unusable"] = True
+                            p["unusable_reason"] = _ng_map[pi]
+                    logger.info("[REPORT] Enriched %d phases with NG (unusable) flags from DB", len(_ng_map))
+            except Exception as e:
+                logger.warning("[REPORT][WARN] Failed to load unusable flags: %s", e)
+
             r2_raw = build_report_2_phase_insights_raw(
                 phase_units, best_data, excel_data=excel_data
             )

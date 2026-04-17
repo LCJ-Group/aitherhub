@@ -355,6 +355,11 @@ def build_report_2_phase_insights_raw(phase_units, best_data, excel_data=None):
         if ai_tags:
             item["sales_psychology_tags"] = ai_tags
 
+        # Add NG (unusable) flag if clip was marked as bad by human reviewer
+        if p.get("is_unusable"):
+            item["is_unusable"] = True
+            item["unusable_reason"] = p.get("unusable_reason", "unknown")
+
         out.append(item)
 
     return out
@@ -396,6 +401,7 @@ PROMPT_REPORT_2 = """
 - CTAスコア（1〜5、購買を促す発言の強度。ある場合）
 - 音声特徴量（声の熱量・抑揚・話速・沈黙率。ある場合）
 - セールスタグ（専門家が付与したセールス手法タグ。ある場合）
+- NG判定（人間レビュアーが「使えない」と判定したフェーズ。理由付き。ある場合）
 
 あなたの役割：
 - このフェーズで「どう売っているか」を分析する
@@ -411,6 +417,7 @@ PROMPT_REPORT_2 = """
 - CTAスコアがある場合：購買を促す発言の強さと頻度の評価。スコアが低いフェーズでは「もっと強く購買を促すべき」等の具体的アドバイス
 - 音声特徴量がある場合：声の熱量（energy_mean）や抑揚（pitch_std）が低い場合は「もっと感情を込めて話すべき」、話速（speech_rate）が速すぎる場合は「ゆっくり丁寧に説明すべき」等のアドバイス
 - セールスタグ（human_sales_tags / sales_psychology_tags）がある場合：配信者が使っているセールス手法（例：HOOK、EMPATHY、CTA、SCARCITY、SOCIAL_PROOF等）を踏まえて、足りないテクニックや強化すべきポイントを具体的にアドバイスする。タグが少ないフェーズでは「どのセールス手法を追加すべきか」を提案する
+- NG判定（is_unusable=true）がある場合：このフェーズは人間レビュアーにより「使えない」と判定されている。NG理由（unusable_reason）を踏まえて、なぜこのフェーズが問題なのか、次回の配信でどう改善すべきかを具体的にアドバイスする。例：「音声が悪い」→マイク環境の改善提案、「カット位置が悪い」→話の区切りを意識した構成提案
 
 出力ルール：
 - 最大2つの具体的なセールス改善アドバイス
@@ -441,6 +448,7 @@ PROMPT_REPORT_2_ZHTW = """
 - CTA評分（1〜5，促購發言的強度。如有）
 - 語音特徵值（聲音熱度、抑揚、語速、沈默率。如有）
 - 銷售標籤（專家標註的銷售技巧標籤。如有）
+- NG判定（人工審查員判定為「不可用」的階段。附理由。如有）
 
 你的角色：
 - 分析這個階段「如何在賣」
@@ -456,6 +464,7 @@ PROMPT_REPORT_2_ZHTW = """
 - 如有CTA評分：評估促購發言的強度與頻率。低分階段應建議「需要更強力地促購」等具體建議
 - 如有語音特徵值：聲音熱度（energy_mean）或抑揚（pitch_std）偏低時建議「應更有感情地說話」，語速（speech_rate）過快時建議「應放慢速度仔細說明」
 - 如有銷售標籤（human_sales_tags / sales_psychology_tags）：根據主播使用的銷售技巧（例如：HOOK、EMPATHY、CTA、SCARCITY、SOCIAL_PROOF等），具體建議缺少的技巧或應強化的重點。標籤較少的階段應建議「應增加哪些銷售技巧」
+- 如有NG判定（is_unusable=true）：此階段已被人工審查員判定為「不可用」。根據NG理由（unusable_reason），具體建議為何此階段有問題以及下次直播應如何改善。例：「音質差」→建議改善麥克風環境，「剪輯位置不當」→建議注意話題轉換的節奏
 
 輸出規則：
 - 最多2個具體的銷售改善建議

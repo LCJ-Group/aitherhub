@@ -26,10 +26,22 @@ export default function AdminDashboard() {
   const [feedbackLoading, setFeedbackLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  // Support ?tab= URL parameter
-const urlParams = new URLSearchParams(window.location.search);
-const initialTab = urlParams.get("tab") || "dashboard";
-const [activeTab, setActiveTab] = useState(initialTab);
+  // Support ?tab= URL parameter for shareable links
+  const urlParams = new URLSearchParams(window.location.search);
+  const initialTab = urlParams.get("tab") || "dashboard";
+  const [activeTab, setActiveTabRaw] = useState(initialTab);
+
+  // Wrap setActiveTab to also update URL query parameter
+  const setActiveTab = useCallback((tab) => {
+    setActiveTabRaw(tab);
+    const url = new URL(window.location);
+    if (tab === "dashboard") {
+      url.searchParams.delete("tab");
+    } else {
+      url.searchParams.set("tab", tab);
+    }
+    window.history.replaceState({}, "", url);
+  }, []);
   const [selectedVideoId, setSelectedVideoId] = useState(null);
   const [uploadHealth, setUploadHealth] = useState(null);
   const [uploadHealthLoading, setUploadHealthLoading] = useState(false);

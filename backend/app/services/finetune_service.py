@@ -96,6 +96,7 @@ async def build_training_dataset(
     system_prompt = _build_system_prompt(persona)
 
     # 3. Get video_phases with audio_text AND phase_insights
+    #    Exclude phases whose clips have been marked as unusable (NG)
     phases_sql = text("""
         SELECT
             vp.video_id,
@@ -111,6 +112,15 @@ async def build_training_dataset(
             ON pi.video_id = vp.video_id
             AND pi.phase_index = vp.phase_index
         WHERE vp.video_id = ANY(:vids)
+          AND NOT EXISTS (
+              SELECT 1 FROM video_clips vc
+              WHERE vc.video_id = vp.video_id
+                AND CASE
+                    WHEN vc.phase_index ~ '^[0-9]+$' THEN CAST(vc.phase_index AS INTEGER)
+                    ELSE -1
+                END = vp.phase_index
+                AND COALESCE(vc.is_unusable, FALSE) = TRUE
+          )
         ORDER BY vp.video_id, vp.phase_index ASC
     """)
     try:
