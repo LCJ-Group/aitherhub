@@ -601,6 +601,29 @@ async def ensure_tables_exist():
 
 
 @app.on_event("startup")
+async def ensure_videos_language_column():
+    """Ensure 'language' column exists on videos table.
+    
+    The column was added in migration 20260416_add_video_language but Azure Web App
+    deployment does not run alembic upgrade head, so we ensure it here.
+    """
+    try:
+        from app.core.db import engine
+        from sqlalchemy import text as _text
+
+        async with asyncio.timeout(30):
+            async with engine.begin() as conn:
+                await conn.execute(_text(
+                    "ALTER TABLE videos ADD COLUMN IF NOT EXISTS language VARCHAR(10) DEFAULT 'ja'"
+                ))
+        logger.info("videos.language column verified/created successfully")
+    except asyncio.TimeoutError:
+        logger.warning("Timeout (30s) while ensuring videos.language column on startup")
+    except Exception as e:
+        logger.warning(f"Failed to ensure videos.language column on startup: {e}")
+
+
+@app.on_event("startup")
 async def ensure_auto_video_jobs_table():
     """Ensure auto_video_jobs table exists and restore jobs from DB."""
     try:
