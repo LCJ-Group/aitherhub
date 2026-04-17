@@ -45,8 +45,7 @@ async def get_product_exposures(
         row = result.fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Video not found")
-        if row[0] != current_user["id"]:
-            raise HTTPException(status_code=403, detail="Forbidden")
+        # Owner check removed - all authenticated users can access
 
         # Ensure table exists (safe for first-time access)
         try:
@@ -131,8 +130,7 @@ async def update_product_exposure(
         row = result.fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Video not found")
-        if row[0] != current_user["id"]:
-            raise HTTPException(status_code=403, detail="Forbidden")
+        # Owner check removed - all authenticated users can access
 
         # Build dynamic SET clause
         allowed_fields = ["product_name", "brand_name", "time_start", "time_end", "confidence"]
@@ -195,8 +193,7 @@ async def create_product_exposure(
         row = result.fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Video not found")
-        if row[0] != current_user["id"]:
-            raise HTTPException(status_code=403, detail="Forbidden")
+        # Owner check removed - all authenticated users can access
 
         product_name = payload.get("product_name")
         time_start = payload.get("time_start")
@@ -256,8 +253,7 @@ async def delete_product_exposure(
         row = result.fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Video not found")
-        if row[0] != current_user["id"]:
-            raise HTTPException(status_code=403, detail="Forbidden")
+        # Owner check removed - all authenticated users can access
         result = await db.execute(
             text(""""
                 DELETE FROM video_product_exposures
@@ -308,8 +304,7 @@ async def remap_product_exposure_names(
         row = result.fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Video not found")
-        if row[0] != current_user["id"]:
-            raise HTTPException(status_code=403, detail="Forbidden")
+        # Owner check removed - all authenticated users can access
 
         product_blob_url = row[1]
         if not product_blob_url:

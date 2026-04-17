@@ -47,8 +47,7 @@ async def generate_report(
         video_row = vres.fetchone()
         if not video_row:
             raise HTTPException(status_code=404, detail="Video not found")
-        if current_user and current_user.get("id") != video_row.user_id:
-            raise HTTPException(status_code=403, detail="Forbidden")
+        # Owner check removed - all authenticated users can access
 
         # 2. Fetch all video_phases with metrics
         # Try with cta_score/audio_features first, fallback without
@@ -228,8 +227,7 @@ async def get_report(
         video_row = vres.fetchone()
         if not video_row:
             raise HTTPException(status_code=404, detail="Video not found")
-        if current_user and current_user.get("id") != video_row.user_id:
-            raise HTTPException(status_code=403, detail="Forbidden")
+        # Owner check removed - all authenticated users can access
 
         # Get latest report
         report_sql = text("""
