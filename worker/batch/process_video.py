@@ -1840,6 +1840,22 @@ def main():
             video_language = get_video_language_sync(video_id)
             logger.info("[REPORT] Video language: %s", video_language)
 
+            # Enrich phase_units with human_sales_tags from DB if not already present
+            # (human_sales_tags are set by experts via the UI, not by the pipeline)
+            _has_human_tags = any(p.get("human_sales_tags") for p in phase_units)
+            if not _has_human_tags:
+                try:
+                    from db_ops import get_phase_human_sales_tags_sync
+                    _ht_map = get_phase_human_sales_tags_sync(video_id, user_id)
+                    if _ht_map:
+                        for p in phase_units:
+                            pi = p["phase_index"]
+                            if pi in _ht_map and _ht_map[pi]:
+                                p["human_sales_tags"] = _ht_map[pi]
+                        logger.info("[REPORT] Enriched %d phases with human_sales_tags from DB", len(_ht_map))
+                except Exception as e:
+                    logger.warning("[REPORT][WARN] Failed to load human_sales_tags: %s", e)
+
             r2_raw = build_report_2_phase_insights_raw(
                 phase_units, best_data, excel_data=excel_data
             )

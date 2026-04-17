@@ -12,6 +12,29 @@ from best_phase_pipeline import extract_attention_metrics
 
 MAX_CONCURRENCY = 20
 
+
+def _parse_sales_tags(raw) -> list[str]:
+    """Parse human_sales_tags or sales_psychology_tags from DB into a list of strings.
+
+    Handles: None, list, JSON string, plain string.
+    """
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return [str(t) for t in raw if t]
+    if isinstance(raw, str):
+        s = raw.strip()
+        if not s or s == "[]":
+            return []
+        try:
+            parsed = json.loads(s)
+            if isinstance(parsed, list):
+                return [str(t) for t in parsed if t]
+        except (json.JSONDecodeError, ValueError):
+            pass
+        return [s]
+    return []
+
 # ======================================================
 # ENV / CLIENT
 # ======================================================
@@ -322,6 +345,16 @@ def build_report_2_phase_insights_raw(phase_units, best_data, excel_data=None):
         if csv_m:
             item["csv_metrics"] = csv_m
 
+        # Add human_sales_tags if available (expert-annotated sales technique tags)
+        human_tags = _parse_sales_tags(p.get("human_sales_tags"))
+        if human_tags:
+            item["human_sales_tags"] = human_tags
+
+        # Add AI-generated sales_psychology_tags if available
+        ai_tags = _parse_sales_tags(p.get("sales_psychology_tags"))
+        if ai_tags:
+            item["sales_psychology_tags"] = ai_tags
+
         out.append(item)
 
     return out
@@ -362,6 +395,7 @@ PROMPT_REPORT_2 = """
 - 過去のベストパフォーマンスとの比較
 - CTAスコア（1〜5、購買を促す発言の強度。ある場合）
 - 音声特徴量（声の熱量・抑揚・話速・沈黙率。ある場合）
+- セールスタグ（専門家が付与したセールス手法タグ。ある場合）
 
 あなたの役割：
 - このフェーズで「どう売っているか」を分析する
@@ -376,6 +410,7 @@ PROMPT_REPORT_2 = """
 - 売上データがある場合：なぜこの時間帯に売れた/売れなかったかの分析
 - CTAスコアがある場合：購買を促す発言の強さと頻度の評価。スコアが低いフェーズでは「もっと強く購買を促すべき」等の具体的アドバイス
 - 音声特徴量がある場合：声の熱量（energy_mean）や抑揚（pitch_std）が低い場合は「もっと感情を込めて話すべき」、話速（speech_rate）が速すぎる場合は「ゆっくり丁寧に説明すべき」等のアドバイス
+- セールスタグ（human_sales_tags / sales_psychology_tags）がある場合：配信者が使っているセールス手法（例：HOOK、EMPATHY、CTA、SCARCITY、SOCIAL_PROOF等）を踏まえて、足りないテクニックや強化すべきポイントを具体的にアドバイスする。タグが少ないフェーズでは「どのセールス手法を追加すべきか」を提案する
 
 出力ルール：
 - 最大2つの具体的なセールス改善アドバイス
@@ -404,7 +439,8 @@ PROMPT_REPORT_2_ZHTW = """
 - 銷售數據（如有）
 - 與過去最佳表現的比較
 - CTA評分（1〜5，促購發言的強度。如有）
-- 語音特徵值（聲音熱度、抑揚、語速、沉默率。如有）
+- 語音特徵值（聲音熱度、抑揚、語速、沈默率。如有）
+- 銷售標籤（專家標註的銷售技巧標籤。如有）
 
 你的角色：
 - 分析這個階段「如何在賣」
@@ -419,6 +455,7 @@ PROMPT_REPORT_2_ZHTW = """
 - 如有銷售數據：分析為何這個時段賣得好/賣不好
 - 如有CTA評分：評估促購發言的強度與頻率。低分階段應建議「需要更強力地促購」等具體建議
 - 如有語音特徵值：聲音熱度（energy_mean）或抑揚（pitch_std）偏低時建議「應更有感情地說話」，語速（speech_rate）過快時建議「應放慢速度仔細說明」
+- 如有銷售標籤（human_sales_tags / sales_psychology_tags）：根據主播使用的銷售技巧（例如：HOOK、EMPATHY、CTA、SCARCITY、SOCIAL_PROOF等），具體建議缺少的技巧或應強化的重點。標籤較少的階段應建議「應增加哪些銷售技巧」
 
 輸出規則：
 - 最多2個具體的銷售改善建議

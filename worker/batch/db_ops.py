@@ -840,7 +840,10 @@ async def load_video_phases(
             view_start, view_end,
             like_start, like_end,
             delta_view, delta_like,
-            group_id
+            group_id,
+            human_sales_tags,
+            sales_psychology_tags,
+            audio_text
         FROM video_phases
         WHERE video_id = :video_id
           AND (user_id = :user_id )
@@ -878,6 +881,9 @@ async def load_video_phases(
             "delta_view": r.delta_view,
             "delta_like": r.delta_like,
             "group_id": r.group_id,
+            "human_sales_tags": r.human_sales_tags,
+            "sales_psychology_tags": r.sales_psychology_tags,
+            "speech_text": r.audio_text,
 
             "metrics": {
                 "delta_view": r.delta_view,
@@ -2222,3 +2228,49 @@ async def update_video_error_message(video_id: str, error_message: str):
 def update_video_error_message_sync(video_id: str, error_message: str):
     loop = get_event_loop()
     loop.run_until_complete(update_video_error_message(video_id, error_message))
+
+
+# ---------- human_sales_tags lookup for report enrichment ----------
+
+async def get_phase_human_sales_tags(video_id: str, user_id: int) -> dict:
+    """Return {phase_index: parsed_tags_list} for phases that have human_sales_tags."""
+    sql = text("""
+        SELECT phase_index, human_sales_tags
+        FROM video_phases
+        WHERE video_id = :video_id
+          AND (user_id = :user_id)
+          AND human_sales_tags IS NOT NULL
+          AND human_sales_tags != '[]'
+        ORDER BY phase_index ASC
+    """)
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(sql, {
+            "video_id": video_id,
+            "user_id": user_id,
+        })
+        rows = result.fetchall()
+
+    out = {}
+    for r in rows:
+        raw = r.human_sales_tags
+        if raw is None:
+            continue
+        if isinstance(raw, list):
+            out[r.phase_index] = raw
+        elif isinstance(raw, str):
+            try:
+                import json as _json
+                parsed = _json.loads(raw)
+                if isinstance(parsed, list):
+                    out[r.phase_index] = parsed
+            except Exception:
+                pass
+    return out
+
+
+def get_phase_human_sales_tags_sync(video_id: str, user_id: int) -> dict:
+    loop = get_event_loop()
+    return loop.run_until_complete(
+        get_phase_human_sales_tags(video_id, user_id)
+    )

@@ -23,6 +23,7 @@ import os
 import sys
 import json
 import logging
+from datetime import datetime
 from pathlib import Path
 from threading import Thread, Event
 
@@ -242,17 +243,95 @@ class StalledJobRecovery:
             )
             await session.commit()
 
+    @staticmethod
+    def _refresh_sas_url(blob_url: str) -> str:
+        """Regenerate a fresh SAS token for an Azure Blob URL if expired or expiring soon.
+
+        Returns the original URL if no SAS token is present, regeneration fails,
+        or the token is still valid (>30 min remaining).
+        """
+        if not blob_url or "?" not in blob_url or "sig=" not in blob_url:
+            return blob_url
+
+        try:
+            from urllib.parse import urlparse, parse_qs
+            parsed = urlparse(blob_url)
+            params = parse_qs(parsed.query)
+            se_values = params.get("se", [])
+            if se_values:
+                expiry_str = se_values[0]
+                expiry_dt = datetime.strptime(expiry_str, "%Y-%m-%dT%H:%M:%SZ")
+                now = datetime.utcnow()
+                remaining = (expiry_dt - now).total_seconds()
+                if remaining > 1800:  # More than 30 min remaining
+                    return blob_url
+                logger.warning(
+                    "[recovery][SAS] Token expired/expiring (%d min), regenerating for clip",
+                    int(remaining / 60),
+                )
+        except Exception as e:
+            logger.warning("[recovery][SAS] Could not parse SAS expiry: %s", e)
+
+        # Regenerate
+        try:
+            conn_str = os.environ.get("AZURE_STORAGE_CONNECTION_STRING", "")
+            if not conn_str:
+                logger.warning("[recovery][SAS] AZURE_STORAGE_CONNECTION_STRING not set, skipping")
+                return blob_url
+
+            from urllib.parse import urlparse, unquote
+            from azure.storage.blob import generate_blob_sas, BlobSasPermissions
+
+            base_url = blob_url.split("?")[0]
+            parsed = urlparse(base_url)
+            path_parts = parsed.path.lstrip("/").split("/", 1)
+            container = path_parts[0] if path_parts else "videos"
+            blob_path = unquote(path_parts[1]) if len(path_parts) > 1 else ""
+
+            if not blob_path:
+                return blob_url
+
+            account_name = account_key = None
+            for part in conn_str.split(";"):
+                if part.startswith("AccountName="):
+                    account_name = part.split("=", 1)[1]
+                if part.startswith("AccountKey="):
+                    account_key = part.split("=", 1)[1]
+
+            if not account_name or not account_key:
+                return blob_url
+
+            from datetime import timedelta
+            expiry = datetime.utcnow() + timedelta(hours=24)
+            sas_token = generate_blob_sas(
+                account_name=account_name,
+                container_name=container,
+                blob_name=blob_path,
+                account_key=account_key,
+                permission=BlobSasPermissions(read=True),
+                expiry=expiry,
+            )
+            new_url = f"https://{account_name}.blob.core.windows.net/{container}/{blob_path}?{sas_token}"
+            logger.info("[recovery][SAS] Regenerated fresh SAS URL (expires in 24h)")
+            return new_url
+        except Exception as e:
+            logger.error("[recovery][SAS] Failed to regenerate: %s", e)
+            return blob_url
+
     def _re_enqueue_clip(self, clip_id: str, video_id: str, job_payload: dict = None):
         """Re-enqueue a clip job to the queue for retry.
 
         Uses job_payload from DB if available (contains blob_url and other fields).
+        Refreshes SAS token on blob_url before re-enqueuing to avoid download failures.
         Falls back to minimal payload if job_payload is not available.
         """
         try:
             from shared.queue.client import get_queue_client
 
             if job_payload and isinstance(job_payload, dict):
-                # Use the full payload from DB (has blob_url, time_start, etc.)
+                # Refresh SAS token on blob_url before re-enqueuing
+                if "blob_url" in job_payload:
+                    job_payload["blob_url"] = self._refresh_sas_url(job_payload["blob_url"])
                 payload = {**job_payload, "retry": True}
             else:
                 # Fallback: minimal payload (DB fallback will pick it up instead)
