@@ -191,7 +191,7 @@
     host.id = "aitherhub-widget-host";
     host.style.cssText = "position:fixed;z-index:2147483647;pointer-events:none;top:0;left:0;width:100%;height:100%;";
     document.body.appendChild(host);
-    var shadow = host.attachShadow({ mode: "open" });
+    var shadow = host.attachShadow({ mode: "closed" });
     return shadow;
   }
 
@@ -1012,12 +1012,19 @@
     soundHint.appendChild(soundHintText);
     overlay.appendChild(soundHint);
 
-    // Sound hint click → show confirm popup
+    // Sound hint click → directly unmute
     soundHint.addEventListener("click", function (e) {
       e.stopPropagation();
       soundHintDismissed = true;
       hideSoundHint();
-      soundConfirm.className = "ath-sound-confirm visible";
+      // Directly unmute
+      isMuted = false;
+      var video = videoElements[currentIndex];
+      if (video) video.muted = false;
+      updateMuteButton();
+      try { localStorage.setItem(SOUND_PREF_KEY, "1"); } catch (e) { }
+      userPreferSound = true;
+      muteBtn.classList.remove("ath-mute-pulse");
     });
 
     function showSoundHint() {
@@ -1468,8 +1475,15 @@
       var isLeftHalf = clickX < feedRect.width / 2;
 
       if (isLeftHalf && isMuted) {
-        // First tap on left: show sound confirm popup
-        soundConfirm.className = "ath-sound-confirm visible";
+        // First tap on left: directly unmute
+        isMuted = false;
+        if (video) video.muted = false;
+        updateMuteButton();
+        try { localStorage.setItem(SOUND_PREF_KEY, "1"); } catch (e) { }
+        userPreferSound = true;
+        soundHintDismissed = true;
+        hideSoundHint();
+        muteBtn.classList.remove("ath-mute-pulse");
         return;
       }
 
@@ -1616,13 +1630,20 @@
     // ── Action: Mute/Unmute ──
     muteBtn.addEventListener("click", function (e) {
       e.stopPropagation();
+      var video = videoElements[currentIndex];
       if (isMuted) {
-        // Show confirmation popup before unmuting
-        soundConfirm.className = "ath-sound-confirm visible";
+        // Directly unmute — no popup confirmation
+        isMuted = false;
+        if (video) video.muted = false;
+        updateMuteButton();
+        try { localStorage.setItem(SOUND_PREF_KEY, "1"); } catch (e) { }
+        userPreferSound = true;
+        soundHintDismissed = true;
+        hideSoundHint();
+        muteBtn.classList.remove("ath-mute-pulse");
       } else {
-        // Muting doesn't need confirmation
+        // Mute
         isMuted = true;
-        var video = videoElements[currentIndex];
         if (video) video.muted = true;
         updateMuteButton();
         try { localStorage.setItem(SOUND_PREF_KEY, "0"); } catch (e) { }
