@@ -140,8 +140,12 @@ async def get_widget_config(
     )
     clips = [dict(r) for r in clips_result.mappings().all()]
 
-    # Priority: widget_url (720p optimized) > exported_url (subtitled) > clip_url (original)
+    # Provide both quality URLs: clip_url (720p for fast load) + clip_url_hd (1080p for quality)
     for clip in clips:
+        # Build HD URL: exported_url (subtitled 1080p) > original clip_url
+        hd_url = clip.get("exported_url") or clip["clip_url"]
+        clip["clip_url_hd"] = hd_url
+        # Build default URL: widget_url (720p) > exported_url > clip_url
         clip["original_clip_url"] = clip["clip_url"]
         if clip.get("widget_url"):
             clip["clip_url"] = clip["widget_url"]
@@ -171,6 +175,12 @@ async def get_widget_config(
         if clip.get("original_clip_url") and "blob.core.windows.net" in (clip["original_clip_url"] or ""):
             try:
                 clip["original_clip_url"] = generate_read_sas_from_url(clip["original_clip_url"])
+            except Exception:
+                pass
+        # Generate SAS for HD URL
+        if clip.get("clip_url_hd") and "blob.core.windows.net" in (clip["clip_url_hd"] or ""):
+            try:
+                clip["clip_url_hd"] = generate_read_sas_from_url(clip["clip_url_hd"])
             except Exception:
                 pass
         if clip.get("thumbnail_url") and "blob.core.windows.net" in (clip["thumbnail_url"] or ""):

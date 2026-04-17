@@ -797,6 +797,76 @@
     var hintShown = false;
     var fabVideo = null;
 
+    // ── Adaptive Quality: detect network speed and choose 720p or 1080p ──
+    var useHD = false; // default: 720p for fast loading
+    function detectNetworkQuality() {
+      // Method 1: Navigator.connection API (Chrome/Android)
+      var conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+      if (conn) {
+        // WiFi or fast connection → HD
+        if (conn.type === "wifi" || conn.type === "ethernet") { useHD = true; return; }
+        // effectiveType: 4g with good downlink → HD
+        if (conn.effectiveType === "4g" && (conn.downlink || 0) >= 5) { useHD = true; return; }
+        // 3g or slower → stay 720p
+        useHD = false;
+        return;
+      }
+      // Method 2: Measure actual download speed with first clip thumbnail
+      var testUrl = (clips[0] && clips[0].thumbnail_url) || "";
+      if (!testUrl) return;
+      var startTime = performance.now();
+      var img = new Image();
+      img.onload = function () {
+        var elapsed = (performance.now() - startTime) / 1000; // seconds
+        // Thumbnail is typically 20-50KB; if loads in < 200ms → fast connection
+        if (elapsed < 0.3) {
+          useHD = true;
+          upgradeToHD();
+        }
+      };
+      img.src = testUrl + (testUrl.indexOf("?") > -1 ? "&" : "?") + "_t=" + Date.now();
+    }
+    detectNetworkQuality();
+
+    // Get the best URL for a clip based on quality setting
+    function getClipUrl(clip) {
+      if (useHD && clip.clip_url_hd) return clip.clip_url_hd;
+      return clip.clip_url || "";
+    }
+
+    // Upgrade all loaded videos to HD if network is fast
+    function upgradeToHD() {
+      if (!useHD) return;
+      clips.forEach(function (clip, idx) {
+        var v = videoElements[idx];
+        if (!v) return;
+        var hdUrl = clip.clip_url_hd;
+        if (!hdUrl || hdUrl === clip.clip_url) return;
+        // Only upgrade if not currently playing or if it's a future video
+        if (idx !== currentIndex) {
+          var currentSrc = v.src || v.getAttribute("data-src") || "";
+          if (currentSrc && currentSrc.indexOf("widget_") > -1) {
+            // Currently has 720p, upgrade to HD
+            if (v.src && v.src !== "" && v.src !== window.location.href) {
+              v.src = hdUrl;
+            } else {
+              v.setAttribute("data-src", hdUrl);
+            }
+          }
+        }
+      });
+    }
+
+    // Listen for network changes
+    var conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+    if (conn) {
+      conn.addEventListener("change", function () {
+        var wasHD = useHD;
+        detectNetworkQuality();
+        if (useHD && !wasHD) upgradeToHD();
+      });
+    }
+
     // ── FAB (Floating Action Button) with Video Preview ──
     var fab = document.createElement("div");
     fab.className = "ath-fab";
@@ -899,10 +969,11 @@
         video.setAttribute("poster", clip.thumbnail_url);
       }
       // Only set src for first 2 videos; rest are lazy-loaded
+      // Use getClipUrl() for adaptive quality (720p/1080p based on network)
       if (index <= 1) {
-        video.src = clip.clip_url || "";
+        video.src = getClipUrl(clip);
       } else {
-        video.setAttribute("data-src", clip.clip_url || "");
+        video.setAttribute("data-src", getClipUrl(clip));
       }
       inner.appendChild(video);
       videoElements[index] = video;
@@ -1275,11 +1346,19 @@
     function ensureVideoSrc(idx) {
       var v = videoElements[idx];
       if (!v) return;
+      var clip = clips[idx];
       if (!v.src || v.src === "" || v.src === window.location.href) {
         var dataSrc = v.getAttribute("data-src");
         if (dataSrc) {
-          v.src = dataSrc;
+          // Use adaptive quality URL
+          v.src = clip ? getClipUrl(clip) : dataSrc;
           v.removeAttribute("data-src");
+        }
+      } else if (useHD && clip && clip.clip_url_hd) {
+        // If HD mode activated and current src is 720p, upgrade
+        var currentSrc = v.src || "";
+        if (currentSrc.indexOf("widget_") > -1 && clip.clip_url_hd.indexOf("widget_") === -1) {
+          v.src = clip.clip_url_hd;
         }
       }
     }
