@@ -1805,6 +1805,45 @@ def remove_silence_from_video(video_path: str, output_path: str, silence_interva
 # Main pipeline
 # =========================
 
+def _ensure_fresh_sas_url(blob_url: str) -> str:
+    """Ensure the blob_url has a valid (non-expired) SAS token.
+    If the SAS token is expired or will expire within 30 minutes,
+    regenerate a fresh one using AZURE_STORAGE_CONNECTION_STRING.
+    Returns the original URL if no SAS token is present or regeneration fails."""
+    if "?" not in blob_url or "sig=" not in blob_url:
+        return blob_url  # No SAS token, return as-is
+
+    try:
+        from urllib.parse import urlparse, parse_qs
+        parsed = urlparse(blob_url)
+        params = parse_qs(parsed.query)
+        se_values = params.get("se", [])
+        if se_values:
+            expiry_str = se_values[0]
+            # Parse expiry datetime (format: 2026-04-17T12:00:00Z)
+            expiry_dt = datetime.strptime(expiry_str, "%Y-%m-%dT%H:%M:%SZ")
+            now = datetime.utcnow()
+            remaining = (expiry_dt - now).total_seconds()
+            if remaining > 1800:  # More than 30 min remaining
+                logger.info(f"[SAS] Token still valid ({remaining/60:.0f} min remaining)")
+                return blob_url
+            logger.warning(f"[SAS] Token expired or expiring soon ({remaining/60:.0f} min remaining), regenerating...")
+        else:
+            logger.warning("[SAS] No 'se' param found in SAS URL, attempting regeneration")
+    except Exception as e:
+        logger.warning(f"[SAS] Could not parse SAS expiry: {e}, attempting regeneration")
+
+    # Regenerate SAS URL
+    try:
+        from process_video import _regenerate_sas_url
+        new_url = _regenerate_sas_url(blob_url)
+        logger.info("[SAS] Successfully regenerated fresh SAS URL")
+        return new_url
+    except Exception as e:
+        logger.error(f"[SAS] Failed to regenerate SAS URL: {e}")
+        return blob_url  # Return original as fallback
+
+
 def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float, time_end: float, phase_index = -1, speed_factor: float = 1.0):
     """Main clip generation pipeline."""
     logger.info(f"=== Starting clip generation ===")
@@ -1813,6 +1852,9 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
 
     # Initialize DB
     init_db_sync()
+
+    # Ensure blob_url has a fresh SAS token (expired tokens cause download failures)
+    blob_url = _ensure_fresh_sas_url(blob_url)
 
     # Update status to processing
     update_clip_status(clip_id, "processing")

@@ -4535,7 +4535,20 @@ async def reset_and_requeue_dead_clips(
                 "reset_count": len(rows),
             }
 
-        # 3. Enqueue to Azure Storage Queue
+        # 3. Regenerate SAS URL (old ones in job_payload are likely expired)
+        from app.services.storage_service import generate_read_sas_from_url
+        fresh_blob_url = vid_row.blob_url
+        if fresh_blob_url:
+            try:
+                base_url = fresh_blob_url.split("?")[0] if "?" in fresh_blob_url else fresh_blob_url
+                new_sas_url = generate_read_sas_from_url(base_url)
+                if new_sas_url:
+                    fresh_blob_url = new_sas_url
+                    logger.info(f"Regenerated fresh SAS URL for requeue of video {video_id}")
+            except Exception as sas_err:
+                logger.warning(f"SAS regeneration failed for video {video_id}: {sas_err}")
+
+        # 4. Enqueue to Azure Storage Queue
         import os
         from azure.storage.queue import QueueClient
 
@@ -4550,7 +4563,7 @@ async def reset_and_requeue_dead_clips(
                 "type": "generate_clip",
                 "video_id": video_id,
                 "clip_id": str(row.id),
-                "blob_url": vid_row.blob_url,
+                "blob_url": fresh_blob_url,
                 "time_start": float(row.time_start) if row.time_start else 0,
                 "time_end": float(row.time_end) if row.time_end else 0,
             })

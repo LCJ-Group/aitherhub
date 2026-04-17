@@ -241,12 +241,12 @@ async def get_clip_status(
             }
 
         # ── Stuck clip detection & auto-retry ──
-        # If a clip has been in pending/processing for > 10 minutes with no progress,
-        # it likely means the worker crashed or the queue message was lost.
-        # Auto-retry by re-enqueuing the job.
+        # If a clip has been in pending/processing/retrying for > 10 minutes with no progress,
+        # it likely means the worker crashed, the queue message was lost, or the SAS token expired.
+        # Auto-retry by re-enqueuing the job with a fresh SAS URL.
         _CLIP_STUCK_TIMEOUT = 600  # 10 minutes
         clip_status = row.status
-        if clip_status in ("pending", "processing") and row.progress_pct == 0:
+        if clip_status in ("pending", "processing", "retrying") and row.progress_pct == 0:
             last_update = row.updated_at or row.created_at
             if last_update:
                 if last_update.tzinfo is None:
@@ -254,11 +254,32 @@ async def get_clip_status(
                 age = (datetime.now(timezone.utc) - last_update).total_seconds()
                 if age > _CLIP_STUCK_TIMEOUT:
                     logger.warning(f"Clip {row.id} stuck in {clip_status} for {age:.0f}s with 0% progress, auto-retrying")
-                    # Try to re-enqueue the job
+                    # Try to re-enqueue the job with a fresh SAS URL
                     job_payload = row.job_payload if hasattr(row, 'job_payload') and row.job_payload else None
                     if job_payload:
                         if isinstance(job_payload, str):
                             job_payload = json.loads(job_payload)
+                        # Regenerate SAS URL if the original has expired
+                        if job_payload.get("blob_url") and "sig=" in job_payload.get("blob_url", ""):
+                            try:
+                                from app.services.storage_service import generate_read_sas_from_url
+                                old_url = job_payload["blob_url"].split("?")[0]  # Strip old SAS
+                                new_sas_url = generate_read_sas_from_url(old_url)
+                                if new_sas_url:
+                                    job_payload["blob_url"] = new_sas_url
+                                    logger.info(f"Clip {row.id} SAS URL regenerated for auto-retry")
+                                    # Also update job_payload in DB so future retries use fresh URL
+                                    update_payload_sql = text("""
+                                        UPDATE video_clips
+                                        SET job_payload = CAST(:payload AS jsonb)
+                                        WHERE id = :clip_id
+                                    """)
+                                    await db.execute(update_payload_sql, {
+                                        "clip_id": str(row.id),
+                                        "payload": json.dumps(job_payload, ensure_ascii=False),
+                                    })
+                            except Exception as sas_err:
+                                logger.warning(f"Clip {row.id} SAS regeneration failed: {sas_err}, using original URL")
                         try:
                             from app.services.queue_service import enqueue_job
                             enqueue_result = await enqueue_job(job_payload)
