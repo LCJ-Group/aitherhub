@@ -8,8 +8,8 @@ import { UPLOAD_STAGES, UploadStageError, wrapStageError } from './uploadErrors'
 const DB_NAME = 'VideoUploadDB';
 const STORE_NAME = 'uploads';
 const BLOCK_SIZE = 8 * 1024 * 1024; // 8MB blocks (doubled from 4MB for large video performance)
-const MAX_CONCURRENT_UPLOADS = 8; // 8 concurrent uploads (doubled from 4 for large video performance)
-const MAX_RETRIES = 3;
+const MAX_CONCURRENT_UPLOADS = 6; // 6 concurrent block uploads (reduced from 8 to avoid bandwidth saturation during multi-file uploads)
+const MAX_RETRIES = 5; // Increased from 3 to handle transient network issues during multi-file uploads
 const RETRY_DELAY_MS = 2000; // 2 seconds base delay
 const FINALIZE_TIMEOUT_MS = 120_000; // 2 minute timeout for commitBlockList on large files
 
@@ -159,6 +159,8 @@ class UploadService extends BaseApiService {
           error.message?.includes('timeout') ||
           error.message?.includes('Timeout') ||
           error.message?.includes('AbortError') ||
+          error.message?.includes('aborted') ||
+          error.message?.includes('signal') ||
           error.name === 'AbortError' ||
           error.name === 'TimeoutError' ||
           error.code === 'ERR_NETWORK'
@@ -320,7 +322,7 @@ class UploadService extends BaseApiService {
             await this.retryWithBackoff(async () => {
               const blockSize = block.end - block.start;
               await blockBlobClient.stageBlock(block.id, block.data, blockSize, {
-                abortSignal: AbortSignal.timeout(60_000), // 60s timeout per block
+                abortSignal: AbortSignal.timeout(120_000), // 120s timeout per block (increased for concurrent multi-file uploads)
               });
             }, MAX_RETRIES, `stageBlock[${block.index}]`);
           } catch (error) {

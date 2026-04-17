@@ -798,7 +798,15 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
                               <span className="text-[10px] text-green-600 mt-1 block">{window.__t('sidebar_uploadDone') || '解析開始済み'}</span>
                             )}
                             {task.status === 'error' && (
-                              <span className="text-[10px] text-red-500 mt-1 block truncate" title={task.error}>{task.error || 'エラー'}</span>
+                              <div className="mt-1 flex items-center gap-1.5">
+                                <span className="text-[10px] text-red-500 truncate flex-1" title={task.error}>{task.error || 'エラー'}</span>
+                                <button
+                                  className="text-[9px] px-1.5 py-0.5 rounded bg-red-100 text-red-600 hover:bg-red-200 transition-colors flex-shrink-0"
+                                  onClick={(e) => { e.stopPropagation(); backgroundUploadManager.removeTask(task.id); }}
+                                >
+                                  ✕
+                                </button>
+                              </div>
                             )}
                           </div>
                         ))}
