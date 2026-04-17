@@ -948,6 +948,15 @@ function ClipCard({ clip, index, isEditing, editForm, onStartEdit, onCancelEdit,
           >
             {hasProductInfo ? "商品情報編集" : "商品情報追加"}
           </button>
+          {clip.video_id && (
+            <button
+              onClick={(e) => { e.stopPropagation(); window.open(`/video/${clip.video_id}`, '_blank'); }}
+              className="px-2 py-1.5 bg-indigo-50 text-indigo-600 rounded text-xs hover:bg-indigo-100 border border-indigo-200"
+              title="CLIP EDITORで編集"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+            </button>
+          )}
           <button
             onClick={(e) => { e.stopPropagation(); if (onDelete) onDelete(); }}
             className="px-2 py-1.5 bg-red-50 text-red-500 rounded text-xs hover:bg-red-100 border border-red-200"

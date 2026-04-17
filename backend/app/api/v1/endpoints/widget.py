@@ -126,6 +126,7 @@ async def get_widget_config(
         text("""
             SELECT wca.clip_id, wca.sort_order, wca.page_url_pattern,
                    vc.clip_url, vc.exported_url, vc.thumbnail_url, vc.widget_url,
+                   vc.video_id,
                    COALESCE(wca.product_name, vc.product_name) as product_name,
                    vc.transcript_text, vc.duration_sec, vc.liver_name,
                    wca.product_price, wca.product_image_url,
