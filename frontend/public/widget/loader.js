@@ -779,30 +779,27 @@
     // ── FAB (Floating Action Button) with Video Preview ──
     var fab = document.createElement("div");
     fab.className = "ath-fab";
-    if (clips[0] && clips[0].clip_url) {
+    // Use thumbnail for FAB to avoid downloading huge video file on page load
+    if (clips[0] && clips[0].thumbnail_url) {
+      var fabImg = document.createElement("img");
+      fabImg.src = clips[0].thumbnail_url;
+      fabImg.alt = "Watch video";
+      fabImg.style.cssText = "width:100%;height:100%;object-fit:cover;border-radius:50%;";
+      fab.appendChild(fabImg);
+    } else if (clips[0] && clips[0].clip_url) {
       fabVideo = document.createElement("video");
       fabVideo.setAttribute("playsinline", "");
       fabVideo.setAttribute("webkit-playsinline", "");
-      fabVideo.setAttribute("preload", "auto");
+      fabVideo.setAttribute("preload", "metadata");
       fabVideo.setAttribute("loop", "");
       fabVideo.setAttribute("autoplay", "");
       fabVideo.muted = true;
       fabVideo.src = clips[0].clip_url;
       fab.appendChild(fabVideo);
-      // Small play icon overlay
-      var fabPlayOverlay = document.createElement("div");
-      fabPlayOverlay.className = "ath-fab-play-overlay";
-      fabPlayOverlay.innerHTML = ICONS.play;
-      fab.appendChild(fabPlayOverlay);
-      // Auto-play when ready
       fabVideo.addEventListener("loadeddata", function () {
         fabVideo.play().catch(function () { });
       });
-      fabVideo.addEventListener("canplay", function () {
-        fabVideo.play().catch(function () { });
-      });
       try { fabVideo.play().catch(function () { }); } catch (e) { }
-      // iOS fallback: try play on first user touch anywhere on page
       var fabPlayOnTouch = function () {
         if (fabVideo && fabVideo.paused) {
           fabVideo.play().catch(function () { });
@@ -812,14 +809,14 @@
       };
       document.addEventListener("touchstart", fabPlayOnTouch, { once: true, passive: true });
       document.addEventListener("click", fabPlayOnTouch, { once: true });
-    } else if (clips[0] && clips[0].thumbnail_url) {
-      var fabImg = document.createElement("img");
-      fabImg.src = clips[0].thumbnail_url;
-      fabImg.alt = "Watch video";
-      fab.appendChild(fabImg);
     } else {
       fab.innerHTML = '<div class="ath-fab-icon">' + ICONS.play + '</div>';
     }
+    // Small play icon overlay
+    var fabPlayOverlay = document.createElement("div");
+    fabPlayOverlay.className = "ath-fab-play-overlay";
+    fabPlayOverlay.innerHTML = ICONS.play;
+    fab.appendChild(fabPlayOverlay);
     if (clips.length > 1) {
       var badge = document.createElement("span");
       badge.className = "ath-badge";
@@ -872,10 +869,20 @@
       video.className = "ath-video";
       video.setAttribute("playsinline", "");
       video.setAttribute("webkit-playsinline", "");
-      video.setAttribute("preload", index <= 2 ? "auto" : "metadata");
+      // Only preload first video; rest load on demand for fast initial playback
+      video.setAttribute("preload", index === 0 ? "auto" : "none");
       video.setAttribute("loop", "");
       video.muted = true;
-      video.src = clip.clip_url || "";
+      // Set poster for instant visual feedback
+      if (clip.thumbnail_url) {
+        video.setAttribute("poster", clip.thumbnail_url);
+      }
+      // Only set src for first 2 videos; rest are lazy-loaded
+      if (index <= 1) {
+        video.src = clip.clip_url || "";
+      } else {
+        video.setAttribute("data-src", clip.clip_url || "");
+      }
       inner.appendChild(video);
       videoElements[index] = video;
 
@@ -1243,9 +1250,39 @@
     }
 
     // ── Helper: Play current video ──
+    // ── Helper: Lazy-load video src if not yet set ──
+    function ensureVideoSrc(idx) {
+      var v = videoElements[idx];
+      if (!v) return;
+      if (!v.src || v.src === "" || v.src === window.location.href) {
+        var dataSrc = v.getAttribute("data-src");
+        if (dataSrc) {
+          v.src = dataSrc;
+          v.removeAttribute("data-src");
+        }
+      }
+    }
+
+    // ── Helper: Preload adjacent videos for seamless swiping ──
+    function preloadAdjacent(idx) {
+      var next = (idx + 1) % clips.length;
+      var prev = ((idx - 1) + clips.length) % clips.length;
+      // Load src for next and previous
+      ensureVideoSrc(next);
+      ensureVideoSrc(prev);
+      // Set preload to auto for next video so it buffers ahead
+      var nextV = videoElements[next];
+      if (nextV) nextV.setAttribute("preload", "auto");
+      var prevV = videoElements[prev];
+      if (prevV) prevV.setAttribute("preload", "metadata");
+    }
+
     function playCurrentVideo() {
       var video = videoElements[currentIndex];
       if (!video) return;
+
+      // Ensure current video has src loaded
+      ensureVideoSrc(currentIndex);
 
       // Pause all others
       Object.keys(videoElements).forEach(function (key) {
@@ -1265,14 +1302,18 @@
           if (!isMuted) {
             video.muted = false;
           }
+          // Preload adjacent videos after current starts playing
+          preloadAdjacent(currentIndex);
         }).catch(function () {
           // Fallback: ensure muted playback
           video.muted = true;
           video.play().catch(function () { });
+          preloadAdjacent(currentIndex);
         });
       } else {
         // Old browsers without Promise: apply preference directly
         if (!isMuted) video.muted = false;
+        preloadAdjacent(currentIndex);
       }
 
       // Update UI
