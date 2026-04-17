@@ -1256,24 +1256,23 @@
       });
 
       video.currentTime = 0;
-      video.muted = isMuted;
+      // Always start muted to guarantee autoplay works on mobile
+      video.muted = true;
       var playPromise = video.play();
       if (playPromise !== undefined) {
-        playPromise.catch(function () {
-          // If autoplay blocked, play muted but preserve user's sound preference
+        playPromise.then(function () {
+          // Playback started; apply user's sound preference
+          if (!isMuted) {
+            video.muted = false;
+          }
+        }).catch(function () {
+          // Fallback: ensure muted playback
           video.muted = true;
-          video.play().then(function () {
-            // If user had sound ON, try to unmute after muted play starts
-            if (!isMuted) {
-              try {
-                video.muted = false;
-              } catch (e) {
-                // If unmute fails, keep muted but don't change isMuted state
-                video.muted = true;
-              }
-            }
-          }).catch(function () { });
+          video.play().catch(function () { });
         });
+      } else {
+        // Old browsers without Promise: apply preference directly
+        if (!isMuted) video.muted = false;
       }
 
       // Update UI
@@ -1370,34 +1369,24 @@
       document.documentElement.style.overflow = "hidden";
       currentIndex = 0;
       updateSlidePositions(false);
+
+      // Sound UX: set isMuted BEFORE playCurrentVideo so it uses correct state
+      if (userPreferSound) {
+        isMuted = false;
+      } else {
+        isMuted = true;
+      }
+
       playCurrentVideo();
       trackEvent("widget_open");
 
-      // Sound UX: if user previously chose sound ON, try to unmute
-      if (userPreferSound) {
-        isMuted = false;
-        var video = videoElements[currentIndex];
-        if (video) {
-          video.muted = false;
-          // If browser blocks unmuted playback, fall back to muted
-          video.play().then(function () {
-            updateMuteButton();
-          }).catch(function () {
-            video.muted = true;
-            isMuted = true;
-            updateMuteButton();
-            // Show hint since autoplay policy blocked unmuted
-            if (!soundHintDismissed) showSoundHint();
-          });
-        }
-      } else {
+      // Update UI after play started
+      updateMuteButton();
+      if (!userPreferSound) {
         // First-time user: show "tap to unmute" hint
         soundHintDismissed = false;
         showSoundHint();
       }
-
-      // Mute button pulse animation when muted
-      if (isMuted) muteBtn.classList.add("ath-mute-pulse");
     });
 
     closeBtn.addEventListener("click", function (e) {
