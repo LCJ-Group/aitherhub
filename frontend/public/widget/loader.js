@@ -1728,10 +1728,13 @@
     shareBtn.addEventListener("click", function (e) {
       e.stopPropagation();
       var clip = clips[currentIndex];
-      var shareUrl = window.location.href;
+      // Build share URL with clip ID parameter so the recipient opens this specific video
+      var baseUrl = window.location.href.split("?")[0].split("#")[0];
+      var shareUrl = baseUrl + "?ath_clip=" + encodeURIComponent(clip.clip_id);
       var shareTitle = clip.product_name || brandName;
+      var shareText = shareTitle + (clip.product_price ? " " + clip.product_price : "");
       if (navigator.share) {
-        navigator.share({ title: shareTitle, url: shareUrl }).catch(function () { });
+        navigator.share({ title: shareTitle, text: shareText, url: shareUrl }).catch(function () { });
       } else if (navigator.clipboard) {
         navigator.clipboard.writeText(shareUrl);
         // Visual feedback
@@ -1739,7 +1742,7 @@
         label.textContent = "コピー!";
         setTimeout(function () { label.textContent = "シェア"; }, 2000);
       }
-      trackEvent("share", { clip_id: clip.clip_id });
+      trackEvent("share", { clip_id: clip.clip_id, share_url: shareUrl });
     });
 
     // ── Sound confirm popup DOM ──
@@ -1903,6 +1906,54 @@
         window.location.href = targetUrl;
       }
     });
+
+    // ── Auto-open from share link: detect ?ath_clip=CLIP_ID in URL ──
+    (function checkShareLink() {
+      try {
+        var params = new URLSearchParams(window.location.search);
+        var sharedClipId = params.get("ath_clip");
+        if (!sharedClipId) return;
+
+        // Find the clip index matching the shared clip ID
+        var targetIndex = -1;
+        for (var si = 0; si < clips.length; si++) {
+          if (clips[si].clip_id === sharedClipId) {
+            targetIndex = si;
+            break;
+          }
+        }
+        if (targetIndex === -1) return; // Clip not found in this client's list
+
+        // Auto-open the widget at the target clip
+        setTimeout(function () {
+          isOpen = true;
+          overlay.classList.add("active");
+          fab.style.display = "none";
+          if (fabVideo) { try { fabVideo.pause(); } catch (e) { } }
+          document.body.style.overflow = "hidden";
+          document.documentElement.style.overflow = "hidden";
+          currentIndex = targetIndex;
+          updateSlidePositions(false);
+          isMuted = true;
+          playCurrentVideo();
+          updateMuteButton();
+          soundHintDismissed = false;
+          showSoundHint();
+          trackEvent("share_open", { clip_id: sharedClipId });
+        }, 500); // Small delay to ensure DOM is ready
+
+        // Clean up URL parameter without page reload
+        if (window.history && window.history.replaceState) {
+          var cleanUrl = window.location.href.split("?")[0];
+          var otherParams = [];
+          params.forEach(function (val, key) {
+            if (key !== "ath_clip") otherParams.push(key + "=" + encodeURIComponent(val));
+          });
+          if (otherParams.length > 0) cleanUrl += "?" + otherParams.join("&");
+          window.history.replaceState({}, document.title, cleanUrl);
+        }
+      } catch (e) { /* Silently fail if URLSearchParams not supported */ }
+    })();
   }
 
   // ── Initialize ──
