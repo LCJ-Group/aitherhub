@@ -913,6 +913,7 @@ async def ensure_widget_tables():
                 "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS uploaded_by_brand VARCHAR(20)",
                 "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS product_price TEXT",
                 "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'processed'",
+                "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS widget_url TEXT",
             ]:
                 try:
                     await conn.execute(_text(alter_sql))

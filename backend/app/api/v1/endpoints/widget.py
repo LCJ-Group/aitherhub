@@ -25,7 +25,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional, List
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -125,7 +125,7 @@ async def get_widget_config(
     clips_result = await db.execute(
         text("""
             SELECT wca.clip_id, wca.sort_order, wca.page_url_pattern,
-                   vc.clip_url, vc.exported_url, vc.thumbnail_url,
+                   vc.clip_url, vc.exported_url, vc.thumbnail_url, vc.widget_url,
                    COALESCE(wca.product_name, vc.product_name) as product_name,
                    vc.transcript_text, vc.duration_sec, vc.liver_name,
                    wca.product_price, wca.product_image_url,
@@ -140,10 +140,12 @@ async def get_widget_config(
     )
     clips = [dict(r) for r in clips_result.mappings().all()]
 
-    # Use exported_url (subtitled version) if available, fallback to clip_url
+    # Priority: widget_url (720p optimized) > exported_url (subtitled) > clip_url (original)
     for clip in clips:
-        if clip.get("exported_url"):
-            clip["original_clip_url"] = clip["clip_url"]
+        clip["original_clip_url"] = clip["clip_url"]
+        if clip.get("widget_url"):
+            clip["clip_url"] = clip["widget_url"]
+        elif clip.get("exported_url"):
             clip["clip_url"] = clip["exported_url"]
 
     # Filter out clips without a playable clip_url
@@ -892,3 +894,186 @@ async def reassign_clip_to_client(
         await db.rollback()
         logger.error(f"Reassign clip error: {e}")
         raise HTTPException(status_code=500, detail=f"Reassign failed: {str(e)}")
+
+
+
+# ─── Widget Video Optimization (720p re-encode for fast mobile playback) ───
+
+
+@router.post("/widget/admin/optimize-clips")
+async def optimize_clips_for_widget(
+    payload: Optional[dict] = None,
+    x_admin_key: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db),
+    background_tasks: BackgroundTasks = None,
+):
+    """
+    Re-encode clips to 720p/1.5Mbps for fast widget playback.
+    Accepts optional clip_ids list; if empty, processes all assigned widget clips
+    that don't have a widget_url yet.
+    """
+    if not _check_admin(x_admin_key):
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    payload = payload or {}
+    clip_ids = payload.get("clip_ids", [])
+
+    if clip_ids:
+        # Specific clips
+        result = await db.execute(
+            text("""
+                SELECT id::text as clip_id, clip_url, exported_url
+                FROM video_clips
+                WHERE id::text = ANY(:ids) AND (clip_url IS NOT NULL AND clip_url != '')
+            """),
+            {"ids": clip_ids},
+        )
+    else:
+        # All widget-assigned clips without widget_url
+        result = await db.execute(
+            text("""
+                SELECT DISTINCT vc.id::text as clip_id, vc.clip_url, vc.exported_url
+                FROM video_clips vc
+                JOIN widget_clip_assignments wca ON vc.id::text = wca.clip_id
+                WHERE wca.is_active = TRUE
+                  AND (vc.widget_url IS NULL OR vc.widget_url = '')
+                  AND (vc.clip_url IS NOT NULL AND vc.clip_url != '')
+            """),
+        )
+
+    clips_to_process = [dict(r) for r in result.mappings().all()]
+
+    if not clips_to_process:
+        return {"status": "no_clips", "message": "No clips need optimization"}
+
+    # Start background processing
+    import asyncio
+    asyncio.ensure_future(_optimize_clips_background(clips_to_process, db))
+
+    return {
+        "status": "started",
+        "clips_queued": len(clips_to_process),
+        "clip_ids": [c["clip_id"] for c in clips_to_process],
+    }
+
+
+async def _optimize_clips_background(clips: list, db: AsyncSession):
+    """Background task to re-encode clips to 720p for widget delivery."""
+    import asyncio
+    import tempfile
+    import os
+    import aiohttp
+    from app.services.storage_service import generate_read_sas_from_url
+
+    for clip in clips:
+        clip_id = clip["clip_id"]
+        # Prefer exported_url (has subtitles) over clip_url
+        source_url = clip.get("exported_url") or clip.get("clip_url")
+        if not source_url:
+            continue
+
+        try:
+            # Generate read SAS for source
+            if "blob.core.windows.net" in source_url:
+                source_url = generate_read_sas_from_url(source_url) or source_url
+
+            logger.info(f"[optimize] Starting clip {clip_id}")
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                input_path = os.path.join(tmpdir, "input.mp4")
+                output_path = os.path.join(tmpdir, "widget.mp4")
+
+                # Download source video
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(source_url) as resp:
+                        if resp.status != 200:
+                            logger.warning(f"[optimize] Failed to download clip {clip_id}: HTTP {resp.status}")
+                            continue
+                        with open(input_path, "wb") as f:
+                            async for chunk in resp.content.iter_chunked(1024 * 1024):
+                                f.write(chunk)
+
+                input_size = os.path.getsize(input_path)
+                logger.info(f"[optimize] Downloaded clip {clip_id}: {input_size / 1024 / 1024:.1f}MB")
+
+                # Re-encode to 720p with faststart
+                proc = await asyncio.create_subprocess_exec(
+                    "ffmpeg", "-y",
+                    "-i", input_path,
+                    "-vf", "scale=-2:720",
+                    "-c:v", "libx264",
+                    "-preset", "fast",
+                    "-crf", "28",
+                    "-maxrate", "1.5M",
+                    "-bufsize", "3M",
+                    "-c:a", "aac",
+                    "-b:a", "64k",
+                    "-movflags", "+faststart",
+                    output_path,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                _, stderr = await proc.communicate()
+
+                if proc.returncode != 0:
+                    logger.warning(f"[optimize] ffmpeg failed for clip {clip_id}: {stderr.decode()[:500]}")
+                    continue
+
+                output_size = os.path.getsize(output_path)
+                ratio = output_size / input_size * 100 if input_size > 0 else 0
+                logger.info(f"[optimize] Encoded clip {clip_id}: {output_size / 1024 / 1024:.1f}MB ({ratio:.0f}% of original)")
+
+                # Upload to blob storage
+                # Derive email and video_id from original clip_url path
+                original_url = clip.get("clip_url") or ""
+                # URL pattern: .../videos/{email}/{video_id}/clips/clip_xxx.mp4
+                parts = original_url.split("/")
+                email_idx = None
+                for pi, p in enumerate(parts):
+                    if p == "videos" and pi + 2 < len(parts):
+                        email_idx = pi + 1
+                        break
+
+                if email_idx and email_idx + 1 < len(parts):
+                    email = parts[email_idx]
+                    video_id = parts[email_idx + 1]
+                else:
+                    email = "widget"
+                    video_id = clip_id
+
+                from app.services.storage_service import generate_upload_sas
+                _, upload_url, blob_url, _ = await generate_upload_sas(
+                    email=email,
+                    video_id=video_id,
+                    filename=f"clips/widget_{clip_id}.mp4",
+                )
+
+                # Upload the optimized clip
+                async with aiohttp.ClientSession() as session:
+                    with open(output_path, "rb") as f:
+                        data = f.read()
+                    async with session.put(
+                        upload_url,
+                        data=data,
+                        headers={
+                            "x-ms-blob-type": "BlockBlob",
+                            "Content-Type": "video/mp4",
+                        },
+                    ) as resp:
+                        if resp.status in (200, 201):
+                            # Update DB with widget_url
+                            from sqlalchemy import text as _text
+                            async with db.begin():
+                                await db.execute(
+                                    _text("UPDATE video_clips SET widget_url = :url WHERE id::text = :cid"),
+                                    {"url": blob_url, "cid": clip_id},
+                                )
+                            logger.info(f"[optimize] Saved widget_url for clip {clip_id}: {blob_url}")
+                        else:
+                            logger.warning(f"[optimize] Upload failed for clip {clip_id}: HTTP {resp.status}")
+
+        except Exception as e:
+            logger.error(f"[optimize] Error processing clip {clip_id}: {e}")
+            continue
+
+    logger.info(f"[optimize] Completed optimization of {len(clips)} clips")
