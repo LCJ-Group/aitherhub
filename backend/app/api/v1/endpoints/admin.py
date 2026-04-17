@@ -4522,31 +4522,86 @@ async def reset_and_requeue_dead_clips(
         if not rows:
             return {"status": "ok", "message": "No dead/error clips found for this video"}
 
-        # 2. Get video blob_url
+        # 2. Get video info for SAS URL generation
+        #    Note: videos table has no "blob_url" column. Use compressed_blob_url
+        #    or generate a fresh download SAS from the video's storage path.
+        from app.services.storage_service import generate_read_sas_from_url, generate_download_sas
         vid_result = await db.execute(text("""
-            SELECT blob_url FROM videos WHERE id = :video_id
+            SELECT id, user_id, original_filename, compressed_blob_url FROM videos WHERE id = :video_id
         """), {"video_id": video_id})
         vid_row = vid_result.fetchone()
-        if not vid_row or not vid_row.blob_url:
+
+        # 3. Generate fresh SAS URL for the video
+        fresh_blob_url = None
+        if vid_row:
+            # Try compressed_blob_url first (faster for clip generation)
+            compressed = getattr(vid_row, 'compressed_blob_url', None)
+            if compressed:
+                try:
+                    from app.services.storage_service import ACCOUNT_NAME, CONTAINER_NAME
+                    full_url = f"https://{ACCOUNT_NAME}.blob.core.windows.net/{CONTAINER_NAME}/{compressed}"
+                    sas_url = generate_read_sas_from_url(full_url)
+                    if sas_url:
+                        fresh_blob_url = sas_url
+                        logger.info(f"Using compressed video SAS for requeue of video {video_id}")
+                except Exception as e:
+                    logger.warning(f"Compressed SAS failed for {video_id}: {e}")
+
+            # Fallback: generate download SAS from original filename
+            if not fresh_blob_url and vid_row.original_filename:
+                try:
+                    # Get user email for storage path
+                    user_result = await db.execute(text(
+                        "SELECT email FROM users WHERE id = :uid"
+                    ), {"uid": str(vid_row.user_id)})
+                    user_row = user_result.fetchone()
+                    if user_row:
+                        dl_url, _ = await generate_download_sas(
+                            email=user_row.email,
+                            video_id=video_id,
+                            filename=vid_row.original_filename,
+                            expires_in_minutes=1440,
+                        )
+                        if dl_url:
+                            fresh_blob_url = dl_url
+                            logger.info(f"Generated download SAS for requeue of video {video_id}")
+                except Exception as e:
+                    logger.warning(f"Download SAS generation failed for {video_id}: {e}")
+
+        if not fresh_blob_url:
+            # Last resort: try to use blob_url from the first clip's job_payload
+            for row in rows:
+                try:
+                    clip_payload = row.job_payload if hasattr(row, 'job_payload') else None
+                    if not clip_payload:
+                        # Re-fetch with job_payload
+                        cp_result = await db.execute(text(
+                            "SELECT job_payload FROM video_clips WHERE id = :cid"
+                        ), {"cid": str(row.id)})
+                        cp_row = cp_result.fetchone()
+                        if cp_row and cp_row.job_payload:
+                            clip_payload = cp_row.job_payload
+                    if clip_payload:
+                        if isinstance(clip_payload, str):
+                            clip_payload = json.loads(clip_payload)
+                        old_url = clip_payload.get("blob_url", "")
+                        if old_url:
+                            base_url = old_url.split("?")[0]
+                            new_sas = generate_read_sas_from_url(base_url)
+                            if new_sas:
+                                fresh_blob_url = new_sas
+                                logger.info(f"Regenerated SAS from clip job_payload for video {video_id}")
+                                break
+                except Exception:
+                    continue
+
+        if not fresh_blob_url:
             await db.commit()
             return {
                 "status": "partial",
-                "message": f"Reset {len(rows)} clips in DB but could not requeue (no blob_url)",
+                "message": f"Reset {len(rows)} clips in DB but could not requeue (no blob_url available)",
                 "reset_count": len(rows),
             }
-
-        # 3. Regenerate SAS URL (old ones in job_payload are likely expired)
-        from app.services.storage_service import generate_read_sas_from_url
-        fresh_blob_url = vid_row.blob_url
-        if fresh_blob_url:
-            try:
-                base_url = fresh_blob_url.split("?")[0] if "?" in fresh_blob_url else fresh_blob_url
-                new_sas_url = generate_read_sas_from_url(base_url)
-                if new_sas_url:
-                    fresh_blob_url = new_sas_url
-                    logger.info(f"Regenerated fresh SAS URL for requeue of video {video_id}")
-            except Exception as sas_err:
-                logger.warning(f"SAS regeneration failed for video {video_id}: {sas_err}")
 
         # 4. Enqueue to Azure Storage Queue
         import os
