@@ -191,7 +191,7 @@
     host.id = "aitherhub-widget-host";
     host.style.cssText = "position:fixed;z-index:2147483647;pointer-events:none;top:0;left:0;width:100%;height:100%;";
     document.body.appendChild(host);
-    var shadow = host.attachShadow({ mode: "closed" });
+    var shadow = host.attachShadow({ mode: "open" });
     return shadow;
   }
 
