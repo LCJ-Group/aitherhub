@@ -392,7 +392,7 @@ export default function AdminWidgetManager({ adminKey }) {
         </div>
       ) : (
         <div className="space-y-3">
-          {clients.map((client) => (
+          {[...clients].sort((a, b) => (b.clip_count || 0) - (a.clip_count || 0)).map((client) => (
             <div key={client.client_id} className="bg-white rounded-lg border p-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
