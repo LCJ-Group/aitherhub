@@ -1,5 +1,5 @@
 /**
- * AitherHub Widget Loader v2.9 — TikTok-Style Fullscreen Feed + Product Card + Subtitles
+ * AitherHub Widget Loader v2.10 — TikTok-Style Fullscreen Feed + Product Card + Subtitles
  *
  * GTM経由で配信される軽量エントリーポイント。
  * 先方のECサイトに1行のタグを追加するだけで、
@@ -46,6 +46,7 @@
  *   - localStorage remembers user sound preference for next visit
  *   - Returning users with sound ON get auto-unmute attempt
  *
+ * v2.10 – OGP product preview: fetch real product info (image, title, description, price) from product page via server-side OGP API
  * v2.9 – Product detail panel: tap product card or CTA → slide-up detail panel
  *         with large product image, full name, price, description, and action buttons.
  *         product_detail_view tracking event added to conversion funnel.
@@ -826,6 +827,36 @@
         background: #111;\
         display: block;\
       }\
+      .ath-detail-loading {\
+        display: flex;\
+        align-items: center;\
+        justify-content: center;\
+        padding: 40px 0;\
+        color: rgba(255,255,255,0.5);\
+        font-size: 13px;\
+        gap: 8px;\
+      }\
+      .ath-detail-loading.hidden { display: none; }\
+      .ath-detail-spinner {\
+        width: 20px; height: 20px;\
+        border: 2px solid rgba(255,255,255,0.2);\
+        border-top-color: ' + themeColor + ';\
+        border-radius: 50%;\
+        animation: ath-spin 0.8s linear infinite;\
+      }\
+      @keyframes ath-spin { to { transform: rotate(360deg); } }\
+      .ath-detail-site {\
+        display: flex;\
+        align-items: center;\
+        gap: 6px;\
+        margin-bottom: 10px;\
+        color: rgba(255,255,255,0.5);\
+        font-size: 11px;\
+      }\
+      .ath-detail-favicon {\
+        width: 14px; height: 14px;\
+        border-radius: 2px;\
+      }\
       .ath-detail-body {\
         padding: 16px;\
       }\
@@ -1280,8 +1311,24 @@
     detailImg.className = "ath-detail-img";
     detailPanel.appendChild(detailImg);
 
+    // Loading indicator
+    var detailLoading = document.createElement("div");
+    detailLoading.className = "ath-detail-loading hidden";
+    detailLoading.innerHTML = '<div class="ath-detail-spinner"></div><span>\u8AAD\u307F\u8FBC\u307F\u4E2D...</span>';
+    detailPanel.appendChild(detailLoading);
+
     var detailBody = document.createElement("div");
     detailBody.className = "ath-detail-body";
+
+    // Site info (favicon + site name)
+    var detailSite = document.createElement("div");
+    detailSite.className = "ath-detail-site";
+    var detailFavicon = document.createElement("img");
+    detailFavicon.className = "ath-detail-favicon";
+    var detailSiteName = document.createElement("span");
+    detailSite.appendChild(detailFavicon);
+    detailSite.appendChild(detailSiteName);
+    detailBody.appendChild(detailSite);
 
     var detailName = document.createElement("div");
     detailName.className = "ath-detail-name";
@@ -1315,44 +1362,27 @@
 
     var isDetailOpen = false;
 
+    // OGP preview cache (keyed by product_url)
+    var ogpCache = {};
+
     function openProductDetail(clip) {
       if (!clip) return;
-      // Populate detail panel
-      detailName.textContent = clip.product_name || "";
-      detailPrice.textContent = clip.product_price || "";
-      // Use transcript_text as description fallback (no dedicated description field yet)
-      detailDesc.textContent = clip.transcript_text || "";
-      if (!clip.transcript_text) {
-        detailDesc.style.display = "none";
-      } else {
-        detailDesc.style.display = "block";
-      }
-      if (clip.product_image_url) {
-        detailImg.src = clip.product_image_url;
-        detailImg.style.display = "block";
-      } else {
-        detailImg.style.display = "none";
-      }
-      // Show/hide cart button based on product_cart_url
-      if (clip.product_cart_url) {
-        detailCartBtn.style.display = "flex";
-      } else {
-        detailCartBtn.style.display = "none";
-      }
-      // Show/hide buy button based on product_url
-      if (clip.product_url) {
-        detailBuyBtn.style.display = "flex";
-      } else {
-        detailBuyBtn.style.display = "none";
-      }
+
       // Pause video
       var video = videoElements[currentIndex];
       if (video && !video.paused) {
         video.pause();
       }
-      // Show panel with animation
+
+      // Show panel immediately with loading state
       detailOverlay.classList.add("active");
       isDetailOpen = true;
+
+      // Show loading, hide content initially
+      detailLoading.classList.remove("hidden");
+      detailBody.style.display = "none";
+      detailImg.style.display = "none";
+
       // Track product_detail_view event
       trackEvent("product_detail_view", {
         clip_id: clip.clip_id,
@@ -1360,6 +1390,118 @@
         product_price: clip.product_price,
         video_time: video ? video.currentTime : 0,
       });
+
+      // Show/hide cart button based on product_cart_url
+      detailCartBtn.style.display = clip.product_cart_url ? "flex" : "none";
+      // Show/hide buy button based on product_url
+      detailBuyBtn.style.display = clip.product_url ? "flex" : "none";
+
+      // If we have a product_url, fetch OGP data
+      var productUrl = clip.product_url;
+      if (productUrl) {
+        // Check cache first
+        if (ogpCache[productUrl]) {
+          populateDetailFromOGP(ogpCache[productUrl], clip);
+          return;
+        }
+        // Fetch OGP data from API
+        fetch(API_BASE + "/widget/product-preview?url=" + encodeURIComponent(productUrl))
+          .then(function (resp) { return resp.json(); })
+          .then(function (ogp) {
+            if (ogp && ogp.success) {
+              ogpCache[productUrl] = ogp;
+              // Only update if panel is still open for this clip
+              if (isDetailOpen && clips[currentIndex] === clip) {
+                populateDetailFromOGP(ogp, clip);
+              }
+            } else {
+              // Fallback to clip data
+              populateDetailFallback(clip);
+            }
+          })
+          .catch(function () {
+            // Fallback to clip data on error
+            populateDetailFallback(clip);
+          });
+      } else {
+        // No product_url, use clip data directly
+        populateDetailFallback(clip);
+      }
+    }
+
+    function populateDetailFromOGP(ogp, clip) {
+      detailLoading.classList.add("hidden");
+      detailBody.style.display = "block";
+
+      // Site info
+      if (ogp.site_name || ogp.favicon) {
+        detailSite.style.display = "flex";
+        detailSiteName.textContent = ogp.site_name || "";
+        if (ogp.favicon) {
+          detailFavicon.src = ogp.favicon;
+          detailFavicon.style.display = "block";
+          detailFavicon.onerror = function () { detailFavicon.style.display = "none"; };
+        } else {
+          detailFavicon.style.display = "none";
+        }
+      } else {
+        detailSite.style.display = "none";
+      }
+
+      // Title: prefer OGP, fallback to clip
+      detailName.textContent = ogp.title || clip.product_name || "";
+
+      // Price: prefer OGP, fallback to clip
+      var price = ogp.price || clip.product_price || "";
+      detailPrice.textContent = price;
+      detailPrice.style.display = price ? "block" : "none";
+
+      // Description from OGP
+      var desc = ogp.description || "";
+      detailDesc.textContent = desc;
+      detailDesc.style.display = desc ? "block" : "none";
+
+      // Image from OGP
+      if (ogp.image) {
+        detailImg.src = ogp.image;
+        detailImg.style.display = "block";
+        detailImg.onerror = function () {
+          // Fallback to clip image or hide
+          if (clip.product_image_url) {
+            detailImg.src = clip.product_image_url;
+          } else {
+            detailImg.style.display = "none";
+          }
+        };
+      } else if (clip.product_image_url) {
+        detailImg.src = clip.product_image_url;
+        detailImg.style.display = "block";
+      } else {
+        detailImg.style.display = "none";
+      }
+    }
+
+    function populateDetailFallback(clip) {
+      detailLoading.classList.add("hidden");
+      detailBody.style.display = "block";
+
+      // Hide site info in fallback mode
+      detailSite.style.display = "none";
+
+      detailName.textContent = clip.product_name || "";
+      detailPrice.textContent = clip.product_price || "";
+      detailPrice.style.display = clip.product_price ? "block" : "none";
+
+      // Use transcript_text as description fallback
+      detailDesc.textContent = clip.transcript_text || "";
+      detailDesc.style.display = clip.transcript_text ? "block" : "none";
+
+      if (clip.product_image_url) {
+        detailImg.src = clip.product_image_url;
+        detailImg.style.display = "block";
+      } else {
+        detailImg.style.display = "none";
+      }
     }
 
     function closeProductDetail() {

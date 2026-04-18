@@ -1098,3 +1098,203 @@ async def _optimize_clips_background(clips: list, db: AsyncSession):
             continue
 
     logger.info(f"[optimize] Completed optimization of {len(clips)} clips")
+
+
+# ─── OGP Product Preview API ───
+
+# In-memory cache for OGP data (TTL-based)
+_ogp_cache: dict = {}  # url -> {"data": {...}, "ts": float}
+_OGP_CACHE_TTL = 3600  # 1 hour
+
+class OGPPreviewResponse(BaseModel):
+    url: str
+    title: Optional[str] = None
+    image: Optional[str] = None
+    description: Optional[str] = None
+    price: Optional[str] = None
+    site_name: Optional[str] = None
+    favicon: Optional[str] = None
+    success: bool = True
+    error: Optional[str] = None
+
+
+async def _fetch_ogp(url: str) -> dict:
+    """Fetch and parse OGP meta tags from a URL."""
+    import time
+    from urllib.parse import urljoin, urlparse
+
+    # Check cache
+    cached = _ogp_cache.get(url)
+    if cached and (time.time() - cached["ts"]) < _OGP_CACHE_TTL:
+        return cached["data"]
+
+    result = {
+        "url": url,
+        "title": None,
+        "image": None,
+        "description": None,
+        "price": None,
+        "site_name": None,
+        "favicon": None,
+        "success": False,
+        "error": None,
+    }
+
+    try:
+        import httpx
+        from bs4 import BeautifulSoup
+
+        async with httpx.AsyncClient(
+            timeout=10.0,
+            follow_redirects=True,
+            headers={
+                "User-Agent": "Mozilla/5.0 (compatible; AitherHubBot/1.0; +https://www.aitherhub.com)",
+                "Accept": "text/html,application/xhtml+xml",
+                "Accept-Language": "ja,en;q=0.9",
+            },
+        ) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+        parsed_url = urlparse(url)
+        base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
+
+        # OGP tags
+        og_title = soup.find("meta", property="og:title")
+        og_image = soup.find("meta", property="og:image")
+        og_desc = soup.find("meta", property="og:description")
+        og_site = soup.find("meta", property="og:site_name")
+
+        # Fallback: standard meta tags
+        meta_desc = soup.find("meta", attrs={"name": "description"})
+        title_tag = soup.find("title")
+
+        result["title"] = (og_title["content"] if og_title and og_title.get("content") else
+                          (title_tag.get_text(strip=True) if title_tag else None))
+        result["image"] = og_image["content"] if og_image and og_image.get("content") else None
+        result["description"] = (og_desc["content"] if og_desc and og_desc.get("content") else
+                                (meta_desc["content"] if meta_desc and meta_desc.get("content") else None))
+        result["site_name"] = og_site["content"] if og_site and og_site.get("content") else None
+
+        # Make image URL absolute
+        if result["image"] and not result["image"].startswith("http"):
+            result["image"] = urljoin(base_url, result["image"])
+
+        # Try to extract price (multiple strategies)
+        # 1. og:price:amount
+        og_price = soup.find("meta", property="og:price:amount")
+        if og_price and og_price.get("content"):
+            result["price"] = og_price["content"]
+        else:
+            # 2. product:price:amount (common in e-commerce)
+            prod_price = soup.find("meta", property="product:price:amount")
+            if prod_price and prod_price.get("content"):
+                result["price"] = prod_price["content"]
+
+        # Try to find price currency
+        og_currency = soup.find("meta", property="og:price:currency") or soup.find("meta", property="product:price:currency")
+        if og_currency and og_currency.get("content") and result.get("price"):
+            currency = og_currency["content"]
+            if currency == "JPY":
+                result["price"] = f"¥{result['price']}"
+            elif currency == "USD":
+                result["price"] = f"${result['price']}"
+
+        # 3. If no OGP price, try JSON-LD structured data
+        if not result.get("price"):
+            import re
+            for script in soup.find_all("script", type="application/ld+json"):
+                try:
+                    ld = json.loads(script.string or "")
+                    # Handle @graph arrays
+                    items = ld if isinstance(ld, list) else [ld]
+                    for item in items:
+                        if isinstance(item, dict) and item.get("@graph"):
+                            items.extend(item["@graph"])
+                    for item in items:
+                        if isinstance(item, dict):
+                            offers = item.get("offers", {})
+                            if isinstance(offers, list):
+                                offers = offers[0] if offers else {}
+                            if isinstance(offers, dict):
+                                p = offers.get("price")
+                                if p:
+                                    curr = offers.get("priceCurrency", "")
+                                    if curr == "JPY":
+                                        result["price"] = f"¥{p}"
+                                    elif curr == "USD":
+                                        result["price"] = f"${p}"
+                                    else:
+                                        result["price"] = str(p)
+                                    break
+                except Exception:
+                    continue
+
+        # Favicon
+        icon_link = soup.find("link", rel=lambda x: x and "icon" in (x if isinstance(x, str) else " ".join(x)))
+        if icon_link and icon_link.get("href"):
+            favicon = icon_link["href"]
+            if not favicon.startswith("http"):
+                favicon = urljoin(base_url, favicon)
+            result["favicon"] = favicon
+        else:
+            result["favicon"] = f"{base_url}/favicon.ico"
+
+        # Clean up description (remove &nbsp; and excessive whitespace)
+        if result["description"]:
+            result["description"] = result["description"].replace("&nbsp;", " ").replace("\u00a0", " ")
+            import re
+            result["description"] = re.sub(r"\s+", " ", result["description"]).strip()
+            # Limit to 300 chars
+            if len(result["description"]) > 300:
+                result["description"] = result["description"][:297] + "..."
+
+        result["success"] = True
+
+    except httpx.TimeoutException:
+        result["error"] = "Request timed out"
+    except httpx.HTTPStatusError as e:
+        result["error"] = f"HTTP {e.response.status_code}"
+    except Exception as e:
+        result["error"] = str(e)[:200]
+        logger.warning(f"OGP fetch error for {url}: {e}")
+
+    # Cache the result
+    import time
+    _ogp_cache[url] = {"data": result, "ts": time.time()}
+
+    # Limit cache size
+    if len(_ogp_cache) > 500:
+        oldest_key = min(_ogp_cache, key=lambda k: _ogp_cache[k]["ts"])
+        del _ogp_cache[oldest_key]
+
+    return result
+
+
+@router.get("/widget/product-preview")
+async def get_product_preview(
+    url: str = Query(..., description="Product page URL to fetch OGP data from"),
+    request: Request = None,
+):
+    """
+    Fetch OGP meta tags from a product page URL.
+    Returns title, image, description, price, site_name, and favicon.
+    Used by the widget's product detail panel to show rich product previews.
+    
+    This endpoint is public (called from widget JS on client sites) and includes
+    CORS headers for cross-origin access.
+    """
+    if not url or not url.startswith("http"):
+        raise HTTPException(status_code=400, detail="Invalid URL")
+
+    data = await _fetch_ogp(url)
+
+    response = Response(
+        content=json.dumps(data, ensure_ascii=False),
+        media_type="application/json",
+    )
+    # Add CORS headers
+    if request:
+        _add_cors_headers(response, request)
+    return response

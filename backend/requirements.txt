@@ -44,3 +44,4 @@ qdrant-client>=1.7.0
 
 # ---- Excel parsing ----
 openpyxl>=3.1.0
+beautifulsoup4==4.12.3
