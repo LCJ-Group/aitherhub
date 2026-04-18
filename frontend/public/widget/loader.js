@@ -46,7 +46,10 @@
  *   - localStorage remembers user sound preference for next visit
  *   - Returning users with sound ON get auto-unmute attempt
  *
- * v2.7 Changes:
+ * v2.8 – 2-tier CTA system: product_url only → "商品を見る" single button;
+ *         product_url + product_cart_url → dual "カートに入れる" + "購入する" buttons;
+ *         no URLs → CTA hidden. Tracking: product_click / add_to_cart / purchase_click.
+ * v2.7 – Changes:
  *   - CTA buttons hidden when clip has no product_url/product_cart_url (no dead links)
  *   - Video counter no longer shows total count (prevents "I've seen enough" effect)
  */
@@ -1288,26 +1291,34 @@
           productCard.style.display = "none";
         }
 
-        // Show CTA buttons only when actual link destinations exist
-        var cartUrl = clip.product_cart_url || clip.product_url;
-        var buyUrl = clip.product_url;
+        // Show CTA buttons based on available URLs (2-tier system)
+        var hasCartUrl = !!clip.product_cart_url;
+        var hasBuyUrl = !!clip.product_url;
 
-        if (!cartUrl && !buyUrl) {
-          // Has product info but no link → hide all CTA buttons
+        if (!hasCartUrl && !hasBuyUrl) {
+          // No URLs at all → hide all CTA buttons
           cartBtn.style.display = "none";
           buyBtn.style.display = "none";
           singleCta.style.display = "none";
-        } else if (cartUrl && buyUrl && cartUrl !== buyUrl) {
-          // Both cart and buy URLs are different → show both
+        } else if (hasCartUrl && hasBuyUrl) {
+          // Tier 2: Both cart + buy URLs → show dual buttons
           cartBtn.style.display = "flex";
           buyBtn.style.display = "flex";
           singleCta.style.display = "none";
-        } else {
-          // Only one URL → show single buy button
-          cartBtn.style.display = "none";
-          buyBtn.style.display = "flex";
-          singleCta.style.display = "none";
+          cartBtn.innerHTML = ICONS.cart + '<span>カートに入れる</span>';
           buyBtn.innerHTML = ICONS.bag + '<span>' + ctaText + '</span>';
+        } else if (hasBuyUrl) {
+          // Tier 1: Only product_url → show single "商品を見る" button
+          cartBtn.style.display = "none";
+          buyBtn.style.display = "none";
+          singleCta.style.display = "flex";
+          singleCta.innerHTML = ICONS.bag + '<span>商品を見る</span>';
+        } else {
+          // Only cart URL (rare) → show single cart button
+          cartBtn.style.display = "flex";
+          buyBtn.style.display = "none";
+          singleCta.style.display = "none";
+          cartBtn.innerHTML = ICONS.cart + '<span>カートに入れる</span>';
         }
 
         // Track product view
@@ -1879,39 +1890,24 @@
       }
     });
 
-    // ── CTA: Single button (fallback, v2.2 behavior) ──
+    // ── CTA: Single button ("商品を見る" — Tier 1: product_url only) ──
     singleCta.addEventListener("click", function (e) {
       e.stopPropagation();
       var clip = clips[currentIndex];
-      trackEvent("cta_click", {
+      trackEvent("product_click", {
         clip_id: clip.clip_id,
         product_name: clip.product_name,
+        product_price: clip.product_price,
         video_time: videoElements[currentIndex] ? videoElements[currentIndex].currentTime : 0,
       });
 
-      // Strategy 1: DOM manipulation (add to cart)
-      if (config.cart_selector) {
-        try {
-          var domCartBtn = document.querySelector(config.cart_selector);
-          if (domCartBtn) {
-            domCartBtn.click();
-            singleCta.innerHTML = '<span>&#10003; カートに追加しました</span>';
-            setTimeout(function () {
-              var clip2 = clips[currentIndex];
-              singleCta.innerHTML = ICONS.cart + '<span>' + ctaText + (clip2.product_name ? ' · ' + clip2.product_name : '') + '</span>';
-            }, 2000);
-            return;
-          }
-        } catch (err) { }
+      var targetUrl = clip.product_url;
+      if (!targetUrl && config.cta_url_template) {
+        targetUrl = config.cta_url_template.replace("{product}", encodeURIComponent(clip.product_name || ""));
       }
-
-      // Strategy 2: Navigate to product URL
-      var targetUrl = config.cta_url_template
-        ? config.cta_url_template.replace("{product}", encodeURIComponent(clip.product_name || ""))
-        : (clip.product_url || window.location.href);
-      if (targetUrl && targetUrl !== window.location.href) {
-        targetUrl = addUtmParams(targetUrl, clip.clip_id, "cta_click");
-        window.location.href = targetUrl;
+      if (targetUrl) {
+        targetUrl = addUtmParams(targetUrl, clip.clip_id, "product_click");
+        window.open(targetUrl, "_blank");
       }
     });
 
