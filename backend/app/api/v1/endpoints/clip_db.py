@@ -114,6 +114,14 @@ class ClipSearchResult(BaseModel):
     # Popularity / edit status
     has_subtitle: Optional[bool] = None  # True if exported_url exists
     download_count: Optional[int] = None  # Number of times downloaded
+    # Subtitle / editor state (auto-saved from ClipEditorV2)
+    subtitle_style: Optional[str] = None
+    subtitle_font_size: Optional[int] = None
+    caption_offset: Optional[float] = None
+    trim_data: Optional[dict] = None
+    subtitle_language: Optional[str] = None
+    subtitle_position_x: Optional[float] = None
+    subtitle_position_y: Optional[float] = None
     # Unusable marking
     is_unusable: Optional[bool] = None
     unusable_reason: Optional[str] = None
@@ -314,6 +322,13 @@ async def search_clips(
             vc.importance_score,
             vc.created_at,
             vc.captions,
+            vc.subtitle_style,
+            vc.subtitle_font_size,
+            vc.caption_offset,
+            vc.trim_data,
+            vc.subtitle_language,
+            vc.subtitle_position_x,
+            vc.subtitle_position_y,
             vp.sales_psychology_tags,
             vp.human_sales_tags,
             vp.product_names as vp_product_names,
@@ -440,6 +455,13 @@ async def search_clips(
                 brand_assignments=brand_map.get(str(row.clip_id)),
                 has_subtitle=bool(row.exported_url) if hasattr(row, 'exported_url') else None,
                 download_count=row.download_count if hasattr(row, 'download_count') else 0,
+                subtitle_style=row.subtitle_style if hasattr(row, 'subtitle_style') else None,
+                subtitle_font_size=row.subtitle_font_size if hasattr(row, 'subtitle_font_size') else None,
+                caption_offset=row.caption_offset if hasattr(row, 'caption_offset') else None,
+                trim_data=_parse_json_safe(row.trim_data) if hasattr(row, 'trim_data') and row.trim_data else None,
+                subtitle_language=row.subtitle_language if hasattr(row, 'subtitle_language') else None,
+                subtitle_position_x=row.subtitle_position_x if hasattr(row, 'subtitle_position_x') else None,
+                subtitle_position_y=row.subtitle_position_y if hasattr(row, 'subtitle_position_y') else None,
                 is_unusable=bool(row.is_unusable) if hasattr(row, 'is_unusable') else False,
                 unusable_reason=row.unusable_reason if hasattr(row, 'unusable_reason') else None,
             ))

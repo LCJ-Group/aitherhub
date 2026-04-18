@@ -270,6 +270,18 @@ function ClipCard({ clip, onPlay, brands, adminKey, onBrandChange }) {
               <Subtitles className="w-2.5 h-2.5" /> 字幕済
             </span>
           )}
+          {clip.subtitle_style && (
+            <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-indigo-500 text-white shadow flex items-center gap-0.5">
+              {clip.subtitle_style === 'karaoke' ? '🎤' : clip.subtitle_style === 'highlight' ? '✦' : '☰'}
+              {clip.subtitle_language === 'en' ? 'EN' : clip.subtitle_language === 'zh-TW' ? 'TW' : 'JA'}
+              {clip.subtitle_font_size ? ` ${clip.subtitle_font_size}px` : ''}
+            </span>
+          )}
+          {clip.trim_data && (
+            <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-teal-500 text-white shadow flex items-center gap-0.5">
+              <Scissors className="w-2.5 h-2.5" /> カット済
+            </span>
+          )}
           {clip.download_count > 0 && (
             <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-orange-500 text-white shadow flex items-center gap-0.5">
               <Download className="w-2.5 h-2.5" /> DL {clip.download_count}

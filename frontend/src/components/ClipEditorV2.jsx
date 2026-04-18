@@ -243,6 +243,8 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
   const [splitPoints, setSplitPoints] = useState([]); // [seconds] sorted
   const [disabledSegments, setDisabledSegments] = useState(new Set()); // Set of segment indices (legacy, kept for waveform compat)
   const [deletedRanges, setDeletedRanges] = useState([]); // [{start, end}] - CapCut-style deleted ranges
+  const [autoSaveStatus, setAutoSaveStatus] = useState(null); // null | 'saving' | 'saved' | 'error'
+  const autoSaveTimerRef = useRef(null);
   const [hoveredSegIdx, setHoveredSegIdx] = useState(null);
   const [selectedSegIdx, setSelectedSegIdx] = useState(null);
   const [timelineCursorPos, setTimelineCursorPos] = useState(null); // mouse X position on timeline
@@ -293,6 +295,51 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
       // localStorage full or unavailable - ignore
     }
   }, [storageKey, deletedRanges, splitPoints, captionOffset, subtitleFontSize, subtitleFeedback, feedbackTags]);
+
+  // ─── Auto-save editor state to DB (debounced) ──────────────
+  useEffect(() => {
+    if (!videoId || !clip?.clip_id) return;
+    // Skip initial mount (no user changes yet)
+    if (autoSaveTimerRef.current === null) {
+      autoSaveTimerRef.current = 'initialized';
+      return;
+    }
+    // Debounce: wait 1.5s after last change before saving
+    if (autoSaveTimerRef.current && autoSaveTimerRef.current !== 'initialized') {
+      clearTimeout(autoSaveTimerRef.current);
+    }
+    autoSaveTimerRef.current = setTimeout(async () => {
+      try {
+        setAutoSaveStatus('saving');
+        await VideoService.saveSubtitleStyle(videoId, clip.clip_id, {
+          style: subtitleStyle,
+          position_x: subtitlePos.x,
+          position_y: subtitlePos.y,
+          font_size: subtitleFontSize || null,
+          caption_offset: captionOffset,
+          trim_data: {
+            deletedRanges,
+            splitPoints,
+          },
+          language: targetLanguage,
+        });
+        setAutoSaveStatus('saved');
+        console.log('[AutoSave] Editor state saved to DB');
+        // Clear "saved" indicator after 2s
+        setTimeout(() => setAutoSaveStatus(null), 2000);
+      } catch (e) {
+        console.error('[AutoSave] Failed to save editor state:', e);
+        setAutoSaveStatus('error');
+        setTimeout(() => setAutoSaveStatus(null), 3000);
+      }
+    }, 1500);
+    return () => {
+      if (autoSaveTimerRef.current && autoSaveTimerRef.current !== 'initialized') {
+        clearTimeout(autoSaveTimerRef.current);
+      }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subtitleStyle, subtitlePos.x, subtitlePos.y, subtitleFontSize, captionOffset, deletedRanges, splitPoints, targetLanguage]);
 
   // Determine if we're playing a clip_url (local time 0-based) or full video
   const isClipVideo = !!(clip?.clip_url);
@@ -677,6 +724,26 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
         if (res?.subtitle_position_x != null && res?.subtitle_position_y != null) {
           setSubtitlePos({ x: res.subtitle_position_x, y: res.subtitle_position_y });
           console.log(`[Subtitles] Restored position: (${res.subtitle_position_x}, ${res.subtitle_position_y})`);
+        }
+        // Restore auto-saved editor state from DB
+        if (res?.subtitle_font_size != null) {
+          setSubtitleFontSize(res.subtitle_font_size);
+          console.log(`[Subtitles] Restored font size: ${res.subtitle_font_size}`);
+        }
+        if (res?.caption_offset != null && res.caption_offset !== 0) {
+          setCaptionOffset(res.caption_offset);
+          console.log(`[Subtitles] Restored caption offset: ${res.caption_offset}`);
+        }
+        if (res?.trim_data) {
+          const td = typeof res.trim_data === 'string' ? JSON.parse(res.trim_data) : res.trim_data;
+          if (td.deletedRanges?.length > 0) setDeletedRanges(td.deletedRanges);
+          if (td.splitPoints?.length > 0) setSplitPoints(td.splitPoints);
+          console.log(`[Subtitles] Restored trim data from DB`);
+        }
+        if (res?.subtitle_language) {
+          setTargetLanguage(res.subtitle_language);
+          prevTargetLanguage.current = res.subtitle_language;
+          console.log(`[Subtitles] Restored language from DB: ${res.subtitle_language}`);
         }
         if (res?.captions && res.captions.length > 0) {
           // Restore targetLanguage from saved captions to avoid unnecessary re-generation
@@ -1763,6 +1830,25 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
               return key || "?";
             })()} | {fmt(origStart)} - {fmt(origEnd)}
           </span>
+          {/* Auto-save indicator */}
+          {autoSaveStatus && (
+            <span style={{
+              fontSize: 11,
+              padding: '2px 8px',
+              borderRadius: 4,
+              backgroundColor: autoSaveStatus === 'saving' ? C.accent + '22'
+                : autoSaveStatus === 'saved' ? '#22c55e22'
+                : '#ef444422',
+              color: autoSaveStatus === 'saving' ? C.accent
+                : autoSaveStatus === 'saved' ? '#22c55e'
+                : '#ef4444',
+              transition: 'opacity 0.3s',
+            }}>
+              {autoSaveStatus === 'saving' ? '… 保存中'
+                : autoSaveStatus === 'saved' ? '✓ 自動保存済み'
+                : '✗ 保存失敗'}
+            </span>
+          )}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {clip.clip_url && captions.length > 0 && (

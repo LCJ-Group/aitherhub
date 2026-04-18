@@ -131,7 +131,11 @@ async def get_widget_config(
                    vc.transcript_text, vc.duration_sec, vc.liver_name,
                    wca.product_price, wca.product_image_url,
                    wca.product_url, wca.product_cart_url,
-                   vc.captions
+                   vc.captions,
+                   vc.subtitle_style, vc.subtitle_font_size,
+                   vc.caption_offset, vc.trim_data,
+                   vc.subtitle_language,
+                   vc.subtitle_position_x, vc.subtitle_position_y
             FROM widget_clip_assignments wca
             LEFT JOIN video_clips vc ON vc.id::text = wca.clip_id
             WHERE wca.client_id = :cid AND wca.is_active = TRUE
@@ -163,6 +167,12 @@ async def get_widget_config(
                 clip["captions"] = json.loads(clip["captions"])
             except Exception:
                 clip["captions"] = None
+        # Parse trim_data JSON if stored as string
+        if clip.get("trim_data") and isinstance(clip["trim_data"], str):
+            try:
+                clip["trim_data"] = json.loads(clip["trim_data"])
+            except Exception:
+                clip["trim_data"] = None
 
     # Generate SAS URLs for clips if needed
     from app.services.storage_service import generate_read_sas_from_url

@@ -223,6 +223,7 @@ async def get_clip_status(
         sql = text("""
             SELECT id, status, clip_url, sas_token, sas_expireddate, error_message, created_at, captions,
                    subtitle_style, subtitle_position_x, subtitle_position_y,
+                   subtitle_font_size, caption_offset, trim_data, subtitle_language,
                    time_start, time_end,
                    COALESCE(progress_pct, 0) as progress_pct, COALESCE(progress_step, '') as progress_step,
                    updated_at, job_payload
@@ -372,7 +373,15 @@ async def get_clip_status(
             response["subtitle_position_x"] = row.subtitle_position_x
         if hasattr(row, 'subtitle_position_y') and row.subtitle_position_y is not None:
             response["subtitle_position_y"] = row.subtitle_position_y
-
+        # Include auto-save editor state
+        if hasattr(row, 'subtitle_font_size') and row.subtitle_font_size is not None:
+            response["subtitle_font_size"] = row.subtitle_font_size
+        if hasattr(row, 'caption_offset') and row.caption_offset is not None:
+            response["caption_offset"] = row.caption_offset
+        if hasattr(row, 'trim_data') and row.trim_data is not None:
+            response["trim_data"] = row.trim_data
+        if hasattr(row, 'subtitle_language') and row.subtitle_language is not None:
+            response["subtitle_language"] = row.subtitle_language
         return response
 
     except HTTPException:
@@ -756,31 +765,59 @@ async def save_subtitle_style(
         pos_x = request_body.get("position_x", 50)
         pos_y = request_body.get("position_y", 85)
 
-        sql = text("""
-            UPDATE video_clips
-            SET subtitle_style = :style,
-                subtitle_position_x = :pos_x,
-                subtitle_position_y = :pos_y,
-                updated_at = NOW()
-            WHERE id = :clip_id AND video_id = :video_id
-        """)
-        await db.execute(sql, {
+        font_size = request_body.get("font_size")  # None = use preset default
+        caption_offset = request_body.get("caption_offset", 0)
+        trim_data = request_body.get("trim_data")  # {deletedRanges, splitPoints}
+        subtitle_language = request_body.get("language")
+
+        # Build dynamic SET clause to only update provided fields
+        set_parts = [
+            "subtitle_style = :style",
+            "subtitle_position_x = :pos_x",
+            "subtitle_position_y = :pos_y",
+            "updated_at = NOW()",
+        ]
+        params = {
             "style": style,
             "pos_x": pos_x,
             "pos_y": pos_y,
             "clip_id": clip_id,
             "video_id": video_id,
-        })
+        }
+        if font_size is not None:
+            set_parts.append("subtitle_font_size = :font_size")
+            params["font_size"] = float(font_size)
+        if caption_offset is not None:
+            set_parts.append("caption_offset = :caption_offset")
+            params["caption_offset"] = float(caption_offset)
+        if trim_data is not None:
+            import json as _json
+            set_parts.append("trim_data = :trim_data")
+            params["trim_data"] = _json.dumps(trim_data) if isinstance(trim_data, (dict, list)) else trim_data
+        if subtitle_language is not None:
+            set_parts.append("subtitle_language = :subtitle_language")
+            params["subtitle_language"] = subtitle_language
+
+        sql = text(f"""
+            UPDATE video_clips
+            SET {', '.join(set_parts)}
+            WHERE id = :clip_id AND video_id = :video_id
+        """)
+        await db.execute(sql, params)
         await db.commit()
 
-        logger.info(f"[SUBTITLE_STYLE] Saved style for clip {clip_id}: {style} at ({pos_x}, {pos_y})")
+        logger.info(f"[SUBTITLE_STYLE] Saved editor state for clip {clip_id}: style={style}, font={font_size}, offset={caption_offset}, lang={subtitle_language}")
 
         return {
             "clip_id": clip_id,
             "subtitle_style": style,
             "position_x": pos_x,
             "position_y": pos_y,
-            "message": "Subtitle style saved successfully",
+            "font_size": font_size,
+            "caption_offset": caption_offset,
+            "trim_data": trim_data,
+            "language": subtitle_language,
+            "message": "Editor state saved successfully",
         }
 
     except Exception as exc:
