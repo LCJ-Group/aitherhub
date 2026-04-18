@@ -441,7 +441,7 @@ function ClipCard({ clip, onPlay, brands, adminKey, onBrandChange }) {
         {/* CLIP EDITOR link */}
         {clip.video_id && (
           <a
-            href={`/video/${clip.video_id}`}
+            href={`/video/${clip.video_id}?open_editor=1${clip.phase_index != null ? `&phase=${clip.phase_index}` : ''}${clip.time_start != null ? `&t_start=${clip.time_start}` : ''}${clip.time_end != null ? `&t_end=${clip.time_end}` : ''}`}
             target="_blank"
             rel="noopener noreferrer"
             onClick={(e) => e.stopPropagation()}

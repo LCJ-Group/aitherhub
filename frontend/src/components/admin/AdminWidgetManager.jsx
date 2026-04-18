@@ -950,7 +950,7 @@ function ClipCard({ clip, index, isEditing, editForm, onStartEdit, onCancelEdit,
           </button>
           {clip.video_id && (
             <button
-              onClick={(e) => { e.stopPropagation(); window.open(`/video/${clip.video_id}`, '_blank'); }}
+              onClick={(e) => { e.stopPropagation(); window.open(`/video/${clip.video_id}?open_editor=1`, '_blank'); }}
               className="px-2 py-1.5 bg-indigo-50 text-indigo-600 rounded text-xs hover:bg-indigo-100 border border-indigo-200"
               title="CLIP EDITORで編集"
             >
