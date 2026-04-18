@@ -1,5 +1,5 @@
 /**
- * AitherHub Widget Loader v2.7 — TikTok-Style Fullscreen Feed + Product Card + Subtitles
+ * AitherHub Widget Loader v2.9 — TikTok-Style Fullscreen Feed + Product Card + Subtitles
  *
  * GTM経由で配信される軽量エントリーポイント。
  * 先方のECサイトに1行のタグを追加するだけで、
@@ -45,6 +45,11 @@
  *   - Mute button pulse animation when muted to draw attention
  *   - localStorage remembers user sound preference for next visit
  *   - Returning users with sound ON get auto-unmute attempt
+ *
+ * v2.9 – Product detail panel: tap product card or CTA → slide-up detail panel
+ *         with large product image, full name, price, description, and action buttons.
+ *         product_detail_view tracking event added to conversion funnel.
+ *         Design balance: compact product card (48px img, 12px name, 36px CTA buttons).
  *
  * v2.8 – 2-tier CTA system: product_url only → "商品を見る" single button;
  *         product_url + product_cart_url → dual "カートに入れる" + "購入する" buttons;
@@ -443,20 +448,20 @@
       .ath-product-card {\
         display: flex;\
         align-items: center;\
-        gap: 10px;\
+        gap: 8px;\
         background: rgba(255,255,255,0.12);\
         backdrop-filter: blur(12px);\
         -webkit-backdrop-filter: blur(12px);\
-        border-radius: 12px;\
-        padding: 10px;\
-        margin-bottom: 10px;\
+        border-radius: 10px;\
+        padding: 8px;\
+        margin-bottom: 8px;\
         border: 1px solid rgba(255,255,255,0.15);\
         cursor: pointer;\
         transition: background 0.2s;\
       }\
       .ath-product-card:active { background: rgba(255,255,255,0.2); }\
       .ath-product-img {\
-        width: 56px; height: 56px;\
+        width: 48px; height: 48px;\
         border-radius: 8px;\
         object-fit: cover;\
         flex-shrink: 0;\
@@ -468,16 +473,17 @@
       }\
       .ath-product-name {\
         color: white;\
-        font-size: 13px;\
+        font-size: 12px;\
         font-weight: 600;\
         line-height: 1.3;\
         white-space: nowrap;\
         overflow: hidden;\
         text-overflow: ellipsis;\
+        max-width: 180px;\
       }\
       .ath-product-price {\
         color: ' + themeColor + ';\
-        font-size: 15px;\
+        font-size: 14px;\
         font-weight: 900;\
         margin-top: 2px;\
       }\
@@ -490,10 +496,10 @@
       }\
       .ath-cta {\
         flex: 1;\
-        height: 44px;\
+        height: 36px;\
         border: none;\
-        border-radius: 22px;\
-        font-size: 14px;\
+        border-radius: 18px;\
+        font-size: 13px;\
         font-weight: 700;\
         cursor: pointer;\
         display: flex;\
@@ -504,7 +510,7 @@
         pointer-events: auto;\
       }\
       .ath-cta:active { transform: scale(0.96); }\
-      .ath-cta svg { width: 18px; height: 18px; flex-shrink: 0; }\
+      .ath-cta svg { width: 16px; height: 16px; flex-shrink: 0; }\
       .ath-cta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }\
       .ath-cta-cart {\
         background: rgba(255,255,255,0.2);\
@@ -771,6 +777,109 @@
       @keyframes ath-spin {\
         to { transform: rotate(360deg); }\
       }\
+      \
+      /* ── Product Detail Panel ── */\
+      .ath-detail-overlay {\
+        position: absolute;\
+        top: 0; left: 0; right: 0; bottom: 0;\
+        background: rgba(0,0,0,0.6);\
+        z-index: 40;\
+        display: none;\
+        pointer-events: auto;\
+      }\
+      .ath-detail-overlay.active { display: block; }\
+      .ath-detail-panel {\
+        position: absolute;\
+        bottom: 0; left: 0; right: 0;\
+        max-height: 75vh;\
+        background: #1a1a1a;\
+        border-radius: 16px 16px 0 0;\
+        padding: 0;\
+        transform: translateY(100%);\
+        transition: transform 0.35s cubic-bezier(0.25, 0.46, 0.45, 0.94);\
+        overflow-y: auto;\
+        -webkit-overflow-scrolling: touch;\
+      }\
+      .ath-detail-overlay.active .ath-detail-panel { transform: translateY(0); }\
+      .ath-detail-handle {\
+        width: 36px; height: 4px;\
+        background: rgba(255,255,255,0.3);\
+        border-radius: 2px;\
+        margin: 12px auto 8px;\
+      }\
+      .ath-detail-close {\
+        position: absolute;\
+        top: 12px; right: 12px;\
+        width: 32px; height: 32px;\
+        background: rgba(255,255,255,0.15);\
+        border: none; border-radius: 50%;\
+        cursor: pointer;\
+        display: flex; align-items: center; justify-content: center;\
+        z-index: 2;\
+      }\
+      .ath-detail-close svg { width: 18px; height: 18px; }\
+      .ath-detail-close:active { background: rgba(255,255,255,0.25); }\
+      .ath-detail-img {\
+        width: 100%;\
+        max-height: 280px;\
+        object-fit: contain;\
+        background: #111;\
+        display: block;\
+      }\
+      .ath-detail-body {\
+        padding: 16px;\
+      }\
+      .ath-detail-name {\
+        color: white;\
+        font-size: 16px;\
+        font-weight: 700;\
+        line-height: 1.4;\
+        margin-bottom: 6px;\
+      }\
+      .ath-detail-price {\
+        color: ' + themeColor + ';\
+        font-size: 20px;\
+        font-weight: 900;\
+        margin-bottom: 12px;\
+      }\
+      .ath-detail-desc {\
+        color: rgba(255,255,255,0.6);\
+        font-size: 13px;\
+        line-height: 1.6;\
+        margin-bottom: 16px;\
+      }\
+      .ath-detail-actions {\
+        display: flex;\
+        gap: 10px;\
+      }\
+      .ath-detail-btn {\
+        flex: 1;\
+        height: 44px;\
+        border: none;\
+        border-radius: 22px;\
+        font-size: 14px;\
+        font-weight: 700;\
+        cursor: pointer;\
+        display: flex;\
+        align-items: center;\
+        justify-content: center;\
+        gap: 6px;\
+        transition: transform 0.15s, opacity 0.15s;\
+      }\
+      .ath-detail-btn:active { transform: scale(0.96); }\
+      .ath-detail-btn svg { width: 18px; height: 18px; flex-shrink: 0; }\
+      .ath-detail-btn-primary {\
+        background: ' + themeColor + ';\
+        color: white;\
+        box-shadow: 0 4px 16px ' + themeColor + '66;\
+      }\
+      .ath-detail-btn-primary:hover { opacity: 0.9; }\
+      .ath-detail-btn-secondary {\
+        background: rgba(255,255,255,0.15);\
+        color: white;\
+        border: 1px solid rgba(255,255,255,0.2);\
+      }\
+      .ath-detail-btn-secondary:hover { background: rgba(255,255,255,0.25); }\
       \
       /* ── Powered by ── */\
       .ath-powered {\
@@ -1152,6 +1261,177 @@
     powered.textContent = "Powered by AitherHub";
     overlay.appendChild(powered);
 
+    // ── Product Detail Panel (slide-up overlay) ──
+    var detailOverlay = document.createElement("div");
+    detailOverlay.className = "ath-detail-overlay";
+    var detailPanel = document.createElement("div");
+    detailPanel.className = "ath-detail-panel";
+
+    var detailHandle = document.createElement("div");
+    detailHandle.className = "ath-detail-handle";
+    detailPanel.appendChild(detailHandle);
+
+    var detailCloseBtn = document.createElement("button");
+    detailCloseBtn.className = "ath-detail-close";
+    detailCloseBtn.innerHTML = ICONS.close;
+    detailPanel.appendChild(detailCloseBtn);
+
+    var detailImg = document.createElement("img");
+    detailImg.className = "ath-detail-img";
+    detailPanel.appendChild(detailImg);
+
+    var detailBody = document.createElement("div");
+    detailBody.className = "ath-detail-body";
+
+    var detailName = document.createElement("div");
+    detailName.className = "ath-detail-name";
+    detailBody.appendChild(detailName);
+
+    var detailPrice = document.createElement("div");
+    detailPrice.className = "ath-detail-price";
+    detailBody.appendChild(detailPrice);
+
+    var detailDesc = document.createElement("div");
+    detailDesc.className = "ath-detail-desc";
+    detailBody.appendChild(detailDesc);
+
+    var detailActions = document.createElement("div");
+    detailActions.className = "ath-detail-actions";
+
+    var detailCartBtn = document.createElement("button");
+    detailCartBtn.className = "ath-detail-btn ath-detail-btn-secondary";
+    detailCartBtn.innerHTML = ICONS.cart + '<span>\u30AB\u30FC\u30C8\u306B\u5165\u308C\u308B</span>';
+
+    var detailBuyBtn = document.createElement("button");
+    detailBuyBtn.className = "ath-detail-btn ath-detail-btn-primary";
+    detailBuyBtn.innerHTML = ICONS.bag + '<span>\u5546\u54C1\u30DA\u30FC\u30B8\u3078</span>';
+
+    detailActions.appendChild(detailCartBtn);
+    detailActions.appendChild(detailBuyBtn);
+    detailBody.appendChild(detailActions);
+    detailPanel.appendChild(detailBody);
+    detailOverlay.appendChild(detailPanel);
+    overlay.appendChild(detailOverlay);
+
+    var isDetailOpen = false;
+
+    function openProductDetail(clip) {
+      if (!clip) return;
+      // Populate detail panel
+      detailName.textContent = clip.product_name || "";
+      detailPrice.textContent = clip.product_price || "";
+      // Use transcript_text as description fallback (no dedicated description field yet)
+      detailDesc.textContent = clip.transcript_text || "";
+      if (!clip.transcript_text) {
+        detailDesc.style.display = "none";
+      } else {
+        detailDesc.style.display = "block";
+      }
+      if (clip.product_image_url) {
+        detailImg.src = clip.product_image_url;
+        detailImg.style.display = "block";
+      } else {
+        detailImg.style.display = "none";
+      }
+      // Show/hide cart button based on product_cart_url
+      if (clip.product_cart_url) {
+        detailCartBtn.style.display = "flex";
+      } else {
+        detailCartBtn.style.display = "none";
+      }
+      // Show/hide buy button based on product_url
+      if (clip.product_url) {
+        detailBuyBtn.style.display = "flex";
+      } else {
+        detailBuyBtn.style.display = "none";
+      }
+      // Pause video
+      var video = videoElements[currentIndex];
+      if (video && !video.paused) {
+        video.pause();
+      }
+      // Show panel with animation
+      detailOverlay.classList.add("active");
+      isDetailOpen = true;
+      // Track product_detail_view event
+      trackEvent("product_detail_view", {
+        clip_id: clip.clip_id,
+        product_name: clip.product_name,
+        product_price: clip.product_price,
+        video_time: video ? video.currentTime : 0,
+      });
+    }
+
+    function closeProductDetail() {
+      detailOverlay.classList.remove("active");
+      isDetailOpen = false;
+      // Resume video
+      var video = videoElements[currentIndex];
+      if (video && video.paused) {
+        video.play().catch(function () { });
+      }
+    }
+
+    // Close detail panel handlers
+    detailCloseBtn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      closeProductDetail();
+    });
+    detailOverlay.addEventListener("click", function (e) {
+      // Close when clicking outside the panel
+      if (e.target === detailOverlay) {
+        closeProductDetail();
+      }
+    });
+
+    // Detail panel: Buy button → external navigation
+    detailBuyBtn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      var clip = clips[currentIndex];
+      if (!clip || !clip.product_url) return;
+      trackEvent("product_click", {
+        clip_id: clip.clip_id,
+        product_name: clip.product_name,
+        product_price: clip.product_price,
+        source: "detail_panel",
+      });
+      var targetUrl = addUtmParams(clip.product_url, clip.clip_id, "detail_buy");
+      window.open(targetUrl, "_blank");
+    });
+
+    // Detail panel: Cart button → add to cart or navigate
+    detailCartBtn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      var clip = clips[currentIndex];
+      if (!clip) return;
+      trackEvent("add_to_cart", {
+        clip_id: clip.clip_id,
+        product_name: clip.product_name,
+        product_price: clip.product_price,
+        source: "detail_panel",
+      });
+      // Strategy 1: DOM manipulation
+      if (config.cart_selector) {
+        try {
+          var domCartBtn = document.querySelector(config.cart_selector);
+          if (domCartBtn) {
+            domCartBtn.click();
+            detailCartBtn.innerHTML = '<span>&#10003; \u30AB\u30FC\u30C8\u306B\u8FFD\u52A0\u3057\u307E\u3057\u305F</span>';
+            setTimeout(function () {
+              detailCartBtn.innerHTML = ICONS.cart + '<span>\u30AB\u30FC\u30C8\u306B\u5165\u308C\u308B</span>';
+            }, 2000);
+            return;
+          }
+        } catch (err) { }
+      }
+      // Strategy 2: Navigate to cart URL
+      var cartUrl = clip.product_cart_url || clip.product_url;
+      if (cartUrl) {
+        var targetUrl = addUtmParams(cartUrl, clip.clip_id, "detail_cart");
+        window.open(targetUrl, "_blank");
+      }
+    });
+
     shadow.appendChild(overlay);
 
     // ── Subtitle engine ──
@@ -1492,6 +1772,7 @@
     // ── Helper: Navigate ──
     function goToIndex(newIndex) {
       if (clips.length <= 1) return;
+      if (isDetailOpen) closeProductDetail();
       currentIndex = ((newIndex % clips.length) + clips.length) % clips.length;
       updateSlidePositions(true);
       playCurrentVideo();
@@ -1583,6 +1864,7 @@
 
     function closeOverlay() {
       isOpen = false;
+      if (isDetailOpen) closeProductDetail();
       overlay.classList.remove("active");
       fab.style.display = "flex";
       // Resume FAB video
@@ -1602,6 +1884,7 @@
 
     // ── Touch Swipe (TikTok-style) ──
     feed.addEventListener("touchstart", function (e) {
+      if (isDetailOpen) return;
       dragStartY = e.touches[0].clientY;
       lastY = dragStartY;
       isDragging = true;
@@ -1644,8 +1927,9 @@
     // ── Tap to play/pause (left half) & long-press 2x speed (right half) ──
     feed.addEventListener("click", function (e) {
       if (isSpeedUp) return;
+      if (isDetailOpen) return;
       // Ignore if clicking on buttons
-      if (e.target.closest && (e.target.closest(".ath-action-btn") || e.target.closest(".ath-cta") || e.target.closest(".ath-close-btn") || e.target.closest(".ath-product-card"))) return;
+      if (e.target.closest && (e.target.closest(".ath-action-btn") || e.target.closest(".ath-cta") || e.target.closest(".ath-close-btn") || e.target.closest(".ath-product-card") || e.target.closest(".ath-detail-overlay"))) return;
 
       var video = videoElements[currentIndex];
       if (!video) return;
@@ -1824,14 +2108,8 @@
     productCard.addEventListener("click", function (e) {
       e.stopPropagation();
       var clip = clips[currentIndex];
-      if (!clip.product_url) return;
-      trackEvent("product_click", {
-        clip_id: clip.clip_id,
-        product_name: clip.product_name,
-        product_price: clip.product_price,
-      });
-      var targetUrl = addUtmParams(clip.product_url, clip.clip_id, "product_card");
-      window.open(targetUrl, "_blank");
+      if (!hasProductInfo(clip)) return;
+      openProductDetail(clip);
     });
 
     // ── CTA: Cart button ──
@@ -1894,21 +2172,8 @@
     singleCta.addEventListener("click", function (e) {
       e.stopPropagation();
       var clip = clips[currentIndex];
-      trackEvent("product_click", {
-        clip_id: clip.clip_id,
-        product_name: clip.product_name,
-        product_price: clip.product_price,
-        video_time: videoElements[currentIndex] ? videoElements[currentIndex].currentTime : 0,
-      });
-
-      var targetUrl = clip.product_url;
-      if (!targetUrl && config.cta_url_template) {
-        targetUrl = config.cta_url_template.replace("{product}", encodeURIComponent(clip.product_name || ""));
-      }
-      if (targetUrl) {
-        targetUrl = addUtmParams(targetUrl, clip.clip_id, "product_click");
-        window.open(targetUrl, "_blank");
-      }
+      if (!hasProductInfo(clip)) return;
+      openProductDetail(clip);
     });
 
     // ── Auto-open from share link: detect ?ath_clip=CLIP_ID in URL ──
