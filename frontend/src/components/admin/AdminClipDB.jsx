@@ -438,6 +438,19 @@ function ClipCard({ clip, onPlay, brands, adminKey, onBrandChange }) {
           </p>
         )}
 
+        {/* CLIP EDITOR link */}
+        {clip.video_id && (
+          <a
+            href={`/video/${clip.video_id}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className="flex items-center justify-center gap-1.5 w-full py-1.5 rounded-lg text-[11px] font-medium text-indigo-600 bg-indigo-50 hover:bg-indigo-100 transition-colors"
+          >
+            <Scissors className="w-3 h-3" /> CLIP EDITOR
+          </a>
+        )}
+
         {/* NG mark / unmark section */}
         <div className="relative pt-1 border-t border-gray-100 mt-1">
           {localUnusable ? (
