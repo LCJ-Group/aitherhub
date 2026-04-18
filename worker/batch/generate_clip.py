@@ -847,12 +847,14 @@ Whisperで自動生成された字幕テキストを、SNS動画で最大限バ�
 ## 入力（Whisper生テキスト + タイムスタンプ）
 {raw_text}
 
-## タイムスタンプルール（厳守）
-- **元のWhisperタイムスタンプを絶対に大幅に変更しない**
-- 重複セグメントを結合した場合: 最初のstartから最後のendまでを使用
-- 1つの元セグメントを複数に分割する場合、元のstart〜endの範囲内で文字数比率で分配
+## タイムスタンプルール（最重要 - 厳守）
+- **元のWhisperタイムスタンプを絶対に変更しない**（±0.3秒以内の微調整のみ許可）
+- 重複セグメントを結合した場合: 最初のセグメントのstartから最後のセグメントのendまでを使用
+- 1つの元セグメントを複数に分割する場合: 元のstart〜endの範囲内で文字数比率で分配
+- フィラーワード除去時: フィラーを含むセグメントのstart/endは変更しない（テキストのみ修正）
+  - 例: [2.50-4.00] 「えーと、髪の毛を」→ [2.50-4.00] 「髪の毛を」（タイムスタンプ維持）
 - セグメント間にギャップがある場合はそのまま維持（無理に埋めない）
-- 音声と字幕のズレを防ぐため、タイムスタンプの精度を最優先する
+- 音声と字幕の同期精度が最優先。テキスト修正のためにタイムスタンプを犠牲にしない
 
 ## 出力形式
 以下のJSON配列形式で出力。各要素は:
@@ -905,15 +907,88 @@ JSON配列のみ出力（説明不要）:"""
         logger.info(f"Original Whisper time range: {orig_min_start:.2f} - {orig_max_end:.2f}")
 
         # Build a flat list of original Whisper word timestamps for matching
+        # Each entry: {"word": str, "start": float, "end": float}
         orig_words_flat = []
         for seg in segments:
             for w in seg.get("words", []):
                 orig_words_flat.append(w)
         logger.info(f"Original Whisper words for matching: {len(orig_words_flat)}")
 
+        # Build a character-level timeline from ALL original Whisper words
+        # This is the ground truth for audio-text alignment
+        orig_char_timeline = []  # [(char, start, end), ...]
+        for ow in orig_words_flat:
+            ow_text = ow.get("word", "")
+            ow_start = ow.get("start", 0)
+            ow_end = ow.get("end", 0)
+            ow_dur = max(0.01, ow_end - ow_start)
+            ow_chars = list(ow_text)
+            for ci, ch in enumerate(ow_chars):
+                ch_s = ow_start + (ow_dur * ci / max(1, len(ow_chars)))
+                ch_e = ow_start + (ow_dur * (ci + 1) / max(1, len(ow_chars)))
+                orig_char_timeline.append((ch, round(ch_s, 3), round(ch_e, 3)))
+
+        # Build original full text for subsequence matching
+        orig_full_text = "".join(ch for ch, _, _ in orig_char_timeline)
+        logger.info(f"Original char timeline: {len(orig_char_timeline)} chars, text='{orig_full_text[:80]}...'")
+
+        # Helper: find best matching position of a substring in original text
+        # Uses sliding window with character similarity score
+        def _find_best_match(query_text, search_start_idx=0):
+            """Find the best matching position of query_text in orig_full_text.
+            Returns (start_idx, end_idx, score) in orig_char_timeline.
+            Uses character-level matching to handle GPT text modifications."""
+            if not query_text or not orig_full_text:
+                return None
+            query_chars = list(query_text)
+            qlen = len(query_chars)
+            best_score = -1
+            best_start = search_start_idx
+            # Search window: from search_start_idx, scan forward
+            # Allow some backward tolerance for overlapping segments
+            scan_start = max(0, search_start_idx - min(20, qlen))
+            scan_end = min(len(orig_full_text), search_start_idx + qlen * 3 + 50)
+            for i in range(scan_start, scan_end):
+                # Score: count matching characters in a window of qlen
+                matches = 0
+                window_end = min(i + qlen + 5, len(orig_full_text))  # slight extra
+                qi = 0
+                oi = i
+                while qi < qlen and oi < window_end:
+                    if query_chars[qi] == orig_full_text[oi]:
+                        matches += 1
+                        qi += 1
+                        oi += 1
+                    else:
+                        # Try skipping one char in original (deletion in GPT)
+                        if oi + 1 < window_end and qi < qlen and query_chars[qi] == orig_full_text[oi + 1]:
+                            oi += 1
+                        # Try skipping one char in query (insertion by GPT)
+                        elif qi + 1 < qlen and oi < window_end and query_chars[qi + 1] == orig_full_text[oi]:
+                            qi += 1
+                        else:
+                            qi += 1
+                            oi += 1
+                score = matches / max(1, qlen)
+                if score > best_score:
+                    best_score = score
+                    best_start = i
+                if score >= 0.95:  # Good enough match
+                    break
+            # Determine end index: advance through orig matching query chars
+            end_idx = best_start
+            qi = 0
+            while qi < qlen and end_idx < len(orig_char_timeline):
+                if qi < qlen and end_idx < len(orig_full_text) and query_chars[qi] == orig_full_text[end_idx]:
+                    qi += 1
+                end_idx += 1
+                if qi >= qlen:
+                    break
+            return (best_start, min(end_idx, len(orig_char_timeline)), best_score)
+
         # Validate, clean, clamp timestamps, and reconstruct word-level timestamps
         valid_segments = []
-        orig_word_idx = 0  # Track position in original Whisper words
+        orig_search_cursor = 0  # Track position in original text for sequential matching
 
         for seg in refined:
             if isinstance(seg, dict) and "start" in seg and "end" in seg and "text" in seg:
@@ -922,7 +997,7 @@ JSON配列のみ出力（説明不要）:"""
                     s_start = float(seg["start"])
                     s_end = float(seg["end"])
 
-                    # Clamp timestamps to original Whisper range to prevent GPT-4o drift
+                    # Clamp timestamps to original Whisper range to prevent GPT drift
                     s_start = max(orig_min_start, min(s_start, orig_max_end))
                     s_end = max(s_start + 0.1, min(s_end, orig_max_end))  # Ensure min 100ms duration
 
@@ -932,57 +1007,137 @@ JSON配列のみ出力（説明不要）:"""
                         if s_start >= s_end:
                             continue  # Skip if no room left
 
-                    # Try to match GPT output characters to original Whisper word timestamps
-                    # This preserves actual speech timing instead of even distribution
                     chars = list(text_val)
                     total_chars = len(chars)
                     duration = s_end - s_start
                     words = []
 
-                    # Find matching original words within this segment's time range
-                    matching_orig_words = []
-                    for ow in orig_words_flat:
-                        ow_start = ow.get("start", 0)
-                        ow_end = ow.get("end", 0)
-                        # Word overlaps with this segment's time range (with 0.5s tolerance)
-                        if ow_end >= s_start - 0.5 and ow_start <= s_end + 0.5:
-                            matching_orig_words.append(ow)
+                    # Strategy: match GPT text to original Whisper char timeline
+                    # using subsequence matching, then use original timestamps
+                    match_result = _find_best_match(text_val, orig_search_cursor) if orig_char_timeline else None
 
-                    if matching_orig_words:
-                        # Map original word timestamps to character positions
-                        # Build a timeline from original words
-                        char_timestamps = []
-                        for ow in matching_orig_words:
-                            ow_text = ow.get("word", "")
-                            ow_start = max(s_start, ow.get("start", s_start))
-                            ow_end = min(s_end, ow.get("end", s_end))
-                            ow_dur = max(0.01, ow_end - ow_start)
-                            ow_chars = list(ow_text)
-                            for ci, ch in enumerate(ow_chars):
-                                ch_s = ow_start + (ow_dur * ci / max(1, len(ow_chars)))
-                                ch_e = ow_start + (ow_dur * (ci + 1) / max(1, len(ow_chars)))
-                                char_timestamps.append((ch, round(ch_s, 3), round(ch_e, 3)))
+                    if match_result and match_result[2] >= 0.5:  # At least 50% character match
+                        match_start, match_end, match_score = match_result
+                        # Use original Whisper timestamps from the matched region
+                        matched_chars = orig_char_timeline[match_start:match_end]
 
-                        # Match GPT output chars to original char timestamps using position ratio
-                        if char_timestamps:
+                        if matched_chars:
+                            # Override GPT timestamps with Whisper timestamps
+                            whisper_start = matched_chars[0][1]
+                            whisper_end = matched_chars[-1][2]
+
+                            # Use Whisper timestamps if they're reasonable
+                            # (within 2s of GPT timestamps to catch gross errors)
+                            if abs(whisper_start - s_start) <= 2.0:
+                                s_start = whisper_start
+                            if abs(whisper_end - s_end) <= 2.0:
+                                s_end = whisper_end
+                            # Ensure min duration
+                            s_end = max(s_start + 0.1, s_end)
+
+                            # Re-check overlap after timestamp correction
+                            if valid_segments and s_start < valid_segments[-1]["end"]:
+                                s_start = valid_segments[-1]["end"]
+                                if s_start >= s_end:
+                                    continue
+
+                            # Map each GPT character to original timestamps via subsequence
+                            mi = 0  # index into matched_chars
                             for ci, ch in enumerate(chars):
-                                # Map position in GPT text to position in original timestamps
-                                ratio = ci / max(1, total_chars - 1) if total_chars > 1 else 0
-                                orig_idx = min(int(ratio * len(char_timestamps)), len(char_timestamps) - 1)
-                                _, ch_start, ch_end = char_timestamps[orig_idx]
-                                words.append({"word": ch, "start": ch_start, "end": ch_end})
+                                # Try to find this character in matched region
+                                found = False
+                                search_limit = min(mi + 5, len(matched_chars))
+                                for si in range(mi, search_limit):
+                                    if matched_chars[si][0] == ch:
+                                        _, ch_start, ch_end = matched_chars[si]
+                                        words.append({"word": ch, "start": ch_start, "end": ch_end})
+                                        mi = si + 1
+                                        found = True
+                                        break
+                                if not found:
+                                    # Character not in original (GPT added punctuation etc)
+                                    # Interpolate from surrounding matched characters
+                                    if words:
+                                        prev_end = words[-1]["end"]
+                                    else:
+                                        prev_end = s_start
+                                    # Look ahead for next matched char
+                                    next_start = s_end
+                                    for fi in range(ci + 1, min(ci + 5, total_chars)):
+                                        if fi < total_chars:
+                                            for si in range(mi, min(mi + 5, len(matched_chars))):
+                                                if matched_chars[si][0] == chars[fi]:
+                                                    next_start = matched_chars[si][1]
+                                                    break
+                                            if next_start != s_end:
+                                                break
+                                    ch_start = prev_end
+                                    ch_end = min(prev_end + 0.05, next_start)  # 50ms for inserted chars
+                                    words.append({"word": ch, "start": round(ch_start, 3), "end": round(ch_end, 3)})
+
+                            # Advance search cursor past this match
+                            orig_search_cursor = match_end
+                            logger.debug(f"Matched '{text_val[:20]}' score={match_score:.2f} range={match_start}-{match_end}")
                         else:
-                            # Fallback: even distribution
+                            # Matched region empty, fallback to even distribution
                             for ci, ch in enumerate(chars):
                                 ch_start = s_start + (duration * ci / total_chars)
                                 ch_end = s_start + (duration * (ci + 1) / total_chars)
                                 words.append({"word": ch, "start": round(ch_start, 3), "end": round(ch_end, 3)})
                     else:
-                        # No matching original words found: even distribution fallback
-                        for ci, ch in enumerate(chars):
-                            ch_start = s_start + (duration * ci / total_chars)
-                            ch_end = s_start + (duration * (ci + 1) / total_chars)
-                            words.append({"word": ch, "start": round(ch_start, 3), "end": round(ch_end, 3)})
+                        # No good match found: use GPT timestamps with even distribution
+                        # But still try to find matching original words in time range
+                        matching_orig_words = []
+                        for ow in orig_words_flat:
+                            ow_start = ow.get("start", 0)
+                            ow_end = ow.get("end", 0)
+                            if ow_end >= s_start - 0.3 and ow_start <= s_end + 0.3:
+                                matching_orig_words.append(ow)
+
+                        if matching_orig_words:
+                            # Build char timeline from time-range matched words
+                            range_char_ts = []
+                            for ow in matching_orig_words:
+                                ow_text = ow.get("word", "")
+                                ow_s = max(s_start, ow.get("start", s_start))
+                                ow_e = min(s_end, ow.get("end", s_end))
+                                ow_d = max(0.01, ow_e - ow_s)
+                                for ci2, ch2 in enumerate(list(ow_text)):
+                                    ch_s2 = ow_s + (ow_d * ci2 / max(1, len(ow_text)))
+                                    ch_e2 = ow_s + (ow_d * (ci2 + 1) / max(1, len(ow_text)))
+                                    range_char_ts.append((ch2, round(ch_s2, 3), round(ch_e2, 3)))
+
+                            if range_char_ts:
+                                # Map by subsequence matching within this range
+                                ri = 0
+                                for ci, ch in enumerate(chars):
+                                    found = False
+                                    for si in range(ri, min(ri + 5, len(range_char_ts))):
+                                        if range_char_ts[si][0] == ch:
+                                            _, ch_start, ch_end = range_char_ts[si]
+                                            words.append({"word": ch, "start": ch_start, "end": ch_end})
+                                            ri = si + 1
+                                            found = True
+                                            break
+                                    if not found:
+                                        if words:
+                                            prev_end = words[-1]["end"]
+                                        else:
+                                            prev_end = s_start
+                                        ch_start = prev_end
+                                        ch_end = min(prev_end + 0.05, s_end)
+                                        words.append({"word": ch, "start": round(ch_start, 3), "end": round(ch_end, 3)})
+                            else:
+                                for ci, ch in enumerate(chars):
+                                    ch_start = s_start + (duration * ci / total_chars)
+                                    ch_end = s_start + (duration * (ci + 1) / total_chars)
+                                    words.append({"word": ch, "start": round(ch_start, 3), "end": round(ch_end, 3)})
+                        else:
+                            # No matching original words found: even distribution fallback
+                            for ci, ch in enumerate(chars):
+                                ch_start = s_start + (duration * ci / total_chars)
+                                ch_end = s_start + (duration * (ci + 1) / total_chars)
+                                words.append({"word": ch, "start": round(ch_start, 3), "end": round(ch_end, 3)})
 
                     valid_segments.append({
                         "start": round(s_start, 3),
