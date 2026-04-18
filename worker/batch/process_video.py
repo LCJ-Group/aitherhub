@@ -1865,8 +1865,14 @@ def main():
                     for p in phase_units:
                         pi = p["phase_index"]
                         if pi in _ng_map:
+                            val = _ng_map[pi]
                             p["is_unusable"] = True
-                            p["unusable_reason"] = _ng_map[pi]
+                            if isinstance(val, dict):
+                                p["unusable_reason"] = val.get("reason", "unknown")
+                                if val.get("comment"):
+                                    p["unusable_comment"] = val["comment"]
+                            else:
+                                p["unusable_reason"] = val
                     logger.info("[REPORT] Enriched %d phases with NG (unusable) flags from DB", len(_ng_map))
             except Exception as e:
                 logger.warning("[REPORT][WARN] Failed to load unusable flags: %s", e)

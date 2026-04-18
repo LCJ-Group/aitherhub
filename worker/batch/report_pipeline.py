@@ -359,6 +359,8 @@ def build_report_2_phase_insights_raw(phase_units, best_data, excel_data=None):
         if p.get("is_unusable"):
             item["is_unusable"] = True
             item["unusable_reason"] = p.get("unusable_reason", "unknown")
+            if p.get("unusable_comment"):
+                item["unusable_comment"] = p["unusable_comment"]
 
         out.append(item)
 
@@ -418,6 +420,7 @@ PROMPT_REPORT_2 = """
 - 音声特徴量がある場合：声の熱量（energy_mean）や抑揚（pitch_std）が低い場合は「もっと感情を込めて話すべき」、話速（speech_rate）が速すぎる場合は「ゆっくり丁寧に説明すべき」等のアドバイス
 - セールスタグ（human_sales_tags / sales_psychology_tags）がある場合：配信者が使っているセールス手法（例：HOOK、EMPATHY、CTA、SCARCITY、SOCIAL_PROOF等）を踏まえて、足りないテクニックや強化すべきポイントを具体的にアドバイスする。タグが少ないフェーズでは「どのセールス手法を追加すべきか」を提案する
 - NG判定（is_unusable=true）がある場合：このフェーズは人間レビュアーにより「使えない」と判定されている。NG理由（unusable_reason）を踏まえて、なぜこのフェーズが問題なのか、次回の配信でどう改善すべきかを具体的にアドバイスする。例：「音声が悪い」→マイク環境の改善提案、「カット位置が悪い」→話の区切りを意識した構成提案
+- NGコメント（unusable_comment）がある場合：レビュアーが記入した具体的なフィードバック。このコメントは「なぜ使えないのか」の最も具体的な情報であるため、改善アドバイスの最優先根拠として活用する。例：「照明が暗くて商品の色味が分からない」→照明環境の具体的改善提案
 
 出力ルール：
 - 最大2つの具体的なセールス改善アドバイス
@@ -465,6 +468,7 @@ PROMPT_REPORT_2_ZHTW = """
 - 如有語音特徵值：聲音熱度（energy_mean）或抑揚（pitch_std）偏低時建議「應更有感情地說話」，語速（speech_rate）過快時建議「應放慢速度仔細說明」
 - 如有銷售標籤（human_sales_tags / sales_psychology_tags）：根據主播使用的銷售技巧（例如：HOOK、EMPATHY、CTA、SCARCITY、SOCIAL_PROOF等），具體建議缺少的技巧或應強化的重點。標籤較少的階段應建議「應增加哪些銷售技巧」
 - 如有NG判定（is_unusable=true）：此階段已被人工審查員判定為「不可用」。根據NG理由（unusable_reason），具體建議為何此階段有問題以及下次直播應如何改善。例：「音質差」→建議改善麥克風環境，「剪輯位置不當」→建議注意話題轉換的節奏
+- 如有NG評論（unusable_comment）：審查員填寫的具體反饋。此評論是「為何不可用」的最具體資訊，應作為改善建議的最優先依據。例：「燈光太暗看不清商品顏色」→具體建議改善燈光環境
 
 輸出規則：
 - 最多2個具體的銷售改善建議

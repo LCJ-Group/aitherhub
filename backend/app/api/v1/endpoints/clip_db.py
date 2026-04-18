@@ -125,6 +125,7 @@ class ClipSearchResult(BaseModel):
     # Unusable marking
     is_unusable: Optional[bool] = None
     unusable_reason: Optional[str] = None
+    unusable_comment: Optional[str] = None
 
 
 class ClipSearchResponse(BaseModel):
@@ -146,6 +147,12 @@ class ClipStatsResponse(BaseModel):
     top_products: list  # [{product: str, count: int, gmv: float}]
     top_livers: list  # [{liver: str, count: int, gmv: float}]
     clips_by_date: list  # [{date: str, count: int}]
+    # NG statistics
+    ng_clips: Optional[int] = 0
+    no_brand_clips: Optional[int] = 0
+    subtitle_clips: Optional[int] = 0
+    trimmed_clips: Optional[int] = 0
+    ng_by_reason: Optional[list] = None  # [{reason: str, count: int}]
 
 
 class EnrichResult(BaseModel):
@@ -173,6 +180,9 @@ async def search_clips(
     video_id: Optional[str] = Query(None, description="Filter by video ID"),
     brand: Optional[str] = Query(None, description="Filter by brand client_id"),
     is_unusable: Optional[bool] = Query(None, description="Filter by unusable status"),
+    no_brand: Optional[bool] = Query(None, description="Filter clips with no brand assigned"),
+    has_subtitle: Optional[bool] = Query(None, description="Filter clips with/without subtitle export"),
+    has_trim: Optional[bool] = Query(None, description="Filter clips with/without trim data"),
     # Sorting
     sort_by: str = Query("created_at", description="Sort field: created_at, gmv, cta_score, importance_score, duration_sec"),
     sort_order: str = Query("desc", description="Sort order: asc or desc"),
@@ -264,6 +274,34 @@ async def search_clips(
         conditions.append("COALESCE(vc.is_unusable, FALSE) = :is_unusable")
         params["is_unusable"] = is_unusable
 
+    # No brand assigned filter
+    if no_brand is True:
+        conditions.append("""
+            vc.id::text NOT IN (
+                SELECT wca.clip_id FROM widget_clip_assignments wca
+                WHERE wca.is_active = TRUE
+            )
+        """)
+    elif no_brand is False:
+        conditions.append("""
+            vc.id::text IN (
+                SELECT wca.clip_id FROM widget_clip_assignments wca
+                WHERE wca.is_active = TRUE
+            )
+        """)
+
+    # Has subtitle export filter
+    if has_subtitle is True:
+        conditions.append("vc.exported_url IS NOT NULL")
+    elif has_subtitle is False:
+        conditions.append("vc.exported_url IS NULL")
+
+    # Has trim data filter
+    if has_trim is True:
+        conditions.append("vc.trim_data IS NOT NULL")
+    elif has_trim is False:
+        conditions.append("vc.trim_data IS NULL")
+
     where_clause = " AND ".join(conditions)
 
     # Validate sort
@@ -339,7 +377,8 @@ async def search_clips(
             vc.exported_url,
             COALESCE(cdl.download_count, 0) as download_count,
             COALESCE(vc.is_unusable, FALSE) as is_unusable,
-            vc.unusable_reason
+            vc.unusable_reason,
+            vc.unusable_comment
         FROM video_clips vc
         LEFT JOIN video_phases vp ON vp.video_id = vc.video_id
             AND vp.phase_index = CASE
@@ -464,6 +503,7 @@ async def search_clips(
                 subtitle_position_y=row.subtitle_position_y if hasattr(row, 'subtitle_position_y') else None,
                 is_unusable=bool(row.is_unusable) if hasattr(row, 'is_unusable') else False,
                 unusable_reason=row.unusable_reason if hasattr(row, 'unusable_reason') else None,
+                unusable_comment=row.unusable_comment if hasattr(row, 'unusable_comment') else None,
             ))
 
         return ClipSearchResponse(
@@ -589,6 +629,37 @@ async def get_clip_stats(
             for r in date_result.fetchall()
         ]
 
+        # NG / status statistics
+        ng_stats_sql = text("""
+            SELECT
+                COUNT(*) FILTER (WHERE COALESCE(vc.is_unusable, FALSE) = TRUE) as ng_count,
+                COUNT(*) FILTER (WHERE vc.exported_url IS NOT NULL) as subtitle_count,
+                COUNT(*) FILTER (WHERE vc.trim_data IS NOT NULL) as trimmed_count,
+                COUNT(*) FILTER (WHERE vc.id::text NOT IN (
+                    SELECT wca.clip_id FROM widget_clip_assignments wca WHERE wca.is_active = TRUE
+                )) as no_brand_count
+            FROM video_clips vc
+            WHERE vc.status = 'completed' AND vc.clip_url IS NOT NULL
+        """)
+        ng_stats_result = await db.execute(ng_stats_sql)
+        ng_stats_row = ng_stats_result.fetchone()
+
+        # NG by reason breakdown
+        ng_reason_sql = text("""
+            SELECT vc.unusable_reason, COUNT(*) as cnt
+            FROM video_clips vc
+            WHERE vc.status = 'completed' AND vc.clip_url IS NOT NULL
+                AND COALESCE(vc.is_unusable, FALSE) = TRUE
+                AND vc.unusable_reason IS NOT NULL
+            GROUP BY vc.unusable_reason
+            ORDER BY cnt DESC
+        """)
+        ng_reason_result = await db.execute(ng_reason_sql)
+        ng_by_reason = [
+            {"reason": r.unusable_reason, "count": r.cnt}
+            for r in ng_reason_result.fetchall()
+        ]
+
         return ClipStatsResponse(
             total_clips=stats_row.total or 0,
             sold_clips=stats_row.sold or 0,
@@ -601,6 +672,11 @@ async def get_clip_stats(
             top_products=top_products,
             top_livers=top_livers,
             clips_by_date=clips_by_date,
+            ng_clips=ng_stats_row.ng_count or 0,
+            no_brand_clips=ng_stats_row.no_brand_count or 0,
+            subtitle_clips=ng_stats_row.subtitle_count or 0,
+            trimmed_clips=ng_stats_row.trimmed_count or 0,
+            ng_by_reason=ng_by_reason,
         )
 
     except Exception as e:
@@ -1080,6 +1156,7 @@ UNUSABLE_REASONS = [
 class MarkUnusableRequest(BaseModel):
     reason: str = Field(..., description="Reason for marking as unusable")
     note: Optional[str] = Field(None, description="Optional free-text note")
+    comment: Optional[str] = Field(None, description="Detailed free-text comment for AI learning")
 
 
 @router.post("/mark-unusable")
@@ -1113,10 +1190,11 @@ async def mark_clip_unusable(
                 UPDATE video_clips
                 SET is_unusable = TRUE,
                     unusable_reason = :reason,
+                    unusable_comment = :comment,
                     unusable_at = NOW()
                 WHERE id = CAST(:clip_id AS uuid)
             """),
-            {"clip_id": clip_id, "reason": reason_text},
+            {"clip_id": clip_id, "reason": reason_text, "comment": req.comment},
         )
         await db.commit()
 
@@ -1176,6 +1254,7 @@ async def unmark_clip_unusable(
                 UPDATE video_clips
                 SET is_unusable = FALSE,
                     unusable_reason = NULL,
+                    unusable_comment = NULL,
                     unusable_at = NULL
                 WHERE id = CAST(:clip_id AS uuid)
             """),

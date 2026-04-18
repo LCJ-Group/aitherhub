@@ -919,6 +919,8 @@ async def ensure_widget_tables():
                 "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS caption_offset REAL DEFAULT 0",
                 "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS trim_data JSONB",
                 "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS subtitle_language VARCHAR(10) DEFAULT 'ja'",
+                # ── NG comment for AI learning ──
+                "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS unusable_comment TEXT",
             ]:
                 try:
                     await conn.execute(_text(alter_sql))

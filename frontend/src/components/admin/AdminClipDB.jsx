@@ -121,24 +121,32 @@ function ClipCard({ clip, onPlay, brands, adminKey, onBrandChange }) {
   const [ngLoading, setNgLoading] = useState(false);
   const [localUnusable, setLocalUnusable] = useState(clip.is_unusable || false);
   const [localReason, setLocalReason] = useState(clip.unusable_reason || "");
+  const [localComment, setLocalComment] = useState(clip.unusable_comment || "");
+  const [ngComment, setNgComment] = useState("");
+  const [selectedNgReason, setSelectedNgReason] = useState(null);
   const tags = clip.tags || clip.sales_psychology_tags || [];
   const assignments = clip.brand_assignments || [];
 
-  const handleMarkNG = async (reasonKey) => {
+  const handleMarkNG = async (reasonKey, comment = "") => {
     setNgLoading(true);
     try {
+      const body = { reason: reasonKey };
+      if (comment.trim()) body.comment = comment.trim();
       const res = await fetch(
         `${API_BASE}/api/v1/clip-db/mark-unusable?clip_id=${clip.clip_id}`,
         {
           method: "POST",
           headers: { "X-Admin-Key": adminKey, "Content-Type": "application/json" },
-          body: JSON.stringify({ reason: reasonKey }),
+          body: JSON.stringify(body),
         }
       );
       if (res.ok) {
         setLocalUnusable(true);
         setLocalReason(reasonKey);
+        setLocalComment(comment.trim());
         setShowNgPicker(false);
+        setSelectedNgReason(null);
+        setNgComment("");
       }
     } catch (e) {
       console.error("Mark NG failed:", e);
@@ -466,18 +474,23 @@ function ClipCard({ clip, onPlay, brands, adminKey, onBrandChange }) {
         {/* NG mark / unmark section */}
         <div className="relative pt-1 border-t border-gray-100 mt-1">
           {localUnusable ? (
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] text-red-500 font-medium flex items-center gap-0.5">
-                <Ban className="w-3 h-3" /> NG: {ngReasonLabel}
-              </span>
-              <button
-                onClick={(e) => { e.stopPropagation(); handleUnmarkNG(); }}
-                disabled={ngLoading}
-                className="text-[10px] text-blue-500 hover:text-blue-700 flex items-center gap-0.5 z-20 relative"
-              >
-                {ngLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Undo2 className="w-3 h-3" />}
-                NG解除
-              </button>
+            <div>
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-red-500 font-medium flex items-center gap-0.5">
+                  <Ban className="w-3 h-3" /> NG: {ngReasonLabel}
+                </span>
+                <button
+                  onClick={(e) => { e.stopPropagation(); handleUnmarkNG(); }}
+                  disabled={ngLoading}
+                  className="text-[10px] text-blue-500 hover:text-blue-700 flex items-center gap-0.5 z-20 relative"
+                >
+                  {ngLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Undo2 className="w-3 h-3" />}
+                  NG解除
+                </button>
+              </div>
+              {localComment && (
+                <p className="text-[9px] text-red-400 mt-0.5 pl-3.5 italic">「{localComment}」</p>
+              )}
             </div>
           ) : (
             <div className="relative">
@@ -488,28 +501,65 @@ function ClipCard({ clip, onPlay, brands, adminKey, onBrandChange }) {
                 <Ban className="w-3 h-3" /> 使えない
               </button>
               {showNgPicker && (
-                <div className="absolute z-30 bottom-full left-0 mb-1 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[180px]">
-                  <div className="px-3 py-1.5 text-[10px] font-semibold text-gray-500 border-b border-gray-100 flex items-center gap-1">
-                    <AlertTriangle className="w-3 h-3 text-red-400" /> NG理由を選択
-                  </div>
-                  {NG_REASONS.map((r) => (
-                    <button
-                      key={r.key}
-                      onClick={(e) => { e.stopPropagation(); handleMarkNG(r.key); }}
-                      disabled={ngLoading}
-                      className="w-full text-left px-3 py-1.5 text-xs hover:bg-red-50 hover:text-red-600 transition flex items-center gap-1.5"
-                    >
-                      {r.label}
-                    </button>
-                  ))}
-                  <div className="border-t border-gray-100 pt-0.5">
-                    <button
-                      onClick={(e) => { e.stopPropagation(); setShowNgPicker(false); }}
-                      className="w-full text-left px-3 py-1 text-[10px] text-gray-400 hover:text-gray-600"
-                    >
-                      閉じる
-                    </button>
-                  </div>
+                <div className="absolute z-30 bottom-full left-0 mb-1 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[220px]" onClick={(e) => e.stopPropagation()}>
+                  {!selectedNgReason ? (
+                    <>
+                      <div className="px-3 py-1.5 text-[10px] font-semibold text-gray-500 border-b border-gray-100 flex items-center gap-1">
+                        <AlertTriangle className="w-3 h-3 text-red-400" /> NG理由を選択
+                      </div>
+                      {NG_REASONS.map((r) => (
+                        <button
+                          key={r.key}
+                          onClick={() => setSelectedNgReason(r.key)}
+                          disabled={ngLoading}
+                          className="w-full text-left px-3 py-1.5 text-xs hover:bg-red-50 hover:text-red-600 transition flex items-center gap-1.5"
+                        >
+                          {r.label}
+                        </button>
+                      ))}
+                      <div className="border-t border-gray-100 pt-0.5">
+                        <button
+                          onClick={() => { setShowNgPicker(false); setSelectedNgReason(null); setNgComment(""); }}
+                          className="w-full text-left px-3 py-1 text-[10px] text-gray-400 hover:text-gray-600"
+                        >
+                          閉じる
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="px-3 py-1.5 text-[10px] font-semibold text-gray-500 border-b border-gray-100 flex items-center gap-1">
+                        <AlertTriangle className="w-3 h-3 text-red-400" />
+                        {NG_REASONS.find(r => r.key === selectedNgReason)?.label}
+                      </div>
+                      <div className="px-3 py-2">
+                        <textarea
+                          value={ngComment}
+                          onChange={(e) => setNgComment(e.target.value)}
+                          placeholder="具体的な理由を記入（AI学習に使われます）"
+                          className="w-full text-xs border border-gray-200 rounded-md p-2 resize-none focus:outline-none focus:ring-1 focus:ring-red-300 placeholder:text-gray-300"
+                          rows={3}
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                        <div className="flex gap-1.5 mt-2">
+                          <button
+                            onClick={() => handleMarkNG(selectedNgReason, ngComment)}
+                            disabled={ngLoading}
+                            className="flex-1 px-2 py-1.5 bg-red-500 text-white text-[10px] font-medium rounded-md hover:bg-red-600 transition disabled:opacity-50"
+                          >
+                            {ngLoading ? "保存中..." : "NGにする"}
+                          </button>
+                          <button
+                            onClick={() => { setSelectedNgReason(null); setNgComment(""); }}
+                            className="px-2 py-1.5 text-[10px] text-gray-400 hover:text-gray-600 border border-gray-200 rounded-md"
+                          >
+                            戻る
+                          </button>
+                        </div>
+                        <p className="text-[9px] text-gray-300 mt-1">※ コメントなしでもOK</p>
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
             </div>
@@ -653,6 +703,9 @@ export default function AdminClipDB({ adminKey }) {
   const [soldFilter, setSoldFilter] = useState(null);
   const [ratingFilter, setRatingFilter] = useState("");
   const [unusableFilter, setUnusableFilter] = useState(null);
+  const [noBrandFilter, setNoBrandFilter] = useState(null);
+  const [hasSubtitleFilter, setHasSubtitleFilter] = useState(null);
+  const [hasTrimFilter, setHasTrimFilter] = useState(null);
   const [sortBy, setSortBy] = useState("created_at");
   const [sortOrder, setSortOrder] = useState("desc");
   const [page, setPage] = useState(1);
@@ -686,7 +739,7 @@ export default function AdminClipDB({ adminKey }) {
     if (searchMode === "structured" && enrichTriggered.current) {
       loadClips();
     }
-  }, [page, sortBy, sortOrder, selectedTag, soldFilter, ratingFilter, selectedBrand, unusableFilter]);
+  }, [page, sortBy, sortOrder, selectedTag, soldFilter, ratingFilter, selectedBrand, unusableFilter, noBrandFilter, hasSubtitleFilter, hasTrimFilter]);
 
   async function autoEnrichAndLoad() {
     // 1. Auto enrich (non-blocking for already-enriched clips)
@@ -757,6 +810,9 @@ export default function AdminClipDB({ adminKey }) {
       if (soldFilter !== null) params.is_sold = soldFilter;
       if (ratingFilter) params.rating = ratingFilter;
       if (unusableFilter !== null) params.is_unusable = unusableFilter;
+      if (noBrandFilter !== null) params.no_brand = noBrandFilter;
+      if (hasSubtitleFilter !== null) params.has_subtitle = hasSubtitleFilter;
+      if (hasTrimFilter !== null) params.has_trim = hasTrimFilter;
 
       const data = await clipDbFetch("/search", params, adminKey);
       setClips(data.clips || []);
@@ -818,7 +874,7 @@ export default function AdminClipDB({ adminKey }) {
     // Reload clips and brands after brand assignment change
     loadClips();
     loadBrands();
-  }, [searchQuery, selectedTag, selectedProduct, selectedLiver, selectedBrand, soldFilter, ratingFilter, unusableFilter, page, sortBy, sortOrder]);
+  }, [searchQuery, selectedTag, selectedProduct, selectedLiver, selectedBrand, soldFilter, ratingFilter, unusableFilter, noBrandFilter, hasSubtitleFilter, hasTrimFilter, page, sortBy, sortOrder]);
 
   return (
     <div>
@@ -1020,11 +1076,12 @@ export default function AdminClipDB({ adminKey }) {
               className="px-3 py-1.5 rounded-lg border border-gray-300 text-xs w-32 focus:outline-none focus:ring-2 focus:ring-purple-500"
             />
 
-            {(selectedTag || selectedProduct || selectedLiver || selectedBrand || soldFilter !== null || ratingFilter || unusableFilter !== null) && (
+            {(selectedTag || selectedProduct || selectedLiver || selectedBrand || soldFilter !== null || ratingFilter || unusableFilter !== null || noBrandFilter !== null || hasSubtitleFilter !== null || hasTrimFilter !== null) && (
               <button
                 onClick={() => {
                   setSelectedTag(""); setSelectedProduct(""); setSelectedLiver("");
-                  setSelectedBrand(""); setSoldFilter(null); setRatingFilter(""); setUnusableFilter(null); setPage(1);
+                  setSelectedBrand(""); setSoldFilter(null); setRatingFilter(""); setUnusableFilter(null);
+                  setNoBrandFilter(null); setHasSubtitleFilter(null); setHasTrimFilter(null); setPage(1);
                 }}
                 className="px-2 py-1.5 rounded-lg text-xs text-red-500 hover:bg-red-50 border border-red-200"
               >
@@ -1042,6 +1099,110 @@ export default function AdminClipDB({ adminKey }) {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
           <TopTagsChart tags={stats.top_tags} />
           <TopProductsChart products={stats.top_products} />
+        </div>
+      )}
+
+      {/* Status Filter Chips */}
+      {stats && (
+        <div className="mb-4">
+          <h3 className="text-sm font-bold text-gray-700 mb-2 flex items-center gap-1.5">
+            <Filter className="w-4 h-4 text-orange-500" />
+            ステータスフィルター
+          </h3>
+          <div className="flex gap-2 flex-wrap">
+            {/* NG clips */}
+            <button
+              onClick={() => {
+                if (unusableFilter === true) { setUnusableFilter(null); }
+                else { setUnusableFilter(true); }
+                setPage(1);
+              }}
+              className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${
+                unusableFilter === true
+                  ? "bg-red-100 border-red-400 text-red-700 shadow-sm"
+                  : "bg-white border-gray-200 text-gray-600 hover:border-red-300 hover:bg-red-50"
+              }`}
+            >
+              <Ban className="w-3 h-3 inline mr-1" />
+              NG {stats.ng_clips > 0 && <span className="ml-0.5 font-bold">{stats.ng_clips}</span>}
+            </button>
+
+            {/* No brand */}
+            <button
+              onClick={() => {
+                if (noBrandFilter === true) { setNoBrandFilter(null); }
+                else { setNoBrandFilter(true); }
+                setPage(1);
+              }}
+              className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${
+                noBrandFilter === true
+                  ? "bg-yellow-100 border-yellow-400 text-yellow-700 shadow-sm"
+                  : "bg-white border-gray-200 text-gray-600 hover:border-yellow-300 hover:bg-yellow-50"
+              }`}
+            >
+              <AlertTriangle className="w-3 h-3 inline mr-1" />
+              ブランド未割当 {stats.no_brand_clips > 0 && <span className="ml-0.5 font-bold">{stats.no_brand_clips}</span>}
+            </button>
+
+            {/* Has subtitle */}
+            <button
+              onClick={() => {
+                if (hasSubtitleFilter === true) { setHasSubtitleFilter(null); }
+                else { setHasSubtitleFilter(true); }
+                setPage(1);
+              }}
+              className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${
+                hasSubtitleFilter === true
+                  ? "bg-purple-100 border-purple-400 text-purple-700 shadow-sm"
+                  : "bg-white border-gray-200 text-gray-600 hover:border-purple-300 hover:bg-purple-50"
+              }`}
+            >
+              <Subtitles className="w-3 h-3 inline mr-1" />
+              字幕済 {stats.subtitle_clips > 0 && <span className="ml-0.5 font-bold">{stats.subtitle_clips}</span>}
+            </button>
+
+            {/* Has trim */}
+            <button
+              onClick={() => {
+                if (hasTrimFilter === true) { setHasTrimFilter(null); }
+                else { setHasTrimFilter(true); }
+                setPage(1);
+              }}
+              className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${
+                hasTrimFilter === true
+                  ? "bg-blue-100 border-blue-400 text-blue-700 shadow-sm"
+                  : "bg-white border-gray-200 text-gray-600 hover:border-blue-300 hover:bg-blue-50"
+              }`}
+            >
+              <Scissors className="w-3 h-3 inline mr-1" />
+              カット済 {stats.trimmed_clips > 0 && <span className="ml-0.5 font-bold">{stats.trimmed_clips}</span>}
+            </button>
+
+            {/* NG by reason breakdown */}
+            {stats.ng_by_reason && stats.ng_by_reason.length > 0 && unusableFilter === true && (
+              <div className="flex gap-1.5 ml-2 pl-2 border-l border-gray-200">
+                {stats.ng_by_reason.map((r) => (
+                  <span key={r.reason} className="px-2 py-1 rounded-full text-[10px] bg-red-50 text-red-600 border border-red-200">
+                    {r.reason} ({r.count})
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {/* Clear all status filters */}
+            {(unusableFilter !== null || noBrandFilter !== null || hasSubtitleFilter !== null || hasTrimFilter !== null) && (
+              <button
+                onClick={() => {
+                  setUnusableFilter(null); setNoBrandFilter(null);
+                  setHasSubtitleFilter(null); setHasTrimFilter(null);
+                  setPage(1);
+                }}
+                className="px-2 py-1.5 rounded-full text-xs text-gray-400 hover:text-red-500 hover:bg-red-50 border border-gray-200"
+              >
+                <X className="w-3 h-3 inline" /> クリア
+              </button>
+            )}
+          </div>
         </div>
       )}
 
