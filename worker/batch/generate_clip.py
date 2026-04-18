@@ -781,6 +781,18 @@ def transcribe_audio(audio_path: str) -> list:
 # GPT-4o subtitle post-processing
 # =========================
 
+# ============================================================================
+# PROTECTED ZONE — Subtitle-Audio Sync Engine
+# DO NOT modify the functions below without thorough testing.
+# These functions ensure subtitle timestamps stay synchronized with audio.
+# Any changes to timestamp mapping logic MUST be verified with real clips.
+# Protected functions:
+#   - refine_subtitles_with_gpt()
+#   - _find_best_match() (inner function)
+#   - orig_char_timeline construction
+#   - Subsequence matching & timestamp restoration logic
+# Last verified: 2026-04-18 (commit 6db6d3b)
+# ============================================================================
 def refine_subtitles_with_gpt(segments: list, phase_context: str = "", product_names: list = None) -> list:
     """
     Use GPT-4.1-mini to refine Whisper transcription for Japanese subtitles.
@@ -791,6 +803,10 @@ def refine_subtitles_with_gpt(segments: list, phase_context: str = "", product_n
     - Remove filler words contextually
     - Add appropriate punctuation
     - Reconstruct word-level timestamps for karaoke effect
+    
+    PROTECTED: Timestamp restoration uses character-level subsequence matching
+    against original Whisper word timestamps. Do not replace with position-ratio
+    based mapping — that causes audio-subtitle desync.
     
     Returns refined segments with word-level timestamps preserved.
     """

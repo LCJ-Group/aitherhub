@@ -78,6 +78,7 @@ jobs:
             "frontend/src/components/AnalyticsSection.jsx"
             "frontend/src/components/VideoDetail.jsx"
             "frontend/src/components/DockPlayer.jsx"
+            "worker/batch/generate_clip.py"
           )
 
           PREV_COMMIT=$(git rev-parse HEAD~1 2>/dev/null || echo "")
@@ -142,6 +143,17 @@ jobs:
                 ERRORS=$((ERRORS + 1))
               fi
             done
+          fi
+
+          # Check subtitle-audio sync engine is intact (PROTECTED ZONE)
+          if [ -f "worker/batch/generate_clip.py" ]; then
+            for pattern in "PROTECTED ZONE" "orig_char_timeline" "_find_best_match" "subsequence matching" "refine_subtitles_with_gpt"; do
+              if ! grep -q "$pattern" "worker/batch/generate_clip.py"; then
+                echo ":x: CRITICAL: Subtitle sync engine missing: \`$pattern\` in generate_clip.py" >> $GITHUB_STEP_SUMMARY
+                ERRORS=$((ERRORS + 1))
+              fi
+            done
+            echo ":white_check_mark: Subtitle-audio sync engine verified (PROTECTED ZONE intact)" >> $GITHUB_STEP_SUMMARY
           fi
 
           if [ "$ERRORS" -eq 0 ]; then
