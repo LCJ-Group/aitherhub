@@ -96,13 +96,16 @@ class AppCreator:
         _all_origins = list(dict.fromkeys(_REQUIRED_ORIGINS + _DEV_ORIGINS + _config_origins))
         logger.info(f"CORS origins: {_all_origins}")
 
-        # 1. Add RequestIdMiddleware FIRST (will be inner / closer to app)
+        # Middleware order (LIFO: last added = outermost = first to process):
+        # Request → WidgetCORSMiddleware → CORSMiddleware → RequestIdMiddleware → app
+        #
+        # WidgetCORSMiddleware MUST be outermost so it can intercept /widget/
+        # preflight (OPTIONS) requests before CORSMiddleware rejects unknown origins.
+
+        # 1. Add RequestIdMiddleware FIRST (innermost)
         self.app.add_middleware(RequestIdMiddleware)
 
-        # 2. Add WidgetCORSMiddleware for /widget/ endpoints (any origin)
-        self.app.add_middleware(WidgetCORSMiddleware)
-
-        # 3. Add CORSMiddleware LAST (will be outer / first to process requests)
+        # 2. Add CORSMiddleware (handles non-widget CORS)
         self.app.add_middleware(
             CORSMiddleware,
             allow_origins=_all_origins,
@@ -110,6 +113,9 @@ class AppCreator:
             allow_methods=["*"],
             allow_headers=["*"],
         )
+
+        # 3. Add WidgetCORSMiddleware LAST (outermost — intercepts /widget/ before CORSMiddleware)
+        self.app.add_middleware(WidgetCORSMiddleware)
 
         # ── Health check endpoints ──
 
