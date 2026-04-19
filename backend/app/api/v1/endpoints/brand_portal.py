@@ -831,3 +831,489 @@ async def brand_gtm_tag(
         "tag_html": tag_html,
         "instructions": "このタグをGTMのカスタムHTMLタグとして追加するか、サイトの<head>に直接貼り付けてください。",
     }
+
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Enhanced Analytics & AI Learning Endpoints
+# ═══════════════════════════════════════════════════════════════════
+
+
+@router.get("/brand/analytics/funnel")
+async def brand_analytics_funnel(
+    client_id: str = Depends(_get_brand_client_id),
+    days: int = Query(default=30, ge=1, le=365),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Funnel analysis: video_play → cta_click/product_click → add_to_cart → purchase_click → conversion
+    Returns stage counts and drop-off rates per session.
+    """
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+
+    # Count unique sessions that reached each funnel stage
+    funnel_sql = text("""
+        WITH session_events AS (
+            SELECT session_id, event_type
+            FROM widget_tracking_events
+            WHERE client_id = :cid AND created_at >= :since
+                  AND event_type IN ('video_play', 'video_progress', 'cta_click', 'product_click',
+                                     'add_to_cart', 'purchase_click', 'conversion')
+        ),
+        session_stages AS (
+            SELECT session_id,
+                MAX(CASE WHEN event_type = 'video_play' THEN 1 ELSE 0 END) as played,
+                MAX(CASE WHEN event_type = 'video_progress' THEN 1 ELSE 0 END) as watched_deep,
+                MAX(CASE WHEN event_type IN ('cta_click', 'product_click') THEN 1 ELSE 0 END) as clicked,
+                MAX(CASE WHEN event_type = 'add_to_cart' THEN 1 ELSE 0 END) as carted,
+                MAX(CASE WHEN event_type = 'purchase_click' THEN 1 ELSE 0 END) as purchased,
+                MAX(CASE WHEN event_type = 'conversion' THEN 1 ELSE 0 END) as converted
+            FROM session_events
+            GROUP BY session_id
+        )
+        SELECT
+            COUNT(*) as total_sessions,
+            SUM(played) as play_sessions,
+            SUM(watched_deep) as deep_watch_sessions,
+            SUM(clicked) as click_sessions,
+            SUM(carted) as cart_sessions,
+            SUM(purchased) as purchase_sessions,
+            SUM(converted) as conversion_sessions
+        FROM session_stages
+    """)
+    result = await db.execute(funnel_sql, {"cid": client_id, "since": since})
+    row = result.mappings().first()
+
+    total = row["play_sessions"] or 1
+    stages = [
+        {"stage": "動画再生", "stage_key": "play", "count": row["play_sessions"] or 0, "rate": 100.0},
+        {"stage": "深い視聴 (50%+)", "stage_key": "deep_watch", "count": row["deep_watch_sessions"] or 0,
+         "rate": round(((row["deep_watch_sessions"] or 0) / total) * 100, 1)},
+        {"stage": "商品クリック", "stage_key": "click", "count": row["click_sessions"] or 0,
+         "rate": round(((row["click_sessions"] or 0) / total) * 100, 1)},
+        {"stage": "カート追加", "stage_key": "cart", "count": row["cart_sessions"] or 0,
+         "rate": round(((row["cart_sessions"] or 0) / total) * 100, 1)},
+        {"stage": "購入クリック", "stage_key": "purchase", "count": row["purchase_sessions"] or 0,
+         "rate": round(((row["purchase_sessions"] or 0) / total) * 100, 1)},
+        {"stage": "コンバージョン", "stage_key": "conversion", "count": row["conversion_sessions"] or 0,
+         "rate": round(((row["conversion_sessions"] or 0) / total) * 100, 1)},
+    ]
+
+    return {"period_days": days, "funnel": stages}
+
+
+@router.get("/brand/analytics/clip-performance")
+async def brand_analytics_clip_performance(
+    client_id: str = Depends(_get_brand_client_id),
+    days: int = Query(default=30, ge=1, le=365),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Per-clip performance: plays, completion rate, CTA clicks, conversions, avg watch duration.
+    This is the core data for AI learning.
+    """
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+
+    perf_sql = text("""
+        WITH clip_plays AS (
+            SELECT clip_id, COUNT(*) as play_count
+            FROM widget_tracking_events
+            WHERE client_id = :cid AND event_type = 'video_play'
+                  AND clip_id IS NOT NULL AND created_at >= :since
+            GROUP BY clip_id
+        ),
+        clip_progress AS (
+            SELECT
+                e.clip_id,
+                COUNT(*) FILTER (WHERE (e.extra_data::jsonb->>'progress_pct')::int >= 50) as watched_50,
+                COUNT(*) FILTER (WHERE (e.extra_data::jsonb->>'progress_pct')::int >= 75) as watched_75,
+                COUNT(*) FILTER (WHERE (e.extra_data::jsonb->>'progress_pct')::int >= 100) as watched_100,
+                AVG((e.extra_data::jsonb->>'watch_duration_sec')::float)
+                    FILTER (WHERE (e.extra_data::jsonb->>'progress_pct')::int >= 100) as avg_watch_sec
+            FROM widget_tracking_events e
+            WHERE e.client_id = :cid AND e.event_type = 'video_progress'
+                  AND e.clip_id IS NOT NULL AND e.created_at >= :since
+            GROUP BY e.clip_id
+        ),
+        clip_replays AS (
+            SELECT clip_id, COUNT(*) as replay_count,
+                   MAX((extra_data::jsonb->>'loop_count')::int) as max_loops
+            FROM widget_tracking_events
+            WHERE client_id = :cid AND event_type = 'video_replay'
+                  AND clip_id IS NOT NULL AND created_at >= :since
+            GROUP BY clip_id
+        ),
+        clip_clicks AS (
+            SELECT clip_id,
+                COUNT(*) FILTER (WHERE event_type IN ('cta_click', 'product_click')) as click_count,
+                COUNT(*) FILTER (WHERE event_type = 'add_to_cart') as cart_count,
+                COUNT(*) FILTER (WHERE event_type = 'purchase_click') as purchase_count,
+                COUNT(*) FILTER (WHERE event_type = 'like') as like_count,
+                COUNT(*) FILTER (WHERE event_type = 'share') as share_count
+            FROM widget_tracking_events
+            WHERE client_id = :cid AND clip_id IS NOT NULL AND created_at >= :since
+                  AND event_type IN ('cta_click', 'product_click', 'add_to_cart', 'purchase_click', 'like', 'share')
+            GROUP BY clip_id
+        ),
+        clip_info AS (
+            SELECT vc.id::text as clip_id, vc.product_name, vc.thumbnail_url,
+                   vc.liver_name, vc.duration_sec
+            FROM video_clips vc
+            INNER JOIN widget_clip_assignments wca ON wca.clip_id = vc.id::text
+            WHERE wca.client_id = :cid AND wca.is_active = TRUE
+        )
+        SELECT
+            ci.clip_id,
+            ci.product_name,
+            ci.thumbnail_url,
+            ci.liver_name,
+            ci.duration_sec,
+            COALESCE(cp.play_count, 0) as plays,
+            COALESCE(cpr.watched_50, 0) as watched_50,
+            COALESCE(cpr.watched_75, 0) as watched_75,
+            COALESCE(cpr.watched_100, 0) as completions,
+            COALESCE(cpr.avg_watch_sec, 0) as avg_watch_sec,
+            COALESCE(cr.replay_count, 0) as replays,
+            COALESCE(cr.max_loops, 0) as max_loops,
+            COALESCE(cc.click_count, 0) as clicks,
+            COALESCE(cc.cart_count, 0) as carts,
+            COALESCE(cc.purchase_count, 0) as purchases,
+            COALESCE(cc.like_count, 0) as likes,
+            COALESCE(cc.share_count, 0) as shares
+        FROM clip_info ci
+        LEFT JOIN clip_plays cp ON cp.clip_id = ci.clip_id
+        LEFT JOIN clip_progress cpr ON cpr.clip_id = ci.clip_id
+        LEFT JOIN clip_replays cr ON cr.clip_id = ci.clip_id
+        LEFT JOIN clip_clicks cc ON cc.clip_id = ci.clip_id
+        ORDER BY COALESCE(cp.play_count, 0) DESC
+    """)
+    result = await db.execute(perf_sql, {"cid": client_id, "since": since})
+    rows = result.mappings().all()
+
+    clips = []
+    for r in rows:
+        plays = r["plays"] or 1
+        completion_rate = round((r["completions"] / plays) * 100, 1) if plays > 0 else 0
+        ctr = round((r["clicks"] / plays) * 100, 1) if plays > 0 else 0
+        cvr = round((r["purchases"] / plays) * 100, 2) if plays > 0 else 0
+
+        # Engagement score (0-100): weighted combination for AI learning
+        engagement = min(100, round(
+            (completion_rate * 0.35) +
+            (min(ctr, 50) * 0.25 * 2) +
+            (min(r["replays"], plays) / plays * 100 * 0.15 if plays > 0 else 0) +
+            (min(r["likes"], plays) / plays * 100 * 0.10 if plays > 0 else 0) +
+            (min(r["shares"], plays) / plays * 100 * 0.15 if plays > 0 else 0)
+        , 1))
+
+        # Conversion score (0-100)
+        conversion_score = min(100, round(
+            (ctr * 0.30) +
+            (min(r["carts"], plays) / plays * 100 * 0.30 if plays > 0 else 0) +
+            (cvr * 10 * 0.40)
+        , 1))
+
+        clips.append({
+            "clip_id": r["clip_id"],
+            "product_name": r["product_name"],
+            "thumbnail_url": r["thumbnail_url"],
+            "liver_name": r["liver_name"],
+            "duration_sec": r["duration_sec"],
+            "plays": r["plays"],
+            "completions": r["completions"],
+            "completion_rate": completion_rate,
+            "avg_watch_sec": round(r["avg_watch_sec"], 1) if r["avg_watch_sec"] else 0,
+            "replays": r["replays"],
+            "clicks": r["clicks"],
+            "ctr": ctr,
+            "carts": r["carts"],
+            "purchases": r["purchases"],
+            "cvr": cvr,
+            "likes": r["likes"],
+            "shares": r["shares"],
+            "engagement_score": engagement,
+            "conversion_score": conversion_score,
+        })
+
+    return {"period_days": days, "clips": clips}
+
+
+@router.get("/brand/analytics/page-matrix")
+async def brand_analytics_page_matrix(
+    client_id: str = Depends(_get_brand_client_id),
+    days: int = Query(default=30, ge=1, le=365),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Page × Clip performance matrix: which clips perform best on which pages.
+    """
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+
+    matrix_sql = text("""
+        WITH page_clip_events AS (
+            SELECT
+                COALESCE(
+                    REGEXP_REPLACE(page_url, '\\?.*$', ''),
+                    page_url
+                ) as clean_url,
+                clip_id,
+                event_type
+            FROM widget_tracking_events
+            WHERE client_id = :cid AND created_at >= :since
+                  AND clip_id IS NOT NULL
+                  AND event_type IN ('video_play', 'cta_click', 'product_click', 'add_to_cart', 'purchase_click', 'conversion')
+        )
+        SELECT
+            clean_url as page_url,
+            clip_id,
+            COUNT(*) FILTER (WHERE event_type = 'video_play') as plays,
+            COUNT(*) FILTER (WHERE event_type IN ('cta_click', 'product_click')) as clicks,
+            COUNT(*) FILTER (WHERE event_type = 'add_to_cart') as carts,
+            COUNT(*) FILTER (WHERE event_type IN ('purchase_click', 'conversion')) as conversions
+        FROM page_clip_events
+        GROUP BY clean_url, clip_id
+        HAVING COUNT(*) FILTER (WHERE event_type = 'video_play') > 0
+        ORDER BY plays DESC
+        LIMIT 100
+    """)
+    result = await db.execute(matrix_sql, {"cid": client_id, "since": since})
+    rows = result.mappings().all()
+
+    matrix = []
+    for r in rows:
+        plays = r["plays"] or 1
+        matrix.append({
+            "page_url": r["page_url"],
+            "clip_id": r["clip_id"],
+            "plays": r["plays"],
+            "clicks": r["clicks"],
+            "carts": r["carts"],
+            "conversions": r["conversions"],
+            "ctr": round((r["clicks"] / plays) * 100, 1),
+            "cvr": round((r["conversions"] / plays) * 100, 2),
+        })
+
+    return {"period_days": days, "matrix": matrix}
+
+
+@router.get("/brand/analytics/time-heatmap")
+async def brand_analytics_time_heatmap(
+    client_id: str = Depends(_get_brand_client_id),
+    days: int = Query(default=30, ge=1, le=365),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Hourly performance heatmap: which hours of day have the most engagement.
+    """
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+
+    heatmap_sql = text("""
+        SELECT
+            EXTRACT(HOUR FROM created_at AT TIME ZONE 'Asia/Tokyo') as hour_jst,
+            EXTRACT(DOW FROM created_at AT TIME ZONE 'Asia/Tokyo') as dow,
+            COUNT(*) FILTER (WHERE event_type = 'video_play') as plays,
+            COUNT(*) FILTER (WHERE event_type IN ('cta_click', 'product_click')) as clicks,
+            COUNT(*) FILTER (WHERE event_type IN ('purchase_click', 'conversion')) as conversions
+        FROM widget_tracking_events
+        WHERE client_id = :cid AND created_at >= :since
+        GROUP BY hour_jst, dow
+        ORDER BY dow, hour_jst
+    """)
+    result = await db.execute(heatmap_sql, {"cid": client_id, "since": since})
+    rows = result.mappings().all()
+
+    dow_names = ["日", "月", "火", "水", "木", "金", "土"]
+    heatmap = []
+    for r in rows:
+        heatmap.append({
+            "hour": int(r["hour_jst"]),
+            "day_of_week": int(r["dow"]),
+            "day_name": dow_names[int(r["dow"])],
+            "plays": r["plays"],
+            "clicks": r["clicks"],
+            "conversions": r["conversions"],
+        })
+
+    return {"period_days": days, "heatmap": heatmap}
+
+
+# ─── Brand Clip Feedback (for AI Learning) ───
+
+class BrandClipFeedbackRequest(BaseModel):
+    rating: int = Field(..., ge=1, le=5, description="Star rating 1-5")
+    tags: Optional[list] = Field(default=None, description="Feedback tags")
+    comment: Optional[str] = Field(default=None, description="Free-text comment")
+
+
+@router.post("/brand/clips/{clip_id}/feedback")
+async def brand_clip_feedback(
+    clip_id: str,
+    payload: BrandClipFeedbackRequest,
+    client_id: str = Depends(_get_brand_client_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Submit brand feedback for a clip. Used for AI learning signal.
+    Upserts: one feedback per brand per clip.
+    """
+    # Ensure table exists
+    await db.execute(text("""
+        CREATE TABLE IF NOT EXISTS brand_clip_feedback (
+            id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+            client_id VARCHAR(20) NOT NULL,
+            clip_id VARCHAR(36) NOT NULL,
+            rating INTEGER NOT NULL CHECK (rating >= 1 AND rating <= 5),
+            tags JSONB,
+            comment TEXT,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW(),
+            UNIQUE(client_id, clip_id)
+        )
+    """))
+    await db.commit()
+
+    # Upsert
+    await db.execute(text("""
+        INSERT INTO brand_clip_feedback (id, client_id, clip_id, rating, tags, comment)
+        VALUES (gen_random_uuid(), :cid, :clip_id, :rating, :tags, :comment)
+        ON CONFLICT (client_id, clip_id)
+        DO UPDATE SET rating = :rating, tags = :tags, comment = :comment, updated_at = NOW()
+    """), {
+        "cid": client_id,
+        "clip_id": clip_id,
+        "rating": payload.rating,
+        "tags": json.dumps(payload.tags) if payload.tags else None,
+        "comment": payload.comment,
+    })
+    await db.commit()
+
+    return {"status": "ok", "clip_id": clip_id, "rating": payload.rating}
+
+
+@router.get("/brand/analytics/overview")
+async def brand_analytics_overview(
+    client_id: str = Depends(_get_brand_client_id),
+    days: int = Query(default=30, ge=1, le=365),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Dashboard overview: KPI summary with period-over-period comparison.
+    """
+    now = datetime.now(timezone.utc)
+    current_start = now - timedelta(days=days)
+    prev_start = current_start - timedelta(days=days)
+
+    # Current period
+    current_sql = text("""
+        SELECT
+            COUNT(*) FILTER (WHERE event_type = 'video_play') as plays,
+            COUNT(DISTINCT session_id) FILTER (WHERE event_type = 'video_play') as unique_viewers,
+            COUNT(*) FILTER (WHERE event_type = 'video_progress'
+                AND (extra_data::jsonb->>'progress_pct')::int >= 100) as completions,
+            COUNT(*) FILTER (WHERE event_type IN ('cta_click', 'product_click')) as clicks,
+            COUNT(*) FILTER (WHERE event_type = 'add_to_cart') as carts,
+            COUNT(*) FILTER (WHERE event_type = 'purchase_click') as purchases,
+            COUNT(*) FILTER (WHERE event_type = 'conversion') as conversions,
+            COUNT(*) FILTER (WHERE event_type = 'like') as likes,
+            COUNT(*) FILTER (WHERE event_type = 'share') as shares,
+            COUNT(*) FILTER (WHERE event_type = 'video_replay') as replays,
+            AVG((extra_data::jsonb->>'watch_duration_sec')::float)
+                FILTER (WHERE event_type = 'video_progress'
+                    AND (extra_data::jsonb->>'progress_pct')::int >= 100) as avg_watch_sec
+        FROM widget_tracking_events
+        WHERE client_id = :cid AND created_at >= :since
+    """)
+    current_result = await db.execute(current_sql, {"cid": client_id, "since": current_start})
+    curr = current_result.mappings().first()
+
+    # Previous period (for comparison)
+    prev_result = await db.execute(current_sql, {"cid": client_id, "since": prev_start})
+    # Re-run with different date range
+    prev_sql = text("""
+        SELECT
+            COUNT(*) FILTER (WHERE event_type = 'video_play') as plays,
+            COUNT(DISTINCT session_id) FILTER (WHERE event_type = 'video_play') as unique_viewers,
+            COUNT(*) FILTER (WHERE event_type IN ('cta_click', 'product_click')) as clicks,
+            COUNT(*) FILTER (WHERE event_type = 'purchase_click') as purchases,
+            COUNT(*) FILTER (WHERE event_type = 'conversion') as conversions
+        FROM widget_tracking_events
+        WHERE client_id = :cid AND created_at >= :prev_start AND created_at < :curr_start
+    """)
+    prev_result = await db.execute(prev_sql, {
+        "cid": client_id, "prev_start": prev_start, "curr_start": current_start
+    })
+    prev = prev_result.mappings().first()
+
+    def growth(current_val, prev_val):
+        c = current_val or 0
+        p = prev_val or 0
+        if p == 0:
+            return None
+        return round(((c - p) / p) * 100, 1)
+
+    plays = curr["plays"] or 0
+    completions = curr["completions"] or 0
+    clicks = curr["clicks"] or 0
+
+    return {
+        "period_days": days,
+        "kpi": {
+            "plays": plays,
+            "plays_growth": growth(plays, prev["plays"]),
+            "unique_viewers": curr["unique_viewers"] or 0,
+            "completion_rate": round((completions / plays) * 100, 1) if plays > 0 else 0,
+            "avg_watch_sec": round(curr["avg_watch_sec"], 1) if curr["avg_watch_sec"] else 0,
+            "clicks": clicks,
+            "clicks_growth": growth(clicks, prev["clicks"]),
+            "ctr": round((clicks / plays) * 100, 1) if plays > 0 else 0,
+            "carts": curr["carts"] or 0,
+            "purchases": curr["purchases"] or 0,
+            "purchases_growth": growth(curr["purchases"], prev["purchases"]),
+            "conversions": curr["conversions"] or 0,
+            "conversions_growth": growth(curr["conversions"], prev["conversions"]),
+            "cvr": round(((curr["conversions"] or 0) / plays) * 100, 2) if plays > 0 else 0,
+            "likes": curr["likes"] or 0,
+            "shares": curr["shares"] or 0,
+            "replays": curr["replays"] or 0,
+        },
+    }
+
+
+@router.get("/brand/analytics/daily")
+async def brand_analytics_daily(
+    client_id: str = Depends(_get_brand_client_id),
+    days: int = Query(default=30, ge=1, le=365),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Daily breakdown of key metrics for chart display.
+    """
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+
+    daily_sql = text("""
+        SELECT
+            DATE(created_at AT TIME ZONE 'Asia/Tokyo') as day,
+            COUNT(*) FILTER (WHERE event_type = 'video_play') as plays,
+            COUNT(*) FILTER (WHERE event_type = 'video_progress'
+                AND (extra_data::jsonb->>'progress_pct')::int >= 100) as completions,
+            COUNT(*) FILTER (WHERE event_type IN ('cta_click', 'product_click')) as clicks,
+            COUNT(*) FILTER (WHERE event_type IN ('purchase_click', 'conversion')) as conversions
+        FROM widget_tracking_events
+        WHERE client_id = :cid AND created_at >= :since
+        GROUP BY DATE(created_at AT TIME ZONE 'Asia/Tokyo')
+        ORDER BY day ASC
+    """)
+    result = await db.execute(daily_sql, {"cid": client_id, "since": since})
+    rows = result.mappings().all()
+
+    daily = []
+    for r in rows:
+        daily.append({
+            "day": str(r["day"]),
+            "plays": r["plays"],
+            "completions": r["completions"],
+            "clicks": r["clicks"],
+            "conversions": r["conversions"],
+        })
+
+    return {"period_days": days, "daily": daily}

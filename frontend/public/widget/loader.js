@@ -944,6 +944,49 @@
     var hintShown = false;
     var fabVideo = null;
 
+    // ── Video Depth Tracking (AI Learning) ──
+    var depthSent = {};          // { "clipId_25": true, ... }
+    var clipWatchStart = {};     // { clipId: Date.now() }
+    var clipLoopCount = {};      // { clipId: 0 }
+    var DEPTH_THRESHOLDS = [25, 50, 75, 100];
+
+    function resetDepthTracking(clipId) {
+      DEPTH_THRESHOLDS.forEach(function (t) { delete depthSent[clipId + "_" + t]; });
+      clipWatchStart[clipId] = Date.now();
+      clipLoopCount[clipId] = 0;
+    }
+
+    function checkVideoDepth(video, clipId) {
+      if (!video || !video.duration || video.duration < 1) return;
+      var pct = (video.currentTime / video.duration) * 100;
+      DEPTH_THRESHOLDS.forEach(function (t) {
+        var key = clipId + "_" + t;
+        if (pct >= t && !depthSent[key]) {
+          depthSent[key] = true;
+          var watchSec = clipWatchStart[clipId] ? (Date.now() - clipWatchStart[clipId]) / 1000 : 0;
+          trackEvent("video_progress", {
+            clip_id: clipId,
+            progress_pct: t,
+            watch_duration_sec: Math.round(watchSec * 10) / 10,
+            total_duration_sec: Math.round(video.duration * 10) / 10,
+            loop_count: clipLoopCount[clipId] || 0
+          });
+        }
+      });
+      // Detect loop restart (video loops back near start after being near end)
+      if (pct < 5 && depthSent[clipId + "_100"]) {
+        clipLoopCount[clipId] = (clipLoopCount[clipId] || 0) + 1;
+        // Track replay event on each loop
+        trackEvent("video_replay", {
+          clip_id: clipId,
+          loop_count: clipLoopCount[clipId],
+          total_watch_sec: clipWatchStart[clipId] ? Math.round((Date.now() - clipWatchStart[clipId]) / 100) / 10 : 0
+        });
+        // Reset depth for next loop (except 100% which stays to detect future loops)
+        [25, 50, 75].forEach(function (t) { delete depthSent[clipId + "_" + t]; });
+      }
+    }
+
     // ── Adaptive Quality: detect network speed and choose 720p or 1080p ──
     var useHD = false; // default: 720p for fast loading
     function detectNetworkQuality() {
@@ -1902,6 +1945,8 @@
 
       // Track
       trackEvent("video_play", { clip_id: clip.clip_id, clip_index: currentIndex });
+      // Reset depth tracking for this clip
+      resetDepthTracking(clip.clip_id);
 
       // Show swipe hint on first video
       if (!hintShown && clips.length > 1) {
@@ -1954,6 +1999,9 @@
         if (index === currentIndex) {
           onTimeUpdate();
           updateSubtitle();
+          // AI Learning: track video depth
+          var c = clips[currentIndex];
+          if (c) checkVideoDepth(videoElements[currentIndex], c.clip_id);
         }
       });
     });

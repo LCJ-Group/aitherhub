@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import Highcharts from 'highcharts';
+import HighchartsReact from 'highcharts-react-official';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'https://aitherhubapi-cpcjcnezbgf5f7e2.japaneast-01.azurewebsites.net/api/v1';
 
@@ -349,16 +351,153 @@ function ProductEditModal({ clip, onSave, onClose }) {
 }
 
 // ─── Analytics Component ───
+// ─── Enhanced Analytics Panel (v2) ───
+function KpiCard({ label, value, sub, growth, color }) {
+  const growthColor = growth > 0 ? colors.success : growth < 0 ? colors.danger : colors.textMuted;
+  return (
+    <div style={{ ...baseCard, textAlign: 'center', minWidth: 130 }}>
+      <div style={{ fontSize: 26, fontWeight: 700, color: color || colors.text }}>{value}</div>
+      <div style={{ fontSize: 12, color: colors.textSecondary, marginTop: 4 }}>{label}</div>
+      {sub && <div style={{ fontSize: 11, color: colors.textMuted, marginTop: 2 }}>{sub}</div>}
+      {growth !== undefined && growth !== null && (
+        <div style={{ fontSize: 11, color: growthColor, marginTop: 4, fontWeight: 600 }}>
+          {growth > 0 ? '+' : ''}{growth}% vs 前期
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FunnelBar({ stages }) {
+  if (!stages || !stages.length) return null;
+  const maxCount = Math.max(...stages.map(s => s.count), 1);
+  return (
+    <div style={{ ...baseCard, marginTop: 20 }}>
+      <h3 style={{ color: colors.text, fontSize: 16, margin: '0 0 16px', fontWeight: 600 }}>ファネル分析</h3>
+      {stages.map((s, i) => (
+        <div key={s.stage_key} style={{ marginBottom: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+            <span style={{ color: colors.textSecondary, fontSize: 13 }}>{s.stage}</span>
+            <span style={{ color: colors.text, fontSize: 13, fontWeight: 600 }}>{s.count.toLocaleString()} ({s.rate}%)</span>
+          </div>
+          <div style={{ background: colors.bg, borderRadius: 6, height: 8, overflow: 'hidden' }}>
+            <div style={{
+              width: `${(s.count / maxCount) * 100}%`,
+              height: '100%',
+              background: `linear-gradient(90deg, ${colors.accent}, ${i > 3 ? colors.success : colors.info})`,
+              borderRadius: 6,
+              transition: 'width 0.6s ease',
+            }} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ClipPerformanceTable({ clips, onFeedback }) {
+  if (!clips || !clips.length) return (
+    <div style={{ ...baseCard, marginTop: 20, textAlign: 'center', padding: 40 }}>
+      <p style={{ color: colors.textMuted }}>クリップパフォーマンスデータがまだありません</p>
+    </div>
+  );
+  return (
+    <div style={{ ...baseCard, marginTop: 20, overflowX: 'auto' }}>
+      <h3 style={{ color: colors.text, fontSize: 16, margin: '0 0 16px', fontWeight: 600 }}>クリップ別パフォーマンス</h3>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+        <thead>
+          <tr style={{ borderBottom: `1px solid ${colors.border}` }}>
+            {['クリップ', '再生', '完了率', 'CTR', 'CVR', 'リプレイ', 'エンゲージ', 'CV', '評価'].map(h => (
+              <th key={h} style={{ color: colors.textMuted, fontWeight: 500, padding: '8px 6px', textAlign: h === 'クリップ' ? 'left' : 'center', whiteSpace: 'nowrap' }}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {clips.map((c, i) => (
+            <tr key={c.clip_id} style={{ borderBottom: `1px solid ${colors.border}` }}>
+              <td style={{ padding: '10px 6px', display: 'flex', alignItems: 'center', gap: 8 }}>
+                {c.thumbnail_url && <img src={c.thumbnail_url} alt="" style={{ width: 40, height: 40, borderRadius: 6, objectFit: 'cover' }} />}
+                <div>
+                  <div style={{ color: colors.text, fontWeight: 500, fontSize: 12 }}>{c.product_name || `Clip ${c.clip_id.slice(0, 6)}`}</div>
+                  <div style={{ color: colors.textMuted, fontSize: 11 }}>{c.liver_name || ''}</div>
+                </div>
+              </td>
+              <td style={{ textAlign: 'center', color: colors.text, fontWeight: 600 }}>{c.plays.toLocaleString()}</td>
+              <td style={{ textAlign: 'center' }}>
+                <span style={{ color: c.completion_rate >= 50 ? colors.success : c.completion_rate >= 25 ? colors.warning : colors.danger, fontWeight: 600 }}>
+                  {c.completion_rate}%
+                </span>
+              </td>
+              <td style={{ textAlign: 'center', color: colors.text }}>{c.ctr}%</td>
+              <td style={{ textAlign: 'center', color: c.cvr > 0 ? colors.success : colors.textMuted, fontWeight: 600 }}>{c.cvr}%</td>
+              <td style={{ textAlign: 'center', color: colors.textSecondary }}>{c.replays}</td>
+              <td style={{ textAlign: 'center' }}>
+                <div style={{
+                  display: 'inline-block', padding: '2px 8px', borderRadius: 10, fontSize: 11, fontWeight: 600,
+                  background: c.engagement_score >= 60 ? 'rgba(34,197,94,0.15)' : c.engagement_score >= 30 ? 'rgba(245,158,11,0.15)' : 'rgba(239,68,68,0.15)',
+                  color: c.engagement_score >= 60 ? colors.success : c.engagement_score >= 30 ? colors.warning : colors.danger,
+                }}>{c.engagement_score}</div>
+              </td>
+              <td style={{ textAlign: 'center', color: colors.text, fontWeight: 600 }}>{c.purchases}</td>
+              <td style={{ textAlign: 'center' }}>
+                <FeedbackStars clipId={c.clip_id} onFeedback={onFeedback} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function FeedbackStars({ clipId, onFeedback }) {
+  const [rating, setRating] = useState(0);
+  const [hover, setHover] = useState(0);
+  const [saved, setSaved] = useState(false);
+
+  const handleClick = async (star) => {
+    setRating(star);
+    try {
+      await brandFetch(`/brand/clips/${clipId}/feedback`, {
+        method: 'POST',
+        body: JSON.stringify({ rating: star, tags: [], comment: '' }),
+      });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 1500);
+      if (onFeedback) onFeedback();
+    } catch (e) { /* ignore */ }
+  };
+
+  return (
+    <div style={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+      {[1, 2, 3, 4, 5].map(s => (
+        <span key={s}
+          onClick={() => handleClick(s)}
+          onMouseEnter={() => setHover(s)}
+          onMouseLeave={() => setHover(0)}
+          style={{
+            cursor: 'pointer', fontSize: 14,
+            color: s <= (hover || rating) ? colors.warning : colors.textMuted,
+            transition: 'color 0.15s',
+          }}>
+          {s <= (hover || rating) ? '\u2605' : '\u2606'}
+        </span>
+      ))}
+      {saved && <span style={{ fontSize: 10, color: colors.success, marginLeft: 4 }}>OK</span>}
+    </div>
+  );
+}
+
 function AnalyticsPanel({ analytics }) {
   if (!analytics) return null;
   const stats = [
-    { label: '動画再生', value: analytics.total_views || 0, icon: '▶' },
-    { label: 'CTAクリック', value: analytics.total_clicks || 0, icon: '🔗' },
-    { label: 'コンバージョン', value: analytics.total_conversions || 0, icon: '✓' },
+    { label: '動画再生', value: analytics.total_views || 0, icon: '\u25B6' },
+    { label: 'CTAクリック', value: analytics.total_clicks || 0, icon: '\uD83D\uDD17' },
+    { label: 'コンバージョン', value: analytics.total_conversions || 0, icon: '\u2713' },
   ];
   const cvr = analytics.total_views > 0
     ? ((analytics.total_conversions / analytics.total_views) * 100).toFixed(2) + '%'
-    : '—';
+    : '\u2014';
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>
@@ -460,6 +599,13 @@ function BrandDashboard({ brandInfo, onLogout }) {
   const [editClip, setEditClip] = useState(null);
   const [loading, setLoading] = useState(true);
   const [brandKeywords, setBrandKeywords] = useState('');
+  // Enhanced analytics state
+  const [analyticsDays, setAnalyticsDays] = useState(30);
+  const [overview, setOverview] = useState(null);
+  const [funnel, setFunnel] = useState(null);
+  const [clipPerf, setClipPerf] = useState(null);
+  const [dailyData, setDailyData] = useState(null);
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -506,6 +652,31 @@ function BrandDashboard({ brandInfo, onLogout }) {
 
   useEffect(() => { loadData(); }, [loadData]);
   useEffect(() => { if (tab === 'recommended') loadRecommended(recommendedSearch); }, [tab]);
+
+  // Load enhanced analytics when tab switches or period changes
+  const loadAnalytics = useCallback(async (days) => {
+    setAnalyticsLoading(true);
+    try {
+      const [ovRes, fnRes, cpRes, dlRes] = await Promise.all([
+        brandFetch(`/brand/analytics/overview?days=${days}`),
+        brandFetch(`/brand/analytics/funnel?days=${days}`),
+        brandFetch(`/brand/analytics/clip-performance?days=${days}`),
+        brandFetch(`/brand/analytics/daily?days=${days}`),
+      ]);
+      if (ovRes) setOverview(await ovRes.json());
+      if (fnRes) setFunnel(await fnRes.json());
+      if (cpRes) setClipPerf(await cpRes.json());
+      if (dlRes) setDailyData(await dlRes.json());
+    } catch (err) {
+      console.error('Failed to load enhanced analytics:', err);
+    } finally {
+      setAnalyticsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (tab === 'analytics') loadAnalytics(analyticsDays);
+  }, [tab, analyticsDays, loadAnalytics]);
 
   const handleAssign = async (clipId) => {
     await brandFetch('/brand/widget/clips', { method: 'POST', body: JSON.stringify({ clip_id: clipId }) });
@@ -702,38 +873,89 @@ function BrandDashboard({ brandInfo, onLogout }) {
           </div>
         )}
 
-        {/* Analytics Tab */}
+        {/* Analytics Tab — Enhanced v2 */}
         {tab === 'analytics' && !loading && (
           <div>
-            <h2 style={{ color: colors.text, fontSize: 20, fontWeight: 600, margin: '0 0 20px' }}>アナリティクス（過去30日）</h2>
-            <AnalyticsPanel analytics={analytics} />
-            {analytics?.daily_views?.length > 0 && (
-              <div style={{ ...baseCard, marginTop: 20 }}>
-                <h3 style={{ color: colors.text, fontSize: 16, margin: '0 0 16px' }}>日別再生数</h3>
-                <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: 120 }}>
-                  {analytics.daily_views.slice().reverse().map((d, i) => {
-                    const maxViews = Math.max(...analytics.daily_views.map(x => x.views));
-                    const h = maxViews > 0 ? (d.views / maxViews) * 100 : 0;
-                    return (
-                      <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                        <span style={{ color: colors.textMuted, fontSize: 10, marginBottom: 4 }}>{d.views}</span>
-                        <div style={{ width: '100%', height: `${h}%`, minHeight: 2, background: colors.accent, borderRadius: '4px 4px 0 0' }} />
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-            {analytics?.top_clips?.length > 0 && (
-              <div style={{ ...baseCard, marginTop: 20 }}>
-                <h3 style={{ color: colors.text, fontSize: 16, margin: '0 0 12px' }}>人気クリップ TOP 10</h3>
-                {analytics.top_clips.map((c, i) => (
-                  <div key={c.clip_id} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: i < analytics.top_clips.length - 1 ? `1px solid ${colors.border}` : 'none' }}>
-                    <span style={{ color: colors.textSecondary, fontSize: 13 }}>#{i + 1} {c.clip_id.slice(0, 8)}...</span>
-                    <span style={{ color: colors.text, fontSize: 13, fontWeight: 600 }}>{c.plays} 再生</span>
-                  </div>
+            {/* Period Selector */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+              <h2 style={{ color: colors.text, fontSize: 20, fontWeight: 600, margin: 0 }}>アナリティクス</h2>
+              <div style={{ display: 'flex', gap: 6 }}>
+                {[7, 14, 30, 90].map(d => (
+                  <button key={d} onClick={() => setAnalyticsDays(d)}
+                    style={{
+                      padding: '6px 14px', borderRadius: 8, fontSize: 12, fontWeight: 500, cursor: 'pointer',
+                      background: analyticsDays === d ? colors.accent : colors.card,
+                      color: analyticsDays === d ? '#fff' : colors.textSecondary,
+                      border: `1px solid ${analyticsDays === d ? colors.accent : colors.border}`,
+                    }}>
+                    {d}日
+                  </button>
                 ))}
               </div>
+            </div>
+
+            {analyticsLoading && <p style={{ color: colors.textMuted, textAlign: 'center', padding: 40 }}>読み込み中...</p>}
+
+            {!analyticsLoading && (
+              <>
+                {/* KPI Overview Cards */}
+                {overview?.kpi && (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12 }}>
+                    <KpiCard label="動画再生" value={(overview.kpi.plays || 0).toLocaleString()} growth={overview.kpi.plays_growth} />
+                    <KpiCard label="ユニーク視聴者" value={(overview.kpi.unique_viewers || 0).toLocaleString()} />
+                    <KpiCard label="完了率" value={`${overview.kpi.completion_rate || 0}%`}
+                      sub={`平均${overview.kpi.avg_watch_sec || 0}秒`}
+                      color={overview.kpi.completion_rate >= 50 ? colors.success : colors.warning} />
+                    <KpiCard label="CTR" value={`${overview.kpi.ctr || 0}%`}
+                      sub={`${(overview.kpi.clicks || 0).toLocaleString()}クリック`}
+                      growth={overview.kpi.clicks_growth} />
+                    <KpiCard label="購入" value={(overview.kpi.purchases || 0).toLocaleString()}
+                      growth={overview.kpi.purchases_growth}
+                      color={overview.kpi.purchases > 0 ? colors.success : colors.text} />
+                    <KpiCard label="CVR" value={`${overview.kpi.cvr || 0}%`}
+                      sub={`${(overview.kpi.conversions || 0).toLocaleString()}CV`}
+                      growth={overview.kpi.conversions_growth}
+                      color={colors.accent} />
+                  </div>
+                )}
+
+                {/* Daily Chart (Highcharts) */}
+                {dailyData?.daily?.length > 0 && (
+                  <div style={{ ...baseCard, marginTop: 20 }}>
+                    <h3 style={{ color: colors.text, fontSize: 16, margin: '0 0 8px', fontWeight: 600 }}>日別トレンド</h3>
+                    <HighchartsReact highcharts={Highcharts} options={{
+                      chart: { type: 'area', backgroundColor: 'transparent', height: 260, style: { fontFamily: 'inherit' } },
+                      title: { text: null },
+                      xAxis: {
+                        categories: dailyData.daily.map(d => d.day.slice(5)),
+                        labels: { style: { color: colors.textMuted, fontSize: '10px' } },
+                        lineColor: colors.border, tickColor: colors.border,
+                      },
+                      yAxis: [
+                        { title: { text: null }, labels: { style: { color: colors.textMuted, fontSize: '10px' } }, gridLineColor: colors.border },
+                      ],
+                      legend: { itemStyle: { color: colors.textSecondary, fontSize: '11px' } },
+                      tooltip: { shared: true, backgroundColor: colors.card, borderColor: colors.border, style: { color: colors.text } },
+                      plotOptions: { area: { fillOpacity: 0.15, marker: { radius: 2 } } },
+                      series: [
+                        { name: '再生', data: dailyData.daily.map(d => d.plays), color: colors.accent },
+                        { name: 'クリック', data: dailyData.daily.map(d => d.clicks), color: colors.info },
+                        { name: 'CV', data: dailyData.daily.map(d => d.conversions), color: colors.success },
+                      ],
+                      credits: { enabled: false },
+                    }} />
+                  </div>
+                )}
+
+                {/* Funnel */}
+                <FunnelBar stages={funnel?.funnel} />
+
+                {/* Clip Performance Table */}
+                <ClipPerformanceTable clips={clipPerf?.clips} onFeedback={() => loadAnalytics(analyticsDays)} />
+
+                {/* Fallback: basic analytics if enhanced not yet available */}
+                {!overview && analytics && <AnalyticsPanel analytics={analytics} />}
+              </>
             )}
           </div>
         )}
