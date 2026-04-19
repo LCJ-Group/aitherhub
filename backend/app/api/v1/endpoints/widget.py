@@ -1110,6 +1110,7 @@ class OGPPreviewResponse(BaseModel):
     url: str
     title: Optional[str] = None
     image: Optional[str] = None
+    images: List[str] = []  # Multiple product images for gallery
     description: Optional[str] = None
     price: Optional[str] = None
     site_name: Optional[str] = None
@@ -1119,7 +1120,15 @@ class OGPPreviewResponse(BaseModel):
 
 
 async def _fetch_ogp(url: str) -> dict:
-    """Fetch and parse OGP meta tags from a URL."""
+    """Fetch and parse OGP meta tags from a URL.
+
+    Enhanced with:
+    - Double-slash fix in OGP image URLs
+    - Fallback image extraction from page JS data, img tags, and JSON-LD
+    - HEAD-request validation to ensure the returned image URL is accessible
+    - Multiple images returned in 'images' array for gallery support
+    """
+    import re
     import time
     from urllib.parse import urljoin, urlparse
 
@@ -1132,6 +1141,7 @@ async def _fetch_ogp(url: str) -> dict:
         "url": url,
         "title": None,
         "image": None,
+        "images": [],  # Multiple product images for gallery
         "description": None,
         "price": None,
         "site_name": None,
@@ -1155,8 +1165,9 @@ async def _fetch_ogp(url: str) -> dict:
         ) as client:
             resp = await client.get(url)
             resp.raise_for_status()
+            html_text = resp.text
 
-        soup = BeautifulSoup(resp.text, "html.parser")
+        soup = BeautifulSoup(html_text, "html.parser")
         parsed_url = urlparse(url)
         base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
 
@@ -1172,14 +1183,108 @@ async def _fetch_ogp(url: str) -> dict:
 
         result["title"] = (og_title["content"] if og_title and og_title.get("content") else
                           (title_tag.get_text(strip=True) if title_tag else None))
-        result["image"] = og_image["content"] if og_image and og_image.get("content") else None
+        raw_ogp_image = og_image["content"] if og_image and og_image.get("content") else None
         result["description"] = (og_desc["content"] if og_desc and og_desc.get("content") else
                                 (meta_desc["content"] if meta_desc and meta_desc.get("content") else None))
         result["site_name"] = og_site["content"] if og_site and og_site.get("content") else None
 
-        # Make image URL absolute
-        if result["image"] and not result["image"].startswith("http"):
-            result["image"] = urljoin(base_url, result["image"])
+        # Make OGP image URL absolute
+        if raw_ogp_image and not raw_ogp_image.startswith("http"):
+            raw_ogp_image = urljoin(base_url, raw_ogp_image)
+
+        # ── Fix double-slash in OGP image URL ──
+        # e.g. "https://kyogokupro.com//html/upload/..." → "https://kyogokupro.com/html/upload/..."
+        if raw_ogp_image:
+            raw_ogp_image = re.sub(r'(?<!:)//', '/', raw_ogp_image)
+
+        # ── Collect candidate image URLs (ordered by priority) ──
+        candidate_images = []
+
+        # Strategy 1: JSON-LD structured data images (most reliable)
+        for script in soup.find_all("script", type="application/ld+json"):
+            try:
+                ld = json.loads(script.string or "")
+                items = ld if isinstance(ld, list) else [ld]
+                for item in items:
+                    if isinstance(item, dict) and item.get("@graph"):
+                        items.extend(item["@graph"])
+                for item in items:
+                    if isinstance(item, dict):
+                        ld_img = item.get("image")
+                        if isinstance(ld_img, str) and ld_img.startswith("http"):
+                            if ld_img not in candidate_images:
+                                candidate_images.append(ld_img)
+                        elif isinstance(ld_img, list):
+                            for li in ld_img:
+                                li_url = li if isinstance(li, str) else (li.get("url") if isinstance(li, dict) else None)
+                                if li_url and li_url.startswith("http") and li_url not in candidate_images:
+                                    candidate_images.append(li_url)
+                        elif isinstance(ld_img, dict) and ld_img.get("url"):
+                            if ld_img["url"] not in candidate_images:
+                                candidate_images.append(ld_img["url"])
+            except Exception:
+                continue
+
+        # Strategy 2: Product gallery slide images (e.g. EC-CUBE slide-item)
+        slide_imgs = soup.select(".slide-item img, .item_visual img, .product-gallery img")
+        for img_tag in slide_imgs:
+            src = img_tag.get("src") or img_tag.get("data-src")
+            if src:
+                if not src.startswith("http"):
+                    src = urljoin(base_url, src)
+                src = re.sub(r'(?<!:)//', '/', src)
+                if src not in candidate_images:
+                    candidate_images.append(src)
+
+        # Strategy 3: Product-related img tags (broader selectors)
+        product_img_selectors = [
+            {"class_": re.compile(r"product|main-image", re.I)},
+            {"id": re.compile(r"product|main-image", re.I)},
+        ]
+        for selector in product_img_selectors:
+            for img_tag in soup.find_all("img", **selector):
+                src = img_tag.get("src") or img_tag.get("data-src")
+                if src:
+                    if not src.startswith("http"):
+                        src = urljoin(base_url, src)
+                    src = re.sub(r'(?<!:)//', '/', src)
+                    if src not in candidate_images:
+                        candidate_images.append(src)
+
+        # Strategy 4: OGP image (after double-slash fix) as last resort
+        if raw_ogp_image and raw_ogp_image not in candidate_images:
+            candidate_images.append(raw_ogp_image)
+
+        # ── Validate image URLs with HEAD requests ──
+        validated_images = []
+        primary_image = None
+
+        async with httpx.AsyncClient(
+            timeout=5.0,
+            follow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; AitherHubBot/1.0)"},
+        ) as img_client:
+            for img_url in candidate_images[:10]:  # Check up to 10 candidates
+                try:
+                    head_resp = await img_client.head(img_url)
+                    content_type = head_resp.headers.get("content-type", "")
+                    if head_resp.status_code == 200 and (
+                        "image" in content_type or content_type == ""
+                    ):
+                        validated_images.append(img_url)
+                        if primary_image is None:
+                            primary_image = img_url
+                except Exception:
+                    continue
+
+        # Set the primary image
+        result["image"] = primary_image
+        result["images"] = validated_images[:8]  # Return up to 8 validated images
+
+        # If no validated images but we have the OGP image, use it anyway
+        if not result["image"] and raw_ogp_image:
+            result["image"] = raw_ogp_image
+            logger.warning(f"[OGP] No validated images found, falling back to OGP image: {raw_ogp_image}")
 
         # Try to extract price (multiple strategies)
         # 1. og:price:amount
@@ -1203,7 +1308,6 @@ async def _fetch_ogp(url: str) -> dict:
 
         # 3. If no OGP price, try JSON-LD structured data
         if not result.get("price"):
-            import re
             for script in soup.find_all("script", type="application/ld+json"):
                 try:
                     ld = json.loads(script.string or "")
@@ -1231,6 +1335,21 @@ async def _fetch_ogp(url: str) -> dict:
                 except Exception:
                     continue
 
+        # 4. If still no price, try to find price from HTML elements
+        if not result.get("price"):
+            price_patterns = [
+                soup.find(class_=re.compile(r"price|product-price|item-price", re.I)),
+                soup.find(id=re.compile(r"price|product-price", re.I)),
+            ]
+            for price_el in price_patterns:
+                if price_el:
+                    price_text = price_el.get_text(strip=True)
+                    # Extract price-like pattern (e.g. ¥7,260 or $19.99)
+                    price_match = re.search(r'[¥$€][\d,]+\.?\d*|[\d,]+\.?\d*\s*円', price_text)
+                    if price_match:
+                        result["price"] = price_match.group(0)
+                        break
+
         # Favicon
         icon_link = soup.find("link", rel=lambda x: x and "icon" in (x if isinstance(x, str) else " ".join(x)))
         if icon_link and icon_link.get("href"):
@@ -1244,13 +1363,13 @@ async def _fetch_ogp(url: str) -> dict:
         # Clean up description (remove &nbsp; and excessive whitespace)
         if result["description"]:
             result["description"] = result["description"].replace("&nbsp;", " ").replace("\u00a0", " ")
-            import re
             result["description"] = re.sub(r"\s+", " ", result["description"]).strip()
             # Limit to 300 chars
             if len(result["description"]) > 300:
                 result["description"] = result["description"][:297] + "..."
 
         result["success"] = True
+        logger.info(f"[OGP] Successfully fetched OGP for {url}: image={result['image']}, images_count={len(result['images'])}")
 
     except httpx.TimeoutException:
         result["error"] = "Request timed out"
