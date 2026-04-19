@@ -1511,11 +1511,14 @@ async def admin_recalculate_scores(
                 COUNT(*) FILTER (WHERE event_type = 'video_progress'
                     AND extra_data IS NOT NULL
                     AND (extra_data->>'progress_pct')::int >= 100) as completions,
-                AVG(CASE WHEN extra_data IS NOT NULL AND extra_data->>'watch_duration_sec' IS NOT NULL
-                    THEN (extra_data->>'watch_duration_sec')::float ELSE NULL END)
-                    FILTER (WHERE event_type = 'video_progress'
+                AVG(
+                    CASE WHEN event_type = 'video_progress'
                         AND extra_data IS NOT NULL
-                        AND (extra_data->>'progress_pct')::int >= 100) as avg_watch_sec,
+                        AND (extra_data->>'progress_pct')::int >= 100
+                        AND extra_data->>'watch_duration_sec' IS NOT NULL
+                    THEN (extra_data->>'watch_duration_sec')::float
+                    ELSE NULL END
+                ) as avg_watch_sec,
                 COUNT(*) FILTER (WHERE event_type IN ('cta_click', 'product_click')) as clicks,
                 COUNT(*) FILTER (WHERE event_type = 'add_to_cart') as carts,
                 COUNT(*) FILTER (WHERE event_type = 'purchase_click') as purchases,

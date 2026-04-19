@@ -928,9 +928,13 @@ async def brand_analytics_clip_performance(
                 COUNT(*) FILTER (WHERE e.extra_data IS NOT NULL AND (e.extra_data->>'progress_pct')::int >= 50) as watched_50,
                 COUNT(*) FILTER (WHERE e.extra_data IS NOT NULL AND (e.extra_data->>'progress_pct')::int >= 75) as watched_75,
                 COUNT(*) FILTER (WHERE e.extra_data IS NOT NULL AND (e.extra_data->>'progress_pct')::int >= 100) as watched_100,
-                AVG(CASE WHEN e.extra_data->>'watch_duration_sec' IS NOT NULL
-                    THEN (e.extra_data->>'watch_duration_sec')::float ELSE NULL END)
-                    FILTER (WHERE e.extra_data IS NOT NULL AND (e.extra_data->>'progress_pct')::int >= 100) as avg_watch_sec
+                AVG(
+                    CASE WHEN e.extra_data IS NOT NULL
+                        AND (e.extra_data->>'progress_pct')::int >= 100
+                        AND e.extra_data->>'watch_duration_sec' IS NOT NULL
+                    THEN (e.extra_data->>'watch_duration_sec')::float
+                    ELSE NULL END
+                ) as avg_watch_sec
             FROM widget_tracking_events e
             WHERE e.client_id = :cid AND e.event_type = 'video_progress'
                   AND e.clip_id IS NOT NULL AND e.created_at >= :since
@@ -1219,10 +1223,14 @@ async def brand_analytics_overview(
             COUNT(*) FILTER (WHERE event_type = 'like') as likes,
             COUNT(*) FILTER (WHERE event_type = 'share') as shares,
             COUNT(*) FILTER (WHERE event_type = 'video_replay') as replays,
-            AVG(CASE WHEN extra_data IS NOT NULL AND extra_data->>'watch_duration_sec' IS NOT NULL
-                THEN (extra_data->>'watch_duration_sec')::float ELSE NULL END)
-                FILTER (WHERE event_type = 'video_progress'
-                    AND extra_data IS NOT NULL AND (extra_data->>'progress_pct')::int >= 100) as avg_watch_sec
+            AVG(
+                CASE WHEN event_type = 'video_progress'
+                    AND extra_data IS NOT NULL
+                    AND (extra_data->>'progress_pct')::int >= 100
+                    AND extra_data->>'watch_duration_sec' IS NOT NULL
+                THEN (extra_data->>'watch_duration_sec')::float
+                ELSE NULL END
+            ) as avg_watch_sec
         FROM widget_tracking_events
         WHERE client_id = :cid AND created_at >= :since
     """)
