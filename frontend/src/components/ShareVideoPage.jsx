@@ -14,7 +14,7 @@ export default function ShareVideoPage() {
 
   useEffect(() => {
     if (!clipId) return;
-    fetch(`${API}/widget/share/${clipId}`)
+    fetch(`${API}/api/v1/widget/share/${clipId}`)
       .then(r => { if (!r.ok) throw new Error('Clip not found'); return r.json(); })
       .then(data => { setMeta(data); setLoading(false); })
       .catch(e => { setError(e.message); setLoading(false); });
