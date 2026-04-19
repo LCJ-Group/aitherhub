@@ -270,11 +270,19 @@ async def search_clips(
         """)
         params["brand_filter"] = brand
 
-    if is_unusable is not None:
-        conditions.append("COALESCE(vc.is_unusable, FALSE) = :is_unusable")
-        params["is_unusable"] = is_unusable
+    # NG filter logic:
+    # - is_unusable=true  → show ONLY NG clips
+    # - is_unusable=false → show ONLY non-NG clips (explicit)
+    # - is_unusable=None  → DEFAULT: exclude NG clips (NG are hidden unless explicitly requested)
+    if is_unusable is True:
+        conditions.append("COALESCE(vc.is_unusable, FALSE) = TRUE")
+    elif is_unusable is False:
+        conditions.append("COALESCE(vc.is_unusable, FALSE) = FALSE")
+    else:
+        # Default: exclude NG clips from normal listing
+        conditions.append("COALESCE(vc.is_unusable, FALSE) = FALSE")
 
-    # No brand assigned filter
+    # No brand assigned filter (always excludes NG clips)
     if no_brand is True:
         conditions.append("""
             vc.id::text NOT IN (
@@ -633,9 +641,9 @@ async def get_clip_stats(
         ng_stats_sql = text("""
             SELECT
                 COUNT(*) FILTER (WHERE COALESCE(vc.is_unusable, FALSE) = TRUE) as ng_count,
-                COUNT(*) FILTER (WHERE vc.exported_url IS NOT NULL) as subtitle_count,
-                COUNT(*) FILTER (WHERE vc.trim_data IS NOT NULL) as trimmed_count,
-                COUNT(*) FILTER (WHERE vc.id::text NOT IN (
+                COUNT(*) FILTER (WHERE COALESCE(vc.is_unusable, FALSE) = FALSE AND vc.exported_url IS NOT NULL) as subtitle_count,
+                COUNT(*) FILTER (WHERE COALESCE(vc.is_unusable, FALSE) = FALSE AND vc.trim_data IS NOT NULL) as trimmed_count,
+                COUNT(*) FILTER (WHERE COALESCE(vc.is_unusable, FALSE) = FALSE AND vc.id::text NOT IN (
                     SELECT wca.clip_id FROM widget_clip_assignments wca WHERE wca.is_active = TRUE
                 )) as no_brand_count
             FROM video_clips vc
