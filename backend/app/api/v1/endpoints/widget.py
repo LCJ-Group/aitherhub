@@ -1483,156 +1483,184 @@ async def admin_recalculate_scores(
     if not _check_admin(x_admin_key):
         raise HTTPException(status_code=403, detail="Admin key required")
 
-    await _ensure_performance_tables(db)
+    try:
+        await _ensure_performance_tables(db)
+    except Exception as e:
+        logger.error(f"Failed to ensure performance tables: {e}")
+        return {"status": "error", "detail": f"Table setup failed: {str(e)}"}
 
     now = datetime.now(timezone.utc)
     since = now - timedelta(days=days)
 
     # Get all active widget clips grouped by client
-    clips_result = await db.execute(text("""
-        SELECT wca.client_id, wca.clip_id
-        FROM widget_clip_assignments wca
-        WHERE wca.is_active = TRUE
-    """))
-    active_clips = clips_result.mappings().all()
+    try:
+        clips_result = await db.execute(text("""
+            SELECT wca.client_id, wca.clip_id
+            FROM widget_clip_assignments wca
+            WHERE wca.is_active = TRUE
+        """))
+        active_clips = clips_result.mappings().all()
+    except Exception as e:
+        logger.error(f"Failed to get active clips: {e}")
+        return {"status": "error", "detail": f"Get clips failed: {str(e)}"}
 
     if not active_clips:
         return {"status": "ok", "message": "No active clips found", "updated": 0}
 
     updated = 0
+    errors = []
     for clip_row in active_clips:
         cid = clip_row["client_id"]
         clip_id = clip_row["clip_id"]
 
-        # Aggregate events for this clip
-        stats_result = await db.execute(text("""
-            SELECT
-                COUNT(*) FILTER (WHERE event_type = 'video_play') as plays,
-                COUNT(*) FILTER (WHERE event_type = 'video_progress'
-                    AND extra_data IS NOT NULL
-                    AND (extra_data->>'progress_pct')::int >= 100) as completions,
-                AVG(
-                    CASE WHEN event_type = 'video_progress'
-                        AND extra_data IS NOT NULL
-                        AND (extra_data->>'progress_pct')::int >= 100
-                        AND extra_data->>'watch_duration_sec' IS NOT NULL
-                    THEN (extra_data->>'watch_duration_sec')::float
-                    ELSE NULL END
-                ) as avg_watch_sec,
-                COUNT(*) FILTER (WHERE event_type IN ('cta_click', 'product_click')) as clicks,
-                COUNT(*) FILTER (WHERE event_type = 'add_to_cart') as carts,
-                COUNT(*) FILTER (WHERE event_type = 'purchase_click') as purchases,
-                COUNT(*) FILTER (WHERE event_type = 'conversion') as conversions,
-                COUNT(*) FILTER (WHERE event_type = 'share') as shares,
-                COUNT(*) FILTER (WHERE event_type = 'like') as likes,
-                COUNT(*) FILTER (WHERE event_type = 'video_replay') as replays
-            FROM widget_tracking_events
-            WHERE client_id = :cid AND clip_id = :clip_id AND created_at >= :since
-        """), {"cid": cid, "clip_id": clip_id, "since": since})
-        stats = stats_result.mappings().first()
-
-        plays = stats["plays"] or 0
-        completions = stats["completions"] or 0
-        clicks = stats["clicks"] or 0
-        purchases = stats["purchases"] or 0
-        replays = stats["replays"] or 0
-        likes = stats["likes"] or 0
-        shares = stats["shares"] or 0
-
-        # Calculate scores
-        if plays > 0:
-            completion_rate = (completions / plays) * 100
-            ctr = (clicks / plays) * 100
-            cvr = (purchases / plays) * 100
-            replay_rate = (min(replays, plays) / plays) * 100
-            like_rate = (min(likes, plays) / plays) * 100
-            share_rate = (min(shares, plays) / plays) * 100
-
-            engagement = min(100, round(
-                completion_rate * 0.35 +
-                min(ctr, 50) * 0.25 * 2 +
-                replay_rate * 0.15 +
-                like_rate * 0.10 +
-                share_rate * 0.15
-            , 1))
-
-            conversion_score = min(100, round(
-                ctr * 0.30 +
-                (min(stats["carts"] or 0, plays) / plays * 100) * 0.30 +
-                cvr * 10 * 0.40
-            , 1))
-
-            overall = round(engagement * 0.4 + conversion_score * 0.6, 1)
-        else:
-            engagement = 0
-            conversion_score = 0
-            overall = 0
-
-        # Get brand feedback if exists
         try:
-            fb_result = await db.execute(text("""
-                SELECT rating, comment FROM brand_clip_feedback
-                WHERE client_id = :cid AND clip_id = :clip_id
-            """), {"cid": cid, "clip_id": clip_id})
-            fb = fb_result.mappings().first()
-            brand_rating = fb["rating"] if fb else None
-            brand_comment = fb["comment"] if fb else None
-        except Exception:
-            brand_rating = None
-            brand_comment = None
+            # Aggregate events for this clip
+            stats_result = await db.execute(text("""
+                SELECT
+                    COUNT(*) FILTER (WHERE event_type = 'video_play') as plays,
+                    COUNT(*) FILTER (WHERE event_type = 'video_progress'
+                        AND extra_data IS NOT NULL
+                        AND (extra_data->>'progress_pct')::int >= 100) as completions,
+                    AVG(
+                        CASE WHEN event_type = 'video_progress'
+                            AND extra_data IS NOT NULL
+                            AND (extra_data->>'progress_pct')::int >= 100
+                            AND extra_data->>'watch_duration_sec' IS NOT NULL
+                        THEN (extra_data->>'watch_duration_sec')::float
+                        ELSE NULL END
+                    ) as avg_watch_sec,
+                    COUNT(*) FILTER (WHERE event_type IN ('cta_click', 'product_click')) as clicks,
+                    COUNT(*) FILTER (WHERE event_type = 'add_to_cart') as carts,
+                    COUNT(*) FILTER (WHERE event_type = 'purchase_click') as purchases,
+                    COUNT(*) FILTER (WHERE event_type = 'conversion') as conversions,
+                    COUNT(*) FILTER (WHERE event_type = 'share') as shares,
+                    COUNT(*) FILTER (WHERE event_type = 'like') as likes,
+                    COUNT(*) FILTER (WHERE event_type = 'video_replay') as replays
+                FROM widget_tracking_events
+                WHERE client_id = :cid AND clip_id = :clip_id AND created_at >= :since
+            """), {"cid": cid, "clip_id": clip_id, "since": since})
+            stats = stats_result.mappings().first()
 
-        # If brand gave feedback, factor it into overall score
-        if brand_rating is not None:
-            brand_bonus = (brand_rating - 3) * 5  # -10 to +10
-            overall = min(100, max(0, overall + brand_bonus))
+            plays = stats["plays"] or 0
+            completions = stats["completions"] or 0
+            clicks = stats["clicks"] or 0
+            purchases = stats["purchases"] or 0
+            replays = stats["replays"] or 0
+            likes = stats["likes"] or 0
+            shares = stats["shares"] or 0
 
-        # Upsert score
-        await db.execute(text("""
-            INSERT INTO clip_performance_scores
-                (id, clip_id, client_id, period_start, period_end,
-                 play_count, completion_count, avg_watch_duration_sec,
-                 cta_click_count, cart_add_count, purchase_count, conversion_count,
-                 share_count, like_count, replay_count,
-                 engagement_score, conversion_score, overall_score,
-                 brand_rating, brand_comment, score_version)
-            VALUES
-                (gen_random_uuid(), :clip_id, :cid, :period_start, :period_end,
-                 :plays, :completions, :avg_watch_sec,
-                 :clicks, :carts, :purchases, :conversions,
-                 :shares, :likes, :replays,
-                 :engagement, :conversion_score, :overall,
-                 :brand_rating, :brand_comment, 'v1')
-            ON CONFLICT (clip_id, client_id, period_end)
-            DO UPDATE SET
-                play_count = :plays, completion_count = :completions,
-                avg_watch_duration_sec = :avg_watch_sec,
-                cta_click_count = :clicks, cart_add_count = :carts,
-                purchase_count = :purchases, conversion_count = :conversions,
-                share_count = :shares, like_count = :likes, replay_count = :replays,
-                engagement_score = :engagement, conversion_score = :conversion_score,
-                overall_score = :overall,
-                brand_rating = :brand_rating, brand_comment = :brand_comment,
-                updated_at = NOW()
-        """), {
-            "clip_id": clip_id, "cid": cid,
-            "period_start": since, "period_end": now,
-            "plays": plays, "completions": completions,
-            "avg_watch_sec": round(stats["avg_watch_sec"], 1) if stats["avg_watch_sec"] else None,
-            "clicks": clicks, "carts": stats["carts"] or 0,
-            "purchases": purchases, "conversions": stats["conversions"] or 0,
-            "shares": shares, "likes": likes, "replays": replays,
-            "engagement": engagement, "conversion_score": conversion_score,
-            "overall": overall,
-            "brand_rating": brand_rating, "brand_comment": brand_comment,
-        })
-        updated += 1
+            # Calculate scores
+            if plays > 0:
+                completion_rate = (completions / plays) * 100
+                ctr = (clicks / plays) * 100
+                cvr = (purchases / plays) * 100
+                replay_rate = (min(replays, plays) / plays) * 100
+                like_rate = (min(likes, plays) / plays) * 100
+                share_rate = (min(shares, plays) / plays) * 100
 
-    await db.commit()
+                engagement = min(100, round(
+                    completion_rate * 0.35 +
+                    min(ctr, 50) * 0.25 * 2 +
+                    replay_rate * 0.15 +
+                    like_rate * 0.10 +
+                    share_rate * 0.15
+                , 1))
+
+                conversion_score = min(100, round(
+                    ctr * 0.30 +
+                    (min(stats["carts"] or 0, plays) / plays * 100) * 0.30 +
+                    cvr * 10 * 0.40
+                , 1))
+
+                overall = round(engagement * 0.4 + conversion_score * 0.6, 1)
+            else:
+                engagement = 0
+                conversion_score = 0
+                overall = 0
+
+            # Get brand feedback if exists
+            try:
+                fb_result = await db.execute(text("""
+                    SELECT rating, comment FROM brand_clip_feedback
+                    WHERE client_id = :cid AND clip_id = :clip_id
+                """), {"cid": cid, "clip_id": clip_id})
+                fb = fb_result.mappings().first()
+                brand_rating = fb["rating"] if fb else None
+                brand_comment = fb["comment"] if fb else None
+            except Exception:
+                brand_rating = None
+                brand_comment = None
+
+            # If brand gave feedback, factor it into overall score
+            if brand_rating is not None:
+                brand_bonus = (brand_rating - 3) * 5  # -10 to +10
+                overall = min(100, max(0, overall + brand_bonus))
+
+            # Upsert score
+            await db.execute(text("""
+                INSERT INTO clip_performance_scores
+                    (id, clip_id, client_id, period_start, period_end,
+                     play_count, completion_count, avg_watch_duration_sec,
+                     cta_click_count, cart_add_count, purchase_count, conversion_count,
+                     share_count, like_count, replay_count,
+                     engagement_score, conversion_score, overall_score,
+                     brand_rating, brand_comment, score_version)
+                VALUES
+                    (gen_random_uuid(), :clip_id, :cid, :period_start, :period_end,
+                     :plays, :completions, :avg_watch_sec,
+                     :clicks, :carts, :purchases, :conversions,
+                     :shares, :likes, :replays,
+                     :engagement, :conversion_score, :overall,
+                     :brand_rating, :brand_comment, 'v1')
+                ON CONFLICT (clip_id, client_id, period_end)
+                DO UPDATE SET
+                    play_count = :plays, completion_count = :completions,
+                    avg_watch_duration_sec = :avg_watch_sec,
+                    cta_click_count = :clicks, cart_add_count = :carts,
+                    purchase_count = :purchases, conversion_count = :conversions,
+                    share_count = :shares, like_count = :likes, replay_count = :replays,
+                    engagement_score = :engagement, conversion_score = :conversion_score,
+                    overall_score = :overall,
+                    brand_rating = :brand_rating, brand_comment = :brand_comment,
+                    updated_at = NOW()
+            """), {
+                "clip_id": clip_id, "cid": cid,
+                "period_start": since, "period_end": now,
+                "plays": plays, "completions": completions,
+                "avg_watch_sec": round(stats["avg_watch_sec"], 1) if stats["avg_watch_sec"] else None,
+                "clicks": clicks, "carts": stats["carts"] or 0,
+                "purchases": purchases, "conversions": stats["conversions"] or 0,
+                "shares": shares, "likes": likes, "replays": replays,
+                "engagement": engagement, "conversion_score": conversion_score,
+                "overall": overall,
+                "brand_rating": brand_rating, "brand_comment": brand_comment,
+            })
+            updated += 1
+        except Exception as e:
+            errors.append(f"{clip_id}: {str(e)}")
+            logger.error(f"Failed to process clip {clip_id}: {e}")
+            try:
+                await db.rollback()
+            except Exception:
+                pass
+            continue
+
+    try:
+        await db.commit()
+    except Exception as e:
+        logger.error(f"Commit failed: {e}")
+        return {"status": "error", "detail": f"Commit failed: {str(e)}", "errors": errors}
 
     # Auto-ranking: update sort_order based on overall_score
-    await _auto_rank_clips(db)
+    try:
+        await _auto_rank_clips(db)
+    except Exception as e:
+        logger.warning(f"Auto-rank failed (non-critical): {e}")
 
-    return {"status": "ok", "updated": updated, "period_days": days}
+    result = {"status": "ok", "updated": updated, "period_days": days}
+    if errors:
+        result["errors"] = errors
+    return result
 
 
 async def _auto_rank_clips(db: AsyncSession):
