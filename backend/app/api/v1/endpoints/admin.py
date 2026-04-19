@@ -4635,3 +4635,645 @@ async def reset_and_requeue_dead_clips(
     except Exception as e:
         import traceback
         return {"status": "error", "message": str(e), "trace": traceback.format_exc()}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Admin Cross-Brand Analytics + ML Insights
+# ═══════════════════════════════════════════════════════════════════════
+
+from datetime import datetime, timedelta
+
+
+async def _qa(db: AsyncSession, sql: str, params: dict = None, default=None):
+    """Run a query returning all rows with rollback on failure."""
+    try:
+        r = await db.execute(text(sql), params or {})
+        return r.fetchall()
+    except Exception as e:
+        logger.warning(f"Admin analytics query error: {e}")
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+        return default if default is not None else []
+
+
+@router.get("/analytics/overview")
+async def admin_analytics_overview(
+    days: int = Query(30, ge=1, le=365),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Cross-brand KPI overview with period comparison."""
+    expected_key = f"{ADMIN_ID}:{ADMIN_PASS}"
+    if x_admin_key != expected_key:
+        raise HTTPException(status_code=403, detail="Invalid admin credentials")
+
+    try:
+        now = datetime.utcnow()
+        period_start = now - timedelta(days=days)
+        prev_start = period_start - timedelta(days=days)
+
+        # Current period KPIs
+        kpi_sql = """
+        SELECT
+            COUNT(*) FILTER (WHERE event_type = 'video_play') as plays,
+            COUNT(DISTINCT session_id) FILTER (WHERE event_type = 'video_play') as unique_viewers,
+            COUNT(*) FILTER (WHERE event_type = 'cta_click') as cta_clicks,
+            COUNT(*) FILTER (WHERE event_type = 'add_to_cart') as add_to_cart,
+            COUNT(*) FILTER (WHERE event_type = 'purchase_click') as purchases,
+            COUNT(*) FILTER (WHERE event_type = 'conversion') as conversions,
+            COUNT(*) FILTER (WHERE event_type = 'video_progress'
+                AND extra_data IS NOT NULL AND extra_data->>'milestone' = '100') as completions,
+            COUNT(*) FILTER (WHERE event_type = 'video_replay') as replays
+        FROM widget_tracking_events
+        WHERE created_at >= :start
+        """
+        current = await _qa(db, kpi_sql, {"start": period_start})
+        prev = await _qa(db, kpi_sql, {"start": prev_start})
+
+        c = current[0] if current else None
+        p = prev[0] if prev else None
+
+        def safe(row, idx):
+            return int(row[idx]) if row and row[idx] else 0
+
+        plays = safe(c, 0)
+        unique_viewers = safe(c, 1)
+        cta_clicks = safe(c, 2)
+        add_to_cart = safe(c, 3)
+        purchases = safe(c, 4)
+        conversions = safe(c, 5)
+        completions = safe(c, 6)
+        replays = safe(c, 7)
+
+        prev_plays = safe(p, 0)
+        prev_cta = safe(p, 2)
+        prev_purchases = safe(p, 4)
+        prev_completions = safe(p, 6)
+
+        completion_rate = round(completions / plays * 100, 1) if plays > 0 else 0
+        ctr = round(cta_clicks / plays * 100, 1) if plays > 0 else 0
+        cvr = round(conversions / plays * 100, 2) if plays > 0 else 0
+
+        prev_completion_rate = round(prev_completions / prev_plays * 100, 1) if prev_plays > 0 else 0
+        prev_ctr = round(prev_cta / prev_plays * 100, 1) if prev_plays > 0 else 0
+        prev_cvr = round(prev_purchases / prev_plays * 100, 2) if prev_plays > 0 else 0
+
+        def delta(cur, prev_val):
+            if prev_val == 0:
+                return None
+            return round((cur - prev_val) / prev_val * 100, 1)
+
+        # Total active clips and brands
+        active_clips = await _q(db, """
+            SELECT COUNT(DISTINCT wca.clip_id)
+            FROM widget_clip_assignments wca WHERE wca.is_active = true
+        """)
+        active_brands = await _q(db, """
+            SELECT COUNT(DISTINCT wca.client_id)
+            FROM widget_clip_assignments wca WHERE wca.is_active = true
+        """)
+
+        return {
+            "period_days": days,
+            "kpi": {
+                "plays": plays, "plays_delta": delta(plays, prev_plays),
+                "unique_viewers": unique_viewers,
+                "completion_rate": completion_rate, "completion_rate_delta": delta(completion_rate, prev_completion_rate),
+                "ctr": ctr, "ctr_delta": delta(ctr, prev_ctr),
+                "cvr": cvr, "cvr_delta": delta(cvr, prev_cvr),
+                "cta_clicks": cta_clicks,
+                "add_to_cart": add_to_cart,
+                "purchases": purchases,
+                "conversions": conversions,
+                "completions": completions,
+                "replays": replays,
+            },
+            "active_clips": active_clips,
+            "active_brands": active_brands,
+        }
+    except Exception as e:
+        logger.error(f"Admin analytics overview error: {e}")
+        import traceback
+        return {"error": str(e), "trace": traceback.format_exc()}
+
+
+@router.get("/analytics/brand-comparison")
+async def admin_analytics_brand_comparison(
+    days: int = Query(30, ge=1, le=365),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Compare performance across all brands."""
+    expected_key = f"{ADMIN_ID}:{ADMIN_PASS}"
+    if x_admin_key != expected_key:
+        raise HTTPException(status_code=403, detail="Invalid admin credentials")
+
+    try:
+        period_start = datetime.utcnow() - timedelta(days=days)
+
+        rows = await _qa(db, """
+        WITH brand_events AS (
+            SELECT
+                wca.client_id,
+                wte.event_type,
+                wte.clip_id,
+                wte.extra_data
+            FROM widget_tracking_events wte
+            JOIN widget_clip_assignments wca ON wca.clip_id = wte.clip_id AND wca.is_active = true
+            WHERE wte.created_at >= :start
+        )
+        SELECT
+            be.client_id,
+            COALESCE(wc.name, be.client_id) as brand_name,
+            COUNT(*) FILTER (WHERE be.event_type = 'video_play') as plays,
+            COUNT(*) FILTER (WHERE be.event_type = 'cta_click') as cta_clicks,
+            COUNT(*) FILTER (WHERE be.event_type = 'add_to_cart') as cart,
+            COUNT(*) FILTER (WHERE be.event_type = 'purchase_click') as purchases,
+            COUNT(*) FILTER (WHERE be.event_type = 'conversion') as conversions,
+            COUNT(*) FILTER (WHERE be.event_type = 'video_progress'
+                AND be.extra_data IS NOT NULL AND be.extra_data->>'milestone' = '100') as completions,
+            COUNT(*) FILTER (WHERE be.event_type = 'video_replay') as replays,
+            COUNT(DISTINCT be.clip_id) FILTER (WHERE be.event_type = 'video_play') as active_clips
+        FROM brand_events be
+        LEFT JOIN widget_clients wc ON wc.client_id = be.client_id
+        GROUP BY be.client_id, wc.name
+        ORDER BY plays DESC
+        """, {"start": period_start})
+
+        brands = []
+        for r in rows:
+            plays = int(r[2]) if r[2] else 0
+            cta = int(r[3]) if r[3] else 0
+            completions = int(r[7]) if r[7] else 0
+            conversions = int(r[6]) if r[6] else 0
+            brands.append({
+                "client_id": r[0],
+                "brand_name": r[1] or r[0],
+                "plays": plays,
+                "cta_clicks": cta,
+                "add_to_cart": int(r[4]) if r[4] else 0,
+                "purchases": int(r[5]) if r[5] else 0,
+                "conversions": conversions,
+                "completions": completions,
+                "replays": int(r[8]) if r[8] else 0,
+                "active_clips": int(r[9]) if r[9] else 0,
+                "completion_rate": round(completions / plays * 100, 1) if plays > 0 else 0,
+                "ctr": round(cta / plays * 100, 1) if plays > 0 else 0,
+                "cvr": round(conversions / plays * 100, 2) if plays > 0 else 0,
+            })
+
+        return {"brands": brands, "period_days": days}
+    except Exception as e:
+        logger.error(f"Admin brand comparison error: {e}")
+        return {"brands": [], "error": str(e)}
+
+
+@router.get("/analytics/top-clips")
+async def admin_analytics_top_clips(
+    days: int = Query(30, ge=1, le=365),
+    limit: int = Query(20, ge=1, le=100),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Top performing clips across all brands by engagement score."""
+    expected_key = f"{ADMIN_ID}:{ADMIN_PASS}"
+    if x_admin_key != expected_key:
+        raise HTTPException(status_code=403, detail="Invalid admin credentials")
+
+    try:
+        period_start = datetime.utcnow() - timedelta(days=days)
+
+        rows = await _qa(db, """
+        WITH clip_metrics AS (
+            SELECT
+                wte.clip_id,
+                COUNT(*) FILTER (WHERE wte.event_type = 'video_play') as plays,
+                COUNT(*) FILTER (WHERE wte.event_type = 'cta_click') as cta_clicks,
+                COUNT(*) FILTER (WHERE wte.event_type = 'conversion') as conversions,
+                COUNT(*) FILTER (WHERE wte.event_type = 'video_progress'
+                    AND wte.extra_data IS NOT NULL AND wte.extra_data->>'milestone' = '100') as completions,
+                COUNT(*) FILTER (WHERE wte.event_type = 'video_replay') as replays
+            FROM widget_tracking_events wte
+            WHERE wte.created_at >= :start
+            GROUP BY wte.clip_id
+            HAVING COUNT(*) FILTER (WHERE wte.event_type = 'video_play') > 0
+        )
+        SELECT
+            cm.clip_id,
+            cm.plays,
+            cm.cta_clicks,
+            cm.conversions,
+            cm.completions,
+            cm.replays,
+            vc.clip_url,
+            vc.product_name,
+            vc.duration,
+            COALESCE(wc.name, wca.client_id, 'Unknown') as brand_name,
+            wca.client_id,
+            -- Engagement score: weighted combination
+            (cm.completions::float / NULLIF(cm.plays, 0) * 40
+             + cm.cta_clicks::float / NULLIF(cm.plays, 0) * 30
+             + cm.conversions::float / NULLIF(cm.plays, 0) * 20
+             + cm.replays::float / NULLIF(cm.plays, 0) * 10) as engagement_score
+        FROM clip_metrics cm
+        LEFT JOIN video_clips vc ON vc.clip_id = cm.clip_id
+        LEFT JOIN widget_clip_assignments wca ON wca.clip_id = cm.clip_id AND wca.is_active = true
+        LEFT JOIN widget_clients wc ON wc.client_id = wca.client_id
+        ORDER BY engagement_score DESC NULLS LAST
+        LIMIT :lim
+        """, {"start": period_start, "lim": limit})
+
+        clips = []
+        for r in rows:
+            plays = int(r[1]) if r[1] else 0
+            completions = int(r[4]) if r[4] else 0
+            cta = int(r[2]) if r[2] else 0
+            conversions = int(r[3]) if r[3] else 0
+            clips.append({
+                "clip_id": r[0],
+                "plays": plays,
+                "cta_clicks": cta,
+                "conversions": conversions,
+                "completions": completions,
+                "replays": int(r[5]) if r[5] else 0,
+                "clip_url": r[6],
+                "product_name": r[7],
+                "duration": float(r[8]) if r[8] else 0,
+                "brand_name": r[9],
+                "client_id": r[10],
+                "completion_rate": round(completions / plays * 100, 1) if plays > 0 else 0,
+                "ctr": round(cta / plays * 100, 1) if plays > 0 else 0,
+                "cvr": round(conversions / plays * 100, 2) if plays > 0 else 0,
+                "engagement_score": round(float(r[11]), 2) if r[11] else 0,
+            })
+
+        return {"clips": clips, "period_days": days}
+    except Exception as e:
+        logger.error(f"Admin top clips error: {e}")
+        return {"clips": [], "error": str(e)}
+
+
+@router.get("/analytics/funnel")
+async def admin_analytics_funnel(
+    days: int = Query(30, ge=1, le=365),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Cross-brand funnel analysis."""
+    expected_key = f"{ADMIN_ID}:{ADMIN_PASS}"
+    if x_admin_key != expected_key:
+        raise HTTPException(status_code=403, detail="Invalid admin credentials")
+
+    try:
+        period_start = datetime.utcnow() - timedelta(days=days)
+
+        row = await _qa(db, """
+        SELECT
+            COUNT(*) FILTER (WHERE event_type = 'video_play') as plays,
+            COUNT(*) FILTER (WHERE event_type = 'video_progress'
+                AND extra_data IS NOT NULL AND extra_data->>'milestone' IN ('50', '75', '100')) as deep_views,
+            COUNT(*) FILTER (WHERE event_type = 'cta_click') as cta_clicks,
+            COUNT(*) FILTER (WHERE event_type = 'add_to_cart') as add_to_cart,
+            COUNT(*) FILTER (WHERE event_type = 'purchase_click') as purchase_clicks,
+            COUNT(*) FILTER (WHERE event_type = 'conversion') as conversions
+        FROM widget_tracking_events
+        WHERE created_at >= :start
+        """, {"start": period_start})
+
+        r = row[0] if row else None
+        plays = int(r[0]) if r and r[0] else 0
+
+        stages = [
+            {"name": "動画再生", "count": plays, "rate": 100},
+            {"name": "深い視聴 (50%+)", "count": int(r[1]) if r and r[1] else 0,
+             "rate": round(int(r[1]) / plays * 100, 1) if plays > 0 and r and r[1] else 0},
+            {"name": "商品クリック", "count": int(r[2]) if r and r[2] else 0,
+             "rate": round(int(r[2]) / plays * 100, 1) if plays > 0 and r and r[2] else 0},
+            {"name": "カート追加", "count": int(r[3]) if r and r[3] else 0,
+             "rate": round(int(r[3]) / plays * 100, 1) if plays > 0 and r and r[3] else 0},
+            {"name": "購入クリック", "count": int(r[4]) if r and r[4] else 0,
+             "rate": round(int(r[4]) / plays * 100, 1) if plays > 0 and r and r[4] else 0},
+            {"name": "コンバージョン", "count": int(r[5]) if r and r[5] else 0,
+             "rate": round(int(r[5]) / plays * 100, 1) if plays > 0 and r and r[5] else 0},
+        ]
+
+        return {"stages": stages, "period_days": days}
+    except Exception as e:
+        logger.error(f"Admin funnel error: {e}")
+        return {"stages": [], "error": str(e)}
+
+
+@router.get("/analytics/daily")
+async def admin_analytics_daily(
+    days: int = Query(30, ge=1, le=365),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Daily trend data for charts."""
+    expected_key = f"{ADMIN_ID}:{ADMIN_PASS}"
+    if x_admin_key != expected_key:
+        raise HTTPException(status_code=403, detail="Invalid admin credentials")
+
+    try:
+        period_start = datetime.utcnow() - timedelta(days=days)
+
+        rows = await _qa(db, """
+        SELECT
+            DATE(created_at) as day,
+            COUNT(*) FILTER (WHERE event_type = 'video_play') as plays,
+            COUNT(*) FILTER (WHERE event_type = 'cta_click') as cta_clicks,
+            COUNT(*) FILTER (WHERE event_type = 'conversion') as conversions,
+            COUNT(*) FILTER (WHERE event_type = 'video_progress'
+                AND extra_data IS NOT NULL AND extra_data->>'milestone' = '100') as completions,
+            COUNT(DISTINCT session_id) FILTER (WHERE event_type = 'video_play') as unique_viewers
+        FROM widget_tracking_events
+        WHERE created_at >= :start
+        GROUP BY DATE(created_at)
+        ORDER BY day
+        """, {"start": period_start})
+
+        daily = []
+        for r in rows:
+            daily.append({
+                "date": str(r[0]),
+                "plays": int(r[1]) if r[1] else 0,
+                "cta_clicks": int(r[2]) if r[2] else 0,
+                "conversions": int(r[3]) if r[3] else 0,
+                "completions": int(r[4]) if r[4] else 0,
+                "unique_viewers": int(r[5]) if r[5] else 0,
+            })
+
+        return {"daily": daily, "period_days": days}
+    except Exception as e:
+        logger.error(f"Admin daily error: {e}")
+        return {"daily": [], "error": str(e)}
+
+
+@router.get("/analytics/ml-insights")
+async def admin_analytics_ml_insights(
+    days: int = Query(30, ge=1, le=365),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    db: AsyncSession = Depends(get_db),
+):
+    """ML-powered insights: tag effectiveness, winning patterns, duration analysis."""
+    expected_key = f"{ADMIN_ID}:{ADMIN_PASS}"
+    if x_admin_key != expected_key:
+        raise HTTPException(status_code=403, detail="Invalid admin credentials")
+
+    try:
+        period_start = datetime.utcnow() - timedelta(days=days)
+
+        # 1. Tag effectiveness analysis
+        tag_rows = await _qa(db, """
+        WITH clip_tags AS (
+            SELECT vc.clip_id, unnest(vc.sales_psychology_tags) as tag
+            FROM video_clips vc
+            WHERE vc.sales_psychology_tags IS NOT NULL
+              AND array_length(vc.sales_psychology_tags, 1) > 0
+        ),
+        clip_perf AS (
+            SELECT
+                wte.clip_id,
+                COUNT(*) FILTER (WHERE wte.event_type = 'video_play') as plays,
+                COUNT(*) FILTER (WHERE wte.event_type = 'cta_click') as cta_clicks,
+                COUNT(*) FILTER (WHERE wte.event_type = 'conversion') as conversions,
+                COUNT(*) FILTER (WHERE wte.event_type = 'video_progress'
+                    AND wte.extra_data IS NOT NULL AND wte.extra_data->>'milestone' = '100') as completions
+            FROM widget_tracking_events wte
+            WHERE wte.created_at >= :start
+            GROUP BY wte.clip_id
+        )
+        SELECT
+            ct.tag,
+            COUNT(DISTINCT ct.clip_id) as clip_count,
+            SUM(cp.plays) as total_plays,
+            CASE WHEN SUM(cp.plays) > 0
+                THEN ROUND(SUM(cp.completions)::numeric / SUM(cp.plays) * 100, 1)
+                ELSE 0 END as avg_completion_rate,
+            CASE WHEN SUM(cp.plays) > 0
+                THEN ROUND(SUM(cp.cta_clicks)::numeric / SUM(cp.plays) * 100, 1)
+                ELSE 0 END as avg_ctr,
+            CASE WHEN SUM(cp.plays) > 0
+                THEN ROUND(SUM(cp.conversions)::numeric / SUM(cp.plays) * 100, 2)
+                ELSE 0 END as avg_cvr
+        FROM clip_tags ct
+        JOIN clip_perf cp ON cp.clip_id = ct.clip_id
+        GROUP BY ct.tag
+        HAVING SUM(cp.plays) > 0
+        ORDER BY avg_ctr DESC
+        """, {"start": period_start})
+
+        tag_effectiveness = []
+        for r in tag_rows:
+            tag_effectiveness.append({
+                "tag": r[0],
+                "clip_count": int(r[1]) if r[1] else 0,
+                "total_plays": int(r[2]) if r[2] else 0,
+                "completion_rate": float(r[3]) if r[3] else 0,
+                "ctr": float(r[4]) if r[4] else 0,
+                "cvr": float(r[5]) if r[5] else 0,
+            })
+
+        # 2. Duration analysis (which clip lengths perform best)
+        duration_rows = await _qa(db, """
+        WITH clip_dur AS (
+            SELECT
+                vc.clip_id,
+                CASE
+                    WHEN vc.duration < 10 THEN '0-10s'
+                    WHEN vc.duration < 20 THEN '10-20s'
+                    WHEN vc.duration < 30 THEN '20-30s'
+                    WHEN vc.duration < 45 THEN '30-45s'
+                    WHEN vc.duration < 60 THEN '45-60s'
+                    ELSE '60s+'
+                END as duration_bucket
+            FROM video_clips vc
+            WHERE vc.duration IS NOT NULL AND vc.duration > 0
+        ),
+        clip_perf AS (
+            SELECT
+                wte.clip_id,
+                COUNT(*) FILTER (WHERE wte.event_type = 'video_play') as plays,
+                COUNT(*) FILTER (WHERE wte.event_type = 'cta_click') as cta_clicks,
+                COUNT(*) FILTER (WHERE wte.event_type = 'conversion') as conversions,
+                COUNT(*) FILTER (WHERE wte.event_type = 'video_progress'
+                    AND wte.extra_data IS NOT NULL AND wte.extra_data->>'milestone' = '100') as completions
+            FROM widget_tracking_events wte
+            WHERE wte.created_at >= :start
+            GROUP BY wte.clip_id
+        )
+        SELECT
+            cd.duration_bucket,
+            COUNT(DISTINCT cd.clip_id) as clip_count,
+            SUM(cp.plays) as total_plays,
+            CASE WHEN SUM(cp.plays) > 0
+                THEN ROUND(SUM(cp.completions)::numeric / SUM(cp.plays) * 100, 1)
+                ELSE 0 END as avg_completion_rate,
+            CASE WHEN SUM(cp.plays) > 0
+                THEN ROUND(SUM(cp.cta_clicks)::numeric / SUM(cp.plays) * 100, 1)
+                ELSE 0 END as avg_ctr,
+            CASE WHEN SUM(cp.plays) > 0
+                THEN ROUND(SUM(cp.conversions)::numeric / SUM(cp.plays) * 100, 2)
+                ELSE 0 END as avg_cvr
+        FROM clip_dur cd
+        JOIN clip_perf cp ON cp.clip_id = cd.clip_id
+        GROUP BY cd.duration_bucket
+        ORDER BY
+            CASE cd.duration_bucket
+                WHEN '0-10s' THEN 1
+                WHEN '10-20s' THEN 2
+                WHEN '20-30s' THEN 3
+                WHEN '30-45s' THEN 4
+                WHEN '45-60s' THEN 5
+                ELSE 6
+            END
+        """, {"start": period_start})
+
+        duration_analysis = []
+        for r in duration_rows:
+            duration_analysis.append({
+                "bucket": r[0],
+                "clip_count": int(r[1]) if r[1] else 0,
+                "total_plays": int(r[2]) if r[2] else 0,
+                "completion_rate": float(r[3]) if r[3] else 0,
+                "ctr": float(r[4]) if r[4] else 0,
+                "cvr": float(r[5]) if r[5] else 0,
+            })
+
+        # 3. Sold vs Unsold pattern analysis
+        sold_rows = await _qa(db, """
+        WITH clip_perf AS (
+            SELECT
+                wte.clip_id,
+                COUNT(*) FILTER (WHERE wte.event_type = 'video_play') as plays,
+                COUNT(*) FILTER (WHERE wte.event_type = 'cta_click') as cta_clicks,
+                COUNT(*) FILTER (WHERE wte.event_type = 'video_progress'
+                    AND wte.extra_data IS NOT NULL AND wte.extra_data->>'milestone' = '100') as completions
+            FROM widget_tracking_events wte
+            WHERE wte.created_at >= :start
+            GROUP BY wte.clip_id
+        )
+        SELECT
+            COALESCE(vc.is_sold, false) as is_sold,
+            COUNT(DISTINCT vc.clip_id) as clip_count,
+            AVG(vc.duration) as avg_duration,
+            AVG(array_length(vc.sales_psychology_tags, 1)) as avg_tag_count,
+            CASE WHEN SUM(cp.plays) > 0
+                THEN ROUND(SUM(cp.completions)::numeric / SUM(cp.plays) * 100, 1)
+                ELSE 0 END as avg_completion_rate,
+            CASE WHEN SUM(cp.plays) > 0
+                THEN ROUND(SUM(cp.cta_clicks)::numeric / SUM(cp.plays) * 100, 1)
+                ELSE 0 END as avg_ctr
+        FROM video_clips vc
+        LEFT JOIN clip_perf cp ON cp.clip_id = vc.clip_id
+        GROUP BY COALESCE(vc.is_sold, false)
+        """, {"start": period_start})
+
+        sold_analysis = []
+        for r in sold_rows:
+            sold_analysis.append({
+                "is_sold": bool(r[0]),
+                "clip_count": int(r[1]) if r[1] else 0,
+                "avg_duration": round(float(r[2]), 1) if r[2] else 0,
+                "avg_tag_count": round(float(r[3]), 1) if r[3] else 0,
+                "completion_rate": float(r[4]) if r[4] else 0,
+                "ctr": float(r[5]) if r[5] else 0,
+            })
+
+        # 4. Top winning tag combinations
+        combo_rows = await _qa(db, """
+        WITH clip_perf AS (
+            SELECT
+                wte.clip_id,
+                COUNT(*) FILTER (WHERE wte.event_type = 'video_play') as plays,
+                COUNT(*) FILTER (WHERE wte.event_type = 'cta_click') as cta_clicks,
+                COUNT(*) FILTER (WHERE wte.event_type = 'conversion') as conversions
+            FROM widget_tracking_events wte
+            WHERE wte.created_at >= :start
+            GROUP BY wte.clip_id
+            HAVING COUNT(*) FILTER (WHERE wte.event_type = 'video_play') >= 3
+        )
+        SELECT
+            array_to_string(vc.sales_psychology_tags, ' + ') as tag_combo,
+            COUNT(*) as clip_count,
+            SUM(cp.plays) as total_plays,
+            CASE WHEN SUM(cp.plays) > 0
+                THEN ROUND(SUM(cp.cta_clicks)::numeric / SUM(cp.plays) * 100, 1)
+                ELSE 0 END as avg_ctr,
+            CASE WHEN SUM(cp.plays) > 0
+                THEN ROUND(SUM(cp.conversions)::numeric / SUM(cp.plays) * 100, 2)
+                ELSE 0 END as avg_cvr
+        FROM video_clips vc
+        JOIN clip_perf cp ON cp.clip_id = vc.clip_id
+        WHERE vc.sales_psychology_tags IS NOT NULL
+          AND array_length(vc.sales_psychology_tags, 1) >= 2
+        GROUP BY vc.sales_psychology_tags
+        HAVING COUNT(*) >= 2
+        ORDER BY avg_ctr DESC
+        LIMIT 10
+        """, {"start": period_start})
+
+        winning_combos = []
+        for r in combo_rows:
+            winning_combos.append({
+                "tags": r[0],
+                "clip_count": int(r[1]) if r[1] else 0,
+                "total_plays": int(r[2]) if r[2] else 0,
+                "ctr": float(r[3]) if r[3] else 0,
+                "cvr": float(r[4]) if r[4] else 0,
+            })
+
+        return {
+            "tag_effectiveness": tag_effectiveness,
+            "duration_analysis": duration_analysis,
+            "sold_vs_unsold": sold_analysis,
+            "winning_combos": winning_combos,
+            "period_days": days,
+        }
+    except Exception as e:
+        logger.error(f"Admin ML insights error: {e}")
+        import traceback
+        return {"error": str(e), "trace": traceback.format_exc()}
+
+
+@router.get("/analytics/hourly-heatmap")
+async def admin_analytics_hourly_heatmap(
+    days: int = Query(30, ge=1, le=365),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Hourly activity heatmap (day of week x hour)."""
+    expected_key = f"{ADMIN_ID}:{ADMIN_PASS}"
+    if x_admin_key != expected_key:
+        raise HTTPException(status_code=403, detail="Invalid admin credentials")
+
+    try:
+        period_start = datetime.utcnow() - timedelta(days=days)
+
+        rows = await _qa(db, """
+        SELECT
+            EXTRACT(DOW FROM created_at + INTERVAL '9 hours') as dow,
+            EXTRACT(HOUR FROM created_at + INTERVAL '9 hours') as hour,
+            COUNT(*) FILTER (WHERE event_type = 'video_play') as plays,
+            COUNT(*) FILTER (WHERE event_type = 'cta_click') as clicks
+        FROM widget_tracking_events
+        WHERE created_at >= :start
+        GROUP BY dow, hour
+        ORDER BY dow, hour
+        """, {"start": period_start})
+
+        heatmap = []
+        for r in rows:
+            heatmap.append({
+                "dow": int(r[0]) if r[0] is not None else 0,
+                "hour": int(r[1]) if r[1] is not None else 0,
+                "plays": int(r[2]) if r[2] else 0,
+                "clicks": int(r[3]) if r[3] else 0,
+            })
+
+        return {"heatmap": heatmap, "period_days": days}
+    except Exception as e:
+        logger.error(f"Admin heatmap error: {e}")
+        return {"heatmap": [], "error": str(e)}

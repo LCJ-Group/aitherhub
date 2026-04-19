@@ -5,6 +5,7 @@ import {
   Loader2, RefreshCw, ChevronLeft, ChevronRight, Building2, Plus, Minus,
   Download, Subtitles, Scissors, CheckCircle, Ban, AlertTriangle, Undo2,
   MessageSquare, SkipBack, SkipForward, Volume2, VolumeX,
+  TrendingUp, Activity, Brain, Clock, Zap, Target, Eye,
 } from "lucide-react";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
@@ -1032,6 +1033,12 @@ export default function AdminClipDB({ adminKey }) {
   const [enrichStatus, setEnrichStatus] = useState(null);
   const [showStats, setShowStats] = useState(true);
 
+  // Analytics state
+  const [showAnalytics, setShowAnalytics] = useState(false);
+  const [analyticsDays, setAnalyticsDays] = useState(30);
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
+  const [analyticsData, setAnalyticsData] = useState(null); // {overview, brandComparison, topClips, funnel, daily, mlInsights, heatmap}
+
   const pageSize = 20;
   const totalPages = Math.ceil(total / pageSize);
   const enrichTriggered = useRef(false);
@@ -1179,6 +1186,28 @@ export default function AdminClipDB({ adminKey }) {
     }
   }
 
+  async function loadAnalytics(days) {
+    setAnalyticsLoading(true);
+    try {
+      const d = days || analyticsDays;
+      const headers = { "X-Admin-Key": adminKey };
+      const [ov, bc, tc, fn, dy, ml, hm] = await Promise.all([
+        fetch(`${API_BASE}/api/v1/admin/analytics/overview?days=${d}`, { headers }).then(r => r.json()),
+        fetch(`${API_BASE}/api/v1/admin/analytics/brand-comparison?days=${d}`, { headers }).then(r => r.json()),
+        fetch(`${API_BASE}/api/v1/admin/analytics/top-clips?days=${d}&limit=20`, { headers }).then(r => r.json()),
+        fetch(`${API_BASE}/api/v1/admin/analytics/funnel?days=${d}`, { headers }).then(r => r.json()),
+        fetch(`${API_BASE}/api/v1/admin/analytics/daily?days=${d}`, { headers }).then(r => r.json()),
+        fetch(`${API_BASE}/api/v1/admin/analytics/ml-insights?days=${d}`, { headers }).then(r => r.json()),
+        fetch(`${API_BASE}/api/v1/admin/analytics/hourly-heatmap?days=${d}`, { headers }).then(r => r.json()),
+      ]);
+      setAnalyticsData({ overview: ov, brandComparison: bc, topClips: tc, funnel: fn, daily: dy, mlInsights: ml, heatmap: hm });
+    } catch (e) {
+      console.error("[Analytics] Load failed:", e);
+    } finally {
+      setAnalyticsLoading(false);
+    }
+  }
+
   const handleBrandChange = useCallback(() => {
     // Reload clips and brands after brand assignment change
     loadClips();
@@ -1210,6 +1239,13 @@ export default function AdminClipDB({ adminKey }) {
               title="統計表示"
             >
               <BarChart3 className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => { setShowAnalytics(!showAnalytics); if (!showAnalytics && !analyticsData) loadAnalytics(); }}
+              className={`p-2 rounded-lg transition ${showAnalytics ? "bg-blue-100 text-blue-700" : "hover:bg-gray-100 text-gray-500"}`}
+              title="アナリティクス"
+            >
+              <Activity className="w-4 h-4" />
             </button>
             <button
               onClick={handleForceEnrich}
@@ -1401,6 +1437,370 @@ export default function AdminClipDB({ adminKey }) {
           </div>
         )}
       </div>
+
+      {/* ═══ Cross-Brand Analytics Dashboard ═══ */}
+      {showAnalytics && (
+        <div className="mb-8 space-y-6">
+          {/* Period selector + refresh */}
+          <div className="flex items-center justify-between">
+            <h3 className="text-base font-bold text-gray-900 flex items-center gap-2">
+              <Activity className="w-5 h-5 text-blue-600" />
+              全ブランド横断アナリティクス
+            </h3>
+            <div className="flex items-center gap-2">
+              {[7, 14, 30, 90].map(d => (
+                <button key={d} onClick={() => { setAnalyticsDays(d); loadAnalytics(d); }}
+                  className={`px-3 py-1 rounded-lg text-xs font-medium transition ${
+                    analyticsDays === d ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                  }`}>{d}日</button>
+              ))}
+              <button onClick={() => loadAnalytics()} disabled={analyticsLoading}
+                className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500">
+                {analyticsLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+              </button>
+            </div>
+          </div>
+
+          {analyticsLoading && !analyticsData && (
+            <div className="text-center py-12 text-gray-400">
+              <Loader2 className="w-8 h-8 animate-spin mx-auto mb-2" />
+              <p className="text-sm">アナリティクスを読み込み中...</p>
+            </div>
+          )}
+
+          {analyticsData && (
+            <>
+              {/* KPI Cards */}
+              {analyticsData.overview?.kpi && (() => {
+                const k = analyticsData.overview.kpi;
+                const cards = [
+                  { label: "動画再生", value: k.plays, delta: k.plays_delta, icon: Play, color: "blue" },
+                  { label: "ユニーク視聴者", value: k.unique_viewers, icon: Users, color: "indigo" },
+                  { label: "完了率", value: `${k.completion_rate}%`, delta: k.completion_rate_delta, icon: Eye, color: "green" },
+                  { label: "CTR", value: `${k.ctr}%`, delta: k.ctr_delta, icon: Target, color: "orange" },
+                  { label: "CVR", value: `${k.cvr}%`, delta: k.cvr_delta, icon: Zap, color: "purple" },
+                  { label: "購入クリック", value: k.purchases, icon: ShoppingBag, color: "pink" },
+                  { label: "コンバージョン", value: k.conversions, icon: CheckCircle, color: "emerald" },
+                  { label: "リプレイ", value: k.replays, icon: RefreshCw, color: "cyan" },
+                ];
+                return (
+                  <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
+                    {cards.map((c, i) => {
+                      const Icon = c.icon;
+                      return (
+                        <div key={i} className="bg-white rounded-xl border border-gray-200 p-3 text-center">
+                          <Icon className={`w-4 h-4 mx-auto mb-1 text-${c.color}-500`} />
+                          <div className="text-lg font-bold text-gray-900">{c.value}</div>
+                          <div className="text-[10px] text-gray-500">{c.label}</div>
+                          {c.delta != null && (
+                            <div className={`text-[10px] font-medium mt-0.5 ${c.delta >= 0 ? "text-green-600" : "text-red-500"}`}>
+                              {c.delta >= 0 ? "+" : ""}{c.delta}%
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+
+              {/* Funnel Analysis */}
+              {analyticsData.funnel?.stages?.length > 0 && (
+                <div className="bg-white rounded-xl border border-gray-200 p-4">
+                  <h4 className="text-sm font-bold text-gray-700 mb-3 flex items-center gap-1.5">
+                    <TrendingUp className="w-4 h-4 text-blue-500" />
+                    ファネル分析
+                  </h4>
+                  <div className="space-y-2">
+                    {analyticsData.funnel.stages.map((s, i) => (
+                      <div key={i} className="flex items-center gap-3">
+                        <span className="text-xs text-gray-600 w-28 shrink-0">{s.name}</span>
+                        <div className="flex-1 h-6 bg-gray-100 rounded-full overflow-hidden">
+                          <div className="h-full rounded-full transition-all bg-gradient-to-r from-blue-500 to-blue-400"
+                            style={{ width: `${Math.max(s.rate, 1)}%` }} />
+                        </div>
+                        <span className="text-xs font-bold text-gray-700 w-12 text-right">{s.rate}%</span>
+                        <span className="text-[10px] text-gray-400 w-16 text-right">{s.count.toLocaleString()}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Brand Comparison + Top Clips (side by side) */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                {/* Brand Comparison */}
+                {analyticsData.brandComparison?.brands?.length > 0 && (
+                  <div className="bg-white rounded-xl border border-gray-200 p-4">
+                    <h4 className="text-sm font-bold text-gray-700 mb-3 flex items-center gap-1.5">
+                      <Building2 className="w-4 h-4 text-purple-500" />
+                      ブランド別パフォーマンス
+                    </h4>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="border-b border-gray-100">
+                            <th className="text-left py-2 px-1 text-gray-500 font-medium">ブランド</th>
+                            <th className="text-right py-2 px-1 text-gray-500 font-medium">再生</th>
+                            <th className="text-right py-2 px-1 text-gray-500 font-medium">完了率</th>
+                            <th className="text-right py-2 px-1 text-gray-500 font-medium">CTR</th>
+                            <th className="text-right py-2 px-1 text-gray-500 font-medium">CVR</th>
+                            <th className="text-right py-2 px-1 text-gray-500 font-medium">CV</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {analyticsData.brandComparison.brands.map((b, i) => (
+                            <tr key={i} className="border-b border-gray-50 hover:bg-gray-50">
+                              <td className="py-1.5 px-1 font-medium text-gray-800 truncate max-w-[120px]">{b.brand_name}</td>
+                              <td className="py-1.5 px-1 text-right text-gray-600">{b.plays.toLocaleString()}</td>
+                              <td className="py-1.5 px-1 text-right text-green-600 font-medium">{b.completion_rate}%</td>
+                              <td className="py-1.5 px-1 text-right text-orange-600 font-medium">{b.ctr}%</td>
+                              <td className="py-1.5 px-1 text-right text-purple-600 font-medium">{b.cvr}%</td>
+                              <td className="py-1.5 px-1 text-right text-blue-600 font-bold">{b.conversions}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* Top Clips */}
+                {analyticsData.topClips?.clips?.length > 0 && (
+                  <div className="bg-white rounded-xl border border-gray-200 p-4">
+                    <h4 className="text-sm font-bold text-gray-700 mb-3 flex items-center gap-1.5">
+                      <Star className="w-4 h-4 text-yellow-500" />
+                      トップクリップ (エンゲージメント順)
+                    </h4>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="border-b border-gray-100">
+                            <th className="text-left py-2 px-1 text-gray-500 font-medium">#</th>
+                            <th className="text-left py-2 px-1 text-gray-500 font-medium">商品</th>
+                            <th className="text-left py-2 px-1 text-gray-500 font-medium">ブランド</th>
+                            <th className="text-right py-2 px-1 text-gray-500 font-medium">再生</th>
+                            <th className="text-right py-2 px-1 text-gray-500 font-medium">完了率</th>
+                            <th className="text-right py-2 px-1 text-gray-500 font-medium">CTR</th>
+                            <th className="text-right py-2 px-1 text-gray-500 font-medium">スコア</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {analyticsData.topClips.clips.slice(0, 10).map((c, i) => (
+                            <tr key={i} className="border-b border-gray-50 hover:bg-gray-50">
+                              <td className="py-1.5 px-1 text-gray-400 font-bold">{i + 1}</td>
+                              <td className="py-1.5 px-1 text-gray-800 truncate max-w-[140px]">{c.product_name || "—"}</td>
+                              <td className="py-1.5 px-1 text-gray-500 truncate max-w-[80px]">{c.brand_name}</td>
+                              <td className="py-1.5 px-1 text-right text-gray-600">{c.plays.toLocaleString()}</td>
+                              <td className="py-1.5 px-1 text-right text-green-600">{c.completion_rate}%</td>
+                              <td className="py-1.5 px-1 text-right text-orange-600">{c.ctr}%</td>
+                              <td className="py-1.5 px-1 text-right">
+                                <span className="bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded font-bold">{c.engagement_score}</span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* ML Insights */}
+              {analyticsData.mlInsights && (
+                <div className="space-y-4">
+                  <h4 className="text-sm font-bold text-gray-700 flex items-center gap-1.5">
+                    <Brain className="w-4 h-4 text-purple-500" />
+                    ML分析インサイト
+                  </h4>
+
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    {/* Tag Effectiveness */}
+                    {analyticsData.mlInsights.tag_effectiveness?.length > 0 && (
+                      <div className="bg-white rounded-xl border border-gray-200 p-4">
+                        <h5 className="text-xs font-bold text-gray-600 mb-2 flex items-center gap-1">
+                          <Tag className="w-3.5 h-3.5 text-purple-500" />
+                          タグ別効果分析
+                        </h5>
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="border-b border-gray-100">
+                              <th className="text-left py-1.5 text-gray-500">タグ</th>
+                              <th className="text-right py-1.5 text-gray-500">クリップ数</th>
+                              <th className="text-right py-1.5 text-gray-500">完了率</th>
+                              <th className="text-right py-1.5 text-gray-500">CTR</th>
+                              <th className="text-right py-1.5 text-gray-500">CVR</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {analyticsData.mlInsights.tag_effectiveness.map((t, i) => (
+                              <tr key={i} className="border-b border-gray-50">
+                                <td className="py-1 text-gray-700 font-medium">{t.tag}</td>
+                                <td className="py-1 text-right text-gray-500">{t.clip_count}</td>
+                                <td className="py-1 text-right text-green-600">{t.completion_rate}%</td>
+                                <td className="py-1 text-right text-orange-600 font-bold">{t.ctr}%</td>
+                                <td className="py-1 text-right text-purple-600">{t.cvr}%</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    {/* Duration Analysis */}
+                    {analyticsData.mlInsights.duration_analysis?.length > 0 && (
+                      <div className="bg-white rounded-xl border border-gray-200 p-4">
+                        <h5 className="text-xs font-bold text-gray-600 mb-2 flex items-center gap-1">
+                          <Clock className="w-3.5 h-3.5 text-blue-500" />
+                          動画長さ別パフォーマンス
+                        </h5>
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="border-b border-gray-100">
+                              <th className="text-left py-1.5 text-gray-500">長さ</th>
+                              <th className="text-right py-1.5 text-gray-500">クリップ数</th>
+                              <th className="text-right py-1.5 text-gray-500">完了率</th>
+                              <th className="text-right py-1.5 text-gray-500">CTR</th>
+                              <th className="text-right py-1.5 text-gray-500">CVR</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {analyticsData.mlInsights.duration_analysis.map((d, i) => (
+                              <tr key={i} className="border-b border-gray-50">
+                                <td className="py-1 text-gray-700 font-medium">{d.bucket}</td>
+                                <td className="py-1 text-right text-gray-500">{d.clip_count}</td>
+                                <td className="py-1 text-right text-green-600">{d.completion_rate}%</td>
+                                <td className="py-1 text-right text-orange-600 font-bold">{d.ctr}%</td>
+                                <td className="py-1 text-right text-purple-600">{d.cvr}%</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    {/* Sold vs Unsold */}
+                    {analyticsData.mlInsights.sold_vs_unsold?.length > 0 && (
+                      <div className="bg-white rounded-xl border border-gray-200 p-4">
+                        <h5 className="text-xs font-bold text-gray-600 mb-2 flex items-center gap-1">
+                          <Sparkles className="w-3.5 h-3.5 text-green-500" />
+                          売れた vs 売れなかった パターン比較
+                        </h5>
+                        <div className="grid grid-cols-2 gap-4">
+                          {analyticsData.mlInsights.sold_vs_unsold.map((s, i) => (
+                            <div key={i} className={`rounded-lg p-3 ${s.is_sold ? "bg-green-50 border border-green-200" : "bg-gray-50 border border-gray-200"}`}>
+                              <div className="text-xs font-bold mb-2 ${s.is_sold ? 'text-green-700' : 'text-gray-600'}">
+                                {s.is_sold ? "売れた動画" : "未売動画"}
+                              </div>
+                              <div className="space-y-1 text-xs">
+                                <div className="flex justify-between"><span className="text-gray-500">クリップ数</span><span className="font-bold">{s.clip_count}</span></div>
+                                <div className="flex justify-between"><span className="text-gray-500">平均長さ</span><span className="font-bold">{s.avg_duration}s</span></div>
+                                <div className="flex justify-between"><span className="text-gray-500">平均タグ数</span><span className="font-bold">{s.avg_tag_count}</span></div>
+                                <div className="flex justify-between"><span className="text-gray-500">完了率</span><span className="font-bold text-green-600">{s.completion_rate}%</span></div>
+                                <div className="flex justify-between"><span className="text-gray-500">CTR</span><span className="font-bold text-orange-600">{s.ctr}%</span></div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Winning Tag Combos */}
+                    {analyticsData.mlInsights.winning_combos?.length > 0 && (
+                      <div className="bg-white rounded-xl border border-gray-200 p-4">
+                        <h5 className="text-xs font-bold text-gray-600 mb-2 flex items-center gap-1">
+                          <Zap className="w-3.5 h-3.5 text-yellow-500" />
+                          勝ちパターン（タグ組み合わせ）
+                        </h5>
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="border-b border-gray-100">
+                              <th className="text-left py-1.5 text-gray-500">タグ組み合わせ</th>
+                              <th className="text-right py-1.5 text-gray-500">クリップ</th>
+                              <th className="text-right py-1.5 text-gray-500">CTR</th>
+                              <th className="text-right py-1.5 text-gray-500">CVR</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {analyticsData.mlInsights.winning_combos.map((w, i) => (
+                              <tr key={i} className="border-b border-gray-50">
+                                <td className="py-1 text-gray-700">{w.tags}</td>
+                                <td className="py-1 text-right text-gray-500">{w.clip_count}</td>
+                                <td className="py-1 text-right text-orange-600 font-bold">{w.ctr}%</td>
+                                <td className="py-1 text-right text-purple-600 font-bold">{w.cvr}%</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Daily Trend (simple text-based) */}
+              {analyticsData.daily?.daily?.length > 0 && (
+                <div className="bg-white rounded-xl border border-gray-200 p-4">
+                  <h4 className="text-sm font-bold text-gray-700 mb-3 flex items-center gap-1.5">
+                    <TrendingUp className="w-4 h-4 text-green-500" />
+                    日別トレンド
+                  </h4>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="border-b border-gray-100">
+                          <th className="text-left py-2 px-1 text-gray-500">日付</th>
+                          <th className="text-right py-2 px-1 text-gray-500">再生</th>
+                          <th className="text-right py-2 px-1 text-gray-500">視聴者</th>
+                          <th className="text-right py-2 px-1 text-gray-500">完了</th>
+                          <th className="text-right py-2 px-1 text-gray-500">クリック</th>
+                          <th className="text-right py-2 px-1 text-gray-500">CV</th>
+                          <th className="py-2 px-1 text-gray-500">再生バー</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(() => {
+                          const maxPlays = Math.max(...analyticsData.daily.daily.map(d => d.plays), 1);
+                          return analyticsData.daily.daily.slice(-14).map((d, i) => (
+                            <tr key={i} className="border-b border-gray-50 hover:bg-gray-50">
+                              <td className="py-1 px-1 text-gray-600">{d.date}</td>
+                              <td className="py-1 px-1 text-right font-medium text-gray-800">{d.plays}</td>
+                              <td className="py-1 px-1 text-right text-indigo-600">{d.unique_viewers}</td>
+                              <td className="py-1 px-1 text-right text-green-600">{d.completions}</td>
+                              <td className="py-1 px-1 text-right text-orange-600">{d.cta_clicks}</td>
+                              <td className="py-1 px-1 text-right text-purple-600 font-bold">{d.conversions}</td>
+                              <td className="py-1 px-1 w-32">
+                                <div className="h-3 bg-gray-100 rounded-full overflow-hidden">
+                                  <div className="h-full bg-blue-400 rounded-full" style={{ width: `${(d.plays / maxPlays) * 100}%` }} />
+                                </div>
+                              </td>
+                            </tr>
+                          ));
+                        })()}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Platform Summary */}
+              {analyticsData.overview && (
+                <div className="bg-gradient-to-r from-blue-50 to-purple-50 rounded-xl border border-blue-200 p-4">
+                  <h4 className="text-sm font-bold text-gray-700 mb-2 flex items-center gap-1.5">
+                    <Database className="w-4 h-4 text-blue-500" />
+                    プラットフォーム概要
+                  </h4>
+                  <div className="flex gap-6 text-xs">
+                    <div><span className="text-gray-500">アクティブクリップ: </span><span className="font-bold text-blue-700">{analyticsData.overview.active_clips}</span></div>
+                    <div><span className="text-gray-500">アクティブブランド: </span><span className="font-bold text-purple-700">{analyticsData.overview.active_brands}</span></div>
+                    <div><span className="text-gray-500">期間: </span><span className="font-bold text-gray-700">{analyticsDays}日間</span></div>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       {/* Stats */}
       {showStats && stats && <StatsOverview stats={stats} />}
