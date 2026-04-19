@@ -4,6 +4,7 @@ import {
   Star, ThumbsUp, ThumbsDown, ArrowUpDown, Database, Sparkles,
   Loader2, RefreshCw, ChevronLeft, ChevronRight, Building2, Plus, Minus,
   Download, Subtitles, Scissors, CheckCircle, Ban, AlertTriangle, Undo2,
+  MessageSquare, SkipBack, SkipForward, Volume2, VolumeX,
 } from "lucide-react";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
@@ -664,25 +665,333 @@ function TopProductsChart({ products }) {
   );
 }
 
-// ─── Video Player Modal ───
-function VideoPlayerModal({ clip, onClose }) {
+// ─── Video Player Modal (Check Mode) ───
+function VideoPlayerModal({ clip, clips, onClose, brands, adminKey, onBrandChange, onNavigate }) {
+  const videoRef = useRef(null);
+  const [showNg, setShowNg] = useState(false);
+  const [showBrands, setShowBrands] = useState(false);
+  const [selectedReason, setSelectedReason] = useState(null);
+  const [comment, setComment] = useState("");
+  const [ngLoading, setNgLoading] = useState(false);
+  const [assignLoading, setAssignLoading] = useState(false);
+  const [muted, setMuted] = useState(false);
+  const [actionDone, setActionDone] = useState(null); // "ng" | "brand" | null
+  const [brandSearch, setBrandSearch] = useState("");
+
   if (!clip) return null;
+
+  const currentIdx = clips.findIndex((c) => c.clip_id === clip.clip_id);
+  const hasPrev = currentIdx > 0;
+  const hasNext = currentIdx < clips.length - 1;
+  const assignments = clip.brand_assignments || [];
+  const tags = clip.tags || clip.sales_psychology_tags || [];
+
+  const navigate = (dir) => {
+    const nextIdx = currentIdx + dir;
+    if (nextIdx >= 0 && nextIdx < clips.length) {
+      setShowNg(false); setShowBrands(false); setSelectedReason(null);
+      setComment(""); setActionDone(null); setBrandSearch("");
+      onNavigate(clips[nextIdx]);
+    }
+  };
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+      if (e.key === "ArrowLeft") { e.preventDefault(); navigate(-1); }
+      if (e.key === "ArrowRight") { e.preventDefault(); navigate(1); }
+      if (e.key === "Escape") { e.preventDefault(); onClose(); }
+      if (e.key === " ") {
+        e.preventDefault();
+        if (videoRef.current) videoRef.current.paused ? videoRef.current.play() : videoRef.current.pause();
+      }
+      if (e.key === "n" || e.key === "N") { e.preventDefault(); setShowNg(true); setShowBrands(false); }
+      if (e.key === "b" || e.key === "B") { e.preventDefault(); setShowBrands(true); setShowNg(false); }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [currentIdx, clips]);
+
+  const handleMarkNG = async (reasonKey) => {
+    setNgLoading(true);
+    try {
+      const body = { reason: reasonKey };
+      if (comment.trim()) body.comment = comment.trim();
+      const res = await fetch(
+        `${API_BASE}/api/v1/clip-db/mark-unusable?clip_id=${clip.clip_id}`,
+        { method: "POST", headers: { "X-Admin-Key": adminKey, "Content-Type": "application/json" }, body: JSON.stringify(body) }
+      );
+      if (res.ok) {
+        setActionDone("ng");
+        setShowNg(false); setSelectedReason(null); setComment("");
+        onBrandChange?.();
+        // Auto-advance after 800ms
+        setTimeout(() => { if (hasNext) navigate(1); }, 800);
+      }
+    } catch (e) { console.error("Mark NG failed:", e); }
+    finally { setNgLoading(false); }
+  };
+
+  const handleAssignBrand = async (clientId) => {
+    setAssignLoading(true);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/v1/clip-db/assign-brand?clip_id=${clip.clip_id}&client_id=${clientId}`,
+        { method: "POST", headers: { "X-Admin-Key": adminKey } }
+      );
+      if (res.ok) {
+        setActionDone("brand");
+        setShowBrands(false); setBrandSearch("");
+        onBrandChange?.();
+        // Auto-advance after 800ms
+        setTimeout(() => { if (hasNext) navigate(1); }, 800);
+      }
+    } catch (e) { console.error("Assign brand failed:", e); }
+    finally { setAssignLoading(false); }
+  };
+
+  const unassignedBrands = brands.filter(
+    (b) => !assignments.some((a) => a.client_id === b.client_id)
+  ).filter(
+    (b) => !brandSearch || b.name.toLowerCase().includes(brandSearch.toLowerCase())
+  );
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
-      <div className="relative max-w-md w-full mx-4" onClick={(e) => e.stopPropagation()}>
-        <button onClick={onClose} className="absolute -top-10 right-0 text-white hover:text-gray-300">
-          <X className="w-6 h-6" />
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md" onClick={onClose}>
+      <div className="relative flex gap-0 max-w-5xl w-full mx-4" onClick={(e) => e.stopPropagation()} style={{ maxHeight: "90vh" }}>
+
+        {/* Left nav arrow */}
+        <button
+          onClick={() => navigate(-1)}
+          disabled={!hasPrev}
+          className="absolute -left-14 top-1/2 -translate-y-1/2 z-10 p-2 rounded-full bg-white/10 hover:bg-white/20 text-white disabled:opacity-20 disabled:cursor-not-allowed transition-all"
+        >
+          <ChevronLeft className="w-7 h-7" />
         </button>
-        <video
-          src={clip.clip_url}
-          controls
-          autoPlay
-          className="w-full rounded-xl shadow-2xl"
-          style={{ maxHeight: "80vh" }}
-        />
-        <div className="mt-3 text-white text-sm">
-          {clip.product_name && <p className="font-medium">{clip.product_name}</p>}
-          {clip.transcript_text && <p className="text-gray-300 text-xs mt-1 max-h-40 overflow-y-auto leading-relaxed">{clip.transcript_text}</p>}
+
+        {/* Right nav arrow */}
+        <button
+          onClick={() => navigate(1)}
+          disabled={!hasNext}
+          className="absolute -right-14 top-1/2 -translate-y-1/2 z-10 p-2 rounded-full bg-white/10 hover:bg-white/20 text-white disabled:opacity-20 disabled:cursor-not-allowed transition-all"
+        >
+          <ChevronRight className="w-7 h-7" />
+        </button>
+
+        {/* Close button */}
+        <button onClick={onClose} className="absolute -top-12 right-0 text-white/70 hover:text-white transition-colors flex items-center gap-1 text-sm">
+          <X className="w-5 h-5" /> ESC
+        </button>
+
+        {/* Video area */}
+        <div className="flex-1 min-w-0 flex flex-col">
+          <div className="relative bg-black rounded-l-2xl overflow-hidden" style={{ maxHeight: "75vh" }}>
+            <video
+              ref={videoRef}
+              src={clip.clip_url}
+              controls
+              autoPlay
+              muted={muted}
+              className="w-full h-full object-contain"
+              style={{ maxHeight: "75vh" }}
+            />
+            {/* Counter badge */}
+            <div className="absolute top-3 left-3 px-3 py-1 rounded-full bg-black/60 text-white text-xs font-medium">
+              {currentIdx + 1} / {clips.length}
+            </div>
+            {/* Mute toggle */}
+            <button
+              onClick={() => setMuted(!muted)}
+              className="absolute top-3 right-3 p-2 rounded-full bg-black/60 text-white hover:bg-black/80 transition-colors"
+            >
+              {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+            </button>
+            {/* Action done overlay */}
+            {actionDone && (
+              <div className={`absolute inset-0 flex items-center justify-center pointer-events-none ${
+                actionDone === "ng" ? "bg-red-500/20" : "bg-green-500/20"
+              }`}>
+                <div className={`px-6 py-3 rounded-2xl text-lg font-bold ${
+                  actionDone === "ng" ? "bg-red-500 text-white" : "bg-green-500 text-white"
+                }`}>
+                  {actionDone === "ng" ? "NG" : "\u2713 \u30d6\u30e9\u30f3\u30c9\u5272\u5f53\u6e08"}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Info bar under video */}
+          <div className="bg-gray-900 rounded-bl-2xl px-4 py-3 space-y-2">
+            <div className="flex items-center gap-3 text-white">
+              <span className="text-sm font-bold">{clip.gmv > 0 ? formatGMV(clip.gmv) : "--"}</span>
+              <span className="text-xs text-gray-400">CTA {clip.cta_score || "--"}</span>
+              <span className={`text-xs px-2 py-0.5 rounded-full ${clip.is_sold ? "bg-green-500/20 text-green-400" : "bg-gray-700 text-gray-400"}`}>
+                {clip.is_sold ? "SOLD" : "\u672a\u58f2"}
+              </span>
+              {clip.duration_sec && <span className="text-xs text-gray-500">{formatDuration(clip.duration_sec)}</span>}
+              {assignments.length > 0 && (
+                <div className="flex gap-1 ml-auto">
+                  {assignments.map((a) => (
+                    <span key={a.client_id} className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/30">
+                      {a.name}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+            {tags.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {tags.slice(0, 6).map((t, i) => (
+                  <span key={i} className="text-[10px] px-2 py-0.5 rounded-full bg-white/10 text-gray-300">{getTagLabel(t)}</span>
+                ))}
+              </div>
+            )}
+            {clip.transcript_text && (
+              <p className="text-gray-400 text-xs max-h-16 overflow-y-auto leading-relaxed">{clip.transcript_text}</p>
+            )}
+          </div>
+        </div>
+
+        {/* Right action panel */}
+        <div className="w-64 bg-gray-900 rounded-r-2xl border-l border-gray-800 flex flex-col" style={{ maxHeight: "90vh" }}>
+          <div className="px-4 py-3 border-b border-gray-800">
+            <h3 className="text-white text-sm font-bold flex items-center gap-2">
+              <CheckCircle className="w-4 h-4 text-green-400" />
+              \u30c1\u30a7\u30c3\u30af\u30e2\u30fc\u30c9
+            </h3>
+            <p className="text-gray-500 text-[10px] mt-1">\u2190\u2192 \u30ca\u30d3 \u30fb Space \u518d\u751f \u30fb N=NG \u30fb B=\u30d6\u30e9\u30f3\u30c9</p>
+          </div>
+
+          <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+            {/* NG or Usable action */}
+            {!showNg && !showBrands && (
+              <div className="space-y-2">
+                <button
+                  onClick={() => { setShowBrands(true); setShowNg(false); }}
+                  className="w-full py-3 rounded-xl bg-green-600 hover:bg-green-500 text-white font-bold text-sm transition-colors flex items-center justify-center gap-2"
+                >
+                  <CheckCircle className="w-4 h-4" /> \u4f7f\u3048\u308b\uff08\u30d6\u30e9\u30f3\u30c9\u9078\u629e\uff09
+                </button>
+                <button
+                  onClick={() => { setShowNg(true); setShowBrands(false); }}
+                  className="w-full py-3 rounded-xl bg-red-600/80 hover:bg-red-500 text-white font-bold text-sm transition-colors flex items-center justify-center gap-2"
+                >
+                  <Ban className="w-4 h-4" /> \u4f7f\u3048\u306a\u3044\uff08NG\uff09
+                </button>
+              </div>
+            )}
+
+            {/* NG reason selection */}
+            {showNg && !selectedReason && (
+              <div className="space-y-1">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-red-400 text-xs font-bold flex items-center gap-1">
+                    <AlertTriangle className="w-3 h-3" /> NG\u7406\u7531\u3092\u9078\u629e
+                  </span>
+                  <button onClick={() => setShowNg(false)} className="text-gray-500 hover:text-white text-xs">\u623b\u308b</button>
+                </div>
+                {NG_REASONS.map((r) => (
+                  <button
+                    key={r.key}
+                    onClick={() => setSelectedReason(r.key)}
+                    className="w-full text-left px-3 py-2 rounded-lg text-xs text-gray-200 hover:bg-red-500/20 hover:text-red-300 transition-colors"
+                  >
+                    {r.label}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* NG comment input */}
+            {showNg && selectedReason && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-red-400 text-xs font-bold">
+                    {NG_REASONS.find((r) => r.key === selectedReason)?.label}
+                  </span>
+                  <button onClick={() => setSelectedReason(null)} className="text-gray-500 hover:text-white text-xs">\u623b\u308b</button>
+                </div>
+                <textarea
+                  value={comment}
+                  onChange={(e) => setComment(e.target.value)}
+                  placeholder="\u5177\u4f53\u7684\u306a\u7406\u7531\uff08AI\u5b66\u7fd2\u306b\u4f7f\u308f\u308c\u307e\u3059\uff09"
+                  className="w-full px-3 py-2 rounded-lg bg-gray-800 border border-gray-700 text-white text-xs placeholder-gray-500 resize-none focus:outline-none focus:border-red-500"
+                  rows={3}
+                />
+                <button
+                  onClick={() => handleMarkNG(selectedReason)}
+                  disabled={ngLoading}
+                  className="w-full py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-sm transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  {ngLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Ban className="w-4 h-4" />}
+                  NG\u306b\u3059\u308b
+                </button>
+              </div>
+            )}
+
+            {/* Brand selection */}
+            {showBrands && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-green-400 text-xs font-bold flex items-center gap-1">
+                    <Building2 className="w-3 h-3" /> \u30d6\u30e9\u30f3\u30c9\u9078\u629e
+                  </span>
+                  <button onClick={() => setShowBrands(false)} className="text-gray-500 hover:text-white text-xs">\u623b\u308b</button>
+                </div>
+                <input
+                  type="text"
+                  value={brandSearch}
+                  onChange={(e) => setBrandSearch(e.target.value)}
+                  placeholder="\u30d6\u30e9\u30f3\u30c9\u691c\u7d22..."
+                  className="w-full px-3 py-2 rounded-lg bg-gray-800 border border-gray-700 text-white text-xs placeholder-gray-500 focus:outline-none focus:border-green-500"
+                />
+                <div className="space-y-1 max-h-60 overflow-y-auto">
+                  {unassignedBrands.map((b, idx) => {
+                    const color = getBrandColor(idx);
+                    return (
+                      <button
+                        key={b.client_id}
+                        onClick={() => handleAssignBrand(b.client_id)}
+                        disabled={assignLoading}
+                        className="w-full text-left px-3 py-2.5 rounded-lg text-xs transition-colors hover:bg-green-500/20 flex items-center gap-2 disabled:opacity-50"
+                      >
+                        <span className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold" style={{ background: color.bg, color: color.text }}>
+                          {b.name.charAt(0).toUpperCase()}
+                        </span>
+                        <span className="text-gray-200 truncate">{b.name}</span>
+                        <span className="text-gray-600 text-[10px] ml-auto">{b.clip_count || 0}\u4ef6</span>
+                      </button>
+                    );
+                  })}
+                  {unassignedBrands.length === 0 && (
+                    <p className="text-gray-500 text-xs text-center py-4">
+                      {brandSearch ? "\u898b\u3064\u304b\u308a\u307e\u305b\u3093" : "\u5168\u30d6\u30e9\u30f3\u30c9\u5272\u5f53\u6e08\u307f"}
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Bottom nav buttons (mobile-friendly) */}
+          <div className="px-4 py-3 border-t border-gray-800 flex items-center justify-between">
+            <button
+              onClick={() => navigate(-1)}
+              disabled={!hasPrev}
+              className="flex items-center gap-1 px-3 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 text-white text-xs disabled:opacity-30 transition-colors"
+            >
+              <SkipBack className="w-3 h-3" /> \u524d
+            </button>
+            <span className="text-gray-500 text-xs">{currentIdx + 1}/{clips.length}</span>
+            <button
+              onClick={() => navigate(1)}
+              disabled={!hasNext}
+              className="flex items-center gap-1 px-3 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 text-white text-xs disabled:opacity-30 transition-colors"
+            >
+              \u6b21 <SkipForward className="w-3 h-3" />
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -1331,9 +1640,17 @@ export default function AdminClipDB({ adminKey }) {
         </>
       )}
 
-      {/* Video player modal */}
+      {/* Video player modal (Check Mode) */}
       {playerClip && (
-        <VideoPlayerModal clip={playerClip} onClose={() => setPlayerClip(null)} />
+        <VideoPlayerModal
+          clip={playerClip}
+          clips={clips}
+          onClose={() => setPlayerClip(null)}
+          brands={brands}
+          adminKey={adminKey}
+          onBrandChange={handleBrandChange}
+          onNavigate={setPlayerClip}
+        />
       )}
     </div>
   );
