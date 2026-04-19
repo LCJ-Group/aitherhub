@@ -1701,6 +1701,16 @@ async def _auto_rank_clips(db: AsyncSession):
 async def get_share_clip_meta(clip_id: str, db: AsyncSession = Depends(get_db)):
     """Return clip metadata for the share landing page & OGP tags.
     Public endpoint – no auth required so crawlers can read OGP."""
+    try:
+        return await _get_share_clip_meta_impl(clip_id, db)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Share endpoint error for clip {clip_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def _get_share_clip_meta_impl(clip_id: str, db: AsyncSession):
     result = await db.execute(
         text("""
             SELECT vc.id::text as clip_id,
@@ -1743,17 +1753,18 @@ async def get_share_clip_meta(clip_id: str, db: AsyncSession = Depends(get_db)):
     video_url = row.get("widget_url") or row.get("exported_url") or row.get("clip_url") or ""
 
     # Generate SAS if Azure blob
-    from app.services.storage_service import generate_read_sas_from_url
-    if thumbnail and "blob.core.windows.net" in thumbnail:
-        try:
-            thumbnail = generate_read_sas_from_url(thumbnail)
-        except Exception:
-            pass
-    if video_url and "blob.core.windows.net" in video_url:
-        try:
-            video_url = generate_read_sas_from_url(video_url)
-        except Exception:
-            pass
+    try:
+        from app.services.storage_service import generate_read_sas_from_url
+        if thumbnail and "blob.core.windows.net" in thumbnail:
+            sas_thumb = generate_read_sas_from_url(thumbnail)
+            if sas_thumb:
+                thumbnail = sas_thumb
+        if video_url and "blob.core.windows.net" in video_url:
+            sas_video = generate_read_sas_from_url(video_url)
+            if sas_video:
+                video_url = sas_video
+    except Exception as e:
+        logger.warning(f"SAS generation failed in share endpoint: {e}")
 
     return {
         "clip_id": row["clip_id"],
