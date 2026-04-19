@@ -1721,13 +1721,13 @@ async def _get_share_clip_meta_impl(clip_id: str, db: AsyncSession):
                    wca.product_name as wca_product_name,
                    wca.product_price, wca.product_url,
                    wca.product_image_url, wca.product_cart_url,
-                   wc.name as brand_name, wc.id as client_id,
+                   wc.name as brand_name, wc.client_id as client_id,
                    wc.logo_url as brand_logo_url
             FROM video_clips vc
             LEFT JOIN widget_clip_assignments wca
                 ON vc.id::text = wca.clip_id AND wca.is_active = TRUE
             LEFT JOIN widget_clients wc
-                ON wca.client_id = wc.id AND wc.is_active = TRUE
+                ON wca.client_id = wc.client_id AND wc.is_active = TRUE
             WHERE vc.id::text = :cid
             LIMIT 1
         """),
