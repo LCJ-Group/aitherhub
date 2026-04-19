@@ -2221,11 +2221,11 @@
     shareBtn.addEventListener("click", function (e) {
       e.stopPropagation();
       var clip = clips[currentIndex];
-      // Build share URL with clip ID parameter so the recipient opens this specific video
-      var baseUrl = window.location.href.split("?")[0].split("#")[0];
-      var shareUrl = baseUrl + "?ath_clip=" + encodeURIComponent(clip.clip_id);
+      // Build share URL pointing to the dedicated video landing page
+      var shareUrl = "https://www.aitherhub.com/v/" + encodeURIComponent(clip.clip_id);
       var shareTitle = clip.product_name || brandName;
-      var shareText = shareTitle + (clip.product_price ? " " + clip.product_price : "");
+      // Include URL in text so iOS share sheet always shows the link
+      var shareText = shareTitle + (clip.product_price ? " " + clip.product_price : "") + "\n" + shareUrl;
       if (navigator.share) {
         navigator.share({ title: shareTitle, text: shareText, url: shareUrl }).catch(function () { });
       } else if (navigator.clipboard) {

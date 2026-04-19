@@ -12,6 +12,7 @@ import ScriptGeneratorPage from './components/ScriptGeneratorPage'
 import PrivacyPolicy from './components/PrivacyPolicy'
 import AuthPage from './pages/authPages/AuthPage'
 import BrandPortal from './components/brand/BrandPortal'
+import ShareVideoPage from './components/ShareVideoPage'
 import { Toaster } from "./components/ui/toaster";
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { LanguageProvider } from './contexts/LanguageContext';
@@ -38,6 +39,7 @@ function App() {
           <Route path="/register" element={<AuthPage mode="register" />} />
           <Route path="/forgot-password" element={<AuthPage mode="forgot-password" />} />
           <Route path="/brand" element={<BrandPortal />} />
+          <Route path="/v/:clipId" element={<ShareVideoPage />} />
         </Routes>
         <Toaster />
       </BrowserRouter>

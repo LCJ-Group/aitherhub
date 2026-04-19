@@ -1694,3 +1694,88 @@ async def _auto_rank_clips(db: AsyncSession):
     except Exception as e:
         logger.warning(f"Auto-rank failed (non-critical): {e}")
         await db.rollback()
+
+
+# ── Share Landing Page: clip metadata for /v/{clip_id} ──────────────
+@router.get("/widget/share/{clip_id}")
+async def get_share_clip_meta(clip_id: str, db: AsyncSession = Depends(get_db)):
+    """Return clip metadata for the share landing page & OGP tags.
+    Public endpoint – no auth required so crawlers can read OGP."""
+    result = await db.execute(
+        text("""
+            SELECT vc.id::text as clip_id,
+                   vc.clip_url, vc.exported_url, vc.widget_url,
+                   vc.thumbnail_url, vc.duration_sec,
+                   vc.product_name as vc_product_name,
+                   vc.liver_name,
+                   wca.product_name as wca_product_name,
+                   wca.product_price, wca.product_url,
+                   wca.product_image_url, wca.product_cart_url,
+                   wc.name as brand_name, wc.id as client_id,
+                   wc.logo_url as brand_logo_url
+            FROM video_clips vc
+            LEFT JOIN widget_clip_assignments wca
+                ON vc.id::text = wca.clip_id AND wca.is_active = TRUE
+            LEFT JOIN widget_clients wc
+                ON wca.client_id = wc.id AND wc.is_active = TRUE
+            WHERE vc.id::text = :cid
+            LIMIT 1
+        """),
+        {"cid": clip_id},
+    )
+    row = result.mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Clip not found")
+
+    row = dict(row)
+    product_name = row.get("wca_product_name") or row.get("vc_product_name") or ""
+    brand_name = row.get("brand_name") or ""
+    title = product_name if product_name else brand_name
+    if brand_name and product_name:
+        title = f"{product_name} | {brand_name}"
+    elif brand_name:
+        title = brand_name
+
+    # Pick best thumbnail
+    thumbnail = row.get("thumbnail_url") or row.get("product_image_url") or ""
+
+    # Pick best video URL
+    video_url = row.get("widget_url") or row.get("exported_url") or row.get("clip_url") or ""
+
+    # Generate SAS if Azure blob
+    from app.services.storage_service import generate_read_sas_from_url
+    if thumbnail and "blob.core.windows.net" in thumbnail:
+        try:
+            thumbnail = generate_read_sas_from_url(thumbnail)
+        except Exception:
+            pass
+    if video_url and "blob.core.windows.net" in video_url:
+        try:
+            video_url = generate_read_sas_from_url(video_url)
+        except Exception:
+            pass
+
+    return {
+        "clip_id": row["clip_id"],
+        "client_id": row.get("client_id") or "",
+        "title": title,
+        "brand_name": brand_name,
+        "brand_logo_url": row.get("brand_logo_url") or "",
+        "product_name": product_name,
+        "product_price": row.get("product_price") or "",
+        "product_url": row.get("product_url") or "",
+        "product_image_url": row.get("product_image_url") or "",
+        "product_cart_url": row.get("product_cart_url") or "",
+        "thumbnail_url": thumbnail,
+        "video_url": video_url,
+        "duration_sec": row.get("duration_sec"),
+        "liver_name": row.get("liver_name") or "",
+        "og": {
+            "title": title or "AitherHub Video",
+            "description": f"{brand_name}の動画をチェック！" if brand_name else "動画をチェック！",
+            "image": thumbnail,
+            "video": video_url,
+            "url": f"https://www.aitherhub.com/v/{clip_id}",
+            "type": "video.other",
+        },
+    }
