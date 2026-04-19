@@ -925,11 +925,12 @@ async def brand_analytics_clip_performance(
         clip_progress AS (
             SELECT
                 e.clip_id,
-                COUNT(*) FILTER (WHERE (e.extra_data::jsonb->>'progress_pct')::int >= 50) as watched_50,
-                COUNT(*) FILTER (WHERE (e.extra_data::jsonb->>'progress_pct')::int >= 75) as watched_75,
-                COUNT(*) FILTER (WHERE (e.extra_data::jsonb->>'progress_pct')::int >= 100) as watched_100,
-                AVG((e.extra_data::jsonb->>'watch_duration_sec')::float)
-                    FILTER (WHERE (e.extra_data::jsonb->>'progress_pct')::int >= 100) as avg_watch_sec
+                COUNT(*) FILTER (WHERE e.extra_data IS NOT NULL AND (e.extra_data->>'progress_pct')::int >= 50) as watched_50,
+                COUNT(*) FILTER (WHERE e.extra_data IS NOT NULL AND (e.extra_data->>'progress_pct')::int >= 75) as watched_75,
+                COUNT(*) FILTER (WHERE e.extra_data IS NOT NULL AND (e.extra_data->>'progress_pct')::int >= 100) as watched_100,
+                AVG(CASE WHEN e.extra_data->>'watch_duration_sec' IS NOT NULL
+                    THEN (e.extra_data->>'watch_duration_sec')::float ELSE NULL END)
+                    FILTER (WHERE e.extra_data IS NOT NULL AND (e.extra_data->>'progress_pct')::int >= 100) as avg_watch_sec
             FROM widget_tracking_events e
             WHERE e.client_id = :cid AND e.event_type = 'video_progress'
                   AND e.clip_id IS NOT NULL AND e.created_at >= :since
@@ -937,7 +938,8 @@ async def brand_analytics_clip_performance(
         ),
         clip_replays AS (
             SELECT clip_id, COUNT(*) as replay_count,
-                   MAX((extra_data::jsonb->>'loop_count')::int) as max_loops
+                   MAX(CASE WHEN extra_data IS NOT NULL AND extra_data->>'loop_count' IS NOT NULL
+                       THEN (extra_data->>'loop_count')::int ELSE NULL END) as max_loops
             FROM widget_tracking_events
             WHERE client_id = :cid AND event_type = 'video_replay'
                   AND clip_id IS NOT NULL AND created_at >= :since
@@ -1209,7 +1211,7 @@ async def brand_analytics_overview(
             COUNT(*) FILTER (WHERE event_type = 'video_play') as plays,
             COUNT(DISTINCT session_id) FILTER (WHERE event_type = 'video_play') as unique_viewers,
             COUNT(*) FILTER (WHERE event_type = 'video_progress'
-                AND (extra_data::jsonb->>'progress_pct')::int >= 100) as completions,
+                AND extra_data IS NOT NULL AND (extra_data->>'progress_pct')::int >= 100) as completions,
             COUNT(*) FILTER (WHERE event_type IN ('cta_click', 'product_click')) as clicks,
             COUNT(*) FILTER (WHERE event_type = 'add_to_cart') as carts,
             COUNT(*) FILTER (WHERE event_type = 'purchase_click') as purchases,
@@ -1217,9 +1219,10 @@ async def brand_analytics_overview(
             COUNT(*) FILTER (WHERE event_type = 'like') as likes,
             COUNT(*) FILTER (WHERE event_type = 'share') as shares,
             COUNT(*) FILTER (WHERE event_type = 'video_replay') as replays,
-            AVG((extra_data::jsonb->>'watch_duration_sec')::float)
+            AVG(CASE WHEN extra_data IS NOT NULL AND extra_data->>'watch_duration_sec' IS NOT NULL
+                THEN (extra_data->>'watch_duration_sec')::float ELSE NULL END)
                 FILTER (WHERE event_type = 'video_progress'
-                    AND (extra_data::jsonb->>'progress_pct')::int >= 100) as avg_watch_sec
+                    AND extra_data IS NOT NULL AND (extra_data->>'progress_pct')::int >= 100) as avg_watch_sec
         FROM widget_tracking_events
         WHERE client_id = :cid AND created_at >= :since
     """)
@@ -1295,7 +1298,7 @@ async def brand_analytics_daily(
             DATE(created_at AT TIME ZONE 'Asia/Tokyo') as day,
             COUNT(*) FILTER (WHERE event_type = 'video_play') as plays,
             COUNT(*) FILTER (WHERE event_type = 'video_progress'
-                AND (extra_data::jsonb->>'progress_pct')::int >= 100) as completions,
+                AND extra_data IS NOT NULL AND (extra_data->>'progress_pct')::int >= 100) as completions,
             COUNT(*) FILTER (WHERE event_type IN ('cta_click', 'product_click')) as clicks,
             COUNT(*) FILTER (WHERE event_type IN ('purchase_click', 'conversion')) as conversions
         FROM widget_tracking_events

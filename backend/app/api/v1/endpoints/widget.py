@@ -1464,8 +1464,9 @@ async def _ensure_performance_tables(db: AsyncSession):
             ALTER TABLE clip_performance_scores
             ADD CONSTRAINT uq_cps_clip_client_period UNIQUE (clip_id, client_id, period_end)
         """))
+        await db.commit()
     except Exception:
-        pass  # Already exists
+        await db.rollback()  # Rollback failed ALTER before continuing
     await db.commit()
 
 
@@ -1508,10 +1509,13 @@ async def admin_recalculate_scores(
             SELECT
                 COUNT(*) FILTER (WHERE event_type = 'video_play') as plays,
                 COUNT(*) FILTER (WHERE event_type = 'video_progress'
-                    AND (extra_data::jsonb->>'progress_pct')::int >= 100) as completions,
-                AVG((extra_data::jsonb->>'watch_duration_sec')::float)
+                    AND extra_data IS NOT NULL
+                    AND (extra_data->>'progress_pct')::int >= 100) as completions,
+                AVG(CASE WHEN extra_data IS NOT NULL AND extra_data->>'watch_duration_sec' IS NOT NULL
+                    THEN (extra_data->>'watch_duration_sec')::float ELSE NULL END)
                     FILTER (WHERE event_type = 'video_progress'
-                        AND (extra_data::jsonb->>'progress_pct')::int >= 100) as avg_watch_sec,
+                        AND extra_data IS NOT NULL
+                        AND (extra_data->>'progress_pct')::int >= 100) as avg_watch_sec,
                 COUNT(*) FILTER (WHERE event_type IN ('cta_click', 'product_click')) as clicks,
                 COUNT(*) FILTER (WHERE event_type = 'add_to_cart') as carts,
                 COUNT(*) FILTER (WHERE event_type = 'purchase_click') as purchases,
