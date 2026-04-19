@@ -28,14 +28,14 @@ class WidgetCORSMiddleware(BaseHTTPMiddleware):
                     headers={
                         "Access-Control-Allow-Origin": origin,
                         "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-                        "Access-Control-Allow-Headers": "Content-Type, X-Admin-Key",
+                        "Access-Control-Allow-Headers": "Content-Type, X-Admin-Key, Authorization",
                         "Access-Control-Max-Age": "86400",
                     },
                 )
             response = await call_next(request)
             response.headers["Access-Control-Allow-Origin"] = origin
             response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-            response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Admin-Key"
+            response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Admin-Key, Authorization"
             return response
         return await call_next(request)
 
