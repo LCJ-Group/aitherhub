@@ -815,7 +815,7 @@ function VideoPlayerModal({ clip, clips, onClose, brands, adminKey, onBrandChang
                 <div className={`px-6 py-3 rounded-2xl text-lg font-bold ${
                   actionDone === "ng" ? "bg-red-500 text-white" : "bg-green-500 text-white"
                 }`}>
-                  {actionDone === "ng" ? "NG" : "\u2713 \u30d6\u30e9\u30f3\u30c9\u5272\u5f53\u6e08"}
+                  {actionDone === "ng" ? "NG" : "✓ ブランド割当済"}
                 </div>
               </div>
             )}
@@ -827,7 +827,7 @@ function VideoPlayerModal({ clip, clips, onClose, brands, adminKey, onBrandChang
               <span className="text-sm font-bold">{clip.gmv > 0 ? formatGMV(clip.gmv) : "--"}</span>
               <span className="text-xs text-gray-400">CTA {clip.cta_score || "--"}</span>
               <span className={`text-xs px-2 py-0.5 rounded-full ${clip.is_sold ? "bg-green-500/20 text-green-400" : "bg-gray-700 text-gray-400"}`}>
-                {clip.is_sold ? "SOLD" : "\u672a\u58f2"}
+                {clip.is_sold ? "SOLD" : "未売"}
               </span>
               {clip.duration_sec && <span className="text-xs text-gray-500">{formatDuration(clip.duration_sec)}</span>}
               {assignments.length > 0 && (
@@ -858,9 +858,9 @@ function VideoPlayerModal({ clip, clips, onClose, brands, adminKey, onBrandChang
           <div className="px-4 py-3 border-b border-gray-800">
             <h3 className="text-white text-sm font-bold flex items-center gap-2">
               <CheckCircle className="w-4 h-4 text-green-400" />
-              \u30c1\u30a7\u30c3\u30af\u30e2\u30fc\u30c9
+              チェックモード
             </h3>
-            <p className="text-gray-500 text-[10px] mt-1">\u2190\u2192 \u30ca\u30d3 \u30fb Space \u518d\u751f \u30fb N=NG \u30fb B=\u30d6\u30e9\u30f3\u30c9</p>
+            <p className="text-gray-500 text-[10px] mt-1">←→ ナビ ・ Space 再生 ・ N=NG ・ B=ブランド</p>
           </div>
 
           <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
@@ -871,13 +871,13 @@ function VideoPlayerModal({ clip, clips, onClose, brands, adminKey, onBrandChang
                   onClick={() => { setShowBrands(true); setShowNg(false); }}
                   className="w-full py-3 rounded-xl bg-green-600 hover:bg-green-500 text-white font-bold text-sm transition-colors flex items-center justify-center gap-2"
                 >
-                  <CheckCircle className="w-4 h-4" /> \u4f7f\u3048\u308b\uff08\u30d6\u30e9\u30f3\u30c9\u9078\u629e\uff09
+                  <CheckCircle className="w-4 h-4" /> 使える（ブランド選択）
                 </button>
                 <button
                   onClick={() => { setShowNg(true); setShowBrands(false); }}
                   className="w-full py-3 rounded-xl bg-red-600/80 hover:bg-red-500 text-white font-bold text-sm transition-colors flex items-center justify-center gap-2"
                 >
-                  <Ban className="w-4 h-4" /> \u4f7f\u3048\u306a\u3044\uff08NG\uff09
+                  <Ban className="w-4 h-4" /> 使えない（NG）
                 </button>
               </div>
             )}
@@ -887,9 +887,9 @@ function VideoPlayerModal({ clip, clips, onClose, brands, adminKey, onBrandChang
               <div className="space-y-1">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-red-400 text-xs font-bold flex items-center gap-1">
-                    <AlertTriangle className="w-3 h-3" /> NG\u7406\u7531\u3092\u9078\u629e
+                    <AlertTriangle className="w-3 h-3" /> NG理由を選択
                   </span>
-                  <button onClick={() => setShowNg(false)} className="text-gray-500 hover:text-white text-xs">\u623b\u308b</button>
+                  <button onClick={() => setShowNg(false)} className="text-gray-500 hover:text-white text-xs">戻る</button>
                 </div>
                 {NG_REASONS.map((r) => (
                   <button
@@ -910,12 +910,12 @@ function VideoPlayerModal({ clip, clips, onClose, brands, adminKey, onBrandChang
                   <span className="text-red-400 text-xs font-bold">
                     {NG_REASONS.find((r) => r.key === selectedReason)?.label}
                   </span>
-                  <button onClick={() => setSelectedReason(null)} className="text-gray-500 hover:text-white text-xs">\u623b\u308b</button>
+                  <button onClick={() => setSelectedReason(null)} className="text-gray-500 hover:text-white text-xs">戻る</button>
                 </div>
                 <textarea
                   value={comment}
                   onChange={(e) => setComment(e.target.value)}
-                  placeholder="\u5177\u4f53\u7684\u306a\u7406\u7531\uff08AI\u5b66\u7fd2\u306b\u4f7f\u308f\u308c\u307e\u3059\uff09"
+                  placeholder="具体的な理由（AI学習に使われます）"
                   className="w-full px-3 py-2 rounded-lg bg-gray-800 border border-gray-700 text-white text-xs placeholder-gray-500 resize-none focus:outline-none focus:border-red-500"
                   rows={3}
                 />
@@ -925,7 +925,7 @@ function VideoPlayerModal({ clip, clips, onClose, brands, adminKey, onBrandChang
                   className="w-full py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-sm transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
                 >
                   {ngLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Ban className="w-4 h-4" />}
-                  NG\u306b\u3059\u308b
+                  NGにする
                 </button>
               </div>
             )}
@@ -935,15 +935,15 @@ function VideoPlayerModal({ clip, clips, onClose, brands, adminKey, onBrandChang
               <div className="space-y-2">
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-green-400 text-xs font-bold flex items-center gap-1">
-                    <Building2 className="w-3 h-3" /> \u30d6\u30e9\u30f3\u30c9\u9078\u629e
+                    <Building2 className="w-3 h-3" /> ブランド選択
                   </span>
-                  <button onClick={() => setShowBrands(false)} className="text-gray-500 hover:text-white text-xs">\u623b\u308b</button>
+                  <button onClick={() => setShowBrands(false)} className="text-gray-500 hover:text-white text-xs">戻る</button>
                 </div>
                 <input
                   type="text"
                   value={brandSearch}
                   onChange={(e) => setBrandSearch(e.target.value)}
-                  placeholder="\u30d6\u30e9\u30f3\u30c9\u691c\u7d22..."
+                  placeholder="ブランド検索..."
                   className="w-full px-3 py-2 rounded-lg bg-gray-800 border border-gray-700 text-white text-xs placeholder-gray-500 focus:outline-none focus:border-green-500"
                 />
                 <div className="space-y-1 max-h-60 overflow-y-auto">
@@ -960,13 +960,13 @@ function VideoPlayerModal({ clip, clips, onClose, brands, adminKey, onBrandChang
                           {b.name.charAt(0).toUpperCase()}
                         </span>
                         <span className="text-gray-200 truncate">{b.name}</span>
-                        <span className="text-gray-600 text-[10px] ml-auto">{b.clip_count || 0}\u4ef6</span>
+                        <span className="text-gray-600 text-[10px] ml-auto">{b.clip_count || 0}件</span>
                       </button>
                     );
                   })}
                   {unassignedBrands.length === 0 && (
                     <p className="text-gray-500 text-xs text-center py-4">
-                      {brandSearch ? "\u898b\u3064\u304b\u308a\u307e\u305b\u3093" : "\u5168\u30d6\u30e9\u30f3\u30c9\u5272\u5f53\u6e08\u307f"}
+                      {brandSearch ? "見つかりません" : "全ブランド割当済み"}
                     </p>
                   )}
                 </div>
@@ -981,7 +981,7 @@ function VideoPlayerModal({ clip, clips, onClose, brands, adminKey, onBrandChang
               disabled={!hasPrev}
               className="flex items-center gap-1 px-3 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 text-white text-xs disabled:opacity-30 transition-colors"
             >
-              <SkipBack className="w-3 h-3" /> \u524d
+              <SkipBack className="w-3 h-3" /> 前
             </button>
             <span className="text-gray-500 text-xs">{currentIdx + 1}/{clips.length}</span>
             <button
@@ -989,7 +989,7 @@ function VideoPlayerModal({ clip, clips, onClose, brands, adminKey, onBrandChang
               disabled={!hasNext}
               className="flex items-center gap-1 px-3 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 text-white text-xs disabled:opacity-30 transition-colors"
             >
-              \u6b21 <SkipForward className="w-3 h-3" />
+              次 <SkipForward className="w-3 h-3" />
             </button>
           </div>
         </div>
