@@ -98,7 +98,10 @@ exec python -m gunicorn -k uvicorn.workers.UvicornWorker app.main:app \
     --workers 2 \
     --threads 1 \
     --timeout 600 \
-    --graceful-timeout 30 \
+    --graceful-timeout 120 \
+    --preload \
+    --max-requests 1000 \
+    --max-requests-jitter 100 \
     --bind 0.0.0.0:8000 \
     --access-logfile - \
     --error-logfile - \
