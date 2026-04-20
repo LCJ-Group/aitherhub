@@ -159,6 +159,23 @@ async def get_status(session_id: str):
     return get_auto_live_status(session_id)
 
 
+class MarkConsumedRequest(BaseModel):
+    session_id: str
+    count: int = 1
+
+
+@router.post("/mark-consumed")
+async def mark_consumed_endpoint(req: MarkConsumedRequest):
+    """
+    フロントエンドがspeak_queueからアイテムを消費した時に呼ぶ。
+    これによりバックエンドが「未消費アイテム数」を正確に追跡でき、
+    新しいテキスト生成を継続できる。
+    """
+    from app.services.auto_live_engine import mark_consumed
+    mark_consumed(req.session_id, req.count)
+    return {"success": True, "consumed": req.count}
+
+
 @router.get("/sessions")
 async def list_sessions():
     """アクティブな自動ライブセッション一覧"""

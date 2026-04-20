@@ -224,7 +224,9 @@ export default function LiveAvatarStreaming({
           setIsListening(false);
           break;
         case "avatar.transcription":
-          if (event.text) {
+          // In autoLiveMode, the "Auto" tag is already added when we send the text.
+          // avatar.transcription would add a duplicate "AI" entry. Skip it.
+          if (event.text && !autoLiveMode) {
             setSpeakHistory((prev) => [
               { text: event.text, timestamp: new Date().toLocaleTimeString(), type: "avatar" },
               ...prev,
@@ -584,9 +586,16 @@ export default function LiveAvatarStreaming({
           { text: nextItem.text, timestamp: new Date().toLocaleTimeString(), type: "auto" },
           ...prev,
         ].slice(0, 50));
+
+        // Mark as consumed so backend knows to keep generating
+        try {
+          aiLiveCreatorService.autoLiveMarkConsumed(sessionId, 1);
+        } catch (e) {
+          console.debug("[LiveAvatar AutoLive] mark-consumed error:", e);
+        }
       }
     }
-  }, [isConnected, sendEvent, onTextSent]);
+  }, [isConnected, sendEvent, onTextSent, sessionId, autoLiveMode]);
 
   // Start/stop auto live polling based on autoLiveMode prop
   useEffect(() => {

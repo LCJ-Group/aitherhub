@@ -139,6 +139,9 @@ class AutoLiveSession:
     host_persona: str = ""
     # Chat topics for variety
     chat_topics_used: List[str] = field(default_factory=list)
+    # Track push count for queue length estimation
+    _push_count: int = 0
+    _consumed_count: int = 0  # Updated by frontend polling
     _task: Optional[asyncio.Task] = field(default=None, repr=False)
     _comment_task: Optional[asyncio.Task] = field(default=None, repr=False)
 
@@ -400,6 +403,10 @@ async def push_to_speak_queue(session_id: str, text: str, priority: str = "norma
 
     try:
         service.push_speak_text(text)
+        # Track push count in session for accurate queue length
+        session = _sessions.get(session_id)
+        if session:
+            session._push_count += 1
         logger.info(f"[AutoLive] Pushed to speak queue (priority={priority}): {text[:50]}...")
         return True
     except Exception as e:
@@ -407,14 +414,21 @@ async def push_to_speak_queue(session_id: str, text: str, priority: str = "norma
         return False
 
 
+def mark_consumed(session_id: str, count: int = 1):
+    """フロントエンドがqueueからアイテムを消費した時に呼ばれる"""
+    session = _sessions.get(session_id)
+    if session:
+        session._consumed_count += count
+        logger.debug(f"[AutoLive] Marked {count} items consumed. Pending: {session._push_count - session._consumed_count}")
+
+
 async def get_queue_length(session_id: str) -> int:
-    """speakQueueの残りアイテム数を取得"""
-    from app.services.liveavatar_service import get_liveavatar_service
-    service = get_liveavatar_service()
-    try:
-        return len(service._speak_queue)
-    except Exception:
-        return 0
+    """未消費アイテム数を取得（push数 - 消費数）"""
+    session = _sessions.get(session_id)
+    if session:
+        pending = session._push_count - session._consumed_count
+        return max(0, pending)
+    return 0
 
 
 # ============================================================

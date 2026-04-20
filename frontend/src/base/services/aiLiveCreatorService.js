@@ -542,7 +542,19 @@ class AiLiveCreatorService {
     return res.data;
   }
 
-  // ── Shopee Live ──────────────────────────────────────
+  /**
+   * Mark items as consumed from speak queue (so backend keeps generating)
+   */
+  async autoLiveMarkConsumed(sessionId, count = 1) {
+    const res = await axios.post(
+      `${this.baseURL}/api/v1/auto-live/mark-consumed`,
+      { session_id: sessionId, count },
+      { headers: this._headers(), timeout: 5000 }
+    );
+    return res.data;
+  }
+
+  // ── Shopee Live ───────────────────────────────────────────────────
 
   /**
    * Get Shopee products
