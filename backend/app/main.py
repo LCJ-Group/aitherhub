@@ -938,6 +938,9 @@ async def ensure_widget_tables():
             for drop_nn_sql in [
                 "ALTER TABLE video_clips ALTER COLUMN video_id DROP NOT NULL",
                 "ALTER TABLE video_clips ALTER COLUMN phase_index DROP NOT NULL",
+                "ALTER TABLE video_clips ALTER COLUMN time_start DROP NOT NULL",
+                "ALTER TABLE video_clips ALTER COLUMN time_end DROP NOT NULL",
+                "ALTER TABLE video_clips ALTER COLUMN user_id DROP NOT NULL",
             ]:
                 try:
                     await conn.execute(_text(drop_nn_sql))
