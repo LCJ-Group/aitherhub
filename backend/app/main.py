@@ -14,30 +14,68 @@ from app.core.request_id_middleware import RequestIdMiddleware, RequestIdFilter
 from app.utils.class_object import singleton
 
 
-class WidgetCORSMiddleware(BaseHTTPMiddleware):
-    """Allow any origin for /widget/ endpoints (SaaS widget loaded on client sites)."""
+class WidgetCORSMiddleware:
+    """Pure-ASGI middleware: allow any origin for /widget/ and /brand/widget/ endpoints.
 
-    async def dispatch(self, request: Request, call_next):
-        # Only apply to widget endpoints
-        if "/widget/" in request.url.path:
-            origin = request.headers.get("origin", "*")
-            # Handle preflight
-            if request.method == "OPTIONS":
-                return Response(
-                    status_code=200,
-                    headers={
-                        "Access-Control-Allow-Origin": origin,
-                        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-                        "Access-Control-Allow-Headers": "Content-Type, X-Admin-Key, Authorization",
-                        "Access-Control-Max-Age": "86400",
-                    },
-                )
-            response = await call_next(request)
-            response.headers["Access-Control-Allow-Origin"] = origin
-            response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
-            response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Admin-Key, Authorization"
-            return response
-        return await call_next(request)
+    Unlike BaseHTTPMiddleware, this does NOT buffer the response body,
+    so Content-Length stays correct and streaming responses work.
+    """
+
+    CORS_HEADERS_COMMON = [
+        (b"access-control-allow-methods", b"GET, POST, PUT, DELETE, OPTIONS"),
+        (b"access-control-allow-headers", b"Content-Type, X-Admin-Key, Authorization"),
+    ]
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        path = scope.get("path", "")
+        if "/widget/" not in path:
+            await self.app(scope, receive, send)
+            return
+
+        # Extract origin from headers
+        origin = b"*"
+        for hdr_name, hdr_val in scope.get("headers", []):
+            if hdr_name == b"origin":
+                origin = hdr_val
+                break
+
+        # Handle preflight
+        if scope["method"] == "OPTIONS":
+            headers = [
+                (b"access-control-allow-origin", origin),
+                (b"access-control-max-age", b"86400"),
+            ] + self.CORS_HEADERS_COMMON
+            await send({"type": "http.response.start", "status": 200, "headers": headers})
+            await send({"type": "http.response.body", "body": b""})
+            return
+
+        # For normal requests, inject CORS headers into the response
+        cors_extra = [
+            (b"access-control-allow-origin", origin),
+        ] + self.CORS_HEADERS_COMMON
+
+        async def send_with_cors(message):
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers", []))
+                # Remove any existing CORS headers to avoid duplicates
+                headers = [
+                    (k, v) for k, v in headers
+                    if k.lower() not in (b"access-control-allow-origin",
+                                         b"access-control-allow-methods",
+                                         b"access-control-allow-headers")
+                ]
+                headers.extend(cors_extra)
+                message = {**message, "headers": headers}
+            await send(message)
+
+        await self.app(scope, receive, send_with_cors)
 
 # RequestIdFilter を root logger に追加して、全ログに request_id/video_id/user_id を自動付与
 _rid_filter = RequestIdFilter()
