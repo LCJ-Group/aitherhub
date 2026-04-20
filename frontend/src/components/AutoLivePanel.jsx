@@ -14,7 +14,7 @@ import {
   Play, Square, Pause, Loader2,
   ShoppingBag, Zap, Sparkles, Plus, X, Image as ImageIcon,
   CheckCircle, AlertCircle, ChevronDown, ChevronUp,
-  Settings, MessageCircle, Package, Upload,
+  Settings, MessageCircle, Package, Upload, Camera,
 } from "lucide-react";
 import aiLiveCreatorService from "../base/services/aiLiveCreatorService";
 
@@ -67,6 +67,12 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
   // Settings panel
   const [showSettings, setShowSettings] = useState(false);
   
+  // Photo analysis
+  const [isAnalyzingPhoto, setIsAnalyzingPhoto] = useState(false);
+  const [photoPreview, setPhotoPreview] = useState(null);
+  const photoInputRef = useRef(null);
+  const photoInputLiveRef = useRef(null);
+  
   // Status polling
   const statusIntervalRef = useRef(null);
 
@@ -88,6 +94,44 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
     }
   }, []);
 
+  // ── Analyze Product Photo ──
+  const handlePhotoSelect = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    
+    // Show preview
+    const previewUrl = URL.createObjectURL(file);
+    setPhotoPreview(previewUrl);
+    setShowAddProduct(true);
+    setIsAnalyzingPhoto(true);
+    setError("");
+    
+    try {
+      const result = await aiLiveCreatorService.analyzeProductImage(file);
+      if (result?.success && result?.product) {
+        const p = result.product;
+        setNewProduct(prev => ({
+          ...prev,
+          name: p.name || prev.name,
+          description: p.description || prev.description,
+          price: p.price || prev.price,
+          brand: p.brand || prev.brand,
+          notes: p.notes || prev.notes,
+        }));
+      } else {
+        setError("写真から商品情報を読み取れませんでした。手動で入力してください。");
+      }
+    } catch (err) {
+      console.error("[AutoLive] Photo analysis failed:", err);
+      setError("写真解析に失敗しました。手動で入力してください。");
+    } finally {
+      setIsAnalyzingPhoto(false);
+      // Reset file input so same file can be selected again
+      if (photoInputRef.current) photoInputRef.current.value = "";
+      if (photoInputLiveRef.current) photoInputLiveRef.current.value = "";
+    }
+  };
+
   // ── Add Manual Product ──
   const handleAddManualProduct = () => {
     if (!newProduct.name.trim()) return;
@@ -102,6 +146,7 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
     };
     setManualProducts(prev => [...prev, product]);
     setNewProduct({ name: "", description: "", price: "", brand: "", image_url: "", notes: "" });
+    setPhotoPreview(null);
     setShowAddProduct(false);
   };
 
@@ -123,6 +168,7 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
         custom_notes: newProduct.notes.trim(),
       });
       setNewProduct({ name: "", description: "", price: "", brand: "", image_url: "", notes: "" });
+      setPhotoPreview(null);
       setShowAddProduct(false);
     } catch (err) {
       console.error("[AutoLive] Failed to add product:", err);
@@ -379,6 +425,24 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
               {/* Add Product Form */}
               {showAddProduct ? (
                 <div className="p-2 bg-gray-900/50 rounded-lg border border-amber-500/30 space-y-1.5">
+                  {/* Photo preview & analyzing indicator */}
+                  {(photoPreview || isAnalyzingPhoto) && (
+                    <div className="flex items-center gap-2 p-1.5 bg-gray-800/50 rounded-lg border border-gray-700/30">
+                      {photoPreview && (
+                        <img src={photoPreview} alt="" className="w-12 h-12 rounded object-cover flex-shrink-0" />
+                      )}
+                      {isAnalyzingPhoto ? (
+                        <div className="flex items-center gap-1.5 text-[9px] text-cyan-300">
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                          AIが写真を解析中...
+                        </div>
+                      ) : (
+                        <p className="text-[8px] text-green-400 flex items-center gap-1">
+                          <CheckCircle className="w-3 h-3" /> 解析完了。内容を確認・編集してください。
+                        </p>
+                      )}
+                    </div>
+                  )}
                   <input
                     type="text"
                     placeholder="商品名 *"
@@ -426,13 +490,13 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
                   <div className="flex gap-1.5">
                     <button
                       onClick={isAutoMode ? handleAddProductDuringLive : handleAddManualProduct}
-                      disabled={!newProduct.name.trim()}
+                      disabled={!newProduct.name.trim() || isAnalyzingPhoto}
                       className="flex-1 py-1.5 bg-amber-500/20 border border-amber-500/50 rounded text-[9px] text-amber-300 hover:bg-amber-500/30 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1"
                     >
                       <Plus className="w-3 h-3" /> 追加
                     </button>
                     <button
-                      onClick={() => setShowAddProduct(false)}
+                      onClick={() => { setShowAddProduct(false); setPhotoPreview(null); }}
                       className="px-3 py-1.5 bg-gray-700/50 border border-gray-600 rounded text-[9px] text-gray-400 hover:bg-gray-700"
                     >
                       キャンセル
@@ -440,12 +504,28 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
                   </div>
                 </div>
               ) : (
-                <button
-                  onClick={() => setShowAddProduct(true)}
-                  className="w-full py-2 border-2 border-dashed border-gray-600 rounded-lg text-[9px] text-gray-400 hover:border-amber-500/50 hover:text-amber-300 transition-colors flex items-center justify-center gap-1.5"
-                >
-                  <Plus className="w-3.5 h-3.5" /> 商品を追加
-                </button>
+                <div className="flex gap-1.5">
+                  <input
+                    ref={photoInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handlePhotoSelect}
+                  />
+                  <button
+                    onClick={() => photoInputRef.current?.click()}
+                    disabled={isAnalyzingPhoto}
+                    className="flex-1 py-2 border-2 border-dashed border-cyan-600/50 rounded-lg text-[9px] text-cyan-400 hover:border-cyan-400 hover:text-cyan-300 transition-colors flex items-center justify-center gap-1.5"
+                  >
+                    <Camera className="w-3.5 h-3.5" /> 写真から読み込み
+                  </button>
+                  <button
+                    onClick={() => setShowAddProduct(true)}
+                    className="flex-1 py-2 border-2 border-dashed border-gray-600 rounded-lg text-[9px] text-gray-400 hover:border-amber-500/50 hover:text-amber-300 transition-colors flex items-center justify-center gap-1.5"
+                  >
+                    <Plus className="w-3.5 h-3.5" /> 手動で追加
+                  </button>
+                </div>
               )}
             </div>
           )}
@@ -550,6 +630,24 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
         <div className="mb-2">
           {showAddProduct ? (
             <div className="p-2 bg-gray-900/50 rounded-lg border border-amber-500/30 space-y-1.5">
+              {/* Photo preview & analyzing indicator */}
+              {(photoPreview || isAnalyzingPhoto) && (
+                <div className="flex items-center gap-2 p-1.5 bg-gray-800/50 rounded-lg border border-gray-700/30">
+                  {photoPreview && (
+                    <img src={photoPreview} alt="" className="w-12 h-12 rounded object-cover flex-shrink-0" />
+                  )}
+                  {isAnalyzingPhoto ? (
+                    <div className="flex items-center gap-1.5 text-[9px] text-cyan-300">
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      AIが写真を解析中...
+                    </div>
+                  ) : (
+                    <p className="text-[8px] text-green-400 flex items-center gap-1">
+                      <CheckCircle className="w-3 h-3" /> 解析完了。内容を確認・編集してください。
+                    </p>
+                  )}
+                </div>
+              )}
               <input
                 type="text"
                 placeholder="商品名 *"
@@ -581,13 +679,13 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
               <div className="flex gap-1.5">
                 <button
                   onClick={handleAddProductDuringLive}
-                  disabled={!newProduct.name.trim()}
+                  disabled={!newProduct.name.trim() || isAnalyzingPhoto}
                   className="flex-1 py-1.5 bg-amber-500/20 border border-amber-500/50 rounded text-[9px] text-amber-300 hover:bg-amber-500/30 disabled:opacity-50 flex items-center justify-center gap-1"
                 >
                   <Plus className="w-3 h-3" /> 追加して紹介させる
                 </button>
                 <button
-                  onClick={() => setShowAddProduct(false)}
+                  onClick={() => { setShowAddProduct(false); setPhotoPreview(null); }}
                   className="px-3 py-1.5 bg-gray-700/50 border border-gray-600 rounded text-[9px] text-gray-400"
                 >
                   閉じる
@@ -595,12 +693,28 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
               </div>
             </div>
           ) : (
-            <button
-              onClick={() => setShowAddProduct(true)}
-              className="w-full py-1.5 border border-dashed border-gray-600 rounded-lg text-[9px] text-gray-400 hover:border-amber-500/50 hover:text-amber-300 transition-colors flex items-center justify-center gap-1"
-            >
-              <Plus className="w-3 h-3" /> 商品を追加
-            </button>
+            <div className="flex gap-1.5">
+              <input
+                ref={photoInputLiveRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handlePhotoSelect}
+              />
+              <button
+                onClick={() => photoInputLiveRef.current?.click()}
+                disabled={isAnalyzingPhoto}
+                className="flex-1 py-1.5 border border-dashed border-cyan-600/50 rounded-lg text-[9px] text-cyan-400 hover:border-cyan-400 hover:text-cyan-300 transition-colors flex items-center justify-center gap-1"
+              >
+                <Camera className="w-3 h-3" /> 写真から読み込み
+              </button>
+              <button
+                onClick={() => setShowAddProduct(true)}
+                className="flex-1 py-1.5 border border-dashed border-gray-600 rounded-lg text-[9px] text-gray-400 hover:border-amber-500/50 hover:text-amber-300 transition-colors flex items-center justify-center gap-1"
+              >
+                <Plus className="w-3 h-3" /> 手動で追加
+              </button>
+            </div>
           )}
         </div>
       )}

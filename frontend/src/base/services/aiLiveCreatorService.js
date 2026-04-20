@@ -554,6 +554,29 @@ class AiLiveCreatorService {
     return res.data;
   }
 
+  // ── Product Image Analysis ────────────────────────────────────────
+
+  /**
+   * Analyze a product photo using AI (GPT-4o Vision)
+   * Returns extracted product info: name, description, price, brand, notes
+   */
+  async analyzeProductImage(imageFile) {
+    const formData = new FormData();
+    formData.append("image", imageFile);
+    const res = await axios.post(
+      `${this.baseURL}/api/v1/auto-live/analyze-product-image`,
+      formData,
+      {
+        headers: {
+          ...this._headers(),
+          "Content-Type": "multipart/form-data",
+        },
+        timeout: 60000, // 60 seconds for vision analysis
+      }
+    );
+    return res.data;
+  }
+
   // ── Shopee Live ───────────────────────────────────────────────────
 
   /**

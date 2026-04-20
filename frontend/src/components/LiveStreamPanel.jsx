@@ -33,6 +33,7 @@ import {
   ExternalLink,
   Image,
   Globe,
+  Camera,
 } from "lucide-react";
 import aiLiveCreatorService from "../base/services/aiLiveCreatorService";
 import personaService from "../base/services/personaService";
@@ -76,6 +77,9 @@ const LiveStreamPanel = forwardRef(function LiveStreamPanel({
   const [isImportingTiktok, setIsImportingTiktok] = useState(false);
   const [importError, setImportError] = useState("");
   const [showTiktokImport, setShowTiktokImport] = useState(true); // Show TikTok import by default
+  const [isAnalyzingPhoto, setIsAnalyzingPhoto] = useState(false);
+  const [photoPreview, setPhotoPreview] = useState(null);
+  const photoInputRef = useRef(null);
 
   // ── Scripts ──
   const [scripts, setScripts] = useState({}); // productName → {type → script}
@@ -306,7 +310,39 @@ const LiveStreamPanel = forwardRef(function LiveStreamPanel({
     if (!newProduct.name.trim()) return;
     setProducts((prev) => [...prev, { ...newProduct, id: Date.now() }]);
     setNewProduct({ name: "", description: "", price: "", features: "" });
+    setPhotoPreview(null);
     setShowAddProduct(false);
+  };
+
+  const handlePhotoSelect = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const previewUrl = URL.createObjectURL(file);
+    setPhotoPreview(previewUrl);
+    setShowAddProduct(true);
+    setIsAnalyzingPhoto(true);
+    try {
+      const result = await aiLiveCreatorService.analyzeProductImage(file);
+      if (result?.success && result?.product) {
+        const p = result.product;
+        setNewProduct(prev => ({
+          ...prev,
+          name: p.name || prev.name,
+          description: p.description || prev.description,
+          price: p.price || prev.price,
+          features: p.notes || prev.features,
+        }));
+        showToast('success', '写真から商品情報を読み取りました');
+      } else {
+        showToast('error', '写真から商品情報を読み取れませんでした');
+      }
+    } catch (err) {
+      console.error('[LiveStreamPanel] Photo analysis failed:', err);
+      showToast('error', '写真解析に失敗しました');
+    } finally {
+      setIsAnalyzingPhoto(false);
+      if (photoInputRef.current) photoInputRef.current.value = "";
+    }
   };
 
   const handleRemoveProduct = (id) => {
@@ -1011,6 +1047,24 @@ const LiveStreamPanel = forwardRef(function LiveStreamPanel({
             {showAddProduct ? (
               <div className="border border-indigo-200 rounded-lg p-3 bg-indigo-50/30">
                 <div className="space-y-2">
+                  {/* Photo preview & analyzing indicator */}
+                  {(photoPreview || isAnalyzingPhoto) && (
+                    <div className="flex items-center gap-3 p-2 bg-white rounded-lg border border-gray-200">
+                      {photoPreview && (
+                        <img src={photoPreview} alt="" className="w-14 h-14 rounded-lg object-cover flex-shrink-0" />
+                      )}
+                      {isAnalyzingPhoto ? (
+                        <div className="flex items-center gap-2 text-xs text-cyan-600">
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          AIが写真を解析中...
+                        </div>
+                      ) : (
+                        <p className="text-xs text-green-600 flex items-center gap-1">
+                          <CheckCircle className="w-4 h-4" /> 解析完了。内容を確認・編集してください。
+                        </p>
+                      )}
+                    </div>
+                  )}
                   <input
                     type="text"
                     placeholder="Product name *"
@@ -1053,6 +1107,7 @@ const LiveStreamPanel = forwardRef(function LiveStreamPanel({
                       onClick={() => {
                         setShowAddProduct(false);
                         setNewProduct({ name: "", description: "", price: "", features: "" });
+                        setPhotoPreview(null);
                       }}
                       className="py-2 px-3 border border-gray-200 text-gray-600 text-xs rounded-lg hover:bg-gray-50 transition-colors"
                     >
@@ -1103,14 +1158,34 @@ const LiveStreamPanel = forwardRef(function LiveStreamPanel({
                   </p>
                 </div>
 
-                {/* Manual Add Product */}
-                <button
-                  onClick={() => setShowAddProduct(true)}
-                  className="w-full py-2 border border-gray-200 hover:border-indigo-300 rounded-lg text-xs text-gray-500 hover:text-indigo-600 flex items-center justify-center gap-1.5 transition-colors"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  Add Manually
-                </button>
+                {/* Photo Import & Manual Add */}
+                <div className="flex gap-2">
+                  <input
+                    ref={photoInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handlePhotoSelect}
+                  />
+                  <button
+                    onClick={() => photoInputRef.current?.click()}
+                    disabled={isAnalyzingPhoto}
+                    className="flex-1 py-2 border border-cyan-200 hover:border-cyan-400 rounded-lg text-xs text-cyan-600 hover:text-cyan-700 flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50"
+                  >
+                    {isAnalyzingPhoto ? (
+                      <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Analyzing...</>
+                    ) : (
+                      <><Camera className="w-3.5 h-3.5" /> 写真から読み込み</>
+                    )}
+                  </button>
+                  <button
+                    onClick={() => setShowAddProduct(true)}
+                    className="flex-1 py-2 border border-gray-200 hover:border-indigo-300 rounded-lg text-xs text-gray-500 hover:text-indigo-600 flex items-center justify-center gap-1.5 transition-colors"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    Add Manually
+                  </button>
+                </div>
               </div>
             )}
 
