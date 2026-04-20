@@ -64,12 +64,15 @@ class WidgetCORSMiddleware:
         async def send_with_cors(message):
             if message["type"] == "http.response.start":
                 headers = list(message.get("headers", []))
-                # Remove any existing CORS headers to avoid duplicates
+                # Remove existing CORS headers AND content-length to avoid
+                # mismatch when upstream CORSMiddleware modifies the body.
+                # Without content-length, the server uses chunked transfer.
                 headers = [
                     (k, v) for k, v in headers
                     if k.lower() not in (b"access-control-allow-origin",
                                          b"access-control-allow-methods",
-                                         b"access-control-allow-headers")
+                                         b"access-control-allow-headers",
+                                         b"content-length")
                 ]
                 headers.extend(cors_extra)
                 message = {**message, "headers": headers}
