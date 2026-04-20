@@ -508,13 +508,14 @@ class VideoService extends BaseApiService {
    * @param {number} [speedFactor=1.2] - Playback speed (1.0-1.5x)
    * @returns {Promise<{clip_id, status, message}>}
    */
-  async requestClipGeneration(videoId, phaseIndex, timeStart, timeEnd, speedFactor = 1.2) {
+  async requestClipGeneration(videoId, phaseIndex, timeStart, timeEnd, speedFactor = 1.2, subtitleLanguage = 'ja') {
     try {
       const response = await this.post(`/api/v1/videos/${videoId}/clips`, {
         phase_index: phaseIndex,
         time_start: timeStart,
         time_end: timeEnd,
         speed_factor: speedFactor,
+        subtitle_language: subtitleLanguage,
       });
       return response;
     } catch (error) {

@@ -587,8 +587,9 @@ def process_clip_job(payload: dict):
 
     phase_index = payload.get("phase_index", -1)
     speed_factor = payload.get("speed_factor", 1.0)
+    subtitle_language = payload.get("subtitle_language", "ja")
 
-    print(f"[worker] Starting clip generation for clip_id={clip_id} (speed={speed_factor}x, timeout={CLIP_PROCESS_TIMEOUT}s)")
+    print(f"[worker] Starting clip generation for clip_id={clip_id} (speed={speed_factor}x, lang={subtitle_language}, timeout={CLIP_PROCESS_TIMEOUT}s)")
     cmd = [
         sys.executable,
         os.path.join(BATCH_DIR, "generate_clip.py"),
@@ -599,6 +600,7 @@ def process_clip_job(payload: dict):
         "--time-end", str(time_end),
         "--phase-index", str(phase_index),
         "--speed-factor", str(speed_factor),
+        "--subtitle-language", str(subtitle_language),
     ]
 
     try:

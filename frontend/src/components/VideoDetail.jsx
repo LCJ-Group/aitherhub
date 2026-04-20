@@ -650,7 +650,10 @@ export default function VideoDetail({ videoData, editorParams }) {
     }));
 
     try {
-      const res = await VideoService.requestClipGeneration(videoData.id, phaseIndex, timeStart, timeEnd);
+      // Get user's UI language for subtitle generation
+      const uiLang = (localStorage.getItem('aitherhub_language') || 'ja');
+      const subtitleLang = uiLang === 'zh-TW' ? 'zh-TW' : uiLang === 'en' ? 'auto' : 'ja';
+      const res = await VideoService.requestClipGeneration(videoData.id, phaseIndex, timeStart, timeEnd, 1.2, subtitleLang);
 
       if (res.status === 'completed' && res.clip_url) {
         // Show subtitle generation status while transcribing

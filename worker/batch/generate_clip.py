@@ -647,8 +647,15 @@ def extract_audio(video_path: str, audio_path: str) -> bool:
         return False
 
 
-def transcribe_audio(audio_path: str) -> list:
+def transcribe_audio(audio_path: str, subtitle_language: str = "ja") -> list:
     """Transcribe audio using Azure Whisper API.
+    
+    Args:
+        audio_path: Path to audio file
+        subtitle_language: Target subtitle language ('ja', 'zh-TW', 'auto')
+            - 'ja': Force Japanese recognition
+            - 'zh-TW': Force Chinese recognition (will be converted to Traditional Chinese later)
+            - 'auto': Let Whisper auto-detect the language
     
     Returns list of segments with word-level timestamps for karaoke effect.
     Each segment has: start, end, text, words (list of {word, start, end})
@@ -660,10 +667,16 @@ def transcribe_audio(audio_path: str) -> list:
     with open(audio_path, "rb") as f:
         audio_data = f.read()
 
+    # Language-specific Whisper prompts and settings
+    whisper_lang_map = {
+        'ja': 'ja',
+        'zh-TW': 'zh',
+        'auto': None,  # Let Whisper auto-detect
+    }
+    whisper_lang = whisper_lang_map.get(subtitle_language, 'ja')
+    
     # Japanese prompt to improve Whisper recognition accuracy
-    # Including common terms helps Whisper recognize domain-specific vocabulary
-    # Also includes beauty/cosmetics vocabulary for Kyogoku Ryu brand context
-    whisper_prompt = (
+    whisper_prompt_ja = (
         "ライブ配信、ライブコマース、商品紹介、視聴者、コメント、"
         "購入、カート、セット、限定、在庫、価格、お得、割引、"
         "ありがとうございます、よろしくお願いします、"
@@ -676,21 +689,47 @@ def transcribe_audio(audio_path: str) -> list:
         "めっちゃ、すごい、やばい、マジで、本当に、"
         "円、個、本、セット、パック"
     )
+    # Chinese prompt for beauty/cosmetics context
+    whisper_prompt_zh = (
+        "直播、直播帶貨、商品介紹、觀眾、留言、"
+        "購買、購物車、套裝、限定、庫存、價格、優惠、折扣、"
+        "謝謝、請多多關照、"
+        "你好、晚上好、辛苦了、"
+        "京極琉、KYOGOKU、洗髮精、護髮素、染髮、"
+        "漂髮、護髮、美容、沙龍、頭髮、頭皮、"
+        "NMN、RENOVATIO、"
+        "膠原蛋白、玻尿酸、精華液、乳霜、"
+        "免運費、點數、優惠券、限時特賣"
+    )
+    
+    if subtitle_language == 'zh-TW':
+        whisper_prompt = whisper_prompt_zh
+    elif subtitle_language == 'auto':
+        # For auto-detect, provide minimal prompt to avoid biasing language detection
+        whisper_prompt = "KYOGOKU, RENOVATIO, NMN"
+    else:
+        whisper_prompt = whisper_prompt_ja
+    
+    logger.info(f"[TRANSCRIBE] subtitle_language={subtitle_language}, whisper_lang={whisper_lang}")
 
     for attempt in range(3):
         try:
+            # Build files dict — omit language param for auto-detect
+            files_dict = {
+                "file": ("audio.wav", audio_data, "audio/wav"),
+                "response_format": (None, "verbose_json"),
+                "timestamp_granularities[]": (None, "word"),
+                "temperature": (None, "0"),
+                "task": (None, "transcribe"),
+                "prompt": (None, whisper_prompt),
+            }
+            if whisper_lang is not None:
+                files_dict["language"] = (None, whisper_lang)
+            
             response = requests.post(
                 WHISPER_ENDPOINT,
                 headers={"api-key": AZURE_KEY},
-                files={
-                    "file": ("audio.wav", audio_data, "audio/wav"),
-                    "response_format": (None, "verbose_json"),
-                    "timestamp_granularities[]": (None, "word"),
-                    "temperature": (None, "0"),
-                    "task": (None, "transcribe"),
-                    "language": (None, "ja"),
-                    "prompt": (None, whisper_prompt),
-                },
+                files=files_dict,
                 timeout=120,
             )
 
@@ -793,9 +832,9 @@ def transcribe_audio(audio_path: str) -> list:
 #   - Subsequence matching & timestamp restoration logic
 # Last verified: 2026-04-18 (commit 6db6d3b)
 # ============================================================================
-def refine_subtitles_with_gpt(segments: list, phase_context: str = "", product_names: list = None) -> list:
+def refine_subtitles_with_gpt(segments: list, phase_context: str = "", product_names: list = None, subtitle_language: str = "ja") -> list:
     """
-    Use GPT-4.1-mini to refine Whisper transcription for Japanese subtitles.
+    Use GPT-4.1-mini to refine Whisper transcription for subtitles (multi-language).
     
     Improvements:
     - Fix misrecognized Japanese words using context + product name dictionary
@@ -820,20 +859,140 @@ def refine_subtitles_with_gpt(segments: list, phase_context: str = "", product_n
         raw_lines.append(f"[{seg['start']:.2f}-{seg['end']:.2f}] {seg['text']}")
     raw_text = "\n".join(raw_lines)
 
-    # Build context sections
-    context_section = ""
-    if phase_context:
-        context_section = f"""\n## このフェーズの内容（参考情報 - 商品名や固有名詞の修正に活用）
+    # Build context sections (language-aware)
+    if subtitle_language == 'zh-TW':
+        context_section = ""
+        if phase_context:
+            context_section = f"""\n## 此階段的內容（參考資訊 - 用於修正商品名和專有名詞）
 {phase_context}\n"""
+        product_section = ""
+        if product_names:
+            product_section = f"""\n## 商品名辭典（此影片中出現的商品名 - 必須用於修正誤識別）
+{', '.join(product_names)}
+※ 如果Whisper誤識別，請修正為上述商品名\n"""
+        prompt = f"""你是繁體中文直播帶貨影片的TikTok/Reels病毒式字幕製作專家。
+請將Whisper自動生成的字幕文字轉換為在社群媒體影片中最能引起關注的格式。
+所有輸出必須使用繁體中文。
+{context_section}{product_section}
+## 修正規則（按優先順序）
+1. **重複・片段文字的合併（最重要）**: 將重複的片段整合為一個
+   - 理解前後文脈，合併為通順自然的一句話
+   - 合併後，時間戳從第一個片段的start到最後一個片段的end
+2. **誤識別修正**: 修正不自然的詞語和句子
+   - 商品名・品牌名的誤識別（從上下文・商品名辭典推測）
+   - 數字・金額的錯誤
+   - 詞語中間斷開的情況要合併
+3. **填充詞去除**: 去除「嗯」「那個」「就是」「然後」等填充詞
+4. **病毒式分段**: 分割為TikTok字幕最佳長度
+   - 每行4〜10個字為理想（傳達意義的最小單位）
+   - 避免過短的分割（3字以下的獨立片段要與前後合併）
+   - 在意義的分界・換氣處換行
+5. **重要詞標記**: 以下詞語標記 emphasis: true
+   - 商品名・品牌名
+   - 金額（例: 1000元、半價）
+   - 感嘆表達（超棒、太厲害、真的假的）
+   - 限量表達（限定、剩餘不多、最後）
+   - CTA表達（快來、趕快、買起來）
+6. **標點符號**: 在自然位置添加「、」。字幕所以「。」要最少
 
-    # Build product name dictionary section
-    product_section = ""
-    if product_names:
-        product_section = f"""\n## 商品名辞書（この動画に登場する商品名 - 誤認識修正に必ず活用）
+## 輸入（Whisper原始文字 + 時間戳）
+{raw_text}
+
+## 時間戳規則（最重要 - 必須遵守）
+- **絕對不要改變原始Whisper時間戳**（只允許±0.3秒以內的微調）
+- 合併重複片段時: 使用第一個片段的start到最後一個片段的end
+- 將一個原始片段分割為多個時: 在原始start〜end範圍內按字數比例分配
+- 去除填充詞時: 不改變包含填充詞的片段的start/end（只修正文字）
+- 片段之間有間隔時保持原樣（不要強行填補）
+- 音訊與字幕的同步精度最優先
+
+## 輸出格式
+以下JSON陣列格式輸出。每個元素為:
+{{{{
+  "start": float,
+  "end": float,
+  "text": "修正後文字（繁體中文）",
+  "emphasis": true/false
+}}}}
+- emphasis: true 的行會在字幕中大字強調顯示
+- 只有填充詞的片段要去除
+- 不要製作3字以下的獨立片段（要與前後合併）
+
+只輸出JSON陣列（不需要說明）:"""
+        system_msg = "你是繁體中文直播帶貨字幕的修正專家。只輸出JSON陣列。"
+    elif subtitle_language == 'auto':
+        # For auto-detected language, use a generic prompt
+        context_section = ""
+        if phase_context:
+            context_section = f"""\n## Phase context (reference for fixing product names and proper nouns)
+{phase_context}\n"""
+        product_section = ""
+        if product_names:
+            product_section = f"""\n## Product name dictionary (products in this video - must use for fixing misrecognitions)
+{', '.join(product_names)}
+※ If Whisper misrecognized, correct to the above product names\n"""
+        prompt = f"""You are an expert at creating viral TikTok/Reels subtitles for live commerce videos.
+Convert the Whisper-generated subtitle text into the most engaging format for social media.
+Keep the subtitles in the SAME LANGUAGE as the original audio (do not translate).
+{context_section}{product_section}
+## Correction rules (by priority)
+1. **Merge duplicate/fragmented text (most important)**: Consolidate repeated segments
+   - Understand context and merge into natural, coherent sentences
+   - After merging, timestamps span from first segment's start to last segment's end
+2. **Fix misrecognitions**: Correct unnatural words and sentences
+   - Product/brand name misrecognitions (infer from context/dictionary)
+   - Number/price errors
+   - Words split in the middle should be joined
+3. **Remove filler words**: Remove filler words and hesitations
+4. **Viral segmentation**: Split into optimal TikTok subtitle lengths
+   - 4-15 characters per line (minimum meaningful unit)
+   - Avoid too-short splits (merge segments under 3 chars with neighbors)
+   - Break at meaning boundaries and breath pauses
+5. **Important word marking**: Mark these with emphasis: true
+   - Product/brand names
+   - Prices and amounts
+   - Exclamations and strong expressions
+   - Limited quantity expressions
+   - CTA expressions
+6. **Punctuation**: Add natural punctuation. Minimal periods for subtitles.
+
+## Input (Whisper raw text + timestamps)
+{raw_text}
+
+## Timestamp rules (most important - must follow)
+- **Never change original Whisper timestamps** (only ±0.3s fine-tuning allowed)
+- When merging: use first segment's start to last segment's end
+- When splitting: distribute within original start~end by character ratio
+- When removing fillers: don't change segment start/end (only modify text)
+- Keep gaps between segments as-is (don't force-fill)
+- Audio-subtitle sync accuracy is top priority
+
+## Output format
+JSON array format. Each element:
+{{{{
+  "start": float,
+  "end": float,
+  "text": "corrected text (same language as original)",
+  "emphasis": true/false
+}}}}
+- emphasis: true lines will be displayed prominently
+- Remove segments that are only filler words
+- Don't create standalone segments under 3 characters
+
+Output JSON array only (no explanation):"""
+        system_msg = "You are a live commerce subtitle correction expert. Output JSON array only."
+    else:
+        # Default: Japanese
+        context_section = ""
+        if phase_context:
+            context_section = f"""\n## このフェーズの内容（参考情報 - 商品名や固有名詞の修正に活用）
+{phase_context}\n"""
+        product_section = ""
+        if product_names:
+            product_section = f"""\n## 商品名辞書（この動画に登場する商品名 - 誤認識修正に必ず活用）
 {', '.join(product_names)}
 ※ Whisperが誤認識した場合、上記の商品名に修正してください\n"""
-
-    prompt = f"""あなたは日本語ライブコマース動画のTikTok/Reels向けバイラル字幕を作成する専門家です。
+        prompt = f"""あなたは日本語ライブコマース動画のTikTok/Reels向けバイラル字幕を作成する専門家です。
 Whisperで自動生成された字幕テキストを、SNS動画で最大限バズる形式に変換してください。
 {context_section}{product_section}
 ## 修正ルール（優先度順）
@@ -885,12 +1044,13 @@ Whisperで自動生成された字幕テキストを、SNS動画で最大限バ�
 - 3文字以下の単独セグメントは作らない（前後と結合すること）
 
 JSON配列のみ出力（説明不要）:"""
+        system_msg = "あなたは日本語ライブコマース字幕の修正専門家です。JSON配列のみを出力してください。"
 
     try:
         response = _openai_client.responses.create(
             model="gpt-4.1-mini",
             input=[
-                {"role": "system", "content": "あなたは日本語ライブコマース字幕の修正専門家です。JSON配列のみを出力してください。"},
+                {"role": "system", "content": system_msg},
                 {"role": "user", "content": prompt},
             ],
             max_output_tokens=4096,
@@ -2015,10 +2175,10 @@ def _ensure_fresh_sas_url(blob_url: str) -> str:
         return blob_url  # Return original as fallback
 
 
-def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float, time_end: float, phase_index = -1, speed_factor: float = 1.0):
+def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float, time_end: float, phase_index = -1, speed_factor: float = 1.0, subtitle_language: str = "ja"):
     """Main clip generation pipeline."""
     logger.info(f"=== Starting clip generation ===")
-    logger.info(f"clip_id={clip_id}, video_id={video_id}, speed={speed_factor}x")
+    logger.info(f"clip_id={clip_id}, video_id={video_id}, speed={speed_factor}x, subtitle_language={subtitle_language}")
     logger.info(f"time_range={time_start:.1f}s - {time_end:.1f}s")
 
     # Initialize DB
@@ -2163,8 +2323,8 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
         audio_path = os.path.join(work_dir, "audio.wav")
         segments = []
         if extract_audio(segment_path, audio_path):
-            segments = transcribe_audio(audio_path)
-            logger.info(f"Got {len(segments)} raw subtitle segments from Whisper")
+            segments = transcribe_audio(audio_path, subtitle_language=subtitle_language)
+            logger.info(f"Got {len(segments)} raw subtitle segments from Whisper (lang={subtitle_language})")
         else:
             logger.warning("Audio extraction failed, proceeding without subtitles")
 
@@ -2198,7 +2358,7 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
                 logger.warning(f"Failed to get product names: {e}")
 
             logger.info("Refining subtitles with GPT-4.1-mini...")
-            segments = refine_subtitles_with_gpt(segments, phase_context, product_names=product_names)
+            segments = refine_subtitles_with_gpt(segments, phase_context, product_names=product_names, subtitle_language=subtitle_language)
             logger.info(f"After GPT refinement: {len(segments)} subtitle segments")
 
         update_clip_progress(clip_id, 75, "creating_clip")
@@ -2307,7 +2467,7 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
                     for w in seg.get("words", [])
                 ] if seg.get("words") else [],
                 "source": "whisper",
-                "language": "ja",
+                "language": subtitle_language,
             })
         update_clip_status(clip_id, "completed", clip_url=uploaded_url, captions=captions_data if captions_data else None)
         logger.info(f"=== Clip generation completed successfully ({len(captions_data)} captions saved) ===")
@@ -2449,6 +2609,7 @@ def main():
     parser.add_argument("--time-end", type=float, required=True, help="End time in seconds")
     parser.add_argument("--phase-index", default="-1", help="Phase index for context-aware subtitles (int or string identifier)")
     parser.add_argument("--speed-factor", type=float, default=1.0, help="Playback speed (1.0=normal, 1.2=20%% faster)")
+    parser.add_argument("--subtitle-language", default="ja", help="Subtitle language: ja, zh-TW, or auto")
 
     args = parser.parse_args()
 
@@ -2460,6 +2621,7 @@ def main():
         time_end=args.time_end,
         phase_index=args.phase_index,
         speed_factor=args.speed_factor,
+        subtitle_language=args.subtitle_language,
     )
 
 

@@ -216,7 +216,14 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
   const [transcribing, setTranscribing] = useState(false);
   const [transcribeProgress, setTranscribeProgress] = useState(0); // 0-100
   const [captionsLoaded, setCaptionsLoaded] = useState(false);
-  const [targetLanguage, setTargetLanguage] = useState('ja'); // 'ja' | 'zh-TW' | 'auto' (original language)
+  // Default subtitle language based on user's UI language
+  const defaultSubLang = (() => {
+    const uiLang = localStorage.getItem('aitherhub_language') || 'ja';
+    if (uiLang === 'zh-TW') return 'zh-TW';
+    if (uiLang === 'en') return 'auto';
+    return 'ja';
+  })();
+  const [targetLanguage, setTargetLanguage] = useState(defaultSubLang); // 'ja' | 'zh-TW' | 'auto' (original language)
 
   // Subtitle style & position
   const [subtitleStyle, setSubtitleStyle] = useState('box');

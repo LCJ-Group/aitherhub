@@ -51,6 +51,7 @@ async def request_clip_generation(
         time_start = request_body.get("time_start")
         time_end = request_body.get("time_end")
         speed_factor = float(request_body.get("speed_factor", 1.0))
+        subtitle_language = request_body.get("subtitle_language", "ja")  # 'ja', 'zh-TW', or 'auto'
 
         if phase_index is None or time_start is None or time_end is None:
             raise HTTPException(status_code=400, detail="phase_index, time_start, time_end are required")
@@ -172,6 +173,7 @@ async def request_clip_generation(
             "time_end": time_end,
             "phase_index": phase_index,
             "speed_factor": speed_factor,
+            "subtitle_language": subtitle_language,
         }
         import json as _json
         insert_sql = text("""
@@ -510,6 +512,7 @@ async def trim_clip(
         new_start = float(request_body.get("time_start", 0))
         new_end = float(request_body.get("time_end", 0))
         speed_factor = float(request_body.get("speed_factor", 1.2))
+        subtitle_language = request_body.get("subtitle_language", "ja")
 
         if new_end <= new_start:
             raise HTTPException(status_code=400, detail="time_end must be greater than time_start")
@@ -582,6 +585,7 @@ async def trim_clip(
             "time_end": new_end,
             "phase_index": clip_row.phase_index,
             "speed_factor": speed_factor,
+            "subtitle_language": subtitle_language,
         })
 
         logger.info(

@@ -571,6 +571,7 @@ def _run_clip_job(payload: dict) -> bool:
 
     phase_index = payload.get("phase_index", -1)
     speed_factor = payload.get("speed_factor", 1.0)
+    subtitle_language = payload.get("subtitle_language", "ja")
 
     # ── Task 4: Metrics ──
     try:
@@ -587,7 +588,7 @@ def _run_clip_job(payload: dict) -> bool:
     if _heartbeat_manager:
         _heartbeat_manager.register_job(clip_id)
 
-    print(f"[worker] Starting clip generation: clip_id={clip_id}")
+    print(f"[worker] Starting clip generation: clip_id={clip_id} (lang={subtitle_language})")
     cmd = [
         sys.executable,
         os.path.join(BATCH_DIR, "generate_clip.py"),
@@ -598,6 +599,7 @@ def _run_clip_job(payload: dict) -> bool:
         "--time-end", str(time_end),
         "--phase-index", str(phase_index),
         "--speed-factor", str(speed_factor),
+        "--subtitle-language", str(subtitle_language),
     ]
 
     try:

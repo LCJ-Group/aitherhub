@@ -266,7 +266,10 @@ export default function ClipSection({ videoData, clipStates, reports1, editorPar
 
     (async () => {
       try {
-        const res = await VideoService.requestClipGeneration(videoData.id, phaseIdx, timeStart, timeEnd);
+        // Get user's UI language for subtitle generation
+        const uiLang = (localStorage.getItem('aitherhub_language') || 'ja');
+        const subtitleLang = uiLang === 'zh-TW' ? 'zh-TW' : uiLang === 'en' ? 'auto' : 'ja';
+        const res = await VideoService.requestClipGeneration(videoData.id, phaseIdx, timeStart, timeEnd, 1.2, subtitleLang);
         if (res.status === 'completed' && res.clip_url) {
           // Already generated (cache hit)
           setAutoGenerating(false);
