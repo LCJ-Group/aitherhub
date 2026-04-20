@@ -142,6 +142,7 @@ export default function AiLiveCreatorPage() {
 
   // ── AutoPilot State ──
   const [autoPilotActive, setAutoPilotActive] = useState(false);
+  const [autoLiveActive, setAutoLiveActive] = useState(false); // Auto Live mode for speak queue polling
 
   // ── Preview Player State (shared with LiveStreamPanel) ──
   const [previewVideoQueue, setPreviewVideoQueue] = useState([]);
@@ -1293,6 +1294,7 @@ export default function AiLiveCreatorPage() {
                     voiceId={selectedVoiceId}
                     sandbox={false}
                     hideVideo={true}
+                    autoLiveMode={autoLiveActive}
                     onStreamReady={(stream) => {
                       console.log('[LiveAvatar] Stream ready → left preview');
                       setLiveAvatarStream(stream);
@@ -1393,7 +1395,11 @@ export default function AiLiveCreatorPage() {
                   <AutoLivePanel
                     sessionId={livekitCredsRef.current?.session_id}
                     isConnected={liveAvatarConnected}
-                    onStatusChange={(status) => console.log('[AutoLive] Status:', status)}
+                    onStatusChange={(status) => {
+                      console.log('[AutoLive] Status:', status);
+                      // Activate/deactivate speak queue polling in LiveAvatarStreaming
+                      setAutoLiveActive(status === "running" || status === "started");
+                    }}
                   />
                 )}
 

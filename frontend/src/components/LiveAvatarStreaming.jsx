@@ -13,6 +13,7 @@ import {
   Square,
   MessageSquare,
 } from "lucide-react";
+import axios from "axios";
 import aiLiveCreatorService from "../base/services/aiLiveCreatorService";
 
 /**
@@ -44,6 +45,7 @@ export default function LiveAvatarStreaming({
   voiceId = "",
   sandbox = false,
   hideVideo = false,
+  autoLiveMode = false,
   onStreamReady,
   onDisconnect,
   onError,
@@ -72,6 +74,11 @@ export default function LiveAvatarStreaming({
   const textInputRef = useRef(null);
   const sessionIdRef = useRef(null);
   const audioElementsRef = useRef([]); // Track audio elements for cleanup
+  const autoLivePollRef = useRef(null); // Auto Live speak queue polling
+  const lastQueueIdRef = useRef("0"); // Last processed queue item ID
+  const autoLiveSpeakingRef = useRef(false); // Whether avatar is currently speaking (for queue pacing)
+  const autoLiveQueueRef = useRef([]); // Local buffer of pending texts from queue
+  const processedIdsRef = useRef(new Set()); // Dedup processed queue items
 
   // ── Cleanup on unmount ──
   useEffect(() => {
@@ -200,6 +207,8 @@ export default function LiveAvatarStreaming({
           break;
         case "avatar.speak_ended":
           setIsSpeaking(false);
+          // Reset auto-live speaking flag so next queue item can be sent
+          autoLiveSpeakingRef.current = false;
           break;
         case "user.speak_started":
           setIsListening(true);
@@ -388,6 +397,8 @@ export default function LiveAvatarStreaming({
                 setIsSpeaking(true);
               } else if (data.type === "agent.speak_ended") {
                 setIsSpeaking(false);
+                // Reset auto-live speaking flag so next queue item can be sent
+                autoLiveSpeakingRef.current = false;
               } else if (data.type === "session.stopped") {
                 console.log("[LiveAvatar] Session stopped via WebSocket");
                 stopSession();
@@ -477,6 +488,106 @@ export default function LiveAvatarStreaming({
     // Notify parent that stream is disconnected
     if (onDisconnect) onDisconnect();
   }, [sessionId, onDisconnect]);
+
+  // ══════════════════════════════════════════════════════════
+  // Auto Live: Speak Queue Polling + Auto Send
+  // ══════════════════════════════════════════════════════════
+
+  // Poll speak queue from backend and send to avatar
+  const pollAndSendQueue = useCallback(async () => {
+    if (!isConnected) return;
+
+    const baseURL = import.meta.env.VITE_API_BASE_URL;
+    try {
+      const resp = await axios.get(
+        `${baseURL}/api/v1/digital-human/liveavatar/speak-queue/poll`,
+        {
+          params: { after_id: lastQueueIdRef.current },
+          headers: { "X-Admin-Key": "aither:hub" },
+          timeout: 5000,
+        }
+      );
+
+      if (resp.data?.success && resp.data.items?.length > 0) {
+        for (const item of resp.data.items) {
+          const itemId = String(item.id);
+          if (processedIdsRef.current.has(itemId)) continue;
+          processedIdsRef.current.add(itemId);
+
+          // Keep set bounded
+          if (processedIdsRef.current.size > 200) {
+            const arr = Array.from(processedIdsRef.current);
+            processedIdsRef.current = new Set(arr.slice(-100));
+          }
+
+          // Add to local queue
+          autoLiveQueueRef.current.push(item);
+
+          // Update last seen ID
+          if (parseInt(itemId) > parseInt(lastQueueIdRef.current || "0")) {
+            lastQueueIdRef.current = itemId;
+          }
+        }
+      }
+    } catch (err) {
+      console.debug("[LiveAvatar AutoLive] Queue poll error:", err.message);
+    }
+
+    // Process next item from local queue if not currently speaking
+    if (!autoLiveSpeakingRef.current && autoLiveQueueRef.current.length > 0) {
+      const nextItem = autoLiveQueueRef.current.shift();
+      if (nextItem?.text) {
+        console.log(`[LiveAvatar AutoLive] Sending text: "${nextItem.text.substring(0, 60)}..."`);
+        autoLiveSpeakingRef.current = true;
+        sendEvent("avatar.speak_text", { text: nextItem.text });
+
+        // Also push to OBS queue and notify parent
+        if (onTextSent) onTextSent(nextItem.text);
+
+        // Add to speak history
+        setSpeakHistory((prev) => [
+          { text: nextItem.text, timestamp: new Date().toLocaleTimeString(), type: "auto" },
+          ...prev,
+        ].slice(0, 50));
+      }
+    }
+  }, [isConnected, sendEvent, onTextSent]);
+
+  // Start/stop auto live polling based on autoLiveMode prop
+  useEffect(() => {
+    if (autoLiveMode && isConnected) {
+      console.log("[LiveAvatar AutoLive] Starting speak queue polling");
+      // Reset state
+      autoLiveQueueRef.current = [];
+      autoLiveSpeakingRef.current = false;
+
+      // Poll every 2 seconds
+      autoLivePollRef.current = setInterval(() => {
+        pollAndSendQueue();
+      }, 2000);
+
+      return () => {
+        if (autoLivePollRef.current) {
+          clearInterval(autoLivePollRef.current);
+          autoLivePollRef.current = null;
+        }
+      };
+    } else {
+      // Stop polling
+      if (autoLivePollRef.current) {
+        clearInterval(autoLivePollRef.current);
+        autoLivePollRef.current = null;
+        console.log("[LiveAvatar AutoLive] Stopped speak queue polling");
+      }
+    }
+  }, [autoLiveMode, isConnected, pollAndSendQueue]);
+
+  // Listen for avatar.speak_ended to pace auto-live queue processing
+  // (Update autoLiveSpeakingRef when avatar finishes speaking)
+  useEffect(() => {
+    // This is handled in handleDataReceived via avatar.speak_ended event
+    // We just need to reset the flag when speaking ends
+  }, []);
 
   // ── Speak Text (direct TTS) ──
   const handleSpeak = useCallback(() => {
@@ -707,10 +818,11 @@ export default function LiveAvatarStreaming({
                 <span className="text-[9px] text-gray-500 font-mono shrink-0 mt-0.5">{item.timestamp}</span>
                 <span className={`text-[9px] shrink-0 mt-0.5 px-1 rounded ${
                   item.type === "sent" ? "bg-green-500/20 text-green-400" :
+                  item.type === "auto" ? "bg-amber-500/20 text-amber-400" :
                   item.type === "avatar" ? "bg-blue-500/20 text-blue-400" :
                   "bg-purple-500/20 text-purple-400"
                 }`}>
-                  {item.type === "sent" ? "送信" : item.type === "avatar" ? "AI" : "You"}
+                  {item.type === "sent" ? "\u9001\u4fe1" : item.type === "auto" ? "Auto" : item.type === "avatar" ? "AI" : "You"}
                 </span>
                 <p className="text-[11px] text-gray-300">{item.text}</p>
               </div>

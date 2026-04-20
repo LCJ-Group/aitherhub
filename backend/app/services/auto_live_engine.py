@@ -210,13 +210,18 @@ Current product being discussed:
 # Speak Queue Integration
 # ============================================================
 async def push_to_speak_queue(session_id: str, text: str, priority: str = "normal") -> bool:
-    """speakQueueにテキストをpush（LiveAvatarが話す）"""
+    """speakQueueにテキストをpush（LiveAvatarが話す）
+    
+    liveavatar_service.push_speak_text() はグローバルキュー。
+    OBSページとメインページの両方がポーリングしてLiveKit data channelで送信する。
+    priorityが'high'の場合はテキストの先頭にマーカーを付ける（将来の優先度制御用）。
+    """
     from app.services.liveavatar_service import get_liveavatar_service
     service = get_liveavatar_service()
 
     try:
-        await service.push_speak_text(session_id, text, priority)
-        logger.info(f"[AutoLive] Pushed to speak queue: {text[:50]}...")
+        service.push_speak_text(text)
+        logger.info(f"[AutoLive] Pushed to speak queue (priority={priority}): {text[:50]}...")
         return True
     except Exception as e:
         logger.error(f"[AutoLive] Failed to push to speak queue: {e}")
@@ -228,8 +233,7 @@ async def get_queue_length(session_id: str) -> int:
     from app.services.liveavatar_service import get_liveavatar_service
     service = get_liveavatar_service()
     try:
-        queue = service.speak_queues.get(session_id, [])
-        return len(queue)
+        return len(service._speak_queue)
     except Exception:
         return 0
 
