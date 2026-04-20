@@ -79,6 +79,8 @@ export default function LiveAvatarStreaming({
   const autoLiveSpeakingRef = useRef(false); // Whether avatar is currently speaking (for queue pacing)
   const autoLiveQueueRef = useRef([]); // Local buffer of pending texts from queue
   const processedIdsRef = useRef(new Set()); // Dedup processed queue items
+  const processedTextsRef = useRef(new Set()); // Dedup by text content
+  const speakStartTimeRef = useRef(null); // Track when speaking started for timeout
 
   // ── Cleanup on unmount ──
   useEffect(() => {
@@ -209,6 +211,7 @@ export default function LiveAvatarStreaming({
           setIsSpeaking(false);
           // Reset auto-live speaking flag so next queue item can be sent
           autoLiveSpeakingRef.current = false;
+          speakStartTimeRef.current = null;
           break;
         case "user.speak_started":
           setIsListening(true);
@@ -399,6 +402,7 @@ export default function LiveAvatarStreaming({
                 setIsSpeaking(false);
                 // Reset auto-live speaking flag so next queue item can be sent
                 autoLiveSpeakingRef.current = false;
+                speakStartTimeRef.current = null;
               } else if (data.type === "session.stopped") {
                 console.log("[LiveAvatar] Session stopped via WebSocket");
                 stopSession();
@@ -533,12 +537,35 @@ export default function LiveAvatarStreaming({
       console.debug("[LiveAvatar AutoLive] Queue poll error:", err.message);
     }
 
+    // Timeout protection: if speaking for more than 15 seconds, force reset
+    if (autoLiveSpeakingRef.current && speakStartTimeRef.current) {
+      const elapsed = Date.now() - speakStartTimeRef.current;
+      if (elapsed > 15000) {
+        console.warn("[LiveAvatar AutoLive] Speak timeout (15s), forcing reset");
+        autoLiveSpeakingRef.current = false;
+        speakStartTimeRef.current = null;
+      }
+    }
+
     // Process next item from local queue if not currently speaking
     if (!autoLiveSpeakingRef.current && autoLiveQueueRef.current.length > 0) {
       const nextItem = autoLiveQueueRef.current.shift();
       if (nextItem?.text) {
+        // Content-based dedup: skip if we've already said very similar text
+        const textKey = nextItem.text.substring(0, 30).toLowerCase();
+        if (processedTextsRef.current.has(textKey)) {
+          console.warn(`[LiveAvatar AutoLive] Skipping duplicate text: "${textKey}..."`);
+          return; // Skip this item, will process next one on next poll
+        }
+        processedTextsRef.current.add(textKey);
+        if (processedTextsRef.current.size > 100) {
+          const arr = Array.from(processedTextsRef.current);
+          processedTextsRef.current = new Set(arr.slice(-50));
+        }
+
         console.log(`[LiveAvatar AutoLive] Sending text: "${nextItem.text.substring(0, 60)}..."`);
         autoLiveSpeakingRef.current = true;
+        speakStartTimeRef.current = Date.now();
         sendEvent("avatar.speak_text", { text: nextItem.text });
 
         // Also push to OBS queue and notify parent
@@ -561,10 +588,10 @@ export default function LiveAvatarStreaming({
       autoLiveQueueRef.current = [];
       autoLiveSpeakingRef.current = false;
 
-      // Poll every 2 seconds
+      // Poll every 1 second for faster response
       autoLivePollRef.current = setInterval(() => {
         pollAndSendQueue();
-      }, 2000);
+      }, 1000);
 
       return () => {
         if (autoLivePollRef.current) {

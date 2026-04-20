@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 # ============================================================
 OPENAI_MODEL = os.getenv("AUTO_LIVE_MODEL", "gpt-4.1-mini")
 COMMENT_POLL_INTERVAL = 5  # seconds
-SPEAK_QUEUE_CHECK_INTERVAL = 2  # seconds
+SPEAK_QUEUE_CHECK_INTERVAL = 1  # seconds (reduced from 2 for less gap between speeches)
 
 
 # ============================================================
@@ -49,8 +49,8 @@ class FlowPhase(str, Enum):
 # Flow templates: defines the sequence of phases in a livestream
 # Each entry is (phase, segments_count) — how many speech segments to generate for this phase
 FLOW_WITH_PRODUCTS = [
-    (FlowPhase.OPENING, 2),
-    (FlowPhase.CHAT, 1),
+    (FlowPhase.OPENING, 1),
+    (FlowPhase.CHAT, 2),
     (FlowPhase.PRODUCT_INTRO, 2),
     (FlowPhase.PRODUCT_DEEP, 3),
     (FlowPhase.CHAT, 1),
@@ -130,8 +130,10 @@ class AutoLiveSession:
     phase_segment_count: int = 0  # How many segments generated in current phase
     flow_index: int = 0  # Position in the flow template
     opening_done: bool = False
-    # Conversation history for context continuity
+    # Conversation history for context continuity (FULL text, not truncated)
     conversation_history: List[str] = field(default_factory=list)
+    # Exact texts generated (for dedup)
+    generated_texts: List[str] = field(default_factory=list)
     # Custom host persona
     host_name: str = ""
     host_persona: str = ""
@@ -276,11 +278,11 @@ async def _generate_speech(
 - Say goodbye warmly""",
     }
 
-    # Build conversation context (last 3 messages for continuity)
+    # Build conversation context — include ALL recent messages for dedup
     recent_history = ""
     if session.conversation_history:
-        recent = session.conversation_history[-3:]
-        recent_history = f"\nRecent conversation (for continuity, do NOT repeat these):\n" + "\n".join([f"- {h}" for h in recent])
+        recent = session.conversation_history[-15:]  # Last 15 messages
+        recent_history = "\n\n=== CONVERSATION HISTORY (you MUST NOT repeat or paraphrase ANY of these) ===\n" + "\n".join([f"{i+1}. {h}" for i, h in enumerate(recent)]) + "\n=== END HISTORY ==="
 
     # Product context
     product_context = ""
@@ -301,16 +303,19 @@ async def _generate_speech(
 
 {phase_instructions.get(phase, '')}
 
-General rules:
-- Keep each speech segment under {max_length} characters (for TTS, be concise)
+CRITICAL RULES:
+- Keep each speech segment between 50-{max_length} characters (for TTS, be concise but not too short)
 - Be NATURAL and conversational, never robotic or scripted-sounding
 - Vary your tone and energy based on the phase
-- Do NOT repeat what you've already said
+- ABSOLUTELY DO NOT repeat or paraphrase anything from the conversation history below
+- Each segment must be COMPLETELY DIFFERENT from all previous ones
+- Do NOT start with the same greeting twice (e.g. if you already said "大家好", use a different opener)
 - Output ONLY the speech text, no labels, no formatting, no quotes
+- Do NOT use quotation marks around the text
 {recent_history}
 {product_context}
 
-This is speech segment #{session.speak_count + 1} of the livestream."""
+This is speech segment #{session.speak_count + 1} of the livestream. You MUST say something NEW and DIFFERENT."""
 
     try:
         response = await client.chat.completions.create(
@@ -320,7 +325,7 @@ This is speech segment #{session.speak_count + 1} of the livestream."""
                 {"role": "user", "content": f"Generate the next {phase.value} speech segment."},
             ],
             max_tokens=300,
-            temperature=0.85,
+            temperature=0.75,
         )
         text = response.choices[0].message.content.strip()
         # Remove quotes if GPT wraps in them
@@ -502,10 +507,15 @@ async def _flow_speech_loop(session: AutoLiveSession):
                 session.speak_count += 1
                 phase_segments_done += 1
 
-                # Add to conversation history
-                session.conversation_history.append(f"[{current_phase.value}] {text[:100]}")
-                if len(session.conversation_history) > 10:
-                    session.conversation_history = session.conversation_history[-10:]
+                # Add to conversation history (FULL text for dedup)
+                session.conversation_history.append(f"[{current_phase.value}] {text}")
+                if len(session.conversation_history) > 20:
+                    session.conversation_history = session.conversation_history[-20:]
+                
+                # Track exact texts for duplicate detection
+                session.generated_texts.append(text)
+                if len(session.generated_texts) > 50:
+                    session.generated_texts = session.generated_texts[-50:]
 
                 # Check if we should move to next phase
                 if phase_segments_done >= target_segments:
