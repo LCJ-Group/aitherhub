@@ -253,22 +253,26 @@ async def brand_register_clip(
     """Register an uploaded video as a clip in the database."""
     clip_id = str(uuid.uuid4())
 
-    await db.execute(
-        text("""
-            INSERT INTO video_clips (id, clip_url, product_name, product_price,
-                                     uploaded_by_brand, status, created_at)
-            VALUES (:id, :clip_url, :product_name, :product_price,
-                    :brand_id, 'uploaded', NOW())
-        """),
-        {
-            "id": clip_id,
-            "clip_url": payload.blob_url,
-            "product_name": payload.product_name or payload.title,
-            "product_price": payload.product_price,
-            "brand_id": client_id,
-        },
-    )
-    await db.commit()
+    try:
+        await db.execute(
+            text("""
+                INSERT INTO video_clips (id, clip_url, product_name, product_price,
+                                         uploaded_by_brand, status, created_at)
+                VALUES (:id, :clip_url, :product_name, :product_price,
+                        :brand_id, 'uploaded', NOW())
+            """),
+            {
+                "id": clip_id,
+                "clip_url": payload.blob_url,
+                "product_name": payload.product_name or payload.title,
+                "product_price": payload.product_price,
+                "brand_id": client_id,
+            },
+        )
+        await db.commit()
+    except Exception as e:
+        logger.exception(f"brand_register_clip INSERT failed for {client_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Clip registration failed: {type(e).__name__}: {e}")
 
     return {
         "clip_id": clip_id,
