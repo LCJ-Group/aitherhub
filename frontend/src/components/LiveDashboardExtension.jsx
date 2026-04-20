@@ -10,9 +10,11 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 
 // ─── Comment Item ─────────────────────────────────────────────
 const CommentItem = ({ comment, isNew }) => {
+  useTranslation(); // triggers re-render on language change
   const badgeColors = {
     [window.__t('liveDashboardExtension_6cb266', '1位')]: 'bg-yellow-500',
     [window.__t('liveDashboardExtension_4a1b24', '2位')]: 'bg-gray-400',

@@ -8,6 +8,7 @@ import {
   Zap, ArrowUpDown, Database, Sparkles, Eye, Clock, DollarSign, Loader2,
   RefreshCw, ChevronLeft, ChevronRight, Volume2,
 } from "lucide-react";
+import { useTranslation } from 'react-i18next';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
 
@@ -95,6 +96,7 @@ function formatDate(d) {
 
 // ─── Clip Card Component ───
 function ClipCard({ clip, onPlay }) {
+  useTranslation(); // triggers re-render on language change
   const [expanded, setExpanded] = useState(false);
   const tags = clip.tags || clip.sales_psychology_tags || [];
 

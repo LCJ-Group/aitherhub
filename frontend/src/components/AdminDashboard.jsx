@@ -10,12 +10,14 @@ import AdminLessons from "./admin/AdminLessons";
 import AdminScriptGenerations from "./admin/AdminScriptGenerations";
 import AdminClipDB from "./admin/AdminClipDB";
 import AdminWidgetManager from "./admin/AdminWidgetManager";
+import { useTranslation } from 'react-i18next';
 
 const ADMIN_ID = "aither";
 const ADMIN_PASS = "hub";
 const SESSION_KEY = "aitherhub_admin_auth";
 
 export default function AdminDashboard() {
+  useTranslation(); // triggers re-render on language change
   const [authenticated, setAuthenticated] = useState(false);
   const [loginId, setLoginId] = useState("");
   const [loginPass, setLoginPass] = useState("");

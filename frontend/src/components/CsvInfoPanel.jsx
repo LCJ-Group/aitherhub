@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import BaseApiService from "../base/api/BaseApiService";
+import { useTranslation } from 'react-i18next';
 
 /**
  * CsvInfoPanel - 動画に紐付いているCSV（Excel）情報を表示するパネル
@@ -12,6 +13,7 @@ import BaseApiService from "../base/api/BaseApiService";
  * - 差し替え履歴
  */
 export default function CsvInfoPanel({ videoData, onReplace }) {
+  useTranslation(); // triggers re-render on language change
   const [excelInfo, setExcelInfo] = useState(null);
   const [loading, setLoading] = useState(false);
   const [collapsed, setCollapsed] = useState(true);

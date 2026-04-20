@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import VideoService from "../base/services/videoService";
 import { useSectionState } from "../base/hooks/useSectionState";
 import { ErrorState } from "./SectionStateUI";
+import { useTranslation } from 'react-i18next';
 
 /**
  * LiveReportSection – AitherHub Live Report v1
@@ -42,6 +43,7 @@ const SIGNAL_BADGES = {
 };
 
 export default function LiveReportSection({ videoData }) {
+  useTranslation(); // triggers re-render on language change
   // useSectionState for initial fetch (GET existing report)
   const { state: fetchState, data: report, error: fetchError, execute, retry, setData: setReport } = useSectionState("LiveReport");
   const [generating, setGenerating] = useState(false);

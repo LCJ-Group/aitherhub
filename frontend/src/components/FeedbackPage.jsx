@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { toast } from "../hooks/use-toast";
 import FeedbackService from "../base/services/feedbackService";
+import { useTranslation } from 'react-i18next';
 
 export default function FeedbackPage({ onBack }) {
+    useTranslation(); // triggers re-render on language change
     const [feedbackText, setFeedbackText] = useState("");
     const [isSubmitting, setIsSubmitting] = useState(false);
 

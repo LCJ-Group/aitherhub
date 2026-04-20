@@ -2,6 +2,7 @@ import { useState, useRef } from "react";
 import BaseApiService from "../base/api/BaseApiService";
 import { validateCsvDateTime } from "../base/utils/csvDateTimeValidator";
 import { extractTrendStartTime, extractProductDate, extractExcelFileNameDate, extractVideoDateTime } from "../base/utils/csvDateTimeExtractor";
+import { useTranslation } from 'react-i18next';
 
 /**
  * CsvReplaceModal - CSV（Excel）ファイルを差し替えるモーダル
@@ -13,6 +14,7 @@ import { extractTrendStartTime, extractProductDate, extractExcelFileNameDate, ex
  * 4. replace-excel APIで差し替え + Worker再処理
  */
 export default function CsvReplaceModal({ videoData, onClose, onComplete }) {
+  useTranslation(); // triggers re-render on language change
   const [productFile, setProductFile] = useState(null);
   const [trendFile, setTrendFile] = useState(null);
   const [step, setStep] = useState("select"); // select | validating | validation_result | uploading | done | error

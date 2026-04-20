@@ -40,6 +40,7 @@ import LivePreviewPlayer from "./LivePreviewPlayer";
 import HeyGenStreamingAvatar from "./HeyGenStreamingAvatar";
 import LiveAvatarStreaming from "./LiveAvatarStreaming";
 import AutoLivePanel from "./AutoLivePanel";
+import { useTranslation } from 'react-i18next';
 
 /**
  * AI Live Creator Page — Full Livestream Studio
@@ -54,6 +55,7 @@ import AutoLivePanel from "./AutoLivePanel";
  *   Premium (IMTalker):  Full facial animation — head movement, expressions, blinks
  */
 export default function AiLiveCreatorPage() {
+  useTranslation(); // triggers re-render on language change
   const navigate = useNavigate();
 
   // ── View Mode ──

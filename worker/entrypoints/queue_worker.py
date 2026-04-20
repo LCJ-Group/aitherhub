@@ -746,26 +746,34 @@ def _run_video_job(payload: dict) -> bool:
             return True
         else:
             _err_detail = f"exit={proc.returncode}"
-            # Check if killed by SIGTERM (exit=-15) during deployment
-            _is_sigterm = (proc.returncode == -15 or proc.returncode == -signal.SIGTERM)
-            if _is_sigterm:
-                # SIGTERM during deployment: do NOT mark as ERROR.
+            # Check if killed by SIGTERM (-15) or SIGINT (-2) during deployment.
+            # Our signal_handler sends SIGINT to subprocesses when the worker
+            # receives SIGTERM, so both signals indicate a deployment restart.
+            _is_deploy_signal = (
+                proc.returncode == -signal.SIGTERM   # -15
+                or proc.returncode == -15
+                or proc.returncode == -signal.SIGINT  # -2
+                or proc.returncode == -2
+            )
+            if _is_deploy_signal:
+                # SIGTERM/SIGINT during deployment: do NOT mark as ERROR.
                 # Leave status as-is so stuck_video_monitor can requeue it.
-                log_error_type(video_id, "video_analysis", "DEPLOY_SIGTERM", _err_detail)
-                _record_video_error_log(video_id, "DEPLOY_SIGTERM",
+                _sig_name = "SIGINT" if proc.returncode in (-2, -signal.SIGINT) else "SIGTERM"
+                log_error_type(video_id, "video_analysis", "DEPLOY_SIGNAL", f"{_sig_name} {_err_detail}")
+                _record_video_error_log(video_id, "DEPLOY_SIGNAL",
                                         "INTERRUPTED",
-                                        f"process_video.py killed by SIGTERM (deployment restart). "
+                                        f"process_video.py killed by {_sig_name} (deployment restart). "
                                         f"Will be auto-retried by stuck_video_monitor.")
-                print(f"[worker] Video {video_id} interrupted by SIGTERM — will be auto-retried")
+                print(f"[worker] Video {video_id} interrupted by {_sig_name} — will be auto-retried")
             else:
                 log_error_type(video_id, "video_analysis", "SUBPROCESS_FAIL", _err_detail)
                 _record_video_error_log(video_id, "SUBPROCESS_FAIL",
-                                        "STEP_0_EXTRACT_FRAMES",
+                                        _current_step_name if '_current_step_name' in dir() else "UNKNOWN",
                                         f"process_video.py exited with code {proc.returncode}")
-                # Mark as ERROR for non-SIGTERM failures so they don't loop forever
+                # Mark as ERROR for non-signal failures so they don't loop forever
                 update_video_status_to_error(video_id, error_code="SUBPROCESS_FAIL")
             if metrics:
-                metrics.finish(status="interrupted" if _is_sigterm else "failed")
+                metrics.finish(status="interrupted" if _is_deploy_signal else "failed")
             return False
     except Exception as e:
         _err_detail = f"EXC={type(e).__name__} {e}"

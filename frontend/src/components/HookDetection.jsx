@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import VideoService from "../base/services/videoService";
 import { useSectionState } from "../base/hooks/useSectionState";
 import { ErrorState } from "./SectionStateUI";
+import { useTranslation } from 'react-i18next';
 
 /**
  * HookDetection
@@ -14,6 +15,7 @@ import { ErrorState } from "./SectionStateUI";
  *   onSelectHook       – (hook) => void  フック選択時のコールバック
  */
 export default function HookDetection({ videoData, onSelectHook }) {
+  useTranslation(); // triggers re-render on language change
   const { state, data, error, execute, retry } = useSectionState("HookDetection");
   const [collapsed, setCollapsed] = useState(false);
 

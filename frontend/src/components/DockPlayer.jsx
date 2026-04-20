@@ -90,6 +90,7 @@ const DARK_TAG_COLORS = {
 };
 
 export default function DockPlayer({
+  useTranslation(); // triggers re-render on language change
   open,
   onClose,
   videoUrl,
@@ -1819,6 +1820,7 @@ export default function DockPlayer({
         }
         @keyframes fadeInDown {
           from { opacity: 0; transform: translate(-50%, -16px); }
+import { useTranslation } from 'react-i18next';
           to { opacity: 1; transform: translate(-50%, 0); }
         }
       `}</style>

@@ -1,5 +1,6 @@
 import { useState, useCallback } from "react";
 import VideoService from "../base/services/videoService";
+import { useTranslation } from 'react-i18next';
 
 /**
  * ScriptGeneratorPanel — Data-driven script generation UI
@@ -9,6 +10,7 @@ import VideoService from "../base/services/videoService";
  * durations, top-performing phases) from their past livestreams.
  */
 export default function ScriptGeneratorPanel({ videoId, videoData }) {
+  useTranslation(); // triggers re-render on language change
   const [isOpen, setIsOpen] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [script, setScript] = useState(null);

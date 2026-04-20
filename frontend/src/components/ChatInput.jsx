@@ -1,8 +1,10 @@
 import { useState } from "react";
 import AddIcon from "../assets/icons/add.png";
 import SendIcon from "../assets/icons/send.png";
+import { useTranslation } from 'react-i18next';
 
 export default function ChatInput({ className = "", onSend, disabled = false }) {
+  useTranslation(); // triggers re-render on language change
   const [message, setMessage] = useState("");
 
   const handleSend = () => {

@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import axios from "axios";
 import aiLiveCreatorService from "../base/services/aiLiveCreatorService";
+import { useTranslation } from 'react-i18next';
 
 /**
  * LiveAvatar Streaming Component
@@ -39,6 +40,7 @@ import aiLiveCreatorService from "../base/services/aiLiveCreatorService";
  *   - className: Additional CSS classes
  */
 export default function LiveAvatarStreaming({
+  useTranslation(); // triggers re-render on language change
   avatarId = "",
   language = "ja",
   personaPrompt = "",

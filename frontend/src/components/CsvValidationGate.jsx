@@ -13,6 +13,7 @@
  *   isValidating     - バリデーション中フラグ
  */
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 
 const VERDICT_CONFIG = {
   ok: {
@@ -76,6 +77,7 @@ const CHECK_RESULT_BADGE = {
 };
 
 export default function CsvValidationGate({
+  useTranslation(); // triggers re-render on language change
   validationResult,
   onContinue,
   onReplace,

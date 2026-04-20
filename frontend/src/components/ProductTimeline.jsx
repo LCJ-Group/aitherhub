@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import VideoService from "../base/services/videoService";
+import { useTranslation } from 'react-i18next';
 
 /**
  * 商品タイムライン表示コンポーネント
@@ -42,6 +43,7 @@ function parseTimeInput(value) {
 
 // ─── Timeline Bar ─────────────────────────────────────────
 function TimelineBar({ exposures, videoDuration, productColorMap, onSeek }) {
+  useTranslation(); // triggers re-render on language change
   if (!videoDuration || videoDuration <= 0) return null;
 
   return (

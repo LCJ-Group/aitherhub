@@ -18,9 +18,11 @@ import SectionErrorBoundary from "./SectionErrorBoundary";
 import CsvAssetPanel from "./CsvAssetPanel";
 import CsvReplaceModal from "./CsvReplaceModal";
 import ScriptGeneratorPanel from "./ScriptGeneratorPanel";
+import { useTranslation } from 'react-i18next';
 // ProductTimeline is now integrated into AnalyticsSection
 
 export default function VideoDetail({ videoData, editorParams }) {
+  useTranslation(); // triggers re-render on language change
   const [searchParams, setSearchParams] = useSearchParams();
   const markdownTableStyles = `
   .markdown table {

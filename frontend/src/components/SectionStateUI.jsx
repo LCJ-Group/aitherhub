@@ -1,4 +1,5 @@
 import React from "react";
+import { useTranslation } from 'react-i18next';
 
 /**
  * SectionStateUI - セクションの4状態（loading / empty / error / success）を統一表示するコンポーネント
@@ -102,6 +103,7 @@ const ERROR_STYLES = {
 
 // ── SVGアイコン（Material Design風） ──
 function ErrorIcon({ type }) {
+  useTranslation(); // triggers re-render on language change
   const iconMap = {
     network: (
       <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

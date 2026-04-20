@@ -15,6 +15,7 @@ import {
   Square,
 } from "lucide-react";
 import aiLiveCreatorService from "../base/services/aiLiveCreatorService";
+import { useTranslation } from 'react-i18next';
 
 /**
  * HeyGen Streaming Avatar Component
@@ -31,6 +32,7 @@ import aiLiveCreatorService from "../base/services/aiLiveCreatorService";
  *   - className: Additional CSS classes
  */
 export default function HeyGenStreamingAvatar({
+  useTranslation(); // triggers re-render on language change
   avatarId,
   voiceId = "",
   language = "ja",

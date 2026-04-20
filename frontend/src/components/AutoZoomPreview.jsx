@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from "react";
+import { useTranslation } from 'react-i18next';
 
 /**
  * AutoZoomPreview
@@ -16,6 +17,7 @@ import React, { useState, useMemo } from "react";
  */
 
 export default function AutoZoomPreview({ autoZoomData = [], videoData, onApplyZoom }) {
+  useTranslation(); // triggers re-render on language change
   const [collapsed, setCollapsed] = useState(false);
   const [selectedTarget, setSelectedTarget] = useState("face"); // "face" | "product" | "auto"
 

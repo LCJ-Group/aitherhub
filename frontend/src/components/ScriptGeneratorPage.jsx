@@ -29,6 +29,7 @@ import {
   Eye,
 } from "lucide-react";
 import scriptGeneratorService from "../base/services/scriptGeneratorService";
+import { useTranslation } from 'react-i18next';
 
 /**
  * ScriptGeneratorPage - Standalone "売れる台本" tool
@@ -38,6 +39,7 @@ import scriptGeneratorService from "../base/services/scriptGeneratorService";
  * real performance data from AitherHub's analysis database.
  */
 export default function ScriptGeneratorPage() {
+  useTranslation(); // triggers re-render on language change
   const navigate = useNavigate();
 
   // ── Form State ──

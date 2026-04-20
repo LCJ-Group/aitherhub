@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import VideoService from '../base/services/videoService';
+import { useTranslation } from 'react-i18next';
 
 /**
  * ClipFeedbackPanel — Human-in-the-Loop Feedback UI
@@ -31,6 +32,7 @@ const ClipFeedbackPanel = ({
   aiScore = null,
   scoreBreakdown = null,
   onFeedbackSubmitted = () => {},
+  useTranslation(); // triggers re-render on language change
   compact = false,
 }) => {
   const [rating, setRating] = useState(null); // 'good' | 'bad' | null

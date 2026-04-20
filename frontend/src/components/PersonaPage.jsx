@@ -28,6 +28,7 @@ import {
   Copy,
 } from "lucide-react";
 import personaService from "../base/services/personaService";
+import { useTranslation } from 'react-i18next';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
 const ADMIN_KEY = "aither:hub";
@@ -43,6 +44,7 @@ const ADMIN_KEY = "aither:hub";
  *   - Monitor training status
  */
 export default function PersonaPage() {
+  useTranslation(); // triggers re-render on language change
   const navigate = useNavigate();
 
   // ── State ──

@@ -1,12 +1,14 @@
 import React, { useState, useRef, useCallback, useEffect } from "react";
 import VideoService from "../base/services/videoService";
 import ClipFeedbackPanel from "./ClipFeedbackPanel";
+import { useTranslation } from 'react-i18next';
 
 /**
  * Lightning Clip Editor
  * AI生成後の最小編集機能: Trim (±3秒) / Caption Edit / Export
  */
 const LightningClipEditor = ({ videoId, clip, onClose, onClipUpdated }) => {
+  useTranslation(); // triggers re-render on language change
   const videoRef = useRef(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);

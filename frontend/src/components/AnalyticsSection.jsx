@@ -4,6 +4,7 @@ import HighchartsReact from "highcharts-react-official";
 import VideoService from "../base/services/videoService";
 import { logSectionError } from "../base/utils/runtimeErrorLogger";
 import { ErrorState, LoadingSpinner } from "./SectionStateUI";
+import { useTranslation } from 'react-i18next';
 
 /**
  * AnalyticsSection – Unified analytics dashboard (v3 Mockup-matching)
@@ -73,6 +74,7 @@ function parseTimeInput(value) {
 
 // ─── Exposure Row (for edit list) ─────────────────────────
 function ExposureRow({ exposure, colorIdx, onUpdate, onDelete, isEditing, setEditing, streamStartTime }) {
+  useTranslation(); // triggers re-render on language change
   const [editData, setEditData] = useState({
     product_name: exposure.product_name,
     time_start: formatTime(exposure.time_start),

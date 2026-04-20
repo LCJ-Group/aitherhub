@@ -3,6 +3,7 @@ import VideoService from "../base/services/videoService";
 import { useSectionState } from "../base/hooks/useSectionState";
 import { ErrorState } from "./SectionStateUI";
 import ClipEditorV2 from "./ClipEditorV2";
+import { useTranslation } from 'react-i18next';
 
 /**
  * SalesMomentClips
@@ -16,6 +17,7 @@ import ClipEditorV2 from "./ClipEditorV2";
  *   clipStates         – { [phaseIndex]: { status, clip_url } }
  */
 export default function SalesMomentClips({ videoData, onRequestClip, clipStates = {} }) {
+  useTranslation(); // triggers re-render on language change
   const { state, data, error, execute, retry } = useSectionState("SalesMomentClips");
   const [collapsed, setCollapsed] = useState(false);
   const [editorClip, setEditorClip] = useState(null);

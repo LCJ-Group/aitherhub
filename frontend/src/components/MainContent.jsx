@@ -13,6 +13,7 @@ import FeedbackPage from "./FeedbackPage";
 import CsvValidationGate from "./CsvValidationGate";
 import { validateCsvDateTime } from "../base/utils/csvDateTimeValidator";
 import i18n from '../i18n';
+import { useTranslation } from 'react-i18next';
 // LiveDashboard is now at /live/:sessionId route (LivePage.jsx)
 
 /**
@@ -75,6 +76,7 @@ function formatRelativeTime(date) {
  * ErrorLogPanel - Collapsible error log viewer for video processing errors
  */
 function ErrorLogPanel({ videoId, autoOpen = false }) {
+  useTranslation(); // triggers re-render on language change
   const [errorLogs, setErrorLogs] = useState([]);
   const [showLogs, setShowLogs] = useState(autoOpen);
   const [loading, setLoading] = useState(false);
@@ -181,6 +183,7 @@ export default function MainContent({
   onCloseFeedback,
   editorParams,
 }) {
+  useTranslation(); // triggers re-render on language change
   const navigate = useNavigate();
   const postLoginRedirectKey = "postLoginRedirect";
   const isLoggedIn = Boolean(

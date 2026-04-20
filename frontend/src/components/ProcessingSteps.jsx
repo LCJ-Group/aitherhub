@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react';
 import VideoService from '../base/services/videoService';
+import { useTranslation } from 'react-i18next';
 
 // ── Stall detection config ──────────────────────────────────────────
 const STALL_DETECT_MINUTES = 10;  // Minutes without progress change → show stall warning
@@ -50,6 +51,7 @@ function emaSmooth(prev, next, alpha = 0.3) {
 }
 
 function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingComplete, externalProgress, uploadDurationMs, uploadStartTime, videoDurationSec }) {
+  useTranslation(); // triggers re-render on language change
   // Upload elapsed time (live counter during upload)
   const [uploadElapsedMs, setUploadElapsedMs] = useState(0);
   const [currentStatus, setCurrentStatus] = useState(initialStatus || 'NEW');

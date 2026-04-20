@@ -18,6 +18,7 @@ import {
   VolumeX,
 } from "lucide-react";
 import faceSwapService from "../base/services/faceSwapService";
+import { useTranslation } from 'react-i18next';
 
 /**
  * FaceSwapPage - Video face swap + voice conversion pipeline UI
@@ -30,6 +31,7 @@ import faceSwapService from "../base/services/faceSwapService";
  *  5. Download the completed video
  */
 export default function FaceSwapPage() {
+  useTranslation(); // triggers re-render on language change
   const navigate = useNavigate();
 
   // ── State ──

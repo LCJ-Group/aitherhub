@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import VideoService from "../base/services/videoService";
 import ClipEditorV2 from "./ClipEditorV2";
+import { useTranslation } from 'react-i18next';
 
 /**
  * Download a clip by fetching a fresh SAS URL from the API first.
@@ -97,6 +98,7 @@ function detectSource(phaseIndex) {
  *   reports1 – array of phase objects (for phase labels)
  */
 export default function ClipSection({ videoData, clipStates, reports1, editorParams }) {
+  useTranslation(); // triggers re-render on language change
   const [collapsed, setCollapsed] = useState(false);
   const [editorClip, setEditorClip] = useState(null);
   const editorAutoOpenedRef = useRef(false);

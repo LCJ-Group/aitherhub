@@ -7,9 +7,11 @@ import {
   ActivitiesPanel,
   ExtensionStatusBadge,
 } from './LiveDashboardExtension';
+import { useTranslation } from 'react-i18next';
 
 // ─── Sparkline Chart ──────────────────────────────────────
 const Sparkline = ({ data, color = '#00F2EA', height = 60, label, showDots = false }) => {
+  useTranslation(); // triggers re-render on language change
   const canvasRef = useRef(null);
 
   useEffect(() => {

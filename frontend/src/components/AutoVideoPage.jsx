@@ -23,6 +23,7 @@ import {
   X,
 } from "lucide-react";
 import autoVideoService from "../base/services/autoVideoService";
+import { useTranslation } from 'react-i18next';
 
 /**
  * AutoVideoPage - Fully automated video generation pipeline UI
@@ -37,6 +38,7 @@ import autoVideoService from "../base/services/autoVideoService";
  *  5. Lip sync toggle
  */
 export default function AutoVideoPage() {
+  useTranslation(); // triggers re-render on language change
   const navigate = useNavigate();
 
   // ── Form State ──

@@ -2,6 +2,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import LiveDashboard from './LiveDashboard';
 import VideoService from '../base/services/videoService';
+import { useTranslation } from 'react-i18next';
 
 /**
  * LivePage - Standalone page for LiveDashboard at /live/:sessionId
@@ -15,6 +16,7 @@ import VideoService from '../base/services/videoService';
  * AND bridged extension data (metrics, comments, products, traffic).
  */
 export default function LivePage() {
+  useTranslation(); // triggers re-render on language change
   const { sessionId } = useParams();
   const navigate = useNavigate();
   const [dashboardData, setDashboardData] = useState(null);

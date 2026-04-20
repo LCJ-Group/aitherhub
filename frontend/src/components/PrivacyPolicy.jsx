@@ -1,6 +1,8 @@
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 
 const PrivacyPolicy = () => {
+  useTranslation(); // triggers re-render on language change
   return (
     <div style={{
       maxWidth: '800px',

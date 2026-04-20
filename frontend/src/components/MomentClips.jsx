@@ -4,6 +4,7 @@ import { useSectionState } from "../base/hooks/useSectionState";
 import { ErrorState } from "./SectionStateUI";
 import AutoZoomPreview from "./AutoZoomPreview";
 import ClipEditorV2 from "./ClipEditorV2";
+import { useTranslation } from 'react-i18next';
 
 /**
  * MomentClips
@@ -104,6 +105,7 @@ const CATEGORY_CONFIG = {
 };
 
 export default function MomentClips({ videoData, onRequestClip, clipStates = {} }) {
+  useTranslation(); // triggers re-render on language change
   const { state, data, error, execute, retry, setData } = useSectionState("MomentClips");
   const [activeTab, setActiveTab] = useState(null);
   const [collapsed, setCollapsed] = useState(false);

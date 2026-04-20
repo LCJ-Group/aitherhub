@@ -20,6 +20,7 @@ import {
   X,
 } from "lucide-react";
 import digitalHumanService from "../base/services/digitalHumanService";
+import { useTranslation } from 'react-i18next';
 
 /**
  * DigitalHumanPage — Digital Human Livestream Management
@@ -32,6 +33,7 @@ import digitalHumanService from "../base/services/digitalHumanService";
  *  5. Face swap stream management
  */
 export default function DigitalHumanPage() {
+  useTranslation(); // triggers re-render on language change
   const navigate = useNavigate();
 
   // Health

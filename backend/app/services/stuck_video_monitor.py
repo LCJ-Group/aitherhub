@@ -498,7 +498,7 @@ async def _check_and_requeue_stuck_videos():
                            u.email as user_email
                     FROM videos v
                     LEFT JOIN users u ON v.user_id = u.id
-                    WHERE v.last_error_code = 'DEPLOY_SIGTERM'
+                    WHERE v.last_error_code IN ('DEPLOY_SIGTERM', 'DEPLOY_SIGNAL')
                       AND v.status NOT IN ('ERROR', 'completed')
                       AND COALESCE(v.dequeue_count, 0) < :max_retries
                     ORDER BY v.updated_at ASC

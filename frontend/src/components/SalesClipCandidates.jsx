@@ -4,6 +4,7 @@ import { useSectionState } from "../base/hooks/useSectionState";
 import { ErrorState } from "./SectionStateUI";
 import ClipEditorV2 from "./ClipEditorV2";
 import ClipFeedbackPanel from "./ClipFeedbackPanel";
+import { useTranslation } from 'react-i18next';
 
 /**
  * SalesClipCandidates
@@ -17,6 +18,7 @@ import ClipFeedbackPanel from "./ClipFeedbackPanel";
  *   clipStates         – { [phaseIndex]: { status, clip_url } }
  */
 export default function SalesClipCandidates({ videoData, onRequestClip, clipStates = {} }) {
+  useTranslation(); // triggers re-render on language change
   const { state, data: candidates, error, execute, retry, setData: setCandidates } = useSectionState("SalesClipCandidates");
   const [collapsed, setCollapsed] = useState(false);
   // feedbackMap: { [phaseIndex]: "adopted" | "rejected" | "submitting" }
