@@ -1,23 +1,28 @@
 """
-Auto Live Engine — AI自動ライブ配信エンジン
+Auto Live Engine — AI自動ライブ配信エンジン v2
 
-商品データをもとにAIがセールストークを自動生成し、
-speakQueueに連続pushすることでアバターがずっと喋り続ける。
+完全な直播フローを実現：
+  開場挨拶 → 雑談/トレンド → 商品紹介 → 過渡トーク → 次の商品 → 雑談 → ...
+
+商品データはShopeeから取得 OR 手動追加（画像+テキスト）。
+商品がなくても雑談モードで配信可能。
 コメントが来たら割り込みで応答する。
 
 Architecture:
-  [Auto Speech Loop]
-  商品A紹介 → 商品B紹介 → 商品C紹介 → ... (ループ)
+  [Livestream Flow Engine]
+  OPENING → CHAT → PRODUCT_INTRO → PRODUCT_DEEP → TRANSITION → CHAT → PRODUCT_INTRO → ...
   
   [Comment Interrupt]
-  コメント検出 → AI応答生成 → speakQueue push → 自動スピーチ再開
+  コメント検出 → AI応答生成 → speakQueue push → フロー再開
 """
 import os
 import time
 import asyncio
 import logging
+import random
 from typing import Optional, Dict, List, Any
 from dataclasses import dataclass, field
+from enum import Enum
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +32,37 @@ logger = logging.getLogger(__name__)
 OPENAI_MODEL = os.getenv("AUTO_LIVE_MODEL", "gpt-4.1-mini")
 COMMENT_POLL_INTERVAL = 5  # seconds
 SPEAK_QUEUE_CHECK_INTERVAL = 2  # seconds
+
+
+# ============================================================
+# Livestream Flow Phases
+# ============================================================
+class FlowPhase(str, Enum):
+    OPENING = "opening"           # 開場挨拶
+    CHAT = "chat"                 # 雑談・トレンド・視聴者との会話
+    PRODUCT_INTRO = "product_intro"  # 商品紹介（概要）
+    PRODUCT_DEEP = "product_deep"    # 商品深掘り（詳細・使い方・比較）
+    TRANSITION = "transition"     # 過渡トーク（次の商品への橋渡し）
+    CLOSING = "closing"           # 締めの挨拶
+
+
+# Flow templates: defines the sequence of phases in a livestream
+# Each entry is (phase, segments_count) — how many speech segments to generate for this phase
+FLOW_WITH_PRODUCTS = [
+    (FlowPhase.OPENING, 2),
+    (FlowPhase.CHAT, 1),
+    (FlowPhase.PRODUCT_INTRO, 2),
+    (FlowPhase.PRODUCT_DEEP, 3),
+    (FlowPhase.CHAT, 1),
+    (FlowPhase.TRANSITION, 1),
+    # This block repeats for each product
+]
+
+FLOW_CHAT_ONLY = [
+    (FlowPhase.OPENING, 2),
+    (FlowPhase.CHAT, 3),
+    # Repeats
+]
 
 
 @dataclass
@@ -42,6 +78,9 @@ class LiveProduct:
     sales: int = 0
     rating: float = 0.0
     models: List[Dict] = field(default_factory=list)
+    # Manual product fields
+    image_url: str = ""  # Single image URL for manually added products
+    custom_notes: str = ""  # Free-form notes from user
 
     def to_context(self) -> str:
         """AIプロンプト用のコンテキスト文字列を生成"""
@@ -51,9 +90,10 @@ class LiveProduct:
         if self.price:
             parts.append(f"Price: {self.price}")
         if self.description:
-            # 長すぎる場合は最初の500文字
             desc = self.description[:500]
             parts.append(f"Description: {desc}")
+        if self.custom_notes:
+            parts.append(f"Additional Notes: {self.custom_notes}")
         if self.attributes:
             attrs = ", ".join([f"{a.get('attribute_name', '')}: {a.get('attribute_value', '')}" for a in self.attributes if a.get('attribute_value')])
             if attrs:
@@ -66,23 +106,37 @@ class LiveProduct:
             variants = ", ".join([m.get("model_name", "") for m in self.models[:5]])
             if variants:
                 parts.append(f"Variants: {variants}")
+        if self.image_url:
+            parts.append(f"Product Image: {self.image_url}")
         return "\n".join(parts)
 
 
 @dataclass
 class AutoLiveSession:
     """自動ライブ配信セッションの状態管理"""
-    session_id: str  # AitherHub internal session ID
+    session_id: str
     shopee_session_id: Optional[int] = None
     products: List[LiveProduct] = field(default_factory=list)
     current_product_index: int = 0
     is_running: bool = False
     is_paused: bool = False
-    language: str = "en"  # en, ja, zh, th, etc.
-    style: str = "professional"  # professional, casual, energetic
+    language: str = "en"
+    style: str = "professional"
     speak_count: int = 0
     comment_count: int = 0
     last_comment_id: Optional[str] = None
+    # Flow state
+    current_phase: FlowPhase = FlowPhase.OPENING
+    phase_segment_count: int = 0  # How many segments generated in current phase
+    flow_index: int = 0  # Position in the flow template
+    opening_done: bool = False
+    # Conversation history for context continuity
+    conversation_history: List[str] = field(default_factory=list)
+    # Custom host persona
+    host_name: str = ""
+    host_persona: str = ""
+    # Chat topics for variety
+    chat_topics_used: List[str] = field(default_factory=list)
     _task: Optional[asyncio.Task] = field(default=None, repr=False)
     _comment_task: Optional[asyncio.Task] = field(default=None, repr=False)
 
@@ -92,19 +146,75 @@ _sessions: Dict[str, AutoLiveSession] = {}
 
 
 # ============================================================
-# AI Sales Talk Generation
+# Chat Topics Pool (for natural conversation variety)
 # ============================================================
-async def generate_sales_talk(
-    product: LiveProduct,
-    language: str = "en",
-    style: str = "professional",
-    context: str = "",
+CHAT_TOPICS = {
+    "en": [
+        "Ask viewers where they're watching from and what time it is there",
+        "Share a fun beauty tip or life hack",
+        "Talk about current beauty trends on social media",
+        "Ask viewers about their hair/skin care routine",
+        "Share a personal story about discovering a great product",
+        "Discuss seasonal beauty tips (weather-appropriate care)",
+        "Talk about common beauty mistakes people make",
+        "Ask viewers what products they want to see next",
+        "Share behind-the-scenes of how products are made",
+        "Discuss self-care and wellness tips",
+    ],
+    "ja": [
+        "視聴者にどこから見ているか聞く",
+        "美容の豆知識やライフハックを共有する",
+        "SNSで話題の美容トレンドについて話す",
+        "視聴者のヘアケア・スキンケアルーティンを聞く",
+        "良い商品を見つけた時のエピソードを共有する",
+        "季節に合った美容ケアのアドバイスをする",
+        "よくある美容の間違いについて話す",
+        "次に見たい商品を視聴者に聞く",
+        "商品の製造裏話を共有する",
+        "セルフケアとウェルネスのコツを話す",
+    ],
+    "zh": [
+        "问观众从哪里看的直播，那边几点了",
+        "分享一个有趣的美容小技巧",
+        "聊聊社交媒体上的美容趋势",
+        "问观众平时的护肤护发习惯",
+        "分享发现好产品的小故事",
+        "聊聊换季护肤护发的注意事项",
+        "说说常见的美容误区",
+        "问观众想看什么产品",
+        "分享产品背后的故事",
+        "聊聊自我护理和健康生活",
+    ],
+    "th": [
+        "ถามผู้ชมว่าดูจากที่ไหน",
+        "แชร์เคล็ดลับความงาม",
+        "พูดคุยเรื่องเทรนด์ความงามบนโซเชียล",
+        "ถามผู้ชมเรื่องรูทีนดูแลผิวและผม",
+        "แชร์เรื่องราวการค้นพบผลิตภัณฑ์ดีๆ",
+        "พูดคุยเรื่องการดูแลตัวเองตามฤดูกาล",
+        "พูดถึงข้อผิดพลาดด้านความงามที่พบบ่อย",
+        "ถามผู้ชมว่าอยากดูสินค้าอะไรต่อ",
+        "แชร์เบื้องหลังการผลิตสินค้า",
+        "พูดคุยเรื่องการดูแลตัวเอง",
+    ],
+}
+
+
+# ============================================================
+# AI Generation Functions
+# ============================================================
+async def _generate_speech(
+    session: AutoLiveSession,
+    phase: FlowPhase,
+    product: Optional[LiveProduct] = None,
+    extra_context: str = "",
     max_length: int = 200,
 ) -> str:
-    """AIで商品のセールストークを生成"""
+    """AIでフェーズに応じたスピーチを生成"""
     import openai
     client = openai.AsyncOpenAI()
 
+    lang = session.language
     lang_instructions = {
         "en": "Speak in English.",
         "ja": "日本語で話してください。",
@@ -115,42 +225,111 @@ async def generate_sales_talk(
 
     style_instructions = {
         "professional": "Speak like a professional beauty consultant. Be knowledgeable and trustworthy.",
-        "casual": "Speak casually and friendly, like chatting with a friend.",
-        "energetic": "Be energetic and exciting! Use enthusiasm to promote the product.",
+        "casual": "Speak casually and friendly, like chatting with a friend. Use natural filler words.",
+        "energetic": "Be energetic and exciting! Use enthusiasm and excitement.",
     }
 
-    system_prompt = f"""You are an AI live commerce host selling beauty/hair care products on Shopee Live.
-{lang_instructions.get(language, lang_instructions['en'])}
-{style_instructions.get(style, style_instructions['professional'])}
+    # Phase-specific instructions
+    phase_instructions = {
+        FlowPhase.OPENING: """This is the OPENING of the livestream.
+- Greet viewers warmly and enthusiastically
+- Welcome everyone to the stream
+- Briefly mention what you'll be showing today
+- Create excitement and anticipation
+- Ask viewers to like and follow""",
 
-Rules:
-- Keep each speech segment under {max_length} characters (this is for TTS, so keep it concise)
-- Focus on ONE key selling point per segment
-- Be natural and conversational, not robotic
-- Include calls to action (e.g., "add to cart now", "limited stock")
-- Vary your approach: features, benefits, ingredients, usage tips, comparisons, testimonials
-- Do NOT repeat the same points
-- Output ONLY the speech text, no labels or formatting
+        FlowPhase.CHAT: f"""This is a CASUAL CHAT segment between product presentations.
+- Be natural and conversational, like talking to friends
+- Topic hint: {extra_context}
+- Engage with the audience, ask questions
+- Share personal opinions or experiences
+- Keep it light and fun
+- This is NOT a product pitch — just genuine conversation
+- You can mention upcoming products to build anticipation""",
 
-{context}"""
+        FlowPhase.PRODUCT_INTRO: """This is a PRODUCT INTRODUCTION segment.
+- Introduce the product naturally, as if you just picked it up
+- Mention the product name and what it does
+- Share your first impression or personal experience
+- Create curiosity — make viewers want to know more
+- Keep it brief and exciting""",
 
-    product_context = product.to_context()
+        FlowPhase.PRODUCT_DEEP: """This is a PRODUCT DEEP DIVE segment.
+- Go deeper into ONE specific aspect of the product
+- Could be: ingredients, how to use, before/after results, comparison, price value
+- Be specific and informative
+- Include a call to action (add to cart, limited stock, etc.)
+- Share tips for getting the best results""",
+
+        FlowPhase.TRANSITION: """This is a TRANSITION between products.
+- Smoothly wrap up the current product discussion
+- Create a natural bridge to the next topic
+- Maybe ask viewers if they have questions
+- Build anticipation for what's coming next
+- Keep it brief and natural""",
+
+        FlowPhase.CLOSING: """This is the CLOSING of the livestream.
+- Thank all viewers for watching
+- Recap the best deals shown today
+- Remind about limited offers
+- Ask viewers to follow for next stream
+- Say goodbye warmly""",
+    }
+
+    # Build conversation context (last 3 messages for continuity)
+    recent_history = ""
+    if session.conversation_history:
+        recent = session.conversation_history[-3:]
+        recent_history = f"\nRecent conversation (for continuity, do NOT repeat these):\n" + "\n".join([f"- {h}" for h in recent])
+
+    # Product context
+    product_context = ""
+    if product:
+        product_context = f"\nCurrent product:\n{product.to_context()}"
+
+    # Host persona
+    persona = ""
+    if session.host_persona:
+        persona = f"\nYour persona: {session.host_persona}"
+    if session.host_name:
+        persona += f"\nYour name: {session.host_name}"
+
+    system_prompt = f"""You are an AI live commerce host on a live shopping stream.
+{lang_instructions.get(lang, lang_instructions['en'])}
+{style_instructions.get(session.style, style_instructions['professional'])}
+{persona}
+
+{phase_instructions.get(phase, '')}
+
+General rules:
+- Keep each speech segment under {max_length} characters (for TTS, be concise)
+- Be NATURAL and conversational, never robotic or scripted-sounding
+- Vary your tone and energy based on the phase
+- Do NOT repeat what you've already said
+- Output ONLY the speech text, no labels, no formatting, no quotes
+{recent_history}
+{product_context}
+
+This is speech segment #{session.speak_count + 1} of the livestream."""
 
     try:
         response = await client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Generate the next sales talk segment for this product:\n\n{product_context}"},
+                {"role": "user", "content": f"Generate the next {phase.value} speech segment."},
             ],
             max_tokens=300,
-            temperature=0.8,
+            temperature=0.85,
         )
         text = response.choices[0].message.content.strip()
-        logger.info(f"[AutoLive] Generated sales talk ({len(text)} chars): {text[:80]}...")
+        # Remove quotes if GPT wraps in them
+        if text.startswith('"') and text.endswith('"'):
+            text = text[1:-1]
+        logger.info(f"[AutoLive] [{phase.value}] Generated ({len(text)} chars): {text[:80]}...")
         return text
     except Exception as e:
-        logger.error(f"[AutoLive] Failed to generate sales talk: {e}")
+        logger.error(f"[AutoLive] Failed to generate {phase.value} speech: {e}")
         return ""
 
 
@@ -174,7 +353,7 @@ async def generate_comment_response(
 
     product_context = product.to_context() if product else "No specific product context."
 
-    system_prompt = f"""You are an AI live commerce host responding to a viewer's comment on Shopee Live.
+    system_prompt = f"""You are an AI live commerce host responding to a viewer's comment.
 {lang_instructions.get(language, lang_instructions['en'])}
 
 Rules:
@@ -210,12 +389,7 @@ Current product being discussed:
 # Speak Queue Integration
 # ============================================================
 async def push_to_speak_queue(session_id: str, text: str, priority: str = "normal") -> bool:
-    """speakQueueにテキストをpush（LiveAvatarが話す）
-    
-    liveavatar_service.push_speak_text() はグローバルキュー。
-    OBSページとメインページの両方がポーリングしてLiveKit data channelで送信する。
-    priorityが'high'の場合はテキストの先頭にマーカーを付ける（将来の優先度制御用）。
-    """
+    """speakQueueにテキストをpush"""
     from app.services.liveavatar_service import get_liveavatar_service
     service = get_liveavatar_service()
 
@@ -239,77 +413,123 @@ async def get_queue_length(session_id: str) -> int:
 
 
 # ============================================================
-# Auto Speech Loop
+# Livestream Flow Engine (v2)
 # ============================================================
-async def _auto_speech_loop(session: AutoLiveSession):
-    """自動スピーチのメインループ"""
-    logger.info(f"[AutoLive] Starting auto speech loop for session {session.session_id}")
+def _get_next_chat_topic(session: AutoLiveSession) -> str:
+    """Get a random unused chat topic"""
+    lang = session.language
+    topics = CHAT_TOPICS.get(lang, CHAT_TOPICS["en"])
+    unused = [t for t in topics if t not in session.chat_topics_used]
+    if not unused:
+        # Reset if all used
+        session.chat_topics_used = []
+        unused = topics
+    topic = random.choice(unused)
+    session.chat_topics_used.append(topic)
+    return topic
 
-    # 各商品について複数のアプローチでトークを生成
-    approaches = [
-        "Introduce the product and its key benefit",
-        "Explain the main ingredients/materials and why they're special",
-        "Share usage tips and how to get the best results",
-        "Compare with competitors (without naming them) and highlight advantages",
-        "Mention customer reviews and satisfaction",
-        "Create urgency: limited stock, special price, today only",
-    ]
 
-    approach_index = 0
+async def _flow_speech_loop(session: AutoLiveSession):
+    """直播フローに基づく自動スピーチループ v2"""
+    logger.info(f"[AutoLive v2] Starting flow speech loop for session {session.session_id}")
+    logger.info(f"[AutoLive v2] Products: {len(session.products)}, Language: {session.language}, Style: {session.style}")
+
+    has_products = len(session.products) > 0
+
+    # Define the flow based on whether we have products
+    if has_products:
+        # Full flow with products
+        flow_template = list(FLOW_WITH_PRODUCTS)  # copy
+    else:
+        # Chat-only mode
+        flow_template = list(FLOW_CHAT_ONLY)
+
+    flow_index = 0
+    phase_segments_done = 0
 
     while session.is_running:
         if session.is_paused:
             await asyncio.sleep(1)
             continue
 
-        # キューが溜まりすぎないように待つ
+        # Check queue capacity
         queue_len = await get_queue_length(session.session_id)
         if queue_len >= 3:
             await asyncio.sleep(SPEAK_QUEUE_CHECK_INTERVAL)
             continue
 
-        # 現在の商品を取得
-        if not session.products:
-            logger.warning("[AutoLive] No products to present")
-            await asyncio.sleep(5)
-            continue
+        # Get current phase from flow template
+        if flow_index >= len(flow_template):
+            # Loop back (skip opening on repeat)
+            if has_products:
+                # After first cycle, skip opening, start from CHAT
+                flow_template = [
+                    (FlowPhase.CHAT, 1),
+                    (FlowPhase.PRODUCT_INTRO, 2),
+                    (FlowPhase.PRODUCT_DEEP, 3),
+                    (FlowPhase.CHAT, 1),
+                    (FlowPhase.TRANSITION, 1),
+                ]
+            else:
+                flow_template = [(FlowPhase.CHAT, 3)]
+            flow_index = 0
+            phase_segments_done = 0
 
-        product = session.products[session.current_product_index % len(session.products)]
-        approach = approaches[approach_index % len(approaches)]
+        current_phase, target_segments = flow_template[flow_index]
+        session.current_phase = current_phase
 
-        # セールストーク生成
-        context = f"Approach for this segment: {approach}\nThis is segment #{session.speak_count + 1} of the live stream."
-        text = await generate_sales_talk(
-            product=product,
-            language=session.language,
-            style=session.style,
-            context=context,
+        # Get current product for product-related phases
+        current_product = None
+        if has_products and current_phase in (FlowPhase.PRODUCT_INTRO, FlowPhase.PRODUCT_DEEP, FlowPhase.TRANSITION):
+            current_product = session.products[session.current_product_index % len(session.products)]
+
+        # Extra context for chat phases
+        extra_context = ""
+        if current_phase == FlowPhase.CHAT:
+            extra_context = _get_next_chat_topic(session)
+
+        # Generate speech
+        text = await _generate_speech(
+            session=session,
+            phase=current_phase,
+            product=current_product,
+            extra_context=extra_context,
         )
 
         if text:
             success = await push_to_speak_queue(session.session_id, text)
             if success:
                 session.speak_count += 1
-                approach_index += 1
+                phase_segments_done += 1
 
-                # 6つのアプローチを一巡したら次の商品へ
-                if approach_index % len(approaches) == 0:
-                    session.current_product_index += 1
-                    if session.current_product_index >= len(session.products):
-                        session.current_product_index = 0
-                    logger.info(f"[AutoLive] Moving to next product: {session.products[session.current_product_index % len(session.products)].item_name}")
+                # Add to conversation history
+                session.conversation_history.append(f"[{current_phase.value}] {text[:100]}")
+                if len(session.conversation_history) > 10:
+                    session.conversation_history = session.conversation_history[-10:]
 
-        # 次のトーク生成まで少し待つ（キューが空になるのを待つ）
+                # Check if we should move to next phase
+                if phase_segments_done >= target_segments:
+                    flow_index += 1
+                    phase_segments_done = 0
+
+                    # Move to next product after TRANSITION
+                    if current_phase == FlowPhase.TRANSITION and has_products:
+                        session.current_product_index += 1
+                        if session.current_product_index >= len(session.products):
+                            session.current_product_index = 0
+                        next_product = session.products[session.current_product_index % len(session.products)]
+                        logger.info(f"[AutoLive v2] Moving to next product: {next_product.item_name}")
+
         await asyncio.sleep(SPEAK_QUEUE_CHECK_INTERVAL)
 
-    logger.info(f"[AutoLive] Auto speech loop ended for session {session.session_id}")
+    logger.info(f"[AutoLive v2] Flow speech loop ended for session {session.session_id}")
 
 
 # ============================================================
 # Comment Monitor Loop
 # ============================================================
 async def _comment_monitor_loop(session: AutoLiveSession):
-    """コメント監視ループ — Shopeeライブのコメントを取得して応答"""
+    """コメント監視ループ"""
     logger.info(f"[AutoLive] Starting comment monitor for session {session.session_id}")
 
     if not session.shopee_session_id:
@@ -332,13 +552,11 @@ async def _comment_monitor_loop(session: AutoLiveSession):
 
                     user_name = comment.get("user_name", "viewer")
                     content = comment.get("content", "")
-
                     if not content:
                         continue
 
                     logger.info(f"[AutoLive] New comment from {user_name}: {content}")
 
-                    # 現在の商品コンテキストで応答生成
                     current_product = None
                     if session.products:
                         current_product = session.products[session.current_product_index % len(session.products)]
@@ -351,11 +569,9 @@ async def _comment_monitor_loop(session: AutoLiveSession):
                     )
 
                     if response:
-                        # 優先度高でキューにpush（自動スピーチより先に話す）
                         await push_to_speak_queue(session.session_id, response, priority="high")
                         session.comment_count += 1
 
-                        # Shopeeにもテキスト返信
                         try:
                             from app.services.shopee_live_service import post_comment
                             await post_comment(session.shopee_session_id, response)
@@ -379,8 +595,10 @@ async def start_auto_live(
     language: str = "en",
     style: str = "professional",
     shopee_session_id: Optional[int] = None,
+    host_name: str = "",
+    host_persona: str = "",
 ) -> Dict:
-    """自動ライブ配信を開始"""
+    """自動ライブ配信を開始（商品なしでもOK）"""
     # 既存セッションがあれば停止
     if session_id in _sessions:
         await stop_auto_live(session_id)
@@ -399,6 +617,8 @@ async def start_auto_live(
             sales=p.get("sales", 0),
             rating=p.get("rating", 0.0),
             models=p.get("models", []),
+            image_url=p.get("image_url", ""),
+            custom_notes=p.get("custom_notes", ""),
         ))
 
     session = AutoLiveSession(
@@ -408,10 +628,12 @@ async def start_auto_live(
         language=language,
         style=style,
         is_running=True,
+        host_name=host_name,
+        host_persona=host_persona,
     )
 
-    # 自動スピーチループを開始
-    session._task = asyncio.create_task(_auto_speech_loop(session))
+    # v2フローエンジンを開始
+    session._task = asyncio.create_task(_flow_speech_loop(session))
 
     # コメント監視ループを開始（Shopeeセッションがある場合）
     if shopee_session_id:
@@ -419,12 +641,14 @@ async def start_auto_live(
 
     _sessions[session_id] = session
 
-    logger.info(f"[AutoLive] Started auto live for session {session_id} with {len(live_products)} products, lang={language}")
+    mode = "products" if live_products else "chat-only"
+    logger.info(f"[AutoLive v2] Started auto live for session {session_id}: mode={mode}, products={len(live_products)}, lang={language}")
 
     return {
         "status": "started",
         "session_id": session_id,
         "product_count": len(live_products),
+        "mode": mode,
         "language": language,
         "style": style,
         "shopee_session_id": shopee_session_id,
@@ -439,7 +663,6 @@ async def stop_auto_live(session_id: str) -> Dict:
 
     session.is_running = False
 
-    # タスクのキャンセル
     if session._task and not session._task.done():
         session._task.cancel()
         try:
@@ -462,7 +685,7 @@ async def stop_auto_live(session_id: str) -> Dict:
     }
 
     del _sessions[session_id]
-    logger.info(f"[AutoLive] Stopped auto live for session {session_id}: {stats}")
+    logger.info(f"[AutoLive v2] Stopped auto live for session {session_id}: {stats}")
     return stats
 
 
@@ -482,6 +705,33 @@ async def resume_auto_live(session_id: str) -> Dict:
         return {"status": "not_found"}
     session.is_paused = False
     return {"status": "resumed", "session_id": session_id}
+
+
+async def add_product_to_session(session_id: str, product_data: Dict) -> Dict:
+    """実行中のセッションに商品を追加"""
+    session = _sessions.get(session_id)
+    if not session:
+        return {"status": "not_found"}
+
+    product = LiveProduct(
+        item_id=product_data.get("item_id", int(time.time())),
+        item_name=product_data.get("item_name", "Unknown Product"),
+        description=product_data.get("description", ""),
+        price=str(product_data.get("price", "")),
+        brand=product_data.get("brand", ""),
+        image_url=product_data.get("image_url", ""),
+        custom_notes=product_data.get("custom_notes", ""),
+    )
+
+    session.products.append(product)
+    logger.info(f"[AutoLive v2] Added product to session {session_id}: {product.item_name}")
+
+    return {
+        "status": "product_added",
+        "session_id": session_id,
+        "product_name": product.item_name,
+        "total_products": len(session.products),
+    }
 
 
 def get_auto_live_status(session_id: str) -> Dict:
@@ -504,6 +754,8 @@ def get_auto_live_status(session_id: str) -> Dict:
         "product_count": len(session.products),
         "language": session.language,
         "style": session.style,
+        "current_phase": session.current_phase.value,
+        "mode": "products" if session.products else "chat-only",
     }
 
 

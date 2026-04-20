@@ -530,6 +530,18 @@ class AiLiveCreatorService {
     return res.data;
   }
 
+  /**
+   * Add product to running auto live session
+   */
+  async autoLiveAddProduct(params) {
+    const res = await axios.post(
+      `${this.baseURL}/api/v1/auto-live/add-product`,
+      params,
+      { headers: this._headers(), timeout: 5000 }
+    );
+    return res.data;
+  }
+
   // ── Shopee Live ──────────────────────────────────────
 
   /**
