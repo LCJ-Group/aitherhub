@@ -10,6 +10,11 @@ concurrency:
   group: deploy-aitherhubapi
   cancel-in-progress: true
 
+env:
+  AZURE_WEBAPP_NAME: aitherhubAPI
+  AZURE_RG: rg-vdp-kyogoku
+  SLOT_NAME: staging
+
 jobs:
   pre_deploy_check:
     runs-on: ubuntu-latest
@@ -108,46 +113,160 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_AE01A735F8B046C49C5F169706AC5842 }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_8E4F3767CE0647AEAA62C4C721F843FE }}
 
-      - name: Disable Oryx build before deploy
+      # ── Step 1: Ensure staging slot exists ──
+      - name: Ensure staging slot exists
         run: |
-          az webapp config appsettings set \
-            --resource-group rg-vdp-kyogoku \
-            --name aitherhubAPI \
-            --settings \
-              SCM_DO_BUILD_DURING_DEPLOYMENT="false" \
-              ENABLE_ORYX_BUILD="false" \
-            --output none
-          echo "Oryx build disabled. Waiting 10s for settings to propagate..."
-          sleep 10
+          SLOT_EXISTS=$(az webapp deployment slot list \
+            --resource-group ${{ env.AZURE_RG }} \
+            --name ${{ env.AZURE_WEBAPP_NAME }} \
+            --query "[?name=='${{ env.SLOT_NAME }}'].name" \
+            --output tsv 2>/dev/null || echo "")
 
-      - name: Deploy to Azure Web App (Oryx disabled)
-        uses: azure/webapps-deploy@v3
-        with:
-          app-name: 'aitherhubAPI'
-          package: deploy.zip
+          if [ -z "$SLOT_EXISTS" ]; then
+            echo "Creating staging slot..."
+            az webapp deployment slot create \
+              --resource-group ${{ env.AZURE_RG }} \
+              --name ${{ env.AZURE_WEBAPP_NAME }} \
+              --slot ${{ env.SLOT_NAME }} \
+              --configuration-source ${{ env.AZURE_WEBAPP_NAME }} \
+              --output none
+            echo "Staging slot created. Waiting 30s for provisioning..."
+            sleep 30
+          else
+            echo "Staging slot already exists."
+          fi
 
-      - name: Update app settings (after deploy to avoid SCM restart conflict)
+      # ── Step 2: Configure staging slot settings ──
+      - name: Configure staging slot
         run: |
           COMMIT_SHA="${{ github.sha }}"
           SHORT_SHA="${COMMIT_SHA:0:7}"
           BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
           az webapp config appsettings set \
-            --resource-group rg-vdp-kyogoku \
-            --name aitherhubAPI \
+            --resource-group ${{ env.AZURE_RG }} \
+            --name ${{ env.AZURE_WEBAPP_NAME }} \
+            --slot ${{ env.SLOT_NAME }} \
             --settings \
+              SCM_DO_BUILD_DURING_DEPLOYMENT="false" \
+              ENABLE_ORYX_BUILD="false" \
               GIT_COMMIT_SHA="$SHORT_SHA" \
               GIT_BRANCH="${{ github.ref_name }}" \
               BUILD_TIME="$BUILD_TIME" \
               DEPLOY_TIME="$BUILD_TIME" \
               WEBSITES_CONTAINER_START_TIME_LIMIT="1800" \
             --output none
+          echo "Staging slot configured."
 
-      - name: Restart app to pick up new code and settings
+      # ── Step 3: Deploy to staging slot (production stays untouched) ──
+      - name: Deploy to staging slot
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
+          slot-name: ${{ env.SLOT_NAME }}
+          package: deploy.zip
+
+      # ── Step 4: Wait for staging slot to be healthy ──
+      - name: Wait for staging slot to be healthy
         run: |
-          az webapp restart \
-            --resource-group rg-vdp-kyogoku \
-            --name aitherhubAPI \
-            2>&1 || echo "::warning::Restart failed"
+          STAGING_URL="https://${{ env.AZURE_WEBAPP_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net"
+          COMMIT_SHA="${{ github.sha }}"
+          SHORT_SHA="${COMMIT_SHA:0:7}"
+
+          echo "Waiting for staging slot to start..."
+          echo "Staging URL: $STAGING_URL"
+          echo "Expected commit: $SHORT_SHA"
+          echo ""
+
+          HEALTHY=false
+          MAX_ATTEMPTS=40
+          INTERVAL=15
+
+          for i in $(seq 1 $MAX_ATTEMPTS); do
+            RESPONSE=$(curl -sf --connect-timeout 10 --max-time 20 "$STAGING_URL/version" 2>/dev/null || echo "")
+
+            if [ -n "$RESPONSE" ]; then
+              CURRENT_COMMIT=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('commit',''))" 2>/dev/null || echo "")
+              UPTIME=$(echo "$RESPONSE" | python3 -c "import sys,json; print(f'{json.load(sys.stdin).get(\"uptime_seconds\",0):.0f}')" 2>/dev/null || echo "?")
+
+              echo "Attempt $i/$MAX_ATTEMPTS: commit=$CURRENT_COMMIT, uptime=${UPTIME}s"
+
+              if [ "$CURRENT_COMMIT" = "$SHORT_SHA" ]; then
+                # Also check that the app has been running for at least 10 seconds
+                UPTIME_NUM=$(echo "$RESPONSE" | python3 -c "import sys,json; print(int(json.load(sys.stdin).get('uptime_seconds',0)))" 2>/dev/null || echo "0")
+                if [ "$UPTIME_NUM" -ge 10 ]; then
+                  echo ""
+                  echo "Staging slot is healthy: commit=$SHORT_SHA, uptime=${UPTIME}s"
+                  HEALTHY=true
+                  break
+                else
+                  echo "  (correct commit but uptime only ${UPTIME}s, waiting for stability...)"
+                fi
+              else
+                echo "  (waiting for $SHORT_SHA, currently $CURRENT_COMMIT)"
+              fi
+            else
+              echo "Attempt $i/$MAX_ATTEMPTS: staging not responding yet"
+            fi
+
+            sleep $INTERVAL
+          done
+
+          if [ "$HEALTHY" != "true" ]; then
+            echo ""
+            echo "::error::Staging slot health check failed after $MAX_ATTEMPTS attempts. Aborting swap."
+            exit 1
+          fi
+
+      # ── Step 5: Swap staging → production (zero downtime!) ──
+      - name: Swap staging to production
+        run: |
+          echo "Swapping staging → production..."
+          az webapp deployment slot swap \
+            --resource-group ${{ env.AZURE_RG }} \
+            --name ${{ env.AZURE_WEBAPP_NAME }} \
+            --slot ${{ env.SLOT_NAME }} \
+            --target-slot production \
+            --output none
+          echo "Swap completed! New version is now live."
+
+      # ── Step 6: Update production settings (slot-sticky) ──
+      - name: Update production app settings
+        run: |
+          COMMIT_SHA="${{ github.sha }}"
+          SHORT_SHA="${COMMIT_SHA:0:7}"
+          BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          az webapp config appsettings set \
+            --resource-group ${{ env.AZURE_RG }} \
+            --name ${{ env.AZURE_WEBAPP_NAME }} \
+            --settings \
+              GIT_COMMIT_SHA="$SHORT_SHA" \
+              GIT_BRANCH="${{ github.ref_name }}" \
+              BUILD_TIME="$BUILD_TIME" \
+              DEPLOY_TIME="$BUILD_TIME" \
+              WEBSITES_CONTAINER_START_TIME_LIMIT="1800" \
+              SCM_DO_BUILD_DURING_DEPLOYMENT="false" \
+              ENABLE_ORYX_BUILD="false" \
+            --output none
+
+      # ── Step 7: Configure health check & Always On ──
+      - name: Configure health check and Always On
+        run: |
+          # Enable Always On (prevents cold starts)
+          az webapp config set \
+            --resource-group ${{ env.AZURE_RG }} \
+            --name ${{ env.AZURE_WEBAPP_NAME }} \
+            --always-on true \
+            --output none
+
+          # Set health check path
+          az webapp config set \
+            --resource-group ${{ env.AZURE_RG }} \
+            --name ${{ env.AZURE_WEBAPP_NAME }} \
+            --generic-configurations '{"healthCheckPath": "/version"}' \
+            --output none
+
+          echo "Always On enabled, health check path set to /version"
 
       - name: Logout from Azure
         if: always()
@@ -157,21 +276,20 @@ jobs:
     needs: build_and_deploy
     if: always() && needs.build_and_deploy.result != 'cancelled'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 10
     steps:
-      - name: Wait for app startup
+      - name: Verify production is running new version
         env:
           EXPECTED_COMMIT: ${{ github.sha }}
         run: |
           API_URL="https://aitherhubapi-cpcjcnezbgf5f7e2.japaneast-01.azurewebsites.net"
           SHORT_SHA="${EXPECTED_COMMIT:0:7}"
           echo "Expected commit: $SHORT_SHA"
-          echo "Waiting for app to start with pre-built antenv..."
           echo ""
 
           VERIFIED=false
-          MAX_ATTEMPTS=50
-          INTERVAL=30
+          MAX_ATTEMPTS=10
+          INTERVAL=15
 
           for i in $(seq 1 $MAX_ATTEMPTS); do
             RESPONSE=$(curl -sf --connect-timeout 10 --max-time 15 "$API_URL/version" 2>/dev/null || echo "")
@@ -184,14 +302,14 @@ jobs:
 
               if [ "$CURRENT_COMMIT" = "$SHORT_SHA" ]; then
                 echo ""
-                echo "Deploy verified: commit $SHORT_SHA is live."
+                echo "Deploy verified: commit $SHORT_SHA is live in production."
                 VERIFIED=true
                 break
               else
                 echo "  (waiting for $SHORT_SHA, currently $CURRENT_COMMIT)"
               fi
             else
-              echo "Attempt $i/$MAX_ATTEMPTS: API not responding yet"
+              echo "Attempt $i/$MAX_ATTEMPTS: API not responding"
             fi
 
             sleep $INTERVAL
@@ -199,7 +317,7 @@ jobs:
 
           if [ "$VERIFIED" != "true" ]; then
             echo ""
-            echo "::warning::Deploy verification timed out."
+            echo "::warning::Deploy verification timed out. Swap may still be propagating."
           fi
 
       - name: Final health check
