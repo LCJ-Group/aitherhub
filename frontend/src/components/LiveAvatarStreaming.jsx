@@ -81,6 +81,13 @@ export default function LiveAvatarStreaming({
   const processedIdsRef = useRef(new Set()); // Dedup processed queue items
   const processedTextsRef = useRef(new Set()); // Dedup by text content
   const speakStartTimeRef = useRef(null); // Track when speaking started for timeout
+  const autoLiveModeRef = useRef(false); // Ref to track autoLiveMode for closures
+  const pollAndSendQueueRef = useRef(null); // Ref to latest pollAndSendQueue for closures
+
+  // ── Sync autoLiveMode to ref for use in closures (handleDataReceived) ──
+  useEffect(() => {
+    autoLiveModeRef.current = autoLiveMode;
+  }, [autoLiveMode]);
 
   // ── Cleanup on unmount ──
   useEffect(() => {
@@ -213,8 +220,9 @@ export default function LiveAvatarStreaming({
           autoLiveSpeakingRef.current = false;
           speakStartTimeRef.current = null;
           // Immediately try to send next item from queue (don't wait for next poll)
-          if (autoLiveMode) {
-            setTimeout(() => pollAndSendQueue(), 100);
+          // Use refs to avoid stale closure (handleDataReceived has [] deps)
+          if (autoLiveModeRef.current && pollAndSendQueueRef.current) {
+            setTimeout(() => pollAndSendQueueRef.current(), 100);
           }
           break;
         case "user.speak_started":
@@ -226,7 +234,8 @@ export default function LiveAvatarStreaming({
         case "avatar.transcription":
           // In autoLiveMode, the "Auto" tag is already added when we send the text.
           // avatar.transcription would add a duplicate "AI" entry. Skip it.
-          if (event.text && !autoLiveMode) {
+          // Use ref to avoid stale closure (handleDataReceived has [] deps)
+          if (event.text && !autoLiveModeRef.current) {
             setSpeakHistory((prev) => [
               { text: event.text, timestamp: new Date().toLocaleTimeString(), type: "avatar" },
               ...prev,
@@ -558,52 +567,66 @@ export default function LiveAvatarStreaming({
     }
 
     // Process next item from local queue if not currently speaking
-    if (!autoLiveSpeakingRef.current && autoLiveQueueRef.current.length > 0) {
+    // Use a loop to skip duplicates and find the next valid item
+    while (!autoLiveSpeakingRef.current && autoLiveQueueRef.current.length > 0) {
       const nextItem = autoLiveQueueRef.current.shift();
-      if (nextItem?.text) {
-        // Content-based dedup: skip if we've already said very similar text
-        const textKey = nextItem.text.substring(0, 30).toLowerCase();
-        if (processedTextsRef.current.has(textKey)) {
-          console.warn(`[LiveAvatar AutoLive] Skipping duplicate text: "${textKey}..."`);
-          return; // Skip this item, will process next one on next poll
-        }
-        processedTextsRef.current.add(textKey);
-        if (processedTextsRef.current.size > 100) {
-          const arr = Array.from(processedTextsRef.current);
-          processedTextsRef.current = new Set(arr.slice(-50));
-        }
+      if (!nextItem?.text) continue;
 
-        console.log(`[LiveAvatar AutoLive] Sending text: "${nextItem.text.substring(0, 60)}..."`);
-        autoLiveSpeakingRef.current = true;
-        speakStartTimeRef.current = Date.now();
-        sendEvent("avatar.speak_text", { text: nextItem.text });
-
-        // Also push to OBS queue and notify parent
-        if (onTextSent) onTextSent(nextItem.text);
-
-        // Add to speak history
-        setSpeakHistory((prev) => [
-          { text: nextItem.text, timestamp: new Date().toLocaleTimeString(), type: "auto" },
-          ...prev,
-        ].slice(0, 50));
-
-        // Mark as consumed so backend knows to keep generating
-        try {
-          aiLiveCreatorService.autoLiveMarkConsumed(sessionId, 1);
-        } catch (e) {
-          console.debug("[LiveAvatar AutoLive] mark-consumed error:", e);
-        }
+      // Content-based dedup: use full text hash to avoid false positives
+      // (Previously used only first 30 chars which caused GPT-generated texts
+      //  with similar openings to be incorrectly skipped)
+      const textKey = nextItem.text.trim();
+      if (processedTextsRef.current.has(textKey)) {
+        console.warn(`[LiveAvatar AutoLive] Skipping exact duplicate text: "${textKey.substring(0, 50)}..."`);
+        continue; // Try next item instead of returning
       }
+      processedTextsRef.current.add(textKey);
+      if (processedTextsRef.current.size > 100) {
+        const arr = Array.from(processedTextsRef.current);
+        processedTextsRef.current = new Set(arr.slice(-50));
+      }
+
+      console.log(`[LiveAvatar AutoLive] Sending text: "${nextItem.text.substring(0, 60)}..."`);
+      autoLiveSpeakingRef.current = true;
+      speakStartTimeRef.current = Date.now();
+      sendEvent("avatar.speak_text", { text: nextItem.text });
+
+      // Also push to OBS queue and notify parent (fire-and-forget, don't block)
+      if (onTextSent) {
+        try { onTextSent(nextItem.text); } catch (e) {}
+      }
+
+      // Add to speak history
+      setSpeakHistory((prev) => [
+        { text: nextItem.text, timestamp: new Date().toLocaleTimeString(), type: "auto" },
+        ...prev,
+      ].slice(0, 50));
+
+      // Mark as consumed so backend knows to keep generating
+      try {
+        aiLiveCreatorService.autoLiveMarkConsumed(sessionId, 1);
+      } catch (e) {
+        console.debug("[LiveAvatar AutoLive] mark-consumed error:", e);
+      }
+
+      break; // Successfully sent one item, wait for speak_ended before next
     }
   }, [isConnected, sendEvent, onTextSent, sessionId, autoLiveMode]);
+
+  // Keep ref in sync so handleDataReceived closure can call latest version
+  useEffect(() => {
+    pollAndSendQueueRef.current = pollAndSendQueue;
+  }, [pollAndSendQueue]);
 
   // Start/stop auto live polling based on autoLiveMode prop
   useEffect(() => {
     if (autoLiveMode && isConnected) {
       console.log("[LiveAvatar AutoLive] Starting speak queue polling");
-      // Reset state
+      // Reset state for fresh auto-live session
       autoLiveQueueRef.current = [];
       autoLiveSpeakingRef.current = false;
+      processedTextsRef.current = new Set(); // Clear dedup cache for new session
+      speakStartTimeRef.current = null;
 
       // Poll every 1 second for faster response
       autoLivePollRef.current = setInterval(() => {

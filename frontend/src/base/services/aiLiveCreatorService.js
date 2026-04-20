@@ -464,7 +464,7 @@ class AiLiveCreatorService {
     const res = await axios.post(
       `${this.baseURL}/api/v1/digital-human/liveavatar/speak-queue/push`,
       { text },
-      { headers: this._headers(), timeout: 5000 }
+      { headers: this._headers(), timeout: 10000 }
     );
      return res.data;
   }
