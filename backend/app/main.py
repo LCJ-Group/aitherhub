@@ -933,6 +933,17 @@ async def ensure_widget_tables():
                 except Exception as e:
                     logger.warning(f"ALTER TABLE (brand portal): {e}")
 
+            # Allow NULL for video_id / phase_index so brand-uploaded clips
+            # (which have no parent video) can be inserted.
+            for drop_nn_sql in [
+                "ALTER TABLE video_clips ALTER COLUMN video_id DROP NOT NULL",
+                "ALTER TABLE video_clips ALTER COLUMN phase_index DROP NOT NULL",
+            ]:
+                try:
+                    await conn.execute(_text(drop_nn_sql))
+                except Exception as e:
+                    logger.warning(f"DROP NOT NULL (brand portal): {e}")
+
             # Create index for brand uploads
             try:
                 await conn.execute(_text(
