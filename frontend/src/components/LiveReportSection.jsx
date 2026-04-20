@@ -73,6 +73,7 @@ export default function LiveReportSection({ videoData }) {
   const getReportLanguage = () => {
     const lang = localStorage.getItem('language') || 'zh-TW';
     if (lang === 'ja') return 'ja';
+    if (lang === 'en') return 'en';
     return 'zh-TW';
   };
 

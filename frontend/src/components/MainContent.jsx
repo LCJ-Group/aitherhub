@@ -504,7 +504,7 @@ export default function MainContent({
     const capturedProductExcel = productExcelFile;
     const capturedTrendExcel = trendExcelFile;
     const userEmail = user.email;
-    const analysisLang = i18n.language === 'zh-TW' ? 'zh-TW' : 'ja';
+    const analysisLang = i18n.language === 'zh-TW' ? 'zh-TW' : i18n.language === 'en' ? 'en' : 'ja';
     const userId = user?.id;
 
     // Reset UI immediately
@@ -753,7 +753,7 @@ export default function MainContent({
     const capturedMetadata = metadata;
     const userEmail = user.email;
     const userId = user?.id;
-    const analysisLang = i18n.language === 'zh-TW' ? 'zh-TW' : 'ja';
+    const analysisLang = i18n.language === 'zh-TW' ? 'zh-TW' : i18n.language === 'en' ? 'en' : 'ja';
 
     // Reset UI immediately
     setSelectedFile(null);
@@ -870,7 +870,7 @@ export default function MainContent({
     // Capture file and settings before resetting UI
     const fileToUpload = selectedFile;
     const userEmail = user.email;
-    const analysisLang = i18n.language === 'zh-TW' ? 'zh-TW' : 'ja';
+    const analysisLang = i18n.language === 'zh-TW' ? 'zh-TW' : i18n.language === 'en' ? 'en' : 'ja';
     const userId = user?.id;
 
     // Reset UI immediately so user can start next upload

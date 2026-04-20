@@ -216,7 +216,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
   const [transcribing, setTranscribing] = useState(false);
   const [transcribeProgress, setTranscribeProgress] = useState(0); // 0-100
   const [captionsLoaded, setCaptionsLoaded] = useState(false);
-  const [targetLanguage, setTargetLanguage] = useState('ja'); // 'ja' | 'zh-TW'
+  const [targetLanguage, setTargetLanguage] = useState('ja'); // 'ja' | 'zh-TW' | 'auto' (original language)
 
   // Subtitle style & position
   const [subtitleStyle, setSubtitleStyle] = useState('box');
@@ -2806,8 +2806,9 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                 {/* Language selector */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
                   <span style={{ color: C.textMuted, fontSize: 11, whiteSpace: 'nowrap' }}>{window.__t('clipEditorV2_4d4921', '字幕言語:')}</span>
-                  <div style={{ display: 'flex', gap: 4 }}>
+                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
                     {[
+                      { value: 'auto', label: window.__t('clipEditorV2_orig_lang', '🌐 原聲') },
                       { value: 'ja', label: window.__t('clipEditorV2_fd32f4', '🇯🇵 日本語') },
                       { value: 'zh-TW', label: window.__t('clipEditorV2_7b39f2', '🇹🇼 繁體中文') },
                     ].map(lang => (
@@ -2830,8 +2831,14 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                       </button>
                     ))}
                   </div>
+                  {targetLanguage === 'auto' && (
+                    <span style={{ color: C.textDim, fontSize: 10 }}>{window.__t('clipEditorV2_orig_hint', '音声の元の言語で字幕生成')}</span>
+                  )}
                   {targetLanguage === 'zh-TW' && (
-                    <span style={{ color: C.textDim, fontSize: 10 }}>{window.__t('clipEditorV2_155d2b', '台湾語音声→繁體中文字幕')}</span>
+                    <span style={{ color: C.textDim, fontSize: 10 }}>{window.__t('clipEditorV2_155d2b', '音声→繁體中文字幕（翻訳）')}</span>
+                  )}
+                  {targetLanguage === 'ja' && (
+                    <span style={{ color: C.textDim, fontSize: 10 }}>{window.__t('clipEditorV2_ja_hint', '音声→日本語字幕（翻訳）')}</span>
                   )}
                 </div>
                 {captions.length > 0 && captions[0]?.source && (

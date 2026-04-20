@@ -213,7 +213,7 @@ def gpt_rewrite_report_2(item, language="ja"):
                 "content": [
                     {
                         "type": "input_text",
-                        "text": (PROMPT_REPORT_2_ZHTW if language == "zh-TW" else PROMPT_REPORT_2).format(data=payload)
+                        "text": (PROMPT_REPORT_2_ZHTW if language == "zh-TW" else PROMPT_REPORT_2_EN if language == "en" else PROMPT_REPORT_2).format(data=payload)
                     }
                 ]
             }
@@ -266,6 +266,13 @@ async def process_one_report2_task(
                 "目前的比較數據尚無法明確找出改善重點。"
                 "隨著更多直播數據的累積，"
                 "將能提供更具體的改善建議。"
+            )
+        elif language == "en":
+            text = (
+                "Regarding this phase, "
+                "the current comparison data is insufficient to identify clear improvement points. "
+                "As more broadcast data accumulates, "
+                "more specific improvement suggestions will become available."
             )
         else:
             text = (
@@ -486,6 +493,55 @@ PROMPT_REPORT_2_ZHTW = """
 {data}
 
 """.strip()
+
+
+PROMPT_REPORT_2_EN = """
+You are an expert consultant specializing in "maximizing sales" in live commerce.
+
+Below is the information for a specific broadcast phase:
+- Phase description (broadcaster's actions and speech content)
+- Viewer count and like count trends
+- Sales data (if available)
+- Comparison with past best performance
+- CTA score (1-5, intensity of purchase-prompting statements. If available)
+- Audio features (voice energy, intonation, speech rate, silence ratio. If available)
+- Sales tags (expert-assigned sales technique tags. If available)
+- NG judgment (phases judged as "unusable" by human reviewers. With reasons. If available)
+
+Your role:
+- Analyze "how they are selling" in this phase
+- Provide specific advice on "how to sell even better"
+- Do NOT describe video scenes or visuals at all
+
+Analysis perspectives:
+- Sales talk (purchase-prompting phrases, creating scarcity, urgency)
+- Product presentation (demos, before/after, conveying usage experience)
+- Purchase funnel (timing of cart guidance, timing of price presentation)
+- Viewer engagement (comment prompting, responding to questions)
+- If sales data is available: analyze why sales were high/low during this period
+- If CTA score is available: evaluate the strength and frequency of purchase-prompting statements. For low-score phases, provide specific advice like "should push harder for purchases"
+- If audio features are available: if voice energy (energy_mean) or intonation (pitch_std) is low, advise "should speak with more emotion"; if speech rate is too fast, advise "should slow down and explain carefully"
+- If sales tags (human_sales_tags / sales_psychology_tags) are available: based on the sales techniques used (e.g., HOOK, EMPATHY, CTA, SCARCITY, SOCIAL_PROOF), specifically advise on missing techniques or points to strengthen. For phases with few tags, suggest "which sales techniques should be added"
+- If NG judgment (is_unusable=true) is available: this phase was judged "unusable" by a human reviewer. Based on the NG reason (unusable_reason), specifically advise why this phase is problematic and how to improve in the next broadcast. E.g., "poor audio" → suggest microphone environment improvements, "bad cut position" → suggest structuring around natural speech breaks
+- If NG comment (unusable_comment) is available: specific feedback written by the reviewer. This comment is the most concrete information about "why it's unusable," so use it as the top-priority basis for improvement advice. E.g., "lighting is too dark to see product colors" → specific lighting improvement suggestions
+
+Output rules:
+- Maximum 2 specific sales improvement suggestions
+- Each suggestion should follow: "current selling problem" → "specific improvement action"
+- Do NOT write video descriptions like "in this scene the broadcaster is doing..."
+- Write at a level specific enough to implement in the very next broadcast
+- Maximum 3 sentences per item
+
+Constraints:
+- Do not fabricate data
+- Avoid abstract expressions (not "try harder" but "show the price first, then announce the limited quantity")
+- Do not directly cite audio feature numbers (not "energy_mean is 0.03" but "voice energy is low")
+
+Input:
+{data}
+
+""".strip()
+
 
 def rewrite_report_2_with_gpt(raw_items, excel_data=None, language="ja"):
     results = {}
@@ -779,7 +835,55 @@ PROMPT_REPORT_3_ZHTW = """
   ]
 }
 
-輸入數據：
+輸入數據：{data}
+
+""".strip()
+
+
+PROMPT_REPORT_3_EN = """
+You are an expert consultant specializing in "maximizing sales" in live commerce.
+
+Provided information:
+- Phase-by-phase performance across the entire broadcast (viewer count and like count trends)
+- Sales data (GMV, order count, GPM. If available)
+- Per-product performance (introduction time, sales. If available)
+- Sales trigger analysis (which phases saw sales spikes. If available)
+
+Your role:
+- Analyze the overall "sales flow" of the broadcast from a bird's-eye view
+- Identify when sales grew and where opportunities were missed
+- Propose specific "broadcast structure improvements" to maximize sales
+- Do NOT describe video scenes or visuals at all
+
+Analysis perspectives:
+- Opening (first hook) effectiveness
+- Product introduction timing and order
+- Creating purchase peaks (scarcity, urgency, price presentation)
+- Closing (final push) strength
+- Points where viewer drop-off occurs and its causes
+- If sales data is available: characteristics of high GMV-efficiency phases and improvement points for low-efficiency phases
+- If per-product data is available: relationship between introduction time and sales, optimization of introduction order
+- If sales trigger data is available: commonalities of sales-spike phases and how to replicate them
+
+[Mandatory Rules]:
+- Do not fabricate numbers
+- Never mention group_id or internal IDs
+- Do not write video descriptions or scene explanations
+- Write at a level specific enough to implement immediately in the next broadcast
+- Output must be JSON only
+- Each insight = 1 object = 1 insight
+
+Output format (strict):
+{
+  "video_insights": [
+    {
+      "title": "Short title directly related to sales",
+      "content": "Specific sales improvement advice (a few sentences)"
+    }
+  ]
+}
+
+Input data:
 {data}
 """.strip()
 
@@ -808,7 +912,7 @@ def safe_json_load(text):
 
 def rewrite_report_3_with_gpt(raw_video_insight, max_retry: int = 5, language: str = "ja"):
     payload = json.dumps(raw_video_insight, ensure_ascii=False)
-    prompt_tpl = PROMPT_REPORT_3_ZHTW if language == "zh-TW" else PROMPT_REPORT_3
+    prompt_tpl = PROMPT_REPORT_3_ZHTW if language == "zh-TW" else PROMPT_REPORT_3_EN if language == "en" else PROMPT_REPORT_3
     prompt = prompt_tpl.replace("{data}", payload)
 
     for attempt in range(max_retry):
@@ -840,8 +944,8 @@ def rewrite_report_3_with_gpt(raw_video_insight, max_retry: int = 5, language: s
         except Exception:
             break
 
-    fallback_title = "無法完成分析" if language == "zh-TW" else "分析できませんでした"
-    fallback_content = "GPT 未能以預期格式回傳結果。" if language == "zh-TW" else "GPT が期待された形式で結果を返しませんでした。"
+    fallback_title = "無法完成分析" if language == "zh-TW" else "Analysis could not be completed" if language == "en" else "分析できませんでした"
+    fallback_content = "GPT 未能以預期格式回傳結果。" if language == "zh-TW" else "GPT did not return results in the expected format." if language == "en" else "GPT が期待された形式で結果を返しませんでした。"
     return {
         "video_insights": [
             {
@@ -1209,9 +1313,52 @@ PROMPT_REPORT_3_STRUCTURE_ZHTW = """
 {data}
 """.strip()
 
+
+PROMPT_REPORT_3_STRUCTURE_EN = """
+You are an expert in broadcast structure design for "maximizing sales" in live commerce.
+
+Below is the numerical summary and structural characteristics of this broadcast.
+(※This data has been internally benchmarked, but do NOT mention this fact at all.)
+
+Your role:
+- Review this broadcast's structure from the perspective of "maximizing sales"
+- Clearly identify structural strengths and weaknesses that directly impact sales
+- Propose specific "broadcast structure improvements" to boost sales
+- Do NOT describe video scenes or visuals at all
+
+Analysis perspectives:
+- Product introduction placement and timing (when and in what order products are presented)
+- Creating purchase peaks (building momentum in sales talk)
+- Phase transition tempo (keeping viewers engaged without boredom)
+- Opening and closing design
+- Sales time distribution (balance across beginning, middle, and end)
+- Relationship between product introduction duration and sales (products with too short/too long introductions)
+- Sales concentration (whether sales are overly concentrated in specific phases)
+
+Important rules:
+- Never use words like "benchmark," "other videos," or "average"
+- Do not discuss numbers or internal metrics
+- Do not write video descriptions or scene explanations
+- Write at a level specific enough to implement immediately in the next broadcast
+- Output must be JSON only
+
+Output format:
+{
+  "video_insights": [
+    {
+      "title": "Short title directly related to sales",
+      "content": "Specific broadcast structure improvement advice (a few sentences)"
+    }
+  ]
+}
+
+Input data:
+{data}
+""".strip()
+
 def rewrite_report_3_structure_with_gpt(raw_struct_report: dict, max_retry: int = 5, language: str = "ja"):
     payload = json.dumps(raw_struct_report, ensure_ascii=False, indent=2)
-    prompt_tpl = PROMPT_REPORT_3_STRUCTURE_ZHTW if language == "zh-TW" else PROMPT_REPORT_3_STRUCTURE
+    prompt_tpl = PROMPT_REPORT_3_STRUCTURE_ZHTW if language == "zh-TW" else PROMPT_REPORT_3_STRUCTURE_EN if language == "en" else PROMPT_REPORT_3_STRUCTURE
     prompt = prompt_tpl.replace("{data}", payload)
 
     for attempt in range(max_retry):
@@ -1243,9 +1390,9 @@ def rewrite_report_3_structure_with_gpt(raw_struct_report: dict, max_retry: int 
         except Exception:
             break
 
-    # フォールバック（パイプラインを止めない）
-    fallback_title = "無法完成分析" if language == "zh-TW" else "分析できませんでした"
-    fallback_content = "GPT 未能以預期格式回傳結果。" if language == "zh-TW" else "GPT が期待された形式で結果を返しませんでした。"
+    # Fallback (don't stop the pipeline)
+    fallback_title = "無法完成分析" if language == "zh-TW" else "Analysis could not be completed" if language == "en" else "分析できませんでした"
+    fallback_content = "GPT 未能以預期格式回傳結果。" if language == "zh-TW" else "GPT did not return results in the expected format." if language == "en" else "GPT が期待された形式で結果を返しませんでした。"
     return {
         "video_insights": [
             {

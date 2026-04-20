@@ -63,7 +63,7 @@ class TranscribeRequest(BaseModel):
     time_start: float = Field(..., description="Clip start time in seconds (absolute)")
     time_end: float = Field(..., description="Clip end time in seconds (absolute)")
     phase_index: Optional[int] = Field(None, description="Phase index of the clip")
-    target_language: Optional[str] = Field("ja", description="Target language for transcription: 'ja' (Japanese), 'zh-TW' (Traditional Chinese), 'zh' (Simplified Chinese)")
+    target_language: Optional[str] = Field("ja", description="Target language for transcription: 'ja' (Japanese), 'zh-TW' (Traditional Chinese), 'zh' (Simplified Chinese), 'auto' (original language auto-detect)")
 
 
 class SubtitleCaption(BaseModel):
@@ -685,18 +685,26 @@ async def transcribe_clip(
 
     # Determine Whisper language based on target_language
     target_lang = (req.target_language or "ja").strip().lower()
+    
+    # 'auto' mode: let Whisper auto-detect the original language (no translation)
+    is_auto_detect = target_lang == "auto"
+    
     # Map target language to Whisper language parameter
     whisper_lang_map = {
         "ja": "ja",        # Japanese output (Whisper translates Chinese audio to Japanese)
         "zh-tw": "zh",    # Traditional Chinese: first transcribe as Chinese, then convert
         "zh": "zh",       # Simplified Chinese
     }
-    whisper_language = whisper_lang_map.get(target_lang, "ja")
-    needs_traditional_chinese = target_lang == "zh-tw"
+    
+    if is_auto_detect:
+        whisper_language = None  # None = Whisper auto-detects the language
+    else:
+        whisper_language = whisper_lang_map.get(target_lang, "ja")
+    needs_traditional_chinese = target_lang == "zh-tw"  # Only for explicit zh-TW selection
 
     logger.info(f"[transcribe] Starting transcription for video={video_id}, "
                 f"time={req.time_start}-{req.time_end}, target_lang={target_lang}, "
-                f"whisper_lang={whisper_language}, needs_trad_zh={needs_traditional_chinese}")
+                f"whisper_lang={whisper_language}, auto_detect={is_auto_detect}, needs_trad_zh={needs_traditional_chinese}")
 
     # Step 1: Download the clip video to a temp file
     import httpx
@@ -774,20 +782,22 @@ async def transcribe_clip(
                 "ブリーチ、リタッチ、ハイライト、サロン、美容師、スタイリスト"
             ),
         }
-        whisper_prompt = whisper_prompts.get(whisper_language, "")
+        whisper_prompt = whisper_prompts.get(whisper_language, "") if whisper_language else ""
 
         async def _call_whisper(file_path: str) -> list:
             """Call Azure OpenAI Whisper and return segments."""
             fsize = os.path.getsize(file_path)
-            logger.info(f"[transcribe] Sending to Whisper: {file_path} ({fsize/1024/1024:.1f} MB), prompt_lang={whisper_language}")
+            logger.info(f"[transcribe] Sending to Whisper: {file_path} ({fsize/1024/1024:.1f} MB), prompt_lang={whisper_language}, auto_detect={is_auto_detect}")
             with open(file_path, "rb") as f:
                 whisper_kwargs = dict(
                     model="whisper",
                     file=f,
                     response_format="verbose_json",
-                    language=whisper_language,
                     timestamp_granularities=["segment", "word"],
                 )
+                # For auto-detect mode, omit language param so Whisper detects it
+                if whisper_language is not None:
+                    whisper_kwargs["language"] = whisper_language
                 if whisper_prompt:
                     whisper_kwargs["prompt"] = whisper_prompt
                 response = await openai_client.audio.transcriptions.create(**whisper_kwargs)
