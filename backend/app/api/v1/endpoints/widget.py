@@ -206,6 +206,13 @@ async def get_widget_config(
             except Exception:
                 pass
 
+    # Sanitize product_name: remove file extensions and "None" strings
+    import re
+    for clip in clips:
+        pn = clip.get("product_name")
+        if pn and (pn == "None" or re.search(r'\.(mp4|mov|avi|webm|mkv)$', pn, re.IGNORECASE)):
+            clip["product_name"] = None
+
     return {
         "client_id": client_id,
         "name": row["name"],

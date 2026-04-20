@@ -266,7 +266,7 @@ async def brand_register_clip(
             {
                 "id": clip_id,
                 "clip_url": payload.blob_url,
-                "product_name": payload.product_name or payload.title,
+                "product_name": payload.product_name if payload.product_name else None,
                 "product_price": payload.product_price,
                 "brand_id": client_id,
             },

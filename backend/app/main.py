@@ -964,6 +964,14 @@ async def ensure_widget_tables():
             except Exception as e:
                 logger.warning(f"Index creation (lcj_brand_id): {e}")
 
+            # Sanitize product_name: clear file extensions and "None" strings
+            try:
+                await conn.execute(_text(
+                    "UPDATE video_clips SET product_name = NULL WHERE product_name ~ '\\.(mp4|mov|avi|webm|mkv)$' OR product_name = 'None'"
+                ))
+            except Exception as e:
+                logger.warning(f"Sanitize product_name: {e}")
+
             await conn.commit()
         logger.info("Widget tables (widget_clients, widget_clip_assignments, widget_page_contexts, widget_tracking_events) verified/created")
     except asyncio.TimeoutError:

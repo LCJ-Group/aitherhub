@@ -1,9 +1,13 @@
 {
   "navigationFallback": {
     "rewrite": "/index.html",
-    "exclude": ["/assets/*", "/*.{css,scss,js,json,txt,xml,ico,png,jpg,jpeg,gif,svg,woff,woff2,ttf,eot}"]
+    "exclude": ["/assets/*", "/widget/*", "/*.{css,scss,js,json,txt,xml,ico,png,jpg,jpeg,gif,svg,woff,woff2,ttf,eot}"]
   },
   "routes": [
+    {
+      "route": "/loader.js",
+      "rewrite": "/widget/loader.js"
+    },
     {
       "route": "/api/*",
       "backend": "aitherhubAPI"
