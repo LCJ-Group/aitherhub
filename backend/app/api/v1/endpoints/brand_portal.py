@@ -254,15 +254,18 @@ async def brand_register_clip(
     clip_id = str(uuid.uuid4())
 
     try:
+        # video_id is NOT NULL in video_clips; use clip_id as a placeholder
+        # for brand-uploaded clips that don't originate from a full video.
         await db.execute(
             text("""
-                INSERT INTO video_clips (id, clip_url, product_name, product_price,
+                INSERT INTO video_clips (id, video_id, clip_url, product_name, product_price,
                                          uploaded_by_brand, status, created_at)
-                VALUES (:id, :clip_url, :product_name, :product_price,
+                VALUES (:id, :video_id, :clip_url, :product_name, :product_price,
                         :brand_id, 'uploaded', NOW())
             """),
             {
                 "id": clip_id,
+                "video_id": clip_id,
                 "clip_url": payload.blob_url,
                 "product_name": payload.product_name or payload.title,
                 "product_price": payload.product_price,
