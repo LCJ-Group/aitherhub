@@ -32,9 +32,9 @@ const ClipFeedbackPanel = ({
   aiScore = null,
   scoreBreakdown = null,
   onFeedbackSubmitted = () => {},
-  useTranslation(); // triggers re-render on language change
   compact = false,
 }) => {
+  useTranslation(); // triggers re-render on language change
   const [rating, setRating] = useState(null); // 'good' | 'bad' | null
   const [selectedReasons, setSelectedReasons] = useState([]);
   const [salesConfirm, setSalesConfirm] = useState(null); // true | false | null

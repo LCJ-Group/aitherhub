@@ -32,7 +32,6 @@ import { useTranslation } from 'react-i18next';
  *   - className: Additional CSS classes
  */
 export default function HeyGenStreamingAvatar({
-  useTranslation(); // triggers re-render on language change
   avatarId,
   voiceId = "",
   language = "ja",
@@ -40,6 +39,7 @@ export default function HeyGenStreamingAvatar({
   onError,
   className = "",
 }) {
+  useTranslation(); // triggers re-render on language change
   // ── State ──
   const [sessionId, setSessionId] = useState(null);
   const [isConnecting, setIsConnecting] = useState(false);

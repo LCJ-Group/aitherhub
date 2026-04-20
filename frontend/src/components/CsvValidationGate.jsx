@@ -77,7 +77,6 @@ const CHECK_RESULT_BADGE = {
 };
 
 export default function CsvValidationGate({
-  useTranslation(); // triggers re-render on language change
   validationResult,
   onContinue,
   onReplace,
@@ -85,6 +84,7 @@ export default function CsvValidationGate({
   onClose,
   isValidating,
 }) {
+  useTranslation(); // triggers re-render on language change
   // バリデーション中
   if (isValidating) {
     return (

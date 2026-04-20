@@ -40,7 +40,6 @@ import { useTranslation } from 'react-i18next';
  *   - className: Additional CSS classes
  */
 export default function LiveAvatarStreaming({
-  useTranslation(); // triggers re-render on language change
   avatarId = "",
   language = "ja",
   personaPrompt = "",
@@ -55,6 +54,7 @@ export default function LiveAvatarStreaming({
   onSessionCreated,
   className = "",
 }) {
+  useTranslation(); // triggers re-render on language change
   // ── State ──
   const [sessionId, setSessionId] = useState(null);
   const [isConnecting, setIsConnecting] = useState(false);

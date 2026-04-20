@@ -90,7 +90,6 @@ const DARK_TAG_COLORS = {
 };
 
 export default function DockPlayer({
-  useTranslation(); // triggers re-render on language change
   open,
   onClose,
   videoUrl,
@@ -120,6 +119,7 @@ export default function DockPlayer({
   eventScores = [],
   productExposures = [],
 }) {
+  useTranslation(); // triggers re-render on language change
   const videoRef = useRef(null);
   const hasSetupRef = useRef(false);
   const prevVideoUrlRef = useRef(null);
