@@ -9,7 +9,8 @@ export default function ShareVideoPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [showProduct, setShowProduct] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [showProductHighlight, setShowProductHighlight] = useState(false);
   const videoRef = useRef(null);
 
   useEffect(() => {
@@ -37,8 +38,7 @@ export default function ShareVideoPage() {
     setMetaTag('og:url', og.url);
     setMetaTag('og:type', og.type);
     if (og.video) setMetaTag('og:video', og.video);
-    // Twitter card
-    setMetaTag('twitter:card', 'summary_large_image');
+    setMetaTag('twitter:card', og.image ? 'summary_large_image' : 'summary');
     setMetaTag('twitter:title', og.title);
     setMetaTag('twitter:description', og.description);
     setMetaTag('twitter:image', og.image);
@@ -51,26 +51,45 @@ export default function ShareVideoPage() {
     }
   };
 
+  const handleTimeUpdate = () => {
+    if (videoRef.current && videoRef.current.duration) {
+      const pct = (videoRef.current.currentTime / videoRef.current.duration) * 100;
+      setProgress(pct);
+      // Show product highlight at 50% progress
+      if (pct > 50 && !showProductHighlight) {
+        setShowProductHighlight(true);
+      }
+    }
+  };
+
   const handleVideoEnd = () => {
-    setShowProduct(true);
+    setShowProductHighlight(true);
+  };
+
+  const buildUtmUrl = (baseUrl, medium = 'share') => {
+    try {
+      const url = new URL(baseUrl, window.location.origin);
+      url.searchParams.set('utm_source', 'aitherhub');
+      url.searchParams.set('utm_medium', medium);
+      url.searchParams.set('utm_campaign', clipId);
+      return url.toString();
+    } catch {
+      return baseUrl;
+    }
   };
 
   const handleProductClick = () => {
     if (meta?.product_url) {
-      const url = new URL(meta.product_url, window.location.origin);
-      url.searchParams.set('utm_source', 'aitherhub');
-      url.searchParams.set('utm_medium', 'share');
-      url.searchParams.set('utm_campaign', clipId);
-      window.open(url.toString(), '_blank');
+      window.open(buildUtmUrl(meta.product_url), '_blank');
     }
   };
 
   const handleShare = async () => {
     const shareUrl = `https://www.aitherhub.com/v/${clipId}`;
-    const shareText = meta?.title ? `${meta.title}\n${shareUrl}` : shareUrl;
+    const shareTitle = meta?.title || 'AitherHub Video';
     if (navigator.share) {
       try {
-        await navigator.share({ title: meta?.title || 'AitherHub Video', text: shareText, url: shareUrl });
+        await navigator.share({ title: shareTitle, text: shareTitle, url: shareUrl });
       } catch (e) { /* cancelled */ }
     } else {
       await navigator.clipboard.writeText(shareUrl);
@@ -78,47 +97,75 @@ export default function ShareVideoPage() {
     }
   };
 
+  const themeColor = meta?.theme_color || '#FF2D55';
+
+  // --- Loading State ---
   if (loading) return (
-    <div style={styles.container}>
-      <div style={styles.loader}>
-        <div style={styles.spinner} />
+    <div style={styles.pageWrap}>
+      <div style={styles.loaderContainer}>
+        <div style={{...styles.spinner, borderTopColor: themeColor}} />
         <p style={styles.loadingText}>読み込み中...</p>
       </div>
     </div>
   );
 
+  // --- Error State ---
   if (error) return (
-    <div style={styles.container}>
-      <div style={styles.errorBox}>
+    <div style={styles.pageWrap}>
+      <div style={styles.errorContainer}>
+        <div style={styles.errorIcon}>
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.5)" strokeWidth="1.5">
+            <circle cx="12" cy="12" r="10" />
+            <path d="M15 9l-6 6M9 9l6 6" />
+          </svg>
+        </div>
         <p style={styles.errorText}>動画が見つかりませんでした</p>
-        <a href="/" style={styles.homeLink}>AitherHub トップへ</a>
+        <a href="/" style={{...styles.errorLink, color: themeColor}}>AitherHub トップへ</a>
       </div>
     </div>
   );
 
-  return (
-    <div style={styles.container}>
-      <div style={styles.card}>
-        {/* Brand Header */}
-        {meta.brand_name && (
-          <div style={styles.brandHeader}>
-            {meta.brand_logo_url && (
-              <img src={meta.brand_logo_url} alt={meta.brand_name} style={styles.brandLogo} />
-            )}
-            <span style={styles.brandName}>{meta.brand_name}</span>
-          </div>
-        )}
+  const hasProduct = meta.product_name || meta.product_price;
+  const hasProductImage = meta.product_image_url;
 
-        {/* Video Player */}
-        <div style={styles.videoWrapper}>
+  return (
+    <div style={styles.pageWrap}>
+      <div style={styles.card}>
+
+        {/* ── Brand Header ── */}
+        <div style={styles.brandBar}>
+          <div style={styles.brandLeft}>
+            {meta.brand_logo_url ? (
+              <img src={meta.brand_logo_url} alt={meta.brand_name} style={styles.brandLogo} />
+            ) : meta.brand_name ? (
+              <div style={{...styles.brandInitial, background: themeColor}}>
+                {meta.brand_name.charAt(0).toUpperCase()}
+              </div>
+            ) : null}
+            <div>
+              <span style={styles.brandName}>{meta.brand_name || 'AitherHub'}</span>
+              {meta.liver_name && <span style={styles.liverTag}>by {meta.liver_name}</span>}
+            </div>
+          </div>
+          <button style={styles.shareIconBtn} onClick={handleShare} title="シェア">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M4 12v8a2 2 0 002 2h12a2 2 0 002-2v-8M16 6l-4-4-4 4M12 2v13" />
+            </svg>
+          </button>
+        </div>
+
+        {/* ── Video Player ── */}
+        <div style={styles.videoContainer}>
           <video
             ref={videoRef}
             src={meta.video_url}
-            poster={meta.thumbnail_url}
+            poster={meta.thumbnail_url || undefined}
             style={styles.video}
             playsInline
             loop
+            preload="metadata"
             onEnded={handleVideoEnd}
+            onTimeUpdate={handleTimeUpdate}
             onPlay={() => setIsPlaying(true)}
             onPause={() => setIsPlaying(false)}
             onClick={() => {
@@ -130,265 +177,373 @@ export default function ShareVideoPage() {
             controls={isPlaying}
           />
           {!isPlaying && (
-            <button style={styles.playButton} onClick={handlePlay}>
-              <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
-                <circle cx="32" cy="32" r="32" fill="rgba(0,0,0,0.5)" />
-                <path d="M26 20L46 32L26 44V20Z" fill="white" />
-              </svg>
-            </button>
+            <div style={styles.playOverlay} onClick={handlePlay}>
+              <div style={{...styles.playCircle, background: themeColor}}>
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="white">
+                  <path d="M8 5v14l11-7z" />
+                </svg>
+              </div>
+              {meta.duration_sec && (
+                <span style={styles.durationBadge}>
+                  {Math.floor(meta.duration_sec / 60)}:{String(Math.floor(meta.duration_sec % 60)).padStart(2, '0')}
+                </span>
+              )}
+            </div>
           )}
-          {meta.duration_sec && (
-            <span style={styles.duration}>
-              {Math.floor(meta.duration_sec / 60)}:{String(Math.floor(meta.duration_sec % 60)).padStart(2, '0')}
-            </span>
+          {/* Progress bar */}
+          {isPlaying && (
+            <div style={styles.progressTrack}>
+              <div style={{...styles.progressFill, width: `${progress}%`, background: themeColor}} />
+            </div>
           )}
         </div>
 
-        {/* Product Info */}
-        {meta.product_name && (
-          <div style={{...styles.productSection, ...(showProduct ? styles.productHighlight : {})}}>
-            <div style={styles.productInfo}>
-              {meta.product_image_url && (
-                <img src={meta.product_image_url} alt={meta.product_name} style={styles.productImage} />
+        {/* ── Product Section ── */}
+        {hasProduct && (
+          <div style={{
+            ...styles.productSection,
+            ...(showProductHighlight ? { background: `${themeColor}10`, borderLeft: `3px solid ${themeColor}` } : {}),
+          }}>
+            <div style={styles.productRow}>
+              {hasProductImage && (
+                <img src={meta.product_image_url} alt={meta.product_name} style={styles.productImg} />
               )}
-              <div style={styles.productText}>
-                <h2 style={styles.productName}>{meta.product_name}</h2>
+              <div style={styles.productDetails}>
+                <h2 style={styles.productTitle}>{meta.product_name}</h2>
                 {meta.product_price && (
-                  <p style={styles.productPrice}>{meta.product_price}</p>
+                  <span style={{...styles.priceTag, color: themeColor}}>{meta.product_price}</span>
                 )}
-                {meta.liver_name && (
-                  <p style={styles.liverName}>{meta.liver_name}</p>
+                {meta.product_description && (
+                  <p style={styles.productDesc}>
+                    {meta.product_description.length > 80
+                      ? meta.product_description.slice(0, 80) + '...'
+                      : meta.product_description}
+                  </p>
                 )}
               </div>
             </div>
+
             {meta.product_url && (
-              <button style={styles.ctaButton} onClick={handleProductClick}>
+              <button
+                style={{...styles.ctaBtn, background: `linear-gradient(135deg, ${themeColor}, ${themeColor}cc)`}}
+                onClick={handleProductClick}
+              >
                 この商品を見る
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{marginLeft: 6}}>
+                  <path d="M5 12h14M12 5l7 7-7 7" />
+                </svg>
               </button>
             )}
             {meta.product_cart_url && (
-              <button style={styles.cartButton} onClick={() => {
-                const url = new URL(meta.product_cart_url, window.location.origin);
-                url.searchParams.set('utm_source', 'aitherhub');
-                url.searchParams.set('utm_medium', 'share');
-                url.searchParams.set('utm_campaign', clipId);
-                window.open(url.toString(), '_blank');
-              }}>
+              <button
+                style={{...styles.cartBtn, color: themeColor, borderColor: themeColor}}
+                onClick={() => window.open(buildUtmUrl(meta.product_cart_url, 'share_cart'), '_blank')}
+              >
                 カートに追加
               </button>
             )}
           </div>
         )}
 
-        {/* Action Buttons */}
-        <div style={styles.actions}>
-          <button style={styles.shareButton} onClick={handleShare}>
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        {/* ── If no product info, still show brand CTA ── */}
+        {!hasProduct && meta.product_url && (
+          <div style={styles.productSection}>
+            <button
+              style={{...styles.ctaBtn, background: `linear-gradient(135deg, ${themeColor}, ${themeColor}cc)`}}
+              onClick={handleProductClick}
+            >
+              詳しく見る
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{marginLeft: 6}}>
+                <path d="M5 12h14M12 5l7 7-7 7" />
+              </svg>
+            </button>
+          </div>
+        )}
+
+        {/* ── Action Bar ── */}
+        <div style={styles.actionBar}>
+          <button style={styles.actionBtn} onClick={handleShare}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M4 12v8a2 2 0 002 2h12a2 2 0 002-2v-8M16 6l-4-4-4 4M12 2v13" />
             </svg>
-            シェア
+            <span>シェア</span>
           </button>
-          <a href="/" style={styles.moreButton}>
-            他の動画を見る
+          <a href="/" style={styles.actionBtn}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <rect x="3" y="3" width="7" height="7" rx="1" />
+              <rect x="14" y="3" width="7" height="7" rx="1" />
+              <rect x="3" y="14" width="7" height="7" rx="1" />
+              <rect x="14" y="14" width="7" height="7" rx="1" />
+            </svg>
+            <span>他の動画</span>
           </a>
         </div>
 
-        {/* Footer */}
+        {/* ── Footer ── */}
         <div style={styles.footer}>
           <span style={styles.footerText}>Powered by </span>
-          <a href="https://www.aitherhub.com" style={styles.footerLink}>AitherHub</a>
+          <a href="https://www.aitherhub.com" style={{...styles.footerLink, color: `${themeColor}88`}}>AitherHub</a>
         </div>
       </div>
     </div>
   );
 }
 
+// ─── Styles ───
 const styles = {
-  container: {
+  pageWrap: {
     minHeight: '100vh',
-    background: 'linear-gradient(135deg, #0a0a0a 0%, #1a1a2e 50%, #16213e 100%)',
+    background: 'linear-gradient(160deg, #0a0a12 0%, #12122a 40%, #1a1a3e 100%)',
     display: 'flex',
     justifyContent: 'center',
     alignItems: 'flex-start',
-    padding: '20px 16px',
-    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+    padding: '24px 16px',
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Hiragino Sans", "Noto Sans JP", sans-serif',
+    WebkitFontSmoothing: 'antialiased',
   },
   card: {
     width: '100%',
-    maxWidth: '480px',
-    background: '#1e1e2e',
-    borderRadius: '16px',
+    maxWidth: '440px',
+    background: 'rgba(25, 25, 40, 0.95)',
+    borderRadius: '20px',
     overflow: 'hidden',
-    boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
+    boxShadow: '0 24px 80px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.06)',
+    backdropFilter: 'blur(20px)',
   },
-  brandHeader: {
+
+  // Brand Bar
+  brandBar: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: '14px 18px',
+    borderBottom: '1px solid rgba(255,255,255,0.06)',
+  },
+  brandLeft: {
     display: 'flex',
     alignItems: 'center',
     gap: '10px',
-    padding: '16px 20px',
-    borderBottom: '1px solid rgba(255,255,255,0.08)',
   },
   brandLogo: {
-    width: '32px',
-    height: '32px',
+    width: '34px',
+    height: '34px',
     borderRadius: '50%',
     objectFit: 'cover',
+    border: '1px solid rgba(255,255,255,0.1)',
+  },
+  brandInitial: {
+    width: '34px',
+    height: '34px',
+    borderRadius: '50%',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: '#fff',
+    fontSize: '15px',
+    fontWeight: '700',
+    flexShrink: 0,
   },
   brandName: {
     color: '#fff',
-    fontSize: '15px',
+    fontSize: '14px',
     fontWeight: '600',
+    display: 'block',
+    lineHeight: '1.3',
   },
-  videoWrapper: {
+  liverTag: {
+    color: 'rgba(255,255,255,0.4)',
+    fontSize: '11px',
+    display: 'block',
+  },
+  shareIconBtn: {
+    background: 'rgba(255,255,255,0.08)',
+    border: 'none',
+    borderRadius: '50%',
+    width: '36px',
+    height: '36px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: 'rgba(255,255,255,0.7)',
+    cursor: 'pointer',
+    transition: 'background 0.2s',
+  },
+
+  // Video
+  videoContainer: {
     position: 'relative',
     width: '100%',
     aspectRatio: '9/16',
     background: '#000',
     cursor: 'pointer',
+    overflow: 'hidden',
   },
   video: {
     width: '100%',
     height: '100%',
     objectFit: 'cover',
   },
-  playButton: {
+  playOverlay: {
     position: 'absolute',
-    top: '50%',
-    left: '50%',
-    transform: 'translate(-50%, -50%)',
-    background: 'none',
-    border: 'none',
+    inset: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: 'linear-gradient(180deg, rgba(0,0,0,0.1) 0%, rgba(0,0,0,0.4) 100%)',
     cursor: 'pointer',
-    zIndex: 2,
   },
-  duration: {
-    position: 'absolute',
-    bottom: '12px',
-    right: '12px',
-    background: 'rgba(0,0,0,0.7)',
+  playCircle: {
+    width: '64px',
+    height: '64px',
+    borderRadius: '50%',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+    transition: 'transform 0.2s',
+  },
+  durationBadge: {
+    marginTop: '12px',
+    background: 'rgba(0,0,0,0.6)',
     color: '#fff',
     fontSize: '12px',
-    padding: '2px 8px',
-    borderRadius: '4px',
+    fontWeight: '500',
+    padding: '4px 12px',
+    borderRadius: '20px',
+    backdropFilter: 'blur(8px)',
   },
+  progressTrack: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: '3px',
+    background: 'rgba(255,255,255,0.15)',
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: '0 2px 2px 0',
+    transition: 'width 0.3s linear',
+  },
+
+  // Product
   productSection: {
-    padding: '20px',
-    borderTop: '1px solid rgba(255,255,255,0.08)',
-    transition: 'background 0.3s',
+    padding: '18px',
+    borderTop: '1px solid rgba(255,255,255,0.06)',
+    transition: 'all 0.4s ease',
   },
-  productHighlight: {
-    background: 'rgba(255,45,85,0.08)',
-  },
-  productInfo: {
+  productRow: {
     display: 'flex',
     gap: '14px',
     marginBottom: '14px',
   },
-  productImage: {
+  productImg: {
     width: '72px',
     height: '72px',
-    borderRadius: '10px',
+    borderRadius: '12px',
     objectFit: 'cover',
     flexShrink: 0,
+    border: '1px solid rgba(255,255,255,0.08)',
   },
-  productText: {
+  productDetails: {
     flex: 1,
     minWidth: 0,
   },
-  productName: {
+  productTitle: {
     color: '#fff',
     fontSize: '15px',
     fontWeight: '600',
     margin: '0 0 6px 0',
     lineHeight: '1.4',
+    display: '-webkit-box',
+    WebkitLineClamp: 2,
+    WebkitBoxOrient: 'vertical',
+    overflow: 'hidden',
   },
-  productPrice: {
-    color: '#FF2D55',
+  priceTag: {
     fontSize: '18px',
     fontWeight: '700',
-    margin: '0 0 4px 0',
+    display: 'inline-block',
+    marginBottom: '4px',
   },
-  liverName: {
-    color: 'rgba(255,255,255,0.5)',
-    fontSize: '13px',
-    margin: 0,
+  productDesc: {
+    color: 'rgba(255,255,255,0.45)',
+    fontSize: '12px',
+    lineHeight: '1.5',
+    margin: '4px 0 0 0',
   },
-  ctaButton: {
+  ctaBtn: {
     width: '100%',
     padding: '14px',
-    background: 'linear-gradient(135deg, #FF2D55, #FF6B6B)',
     color: '#fff',
     border: 'none',
     borderRadius: '12px',
-    fontSize: '16px',
+    fontSize: '15px',
     fontWeight: '700',
     cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    transition: 'transform 0.15s, box-shadow 0.15s',
+    boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
     marginBottom: '8px',
-    transition: 'transform 0.2s',
   },
-  cartButton: {
+  cartBtn: {
     width: '100%',
     padding: '12px',
     background: 'transparent',
-    color: '#FF2D55',
-    border: '2px solid #FF2D55',
+    border: '1.5px solid',
     borderRadius: '12px',
     fontSize: '14px',
     fontWeight: '600',
     cursor: 'pointer',
     transition: 'all 0.2s',
   },
-  actions: {
+
+  // Actions
+  actionBar: {
     display: 'flex',
-    gap: '10px',
-    padding: '16px 20px',
-    borderTop: '1px solid rgba(255,255,255,0.08)',
-  },
-  shareButton: {
-    flex: 1,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
     gap: '8px',
-    padding: '12px',
-    background: 'rgba(255,255,255,0.08)',
-    color: '#fff',
-    border: 'none',
-    borderRadius: '10px',
-    fontSize: '14px',
-    fontWeight: '500',
-    cursor: 'pointer',
+    padding: '12px 18px',
+    borderTop: '1px solid rgba(255,255,255,0.06)',
   },
-  moreButton: {
+  actionBtn: {
     flex: 1,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    padding: '12px',
-    background: 'rgba(255,255,255,0.08)',
-    color: '#fff',
+    gap: '6px',
+    padding: '10px',
+    background: 'rgba(255,255,255,0.06)',
+    color: 'rgba(255,255,255,0.7)',
     border: 'none',
     borderRadius: '10px',
-    fontSize: '14px',
+    fontSize: '13px',
     fontWeight: '500',
     cursor: 'pointer',
     textDecoration: 'none',
+    transition: 'background 0.2s',
   },
+
+  // Footer
   footer: {
-    padding: '12px 20px',
+    padding: '10px 18px',
     textAlign: 'center',
-    borderTop: '1px solid rgba(255,255,255,0.05)',
+    borderTop: '1px solid rgba(255,255,255,0.04)',
   },
   footerText: {
-    color: 'rgba(255,255,255,0.3)',
-    fontSize: '12px',
+    color: 'rgba(255,255,255,0.2)',
+    fontSize: '11px',
   },
   footerLink: {
-    color: 'rgba(255,255,255,0.5)',
-    fontSize: '12px',
+    fontSize: '11px',
     textDecoration: 'none',
+    fontWeight: '500',
   },
-  loader: {
+
+  // Loading
+  loaderContainer: {
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
@@ -396,30 +551,35 @@ const styles = {
     minHeight: '60vh',
   },
   spinner: {
-    width: '40px',
-    height: '40px',
-    border: '3px solid rgba(255,255,255,0.1)',
+    width: '36px',
+    height: '36px',
+    border: '3px solid rgba(255,255,255,0.08)',
     borderTopColor: '#FF2D55',
     borderRadius: '50%',
-    animation: 'spin 0.8s linear infinite',
+    animation: 'spin 0.7s linear infinite',
   },
   loadingText: {
-    color: 'rgba(255,255,255,0.5)',
-    marginTop: '16px',
-    fontSize: '14px',
+    color: 'rgba(255,255,255,0.4)',
+    marginTop: '14px',
+    fontSize: '13px',
   },
-  errorBox: {
+
+  // Error
+  errorContainer: {
     textAlign: 'center',
-    padding: '60px 20px',
+    padding: '80px 20px',
   },
-  errorText: {
-    color: 'rgba(255,255,255,0.7)',
-    fontSize: '16px',
+  errorIcon: {
     marginBottom: '16px',
   },
-  homeLink: {
-    color: '#FF2D55',
+  errorText: {
+    color: 'rgba(255,255,255,0.6)',
+    fontSize: '15px',
+    marginBottom: '16px',
+  },
+  errorLink: {
     textDecoration: 'none',
     fontSize: '14px',
+    fontWeight: '500',
   },
 };

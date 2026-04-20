@@ -26,6 +26,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, Request, Response
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1730,7 +1731,8 @@ async def _get_share_clip_meta_impl(clip_id: str, db: AsyncSession):
                    wca.product_price, wca.product_url,
                    wca.product_image_url, wca.product_cart_url,
                    wc.name as brand_name, wc.client_id as client_id,
-                   wc.logo_url as brand_logo_url
+                   wc.logo_url as brand_logo_url,
+                   wc.theme_color as theme_color
             FROM video_clips vc
             LEFT JOIN widget_clip_assignments wca
                 ON vc.id::text = wca.clip_id AND wca.is_active = TRUE
@@ -1747,7 +1749,36 @@ async def _get_share_clip_meta_impl(clip_id: str, db: AsyncSession):
 
     row = dict(row)
     product_name = row.get("wca_product_name") or row.get("vc_product_name") or ""
+    product_price = row.get("product_price") or ""
+    product_image_url = row.get("product_image_url") or ""
+    product_description = ""
     brand_name = row.get("brand_name") or ""
+    theme_color = row.get("theme_color") or "#FF2D55"
+    product_url = row.get("product_url") or ""
+
+    # ── OGP enrichment: fetch product info from product_url when missing ──
+    # If product_name is empty or looks like a raw filename, try to enrich from OGP
+    _is_raw_filename = product_name and (
+        product_name.endswith(".mp4") or product_name.endswith(".mov")
+        or product_name.endswith(".webm") or product_name.endswith(".avi")
+    )
+    if (not product_name or _is_raw_filename) and product_url:
+        try:
+            ogp_data = await _fetch_ogp(product_url)
+            if ogp_data.get("success"):
+                if ogp_data.get("title"):
+                    product_name = ogp_data["title"]
+                if ogp_data.get("price") and not product_price:
+                    product_price = ogp_data["price"]
+                if ogp_data.get("image") and not product_image_url:
+                    product_image_url = ogp_data["image"]
+                if ogp_data.get("description"):
+                    product_description = ogp_data["description"][:200]
+                logger.info(f"Share OGP enrichment for {clip_id}: title={product_name}")
+        except Exception as e:
+            logger.warning(f"Share OGP enrichment failed for {clip_id}: {e}")
+
+    # Build title
     title = product_name if product_name else brand_name
     if brand_name and product_name:
         title = f"{product_name} | {brand_name}"
@@ -1755,7 +1786,7 @@ async def _get_share_clip_meta_impl(clip_id: str, db: AsyncSession):
         title = brand_name
 
     # Pick best thumbnail
-    thumbnail = row.get("thumbnail_url") or row.get("product_image_url") or ""
+    thumbnail = row.get("thumbnail_url") or product_image_url or ""
 
     # Pick best video URL
     video_url = row.get("widget_url") or row.get("exported_url") or row.get("clip_url") or ""
@@ -1774,27 +1805,130 @@ async def _get_share_clip_meta_impl(clip_id: str, db: AsyncSession):
     except Exception as e:
         logger.warning(f"SAS generation failed in share endpoint: {e}")
 
+    # Build OGP description
+    og_description = ""
+    if product_description:
+        og_description = product_description
+    elif product_name and brand_name:
+        og_description = f"{brand_name}の「{product_name}」を動画でチェック！"
+    elif brand_name:
+        og_description = f"{brand_name}の動画をチェック！"
+    else:
+        og_description = "動画をチェック！"
+
     return {
         "clip_id": row["clip_id"],
         "client_id": row.get("client_id") or "",
         "title": title,
         "brand_name": brand_name,
         "brand_logo_url": row.get("brand_logo_url") or "",
+        "theme_color": theme_color,
         "product_name": product_name,
-        "product_price": row.get("product_price") or "",
-        "product_url": row.get("product_url") or "",
-        "product_image_url": row.get("product_image_url") or "",
+        "product_price": product_price,
+        "product_url": product_url,
+        "product_image_url": product_image_url,
         "product_cart_url": row.get("product_cart_url") or "",
+        "product_description": product_description,
         "thumbnail_url": thumbnail,
         "video_url": video_url,
         "duration_sec": row.get("duration_sec"),
         "liver_name": row.get("liver_name") or "",
         "og": {
             "title": title or "AitherHub Video",
-            "description": f"{brand_name}の動画をチェック！" if brand_name else "動画をチェック！",
+            "description": og_description,
             "image": thumbnail,
             "video": video_url,
             "url": f"https://www.aitherhub.com/v/{clip_id}",
             "type": "video.other",
         },
     }
+
+
+
+# ── OGP HTML for SNS crawlers: /v/{clip_id} server-side rendered ──────
+@router.get("/ogp/{clip_id}", response_class=HTMLResponse)
+async def share_ogp_page(clip_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    """Return a minimal HTML page with proper OGP meta tags for SNS crawlers.
+
+    If the request comes from a real browser (not a crawler), redirect to the
+    SPA frontend. Crawlers (LINE, Twitter, Facebook, Slack, Discord, etc.)
+    get a static HTML page with OGP tags so link previews work correctly.
+    """
+    from starlette.responses import RedirectResponse
+
+    user_agent = (request.headers.get("user-agent") or "").lower()
+    crawler_keywords = [
+        "bot", "crawler", "spider", "facebookexternalhit", "twitterbot",
+        "slackbot", "discordbot", "linebot", "linkedinbot", "whatsapp",
+        "telegrambot", "applebot", "googlebot", "bingbot", "yandex",
+        "pinterest", "redditbot", "embedly", "quora", "outbrain",
+        "vkshare", "skypeuripreview", "nuzzel", "w3c_validator",
+    ]
+    is_crawler = any(kw in user_agent for kw in crawler_keywords)
+
+    if not is_crawler:
+        # Real browser → redirect to SPA
+        return RedirectResponse(
+            url=f"https://www.aitherhub.com/v/{clip_id}",
+            status_code=302,
+        )
+
+    # Crawler → render OGP HTML
+    try:
+        meta = await _get_share_clip_meta_impl(clip_id, db)
+    except HTTPException:
+        return HTMLResponse(
+            content="<html><head><title>Not Found</title></head><body>Video not found</body></html>",
+            status_code=404,
+        )
+
+    og = meta.get("og", {})
+    title = _escape_html(og.get("title") or "AitherHub Video")
+    description = _escape_html(og.get("description") or "")
+    image = _escape_html(og.get("image") or "")
+    video = _escape_html(og.get("video") or "")
+    url = _escape_html(og.get("url") or f"https://www.aitherhub.com/v/{clip_id}")
+    og_type = _escape_html(og.get("type") or "video.other")
+
+    html = f"""<!DOCTYPE html>
+<html lang="ja" prefix="og: https://ogp.me/ns#">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{title}</title>
+<meta name="description" content="{description}">
+<meta property="og:title" content="{title}">
+<meta property="og:description" content="{description}">
+<meta property="og:type" content="{og_type}">
+<meta property="og:url" content="{url}">
+<meta property="og:site_name" content="AitherHub">
+<meta property="og:locale" content="ja_JP">
+{"<meta property='og:image' content='" + image + "'>" if image else ""}
+{"<meta property='og:image:width' content='1200'>" if image else ""}
+{"<meta property='og:image:height' content='630'>" if image else ""}
+{"<meta property='og:video' content='" + video + "'>" if video else ""}
+{"<meta property='og:video:type' content='video/mp4'>" if video else ""}
+<meta name="twitter:card" content="{'summary_large_image' if image else 'summary'}">
+<meta name="twitter:title" content="{title}">
+<meta name="twitter:description" content="{description}">
+{"<meta name='twitter:image' content='" + image + "'>" if image else ""}
+{"<meta name='twitter:player' content='" + video + "'>" if video else ""}
+<link rel="canonical" href="{url}">
+</head>
+<body>
+<h1>{title}</h1>
+<p>{description}</p>
+<p><a href="{url}">動画を見る</a></p>
+</body>
+</html>"""
+
+    return HTMLResponse(content=html, status_code=200)
+
+
+def _escape_html(s: str) -> str:
+    """Escape HTML special characters for safe embedding in meta tags."""
+    return (s.replace("&", "&amp;")
+             .replace("<", "&lt;")
+             .replace(">", "&gt;")
+             .replace('"', "&quot;")
+             .replace("'", "&#x27;"))
