@@ -1038,7 +1038,7 @@
   "clipEditorV2_ja_hint": "Audio → Japanese subtitles (translate)",
   "clipEditorV2_4b39ae": "🎤 AI再生成",
   "clipEditorV2_de99d4": "🎤 AI生成",
-  "clipEditorV2_4a1c40": "You can use speech recognition with \"AI Generation\" or use the timeline transcription with \"Apply Master\".",
+  "clipEditorV2_4a1c40": "Use \"AI Generation\" to generate subtitles with speech recognition.",
   "clipEditorV2_40dc07": "Delete this subtitle",
   "clipEditorV2_811028": "Save subtitle",
   "clipEditorV2_7ae953": "Trim edit",

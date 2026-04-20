@@ -2900,28 +2900,6 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                     )}
                   </button>
 
-                  {/* Load from master transcripts button */}
-                  <button
-                    onClick={loadFromMasterTranscripts}
-                    style={{
-                      flex: '1 1 auto',
-                      padding: '8px 12px',
-                      border: `1px solid ${C.blue || '#3b82f6'}66`,
-                      borderRadius: 8,
-                      backgroundColor: (C.blue || '#3b82f6') + '18',
-                      color: C.blue || '#3b82f6',
-                      fontSize: 11,
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: 4,
-                      minWidth: 0,
-                    }}
-                  >
-                    {'📝'} マスター反映
-                  </button>
 
                   {/* Clear all captions button */}
                   {captions.length > 0 && (
@@ -2966,7 +2944,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                   >
                     字幕がありません。
                     <br />
-                    <span style={{ fontSize: 11 }}>{window.__t('clipEditorV2_4a1c40', '「AI生成」で音声認識、または「マスター反映」でタイムラインの文字起こしを使用できます。')}</span>
+                    <span style={{ fontSize: 11 }}>{window.__t('clipEditorV2_4a1c40', '「AI生成」で音声認識して字幕を生成できます。')}</span>
                   </div>
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>

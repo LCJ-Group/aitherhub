@@ -1038,7 +1038,7 @@
   "clipEditorV2_ja_hint": "音声→日本語字幕（翻訳）",
   "clipEditorV2_4b39ae": "🎤 AI再生成",
   "clipEditorV2_de99d4": "🎤 AI生成",
-  "clipEditorV2_4a1c40": "「AI生成」で音声認識、または「マスター反映」でタイムラインの文字起こしを使用できます。",
+  "clipEditorV2_4a1c40": "「AI生成」で音声認識して字幕を生成できます。",
   "clipEditorV2_40dc07": "この字幕を削除",
   "clipEditorV2_811028": "字幕を保存",
   "clipEditorV2_7ae953": "トリム編集",
