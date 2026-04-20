@@ -212,6 +212,10 @@ export default function LiveAvatarStreaming({
           // Reset auto-live speaking flag so next queue item can be sent
           autoLiveSpeakingRef.current = false;
           speakStartTimeRef.current = null;
+          // Immediately try to send next item from queue (don't wait for next poll)
+          if (autoLiveMode) {
+            setTimeout(() => pollAndSendQueue(), 100);
+          }
           break;
         case "user.speak_started":
           setIsListening(true);
@@ -403,6 +407,10 @@ export default function LiveAvatarStreaming({
                 // Reset auto-live speaking flag so next queue item can be sent
                 autoLiveSpeakingRef.current = false;
                 speakStartTimeRef.current = null;
+                // Immediately try to send next item from queue
+                if (autoLiveMode) {
+                  setTimeout(() => pollAndSendQueue(), 100);
+                }
               } else if (data.type === "session.stopped") {
                 console.log("[LiveAvatar] Session stopped via WebSocket");
                 stopSession();

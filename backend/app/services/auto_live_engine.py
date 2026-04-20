@@ -457,10 +457,10 @@ async def _flow_speech_loop(session: AutoLiveSession):
             await asyncio.sleep(1)
             continue
 
-        # Check queue capacity
+        # Check queue capacity — allow up to 5 items buffered for seamless playback
         queue_len = await get_queue_length(session.session_id)
-        if queue_len >= 3:
-            await asyncio.sleep(SPEAK_QUEUE_CHECK_INTERVAL)
+        if queue_len >= 5:
+            await asyncio.sleep(0.5)  # Short sleep, check again quickly
             continue
 
         # Get current phase from flow template
@@ -530,7 +530,11 @@ async def _flow_speech_loop(session: AutoLiveSession):
                         next_product = session.products[session.current_product_index % len(session.products)]
                         logger.info(f"[AutoLive v2] Moving to next product: {next_product.item_name}")
 
-        await asyncio.sleep(SPEAK_QUEUE_CHECK_INTERVAL)
+        # Only sleep briefly if queue has items, otherwise generate immediately
+        if await get_queue_length(session.session_id) >= 3:
+            await asyncio.sleep(0.5)  # Queue has buffer, short pause
+        else:
+            await asyncio.sleep(0.1)  # Queue is low, generate ASAP
 
     logger.info(f"[AutoLive v2] Flow speech loop ended for session {session.session_id}")
 
