@@ -186,15 +186,23 @@
   }
 
   // ── Load widget config from API ──
-  function loadConfig(callback) {
+  function loadConfig(callback, attempt) {
+    attempt = attempt || 1;
+    var MAX_RETRIES = 3;
+    var RETRY_DELAYS = [3000, 6000, 12000]; // 3s, 6s, 12s
     fetch(API_BASE + "/widget/config/" + CLIENT_ID)
       .then(function (res) {
-        if (!res.ok) throw new Error("Config not found");
+        if (!res.ok) throw new Error("Config HTTP " + res.status);
         return res.json();
       })
       .then(callback)
       .catch(function (err) {
-        console.warn("[AitherHub] Failed to load config:", err.message);
+        if (attempt < MAX_RETRIES) {
+          console.warn("[AitherHub] Config load attempt " + attempt + " failed (" + err.message + "), retrying in " + (RETRY_DELAYS[attempt - 1] / 1000) + "s...");
+          setTimeout(function () { loadConfig(callback, attempt + 1); }, RETRY_DELAYS[attempt - 1]);
+        } else {
+          console.warn("[AitherHub] Failed to load config after " + MAX_RETRIES + " attempts:", err.message);
+        }
       });
   }
 
