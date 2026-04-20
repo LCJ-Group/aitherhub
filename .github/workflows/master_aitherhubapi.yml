@@ -166,10 +166,25 @@ jobs:
           slot-name: ${{ env.SLOT_NAME }}
           package: deploy.zip
 
-      # ── Step 4: Wait for staging slot to be healthy ──
+      # ── Step 4: Get staging slot hostname dynamically ──
+      - name: Get staging slot hostname
+        id: staging_url
+        run: |
+          # Azure unique default hostnames include a hash, so we must query the actual hostname
+          STAGING_HOST=$(az webapp show \
+            --resource-group ${{ env.AZURE_RG }} \
+            --name ${{ env.AZURE_WEBAPP_NAME }} \
+            --slot ${{ env.SLOT_NAME }} \
+            --query "defaultHostName" \
+            --output tsv)
+
+          echo "Staging hostname: $STAGING_HOST"
+          echo "STAGING_URL=https://$STAGING_HOST" >> $GITHUB_OUTPUT
+
+      # ── Step 5: Wait for staging slot to be healthy ──
       - name: Wait for staging slot to be healthy
         run: |
-          STAGING_URL="https://${{ env.AZURE_WEBAPP_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net"
+          STAGING_URL="${{ steps.staging_url.outputs.STAGING_URL }}"
           COMMIT_SHA="${{ github.sha }}"
           SHORT_SHA="${COMMIT_SHA:0:7}"
 
@@ -218,7 +233,7 @@ jobs:
             exit 1
           fi
 
-      # ── Step 5: Swap staging → production (zero downtime!) ──
+      # ── Step 6: Swap staging → production (zero downtime!) ──
       - name: Swap staging to production
         run: |
           echo "Swapping staging → production..."
@@ -230,7 +245,7 @@ jobs:
             --output none
           echo "Swap completed! New version is now live."
 
-      # ── Step 6: Update production settings (slot-sticky) ──
+      # ── Step 7: Update production settings (slot-sticky) ──
       - name: Update production app settings
         run: |
           COMMIT_SHA="${{ github.sha }}"
@@ -249,7 +264,7 @@ jobs:
               ENABLE_ORYX_BUILD="false" \
             --output none
 
-      # ── Step 7: Configure health check & Always On ──
+      # ── Step 8: Configure health check & Always On ──
       - name: Configure health check and Always On
         run: |
           # Enable Always On (prevents cold starts)
