@@ -27,14 +27,14 @@ class WidgetCORSMiddleware(BaseHTTPMiddleware):
                     status_code=200,
                     headers={
                         "Access-Control-Allow-Origin": origin,
-                        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+                        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
                         "Access-Control-Allow-Headers": "Content-Type, X-Admin-Key, Authorization",
                         "Access-Control-Max-Age": "86400",
                     },
                 )
             response = await call_next(request)
             response.headers["Access-Control-Allow-Origin"] = origin
-            response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+            response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
             response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Admin-Key, Authorization"
             return response
         return await call_next(request)
@@ -904,6 +904,7 @@ async def ensure_widget_tables():
                 "ALTER TABLE widget_clip_assignments ADD COLUMN IF NOT EXISTS product_image_url TEXT",
                 "ALTER TABLE widget_clip_assignments ADD COLUMN IF NOT EXISTS product_url TEXT",
                 "ALTER TABLE widget_clip_assignments ADD COLUMN IF NOT EXISTS product_cart_url TEXT",
+                "ALTER TABLE widget_clip_assignments ADD COLUMN IF NOT EXISTS is_pinned BOOLEAN DEFAULT FALSE",
             ]:
                 try:
                     await conn.execute(_text(col_sql))

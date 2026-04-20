@@ -316,6 +316,7 @@ async def _brand_list_clips_impl(client_id: str, limit: int, offset: int, db: As
                    wca.product_url as widget_product_url,
                    wca.product_cart_url as widget_product_cart_url,
                    wca.sort_order,
+                   COALESCE(wca.is_pinned, FALSE) as is_pinned,
                    CASE WHEN vc.uploaded_by_brand = :cid THEN TRUE ELSE FALSE END as is_own_upload
             FROM video_clips vc
             LEFT JOIN widget_clip_assignments wca
@@ -499,6 +500,40 @@ async def brand_remove_clip_from_widget(
     return {"status": "removed", "clip_id": clip_id}
 
 
+@router.put("/brand/widget/clips/{clip_id}/pin")
+async def brand_toggle_pin(
+    clip_id: str,
+    client_id: str = Depends(_get_brand_client_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Toggle pin status for a clip in the brand's widget.
+    Pinned clips are displayed first in the widget."""
+    # Get current pin status
+    result = await db.execute(
+        text("""
+            SELECT COALESCE(is_pinned, FALSE) as is_pinned
+            FROM widget_clip_assignments
+            WHERE client_id = :cid AND clip_id = :clip_id AND is_active = TRUE
+        """),
+        {"cid": client_id, "clip_id": clip_id},
+    )
+    row = result.mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Clip not assigned to your widget")
+
+    new_pinned = not row["is_pinned"]
+    await db.execute(
+        text("""
+            UPDATE widget_clip_assignments
+            SET is_pinned = :pinned
+            WHERE client_id = :cid AND clip_id = :clip_id
+        """),
+        {"cid": client_id, "clip_id": clip_id, "pinned": new_pinned},
+    )
+    await db.commit()
+    return {"status": "updated", "clip_id": clip_id, "is_pinned": new_pinned}
+
+
 @router.get("/brand/widget/clips")
 async def brand_list_widget_clips(
     client_id: str = Depends(_get_brand_client_id),
@@ -518,12 +553,13 @@ async def _brand_list_widget_clips_impl(client_id: str, db: AsyncSession):
             SELECT wca.clip_id, wca.sort_order, wca.page_url_pattern,
                    wca.product_name, wca.product_price, wca.product_image_url,
                    wca.product_url, wca.product_cart_url,
+                   COALESCE(wca.is_pinned, FALSE) as is_pinned,
                    vc.clip_url, vc.exported_url, vc.thumbnail_url, vc.transcript_text,
                    vc.duration_sec, vc.liver_name
             FROM widget_clip_assignments wca
             JOIN video_clips vc ON vc.id::text = wca.clip_id
             WHERE wca.client_id = :cid AND wca.is_active = TRUE
-            ORDER BY wca.sort_order ASC
+            ORDER BY COALESCE(wca.is_pinned, FALSE) DESC, wca.sort_order ASC
         """),
         {"cid": client_id},
     )

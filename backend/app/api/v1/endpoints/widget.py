@@ -135,11 +135,12 @@ async def get_widget_config(
                    vc.subtitle_style, vc.subtitle_font_size,
                    vc.caption_offset, vc.trim_data,
                    vc.subtitle_language,
-                   vc.subtitle_position_x, vc.subtitle_position_y
+                   vc.subtitle_position_x, vc.subtitle_position_y,
+                   COALESCE(wca.is_pinned, FALSE) as is_pinned
             FROM widget_clip_assignments wca
             LEFT JOIN video_clips vc ON vc.id::text = wca.clip_id
             WHERE wca.client_id = :cid AND wca.is_active = TRUE
-            ORDER BY wca.sort_order ASC
+            ORDER BY COALESCE(wca.is_pinned, FALSE) DESC, wca.sort_order ASC
         """),
         {"cid": client_id},
     )

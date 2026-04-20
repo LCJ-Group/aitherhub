@@ -170,7 +170,7 @@ function VideoUploader({ onUploaded }) {
 }
 
 // ─── Clip Card Component ───
-function ClipCard({ clip, onAssign, onRemove, onEdit, onDownload, isWidget, isRecommended }) {
+function ClipCard({ clip, onAssign, onRemove, onEdit, onDownload, onPin, isWidget, isRecommended }) {
   const [playing, setPlaying] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const videoRef = useRef(null);
@@ -225,6 +225,11 @@ function ClipCard({ clip, onAssign, onRemove, onEdit, onDownload, isWidget, isRe
             配信中
           </span>
         )}
+        {isWidget && clip.is_pinned && (
+          <span style={{ position: 'absolute', top: 8, right: 8, background: '#f59e0b', color: '#fff', padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600 }}>
+            ★ 優先
+          </span>
+        )}
         {isRecommended && clip.is_assigned && (
           <span style={{ position: 'absolute', top: 8, left: 8, background: colors.info, color: '#fff', padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600 }}>
             追加済み
@@ -248,6 +253,11 @@ function ClipCard({ clip, onAssign, onRemove, onEdit, onDownload, isWidget, isRe
         <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap' }}>
           {isWidget ? (
             <>
+              <button onClick={() => onPin && onPin(clip.clip_id)}
+                style={{ flex: 0, minWidth: 36, padding: '6px 8px', background: clip.is_pinned ? 'rgba(245,158,11,0.2)' : 'rgba(245,158,11,0.05)', color: '#f59e0b', border: `1px solid ${clip.is_pinned ? '#f59e0b' : 'rgba(245,158,11,0.3)'}`, borderRadius: 6, fontSize: 14, cursor: 'pointer', lineHeight: 1 }}
+                title={clip.is_pinned ? '優先解除' : '優先表示'}>
+                {clip.is_pinned ? '★' : '☆'}
+              </button>
               <button onClick={() => onEdit && onEdit(clip)}
                 style={{ flex: 1, padding: '6px 0', background: colors.accentLight, color: colors.accent, border: `1px solid ${colors.accent}`, borderRadius: 6, fontSize: 12, cursor: 'pointer' }}>
                 編集
@@ -686,8 +696,31 @@ function BrandDashboard({ brandInfo, onLogout }) {
 
   const handleRemove = async (clipId) => {
     if (!confirm('このクリップをウィジェットから削除しますか？')) return;
-    await brandFetch(`/brand/widget/clips/${clipId}`, { method: 'DELETE' });
-    loadData();
+    try {
+      const res = await brandFetch(`/brand/widget/clips/${clipId}`, { method: 'DELETE' });
+      if (res && !res.ok) {
+        const err = await res.text();
+        alert(`削除に失敗しました: ${err}`);
+        return;
+      }
+      loadData();
+    } catch (err) {
+      alert(`削除に失敗しました: ${err.message}`);
+    }
+  };
+
+  const handlePin = async (clipId) => {
+    try {
+      const res = await brandFetch(`/brand/widget/clips/${clipId}/pin`, { method: 'PUT' });
+      if (res && !res.ok) {
+        const err = await res.text();
+        alert(`優先設定に失敗しました: ${err}`);
+        return;
+      }
+      loadData();
+    } catch (err) {
+      alert(`優先設定に失敗しました: ${err.message}`);
+    }
   };
 
   const handleDownload = async (clipId) => {
@@ -778,7 +811,7 @@ function BrandDashboard({ brandInfo, onLogout }) {
             ) : (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 16 }}>
                 {widgetClips.map(c => (
-                  <ClipCard key={c.clip_id} clip={c} isWidget onRemove={handleRemove} onEdit={setEditClip} onDownload={handleDownload} />
+                  <ClipCard key={c.clip_id} clip={c} isWidget onRemove={handleRemove} onEdit={setEditClip} onDownload={handleDownload} onPin={handlePin} />
                 ))}
               </div>
             )}
@@ -865,7 +898,8 @@ function BrandDashboard({ brandInfo, onLogout }) {
                       onAssign={handleAssign}
                       onRemove={handleRemove}
                       onEdit={setEditClip}
-                      onDownload={handleDownload} />
+                      onDownload={handleDownload}
+                      onPin={handlePin} />
                   ))}
                 </div>
               )}
