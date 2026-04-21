@@ -1858,7 +1858,7 @@ export default function MainContent({
                             <div className="w-full">
                               <label className="block text-left text-xs text-gray-400 mb-1">{window.__t('productData')}</label>
                               <label className="w-full h-[38px] flex items-center justify-center bg-gray-100 border border-gray-300 rounded-md text-sm text-gray-700 cursor-pointer hover:bg-gray-200 transition-colors">
-                                {productExcelFile ? productExcelFile.name : "{window.__t('selectExcel')}"}
+                                {productExcelFile ? productExcelFile.name : window.__t('selectExcel')}
                                 <input type="file" accept=".xlsx,.xls" onChange={handleProductExcelSelect} className="hidden" />
                               </label>
                             </div>

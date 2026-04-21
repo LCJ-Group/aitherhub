@@ -181,12 +181,25 @@ export function formatUploadError(error) {
       return `アップロードエラー: ${error.message}`;
     }
 
-    let msg = `【${info.label}】${info.userMessage}`;
+    // Detect timeout / abort errors and provide clearer message
+    const isAbortTimeout = (
+      error.detail?.includes('signal is aborted') ||
+      error.detail?.includes('AbortError') ||
+      error.cause?.name === 'AbortError' ||
+      error.cause?.name === 'TimeoutError'
+    );
+
+    let msg = `【${info.label}】`;
+    if (isAbortTimeout) {
+      msg += 'ネットワーク接続が不安定なため、アップロードがタイムアウトしました。Wi-Fi環境を確認して再度お試しください。';
+    } else {
+      msg += info.userMessage;
+    }
 
     // Add HTTP status info for debugging
     const debugParts = [];
     if (error.statusCode) debugParts.push(`HTTP ${error.statusCode}`);
-    if (error.detail && error.detail !== info.userMessage) {
+    if (error.detail && error.detail !== info.userMessage && !isAbortTimeout) {
       // Truncate very long details
       const truncated = error.detail.length > 120
         ? error.detail.substring(0, 120) + '…'
@@ -204,6 +217,9 @@ export function formatUploadError(error) {
   // Fallback for non-UploadStageError
   const rawMsg = error?.message || String(error);
 
+  if (rawMsg.includes('signal is aborted') || rawMsg.includes('AbortError') || error?.name === 'AbortError' || error?.name === 'TimeoutError') {
+    return 'アップロードがタイムアウトしました。ネットワーク接続が不安定な可能性があります。Wi-Fi環境を確認して再度お試しください。';
+  }
   if (rawMsg.includes('Failed to fetch') || rawMsg.includes('Network') || rawMsg.includes('sending request')) {
     return 'ネットワークエラーが発生しました。インターネット接続を確認して、もう一度お試しください。';
   }
