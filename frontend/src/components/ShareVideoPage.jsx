@@ -57,7 +57,7 @@ export default function ShareVideoPage() {
           .then(config => {
             const allClips = (config.clips || []).map(c => ({
               ...c,
-              video_url: c.widget_url || c.exported_url || c.clip_url,
+              video_url: c.clip_url || c.widget_url || c.exported_url,
             }));
             if (!allClips.length) {
               setClips([meta]);
@@ -209,7 +209,7 @@ export default function ShareVideoPage() {
             >
               <video
                 ref={el => { videoRefs.current[idx] = el; }}
-                src={clip.video_url || clip.widget_url || clip.exported_url || clip.clip_url}
+                src={clip.video_url || clip.clip_url || clip.widget_url || clip.exported_url}
                 poster={clip.thumbnail_url || undefined}
                 style={S.video}
                 playsInline
