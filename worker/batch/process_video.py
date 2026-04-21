@@ -524,8 +524,16 @@ def fire_compress_async(video_path, blob_url, video_id):
 # =========================
 
 def main():
-    # Apply process-level memory limit to prevent OOM crashes on the VM.
-    _mem_limit_gb = int(os.getenv("FFMPEG_MEM_LIMIT_GB", "8"))
+    # ── Memory optimization: limit MKL/OMP threads to reduce peak memory ──
+    # Intel MKL (used by NumPy/Whisper) allocates per-thread buffers.
+    # Limiting threads from default (all cores) to 4 saves ~2GB on long videos.
+    for _env_key in ("MKL_NUM_THREADS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
+        if _env_key not in os.environ:
+            os.environ[_env_key] = "4"
+    # Apply process-level virtual address space limit to prevent OOM crashes.
+    # VM has 28GB RAM, systemd MemoryMax=14GB. Default raised from 8→14GB
+    # because Whisper large-v3 (~3-4GB) + ffmpeg + Python easily exceeds 8GB.
+    _mem_limit_gb = int(os.getenv("FFMPEG_MEM_LIMIT_GB", "14"))
     _mem_limit_bytes = _mem_limit_gb * 1024 * 1024 * 1024
     try:
         resource.setrlimit(resource.RLIMIT_AS, (_mem_limit_bytes, _mem_limit_bytes))
@@ -707,8 +715,24 @@ def main():
 
         if start_step <= 0:
             # Status already updated to STEP_0 before analysis video generation
-            logger.info("=== STEP 0+3 PARALLEL – EXTRACT FRAMES & AUDIO TRANSCRIPTION ===")
             logger.info("[FRAMES] Source: %s (direct RAW, v6)", _frames_source)
+
+            # ── v8: Adaptive parallel/sequential based on video duration ──
+            # Long videos (>30min) run SEQUENTIALLY to halve peak memory.
+            # Short videos (<30min) run in PARALLEL for speed.
+            # Root cause: Whisper large-v3 (~3-4GB) + ffmpeg buffers exceeded
+            # the 8GB RLIMIT_AS on 1h+ videos, causing mkl_malloc failures.
+            import gc
+            from video_frames import _get_video_duration
+            _vid_duration = _get_video_duration(_frames_source)
+            _SEQUENTIAL_THRESHOLD_SEC = int(os.getenv("SEQUENTIAL_THRESHOLD_SEC", "1800"))  # 30 min
+            _use_sequential = _vid_duration > _SEQUENTIAL_THRESHOLD_SEC
+            logger.info(
+                "=== STEP 0+3 %s – EXTRACT FRAMES & AUDIO TRANSCRIPTION ==="
+                " (duration=%.0fs, threshold=%ds)",
+                "SEQUENTIAL" if _use_sequential else "PARALLEL",
+                _vid_duration, _SEQUENTIAL_THRESHOLD_SEC,
+            )
 
             # Combined progress: frames=50%, audio=50%
             _parallel_progress = {"frames": 0, "audio": 0}
@@ -729,17 +753,17 @@ def main():
                 _update_combined_progress()
 
             def _do_extract_frames():
-                logger.info("[PARALLEL] Starting frame extraction (fps=1) from %s", _frames_source)
+                logger.info("[STEP0] Starting frame extraction (fps=1) from %s", _frames_source)
                 extract_frames(
                     video_path=_frames_source,
                     fps=1,
                     frames_root=video_root(video_id),
                     on_progress=_on_frames_progress,
                 )
-                logger.info("[PARALLEL] Frame extraction DONE")
+                logger.info("[STEP0] Frame extraction DONE")
 
             def _do_audio_transcription():
-                logger.info("[PARALLEL] Starting audio extraction + transcription")
+                logger.info("[STEP3] Starting audio extraction + transcription")
                 # Audio progress split: extraction=20%, transcription=80%
                 def _on_transcription_progress(pct):
                     # Map transcription 0-100 to overall audio 20-100
@@ -751,33 +775,54 @@ def main():
                 _on_audio_progress(10)
 
                 if full_path:
-                    # Full audio extracted successfully — skip chunk extraction
-                    # Chunks are only needed as fallback if batched transcription fails
-                    logger.info("[PARALLEL] Full audio extracted, skipping chunk extraction")
+                    logger.info("[STEP3] Full audio extracted, skipping chunk extraction")
                     _on_audio_progress(20)
                 else:
-                    # Full audio failed — extract chunks as fallback
-                    logger.info("[PARALLEL] Full audio failed, extracting chunks")
+                    logger.info("[STEP3] Full audio failed, extracting chunks")
                     extract_audio_chunks(video_path, ad)
                     _on_audio_progress(20)
 
                 transcribe_audio_chunks(ad, atd, on_progress=_on_transcription_progress)
-                logger.info("[PARALLEL] Audio transcription DONE")
+                logger.info("[STEP3] Audio transcription DONE")
 
-            with ThreadPoolExecutor(max_workers=2) as pool:
-                fut_frames = pool.submit(_do_extract_frames)
-                fut_audio = pool.submit(_do_audio_transcription)
+            if _use_sequential:
+                # ── SEQUENTIAL MODE (long videos >30min) ──
+                # Run frame extraction first, then free memory, then Whisper.
+                # This halves peak memory: ffmpeg never runs alongside Whisper.
+                logger.info("[SEQUENTIAL] Phase 1/2: Frame extraction")
+                try:
+                    _do_extract_frames()
+                except Exception as e:
+                    logger.error("[SEQUENTIAL] Frame extraction failed: %s", e)
+                    raise PipelineStepError("STEP_0_EXTRACT_FRAMES", "FRAME_EXTRACT_FAIL", e) from e
 
-                # Wait for both to complete
-                for fut in as_completed([fut_frames, fut_audio]):
-                    try:
-                        fut.result()
-                    except Exception as e:
-                        logger.error("[PARALLEL] Task failed: %s", e)
-                        raise PipelineStepError("STEP_0_EXTRACT_FRAMES", "FRAME_EXTRACT_FAIL", e) from e
+                # Force garbage collection between heavy steps
+                gc.collect()
+                logger.info("[SEQUENTIAL] Phase 2/2: Audio transcription (gc.collect done)")
+
+                try:
+                    _do_audio_transcription()
+                except Exception as e:
+                    logger.error("[SEQUENTIAL] Audio transcription failed: %s", e)
+                    raise PipelineStepError("STEP_0_EXTRACT_FRAMES", "FRAME_EXTRACT_FAIL", e) from e
+            else:
+                # ── PARALLEL MODE (short videos <30min) ──
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    fut_frames = pool.submit(_do_extract_frames)
+                    fut_audio = pool.submit(_do_audio_transcription)
+
+                    for fut in as_completed([fut_frames, fut_audio]):
+                        try:
+                            fut.result()
+                        except Exception as e:
+                            logger.error("[PARALLEL] Task failed: %s", e)
+                            raise PipelineStepError("STEP_0_EXTRACT_FRAMES", "FRAME_EXTRACT_FAIL", e) from e
 
             update_video_step_progress_sync(video_id, 100)
-            logger.info("=== STEP 0+3 PARALLEL COMPLETE ===")
+            logger.info("=== STEP 0+3 COMPLETE (%s mode) ===", "SEQUENTIAL" if _use_sequential else "PARALLEL")
+
+            # Force GC before next heavy step (YOLO)
+            gc.collect()
 
             # v6: Fire background compression AFTER frame extraction completes
             # This avoids GPU contention during the critical extraction phase
