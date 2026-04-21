@@ -1,5 +1,5 @@
 /**
- * AitherHub Widget Loader v2.10 — TikTok-Style Fullscreen Feed + Product Card + Subtitles
+ * AitherHub Widget Loader v2.11 — TikTok-Style Fullscreen Feed + Product Card + Subtitles
  *
  * GTM経由で配信される軽量エントリーポイント。
  * 先方のECサイトに1行のタグを追加するだけで、
@@ -61,7 +61,7 @@
  */
 (function () {
   "use strict";
-  console.log("[AitherHub] IIFE START v2.10-debug");
+  console.log("[AitherHub] IIFE START v2.11");
 
   // ── Prevent double-loading ──
   if (window.__AITHERHUB_WIDGET_LOADED) { console.log("[AitherHub] SKIPPED: already loaded"); return; }
@@ -214,7 +214,12 @@
     host.id = "aitherhub-widget-host";
     host.style.cssText = "position:fixed;z-index:2147483647;pointer-events:none;top:0;left:0;width:100%;height:100%;";
     document.body.appendChild(host);
-    var shadow = host.attachShadow({ mode: "closed" });
+    var shadow = host.attachShadow({ mode: "open" });
+    // Load Google Fonts via <link> instead of @import (more reliable in Shadow DOM)
+    var fontLink = document.createElement("link");
+    fontLink.rel = "stylesheet";
+    fontLink.href = "https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&display=swap";
+    shadow.appendChild(fontLink);
     return shadow;
   }
 
@@ -253,7 +258,7 @@
     // ── CSS ──
     var style = document.createElement("style");
     style.textContent = '\
-      @import url("https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&display=swap");\
+      /* Font loaded via <link> in createWidgetContainer() */\
       * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }\
       \
       .ath-fab {\
@@ -2426,19 +2431,9 @@
     })();
   }
 
-  // ── Debug helper: write to DOM since console may not be visible ──
-  var _dbgLines = [];
+  // ── Debug helper: console-only logging (no DOM panel in production) ──
   function _dbg(msg) {
-    _dbgLines.push(msg);
     console.log("[AitherHub] " + msg);
-    var el = document.getElementById('aitherhub-debug');
-    if (!el) {
-      el = document.createElement('div');
-      el.id = 'aitherhub-debug';
-      el.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:rgba(0,0,0,0.85);color:#0f0;font:11px monospace;padding:8px;z-index:2147483646;max-height:200px;overflow:auto;pointer-events:auto;';
-      document.body.appendChild(el);
-    }
-    el.textContent = _dbgLines.join('\n');
   }
 
   // ── Initialize ──
@@ -2455,11 +2450,6 @@
       try {
         buildWidget(shadow, config);
         _dbg("buildWidget OK");
-        // Remove debug panel after success
-        setTimeout(function() {
-          var dbgEl = document.getElementById('aitherhub-debug');
-          if (dbgEl) dbgEl.remove();
-        }, 5000);
       } catch (e) {
         _dbg("buildWidget ERROR: " + e.message);
       }
