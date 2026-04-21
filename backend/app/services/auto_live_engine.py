@@ -49,18 +49,18 @@ class FlowPhase(str, Enum):
 # Flow templates: defines the sequence of phases in a livestream
 # Each entry is (phase, segments_count) — how many speech segments to generate for this phase
 FLOW_WITH_PRODUCTS = [
-    (FlowPhase.OPENING, 1),
+    (FlowPhase.OPENING, 2),
+    (FlowPhase.CHAT, 3),
+    (FlowPhase.PRODUCT_INTRO, 3),
+    (FlowPhase.PRODUCT_DEEP, 4),
     (FlowPhase.CHAT, 2),
-    (FlowPhase.PRODUCT_INTRO, 2),
-    (FlowPhase.PRODUCT_DEEP, 3),
-    (FlowPhase.CHAT, 1),
     (FlowPhase.TRANSITION, 1),
     # This block repeats for each product
 ]
 
 FLOW_CHAT_ONLY = [
     (FlowPhase.OPENING, 2),
-    (FlowPhase.CHAT, 3),
+    (FlowPhase.CHAT, 5),
     # Repeats
 ]
 
@@ -213,7 +213,7 @@ async def _generate_speech(
     phase: FlowPhase,
     product: Optional[LiveProduct] = None,
     extra_context: str = "",
-    max_length: int = 200,
+    max_length: int = 400,
 ) -> str:
     """AIでフェーズに応じたスピーチを生成"""
     import openai
@@ -239,46 +239,51 @@ async def _generate_speech(
         FlowPhase.OPENING: """This is the OPENING of the livestream.
 - Greet viewers warmly and enthusiastically
 - Welcome everyone to the stream
-- Briefly mention what you'll be showing today
-- Create excitement and anticipation
-- Ask viewers to like and follow""",
+- Talk about what exciting things you'll be showing today
+- Share your excitement and set the mood
+- Mention that you have great products and stories to share
+- Do NOT ask questions — just welcome and set the scene""",
 
         FlowPhase.CHAT: f"""This is a CASUAL CHAT segment between product presentations.
-- Be natural and conversational, like talking to friends
 - Topic hint: {extra_context}
-- Engage with the audience, ask questions
-- Share personal opinions or experiences
-- Keep it light and fun
-- This is NOT a product pitch — just genuine conversation
-- You can mention upcoming products to build anticipation""",
+- Talk at length about this topic — share your own experience, opinions, and stories
+- Be natural and conversational, like talking to friends
+- Share personal anecdotes, tips, or interesting facts
+- This is NOT a product pitch — just genuine, engaging conversation
+- Do NOT ask viewers questions — instead, TELL them interesting things
+- You can mention upcoming products to build anticipation
+- Keep talking — fill the air with interesting content""",
 
         FlowPhase.PRODUCT_INTRO: """This is a PRODUCT INTRODUCTION segment.
-- Introduce the product naturally, as if you just picked it up
-- Mention the product name and what it does
-- Share your first impression or personal experience
-- Create curiosity — make viewers want to know more
-- Keep it brief and exciting""",
+- Introduce the product with enthusiasm, as if you just picked it up
+- Explain what the product is, what it does, and who it's for
+- Share your first impression and personal experience using it
+- Describe the packaging, texture, scent, or feel in detail
+- Tell a story about how you discovered this product or why you love it
+- Do NOT ask questions — just present and describe passionately""",
 
         FlowPhase.PRODUCT_DEEP: """This is a PRODUCT DEEP DIVE segment.
-- Go deeper into ONE specific aspect of the product
-- Could be: ingredients, how to use, before/after results, comparison, price value
-- Be specific and informative
-- Include a call to action (add to cart, limited stock, etc.)
-- Share tips for getting the best results""",
+- Go deep into ONE specific aspect: ingredients, how to use, results, or value
+- Be specific and informative — share expert knowledge
+- Compare with similar products or explain what makes this one special
+- Share tips for getting the best results with this product
+- Mention the price and why it's a great deal
+- Include a soft call to action (this is selling well, limited stock, etc.)
+- Do NOT ask questions — just educate and convince""",
 
         FlowPhase.TRANSITION: """This is a TRANSITION between products.
-- Smoothly wrap up the current product discussion
+- Smoothly wrap up the current product with a final positive comment
 - Create a natural bridge to the next topic
-- Maybe ask viewers if they have questions
 - Build anticipation for what's coming next
-- Keep it brief and natural""",
+- Share a quick related tip or fun fact
+- Do NOT ask questions — just smoothly move on""",
 
         FlowPhase.CLOSING: """This is the CLOSING of the livestream.
-- Thank all viewers for watching
-- Recap the best deals shown today
-- Remind about limited offers
-- Ask viewers to follow for next stream
-- Say goodbye warmly""",
+- Thank all viewers for watching and being part of the stream
+- Recap the highlights and best deals shown today
+- Remind about limited offers and where to buy
+- Mention when the next stream will be
+- Say goodbye warmly and leave a lasting impression""",
     }
 
     # Build conversation context — include ALL recent messages for dedup
@@ -307,8 +312,11 @@ async def _generate_speech(
 {phase_instructions.get(phase, '')}
 
 CRITICAL RULES:
-- Keep each speech segment between 50-{max_length} characters (for TTS, be concise but not too short)
-- Be NATURAL and conversational, never robotic or scripted-sounding
+- Generate a LONG, DETAILED speech segment of {max_length}-{max_length + 200} characters
+- Talk at length — explain, describe, share stories, give tips, compare products
+- Do NOT end with a question unless the phase specifically calls for it
+- Do NOT ask viewers to comment, reply, or answer — just TALK and PRESENT
+- Be NATURAL and conversational, like a real livestream host who loves talking
 - Vary your tone and energy based on the phase
 - ABSOLUTELY DO NOT repeat or paraphrase anything from the conversation history below
 - Each segment must be COMPLETELY DIFFERENT from all previous ones
@@ -327,7 +335,7 @@ This is speech segment #{session.speak_count + 1} of the livestream. You MUST sa
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"Generate the next {phase.value} speech segment."},
             ],
-            max_tokens=300,
+            max_tokens=600,
             temperature=0.75,
         )
         text = response.choices[0].message.content.strip()
@@ -423,12 +431,20 @@ def mark_consumed(session_id: str, count: int = 1):
 
 
 async def get_queue_length(session_id: str) -> int:
-    """未消費アイテム数を取得（push数 - 消費数）"""
-    session = _sessions.get(session_id)
-    if session:
-        pending = session._push_count - session._consumed_count
-        return max(0, pending)
-    return 0
+    """未消費アイテム数を取得 — liveavatar_serviceの実際のキュー長を使用
+    
+    以前は _push_count - _consumed_count で計算していたが、
+    mark_consumed API呼び出しの失敗やタイミングのずれで
+    カウントが不正確になり、ループが停止する原因になっていた。
+    実際のキュー長を直接確認することで正確性を保証する。
+    """
+    try:
+        from app.services.liveavatar_service import get_liveavatar_service
+        service = get_liveavatar_service()
+        # 実際のキューに残っているアイテム数を返す
+        return len(service._speak_queue)
+    except Exception:
+        return 0
 
 
 # ============================================================
@@ -471,10 +487,11 @@ async def _flow_speech_loop(session: AutoLiveSession):
             await asyncio.sleep(1)
             continue
 
-        # Check queue capacity — allow up to 5 items buffered for seamless playback
+        # Check queue capacity — keep buffer small to stay responsive
+        # (Old items are auto-cleaned after 5 min by liveavatar_service)
         queue_len = await get_queue_length(session.session_id)
-        if queue_len >= 5:
-            await asyncio.sleep(0.5)  # Short sleep, check again quickly
+        if queue_len >= 3:
+            await asyncio.sleep(1)  # Queue has enough buffer, wait briefly
             continue
 
         # Get current phase from flow template
@@ -544,11 +561,8 @@ async def _flow_speech_loop(session: AutoLiveSession):
                         next_product = session.products[session.current_product_index % len(session.products)]
                         logger.info(f"[AutoLive v2] Moving to next product: {next_product.item_name}")
 
-        # Only sleep briefly if queue has items, otherwise generate immediately
-        if await get_queue_length(session.session_id) >= 3:
-            await asyncio.sleep(0.5)  # Queue has buffer, short pause
-        else:
-            await asyncio.sleep(0.1)  # Queue is low, generate ASAP
+        # Brief pause between generations to avoid overwhelming the API
+        await asyncio.sleep(0.3)
 
     logger.info(f"[AutoLive v2] Flow speech loop ended for session {session.session_id}")
 

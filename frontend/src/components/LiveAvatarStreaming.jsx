@@ -558,11 +558,12 @@ export default function LiveAvatarStreaming({
       console.debug("[LiveAvatar AutoLive] Queue poll error:", err.message);
     }
 
-    // Timeout protection: if speaking for more than 15 seconds, force reset
+    // Timeout protection: if speaking for more than 45 seconds, force reset
+    // (Increased from 15s to handle longer speech segments)
     if (autoLiveSpeakingRef.current && speakStartTimeRef.current) {
       const elapsed = Date.now() - speakStartTimeRef.current;
-      if (elapsed > 15000) {
-        console.warn("[LiveAvatar AutoLive] Speak timeout (15s), forcing reset");
+      if (elapsed > 45000) {
+        console.warn("[LiveAvatar AutoLive] Speak timeout (45s), forcing reset");
         autoLiveSpeakingRef.current = false;
         speakStartTimeRef.current = null;
       }
