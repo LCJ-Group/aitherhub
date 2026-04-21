@@ -769,7 +769,7 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
                         {bgUploadTasks.map((task) => (
                           <div key={task.id} className="w-full px-2.5 py-2.5 rounded-lg border border-blue-100 bg-blue-50/50 mb-1">
                             <div className="flex items-center gap-2 min-w-0">
-                              {task.status === 'uploading' && (
+                              {(task.status === 'uploading' || task.status === 'retrying') && (
                                 <svg className="w-3.5 h-3.5 flex-shrink-0 animate-spin text-blue-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
                               )}
                               {task.status === 'done' && <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0 text-green-500" />}
@@ -778,6 +778,13 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
                                 {task.fileName}
                               </span>
                             </div>
+                            {task.status === 'retrying' && (
+                              <div className="mt-1 flex items-center gap-1.5">
+                                <span className="text-[10px] text-amber-600 truncate flex-1">
+                                  {window.__t('sidebar_retrying') || `リトライ中... (${task.retryCount}/3)`}
+                                </span>
+                              </div>
+                            )}
                             {task.status === 'uploading' && (
                               <div className="mt-1.5">
                                 <div className="w-full h-1.5 bg-blue-100 rounded-full overflow-hidden">
@@ -800,6 +807,13 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
                             {task.status === 'error' && (
                               <div className="mt-1 flex items-center gap-1.5">
                                 <span className="text-[10px] text-red-500 truncate flex-1" title={task.error}>{task.error || 'エラー'}</span>
+                                <button
+                                  className="text-[9px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-600 hover:bg-blue-200 transition-colors flex-shrink-0"
+                                  onClick={(e) => { e.stopPropagation(); backgroundUploadManager.retryTask(task.id); }}
+                                  title="Retry"
+                                >
+                                  ↻
+                                </button>
                                 <button
                                   className="text-[9px] px-1.5 py-0.5 rounded bg-red-100 text-red-600 hover:bg-red-200 transition-colors flex-shrink-0"
                                   onClick={(e) => { e.stopPropagation(); backgroundUploadManager.removeTask(task.id); }}
