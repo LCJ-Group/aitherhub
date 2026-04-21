@@ -421,8 +421,9 @@ export default function LiveAvatarStreaming({
                 autoLiveSpeakingRef.current = false;
                 speakStartTimeRef.current = null;
                 // Immediately try to send next item from queue
-                if (autoLiveMode) {
-                  setTimeout(() => pollAndSendQueue(), 100);
+                // Use refs to avoid stale closure (WebSocket handler is created in startSession)
+                if (autoLiveModeRef.current && pollAndSendQueueRef.current) {
+                  setTimeout(() => pollAndSendQueueRef.current(), 100);
                 }
               } else if (data.type === "session.stopped") {
                 console.log("[LiveAvatar] Session stopped via WebSocket");
