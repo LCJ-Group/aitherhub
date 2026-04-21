@@ -182,6 +182,81 @@ app = app_creator.app
 container = app_creator.container
 
 
+# ── OGP proxy for /v/{clip_id} — serves OGP HTML to crawlers, redirects browsers to SPA ──
+@app.get("/v/{clip_id}")
+async def ogp_proxy(clip_id: str, request: Request):
+    """Proxy /v/{clip_id} to the OGP endpoint for SNS crawler support.
+    Browsers get redirected to the SPA frontend.
+    Crawlers get server-rendered HTML with proper OGP meta tags."""
+    from fastapi.responses import HTMLResponse, RedirectResponse
+    from app.core.db import get_async_session
+    from app.api.v1.endpoints.widget import _get_share_clip_meta_impl, _escape_html
+
+    user_agent = (request.headers.get("user-agent") or "").lower()
+    crawler_keywords = [
+        "bot", "crawler", "spider", "facebookexternalhit", "twitterbot",
+        "slackbot", "discordbot", "linebot", "linkedinbot", "whatsapp",
+        "telegrambot", "applebot", "googlebot", "bingbot", "yandex",
+        "pinterest", "redditbot", "embedly", "quora", "outbrain",
+        "vkshare", "skypeuripreview", "nuzzel", "w3c_validator",
+    ]
+    is_crawler = any(kw in user_agent for kw in crawler_keywords)
+
+    if not is_crawler:
+        return RedirectResponse(
+            url=f"https://www.aitherhub.com/v/{clip_id}",
+            status_code=302,
+        )
+
+    # Crawler → render OGP HTML
+    try:
+        async for db in get_async_session():
+            meta = await _get_share_clip_meta_impl(clip_id, db)
+            break
+    except Exception:
+        return HTMLResponse(
+            content="<html><head><title>Not Found</title></head><body>Video not found</body></html>",
+            status_code=404,
+        )
+
+    og = meta.get("og", {})
+    title = _escape_html(og.get("title") or "AitherHub Video")
+    description = _escape_html(og.get("description") or "")
+    image = _escape_html(og.get("image") or "")
+    video = _escape_html(og.get("video") or "")
+    url = _escape_html(og.get("url") or f"https://www.aitherhub.com/v/{clip_id}")
+
+    html = f"""<!DOCTYPE html>
+<html lang="ja" prefix="og: https://ogp.me/ns#">
+<head>
+<meta charset="UTF-8">
+<title>{title}</title>
+<meta property="og:title" content="{title}">
+<meta property="og:description" content="{description}">
+<meta property="og:type" content="video.other">
+<meta property="og:url" content="{url}">
+<meta property="og:site_name" content="AitherHub">
+{"<meta property='og:image' content='" + image + "'>" if image else ""}
+{"<meta property='og:image:width' content='1200'>" if image else ""}
+{"<meta property='og:image:height' content='630'>" if image else ""}
+{"<meta property='og:video' content='" + video + "'>" if video else ""}
+{"<meta property='og:video:type' content='video/mp4'>" if video else ""}
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="{title}">
+<meta name="twitter:description" content="{description}">
+{"<meta name='twitter:image' content='" + image + "'>" if image else ""}
+<link rel="canonical" href="{url}">
+</head>
+<body>
+<h1>{title}</h1>
+<p>{description}</p>
+<p><a href="{url}">動画を見る</a></p>
+</body>
+</html>"""
+
+    return HTMLResponse(content=html, status_code=200)
+
+
 @app.on_event("startup")
 async def unified_startup():
     """Single unified startup: run ALL DDL migrations and restore tasks.
