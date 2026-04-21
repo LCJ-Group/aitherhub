@@ -931,6 +931,7 @@ async def gpt_phase_description_async(
     speech_text: str,
     sem: asyncio.Semaphore,
     max_retry: int = 5,
+    language: str = "ja",
 ):
     """v4: Improved retry with separate 429 handling."""
     async with sem:
