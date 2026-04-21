@@ -47,7 +47,9 @@ async function apiFetch(path, dbgLog) {
 }
 
 export default function ShareVideoPage() {
-  const { clipId } = useParams();
+  const { clipId: rawClipId } = useParams();
+  // Sanitize clipId: strip any non-UUID characters (zero-width spaces, etc.)
+  const clipId = (rawClipId || '').replace(/[^a-f0-9\-]/gi, '');
   const [clips, setClips] = useState([]);
   const [brandName, setBrandName] = useState('');
   const [themeColor, setThemeColor] = useState('#FF2D55');
@@ -70,7 +72,9 @@ export default function ShareVideoPage() {
     if (!clipId) return;
     const logs = [];
     const dbgLog = (msg) => { logs.push(msg); };
-    dbgLog(`clipId=${clipId}`);
+    dbgLog(`raw=${rawClipId} len=${rawClipId?.length}`);
+    dbgLog(`clean=${clipId} len=${clipId.length}`);
+    if (rawClipId !== clipId) dbgLog(`SANITIZED! diff chars removed`);
     dbgLog(`UA=${navigator.userAgent.substring(0, 60)}`);
     dbgLog(`origin=${location.origin}`);
 
