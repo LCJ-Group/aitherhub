@@ -9,10 +9,6 @@
       "rewrite": "/widget/loader.js"
     },
     {
-      "route": "/v/*",
-      "backend": "aitherhubAPI"
-    },
-    {
       "route": "/api/*",
       "backend": "aitherhubAPI"
     }

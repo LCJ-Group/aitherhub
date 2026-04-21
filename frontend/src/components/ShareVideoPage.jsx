@@ -85,7 +85,7 @@ export default function ShareVideoPage() {
   };
 
   const handleShare = async () => {
-    const shareUrl = `https://www.aitherhub.com/v/${clipId}`;
+    const shareUrl = `${API}/v/${clipId}`;
     const shareTitle = meta?.title || 'AitherHub Video';
     if (navigator.share) {
       try {
