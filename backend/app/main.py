@@ -219,15 +219,11 @@ async def ogp_proxy(clip_id: str, request: Request):
         )
 
     if not is_crawler:
-        # Browser → redirect to product page with ath_clip param for auto-open widget
-        product_url = meta.get("product_url") or ""
-        if product_url:
-            sep = "&" if "?" in product_url else "?"
-            redirect_url = f"{product_url}{sep}ath_clip={clip_id}"
-        else:
-            # Fallback: no product_url → redirect to SPA share page
-            redirect_url = f"https://www.aitherhub.com/v/{clip_id}"
-        return RedirectResponse(url=redirect_url, status_code=302)
+        # Browser → redirect to SPA share page (TikTok-style fullscreen player)
+        return RedirectResponse(
+            url=f"https://www.aitherhub.com/v/{clip_id}",
+            status_code=302,
+        )
 
     og = meta.get("og", {})
     title = _escape_html(og.get("title") or "AitherHub Video")

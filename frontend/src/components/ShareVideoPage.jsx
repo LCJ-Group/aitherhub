@@ -1,585 +1,537 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 
 const API = import.meta.env.VITE_API_URL || 'https://aitherhubapi-cpcjcnezbgf5f7e2.japaneast-01.azurewebsites.net';
 
 export default function ShareVideoPage() {
   const { clipId } = useParams();
-  const [meta, setMeta] = useState(null);
+  const [clips, setClips] = useState([]);
+  const [brandName, setBrandName] = useState('');
+  const [themeColor, setThemeColor] = useState('#FF2D55');
+  const [currentIndex, setCurrentIndex] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [showProductHighlight, setShowProductHighlight] = useState(false);
-  const videoRef = useRef(null);
+  const [isMuted, setIsMuted] = useState(true);
+  const [showSoundHint, setShowSoundHint] = useState(true);
+  const [liked, setLiked] = useState({});
+  const [showProduct, setShowProduct] = useState(false);
 
+  const containerRef = useRef(null);
+  const videoRefs = useRef({});
+  const touchStartY = useRef(0);
+  const touchStartTime = useRef(0);
+  const isTransitioning = useRef(false);
+
+  // ── Fetch data ──
   useEffect(() => {
     if (!clipId) return;
+    // Step 1: Get clip meta to find client_id
     fetch(`${API}/api/v1/widget/share/${clipId}`)
       .then(r => { if (!r.ok) throw new Error('Clip not found'); return r.json(); })
-      .then(data => { setMeta(data); setLoading(false); })
+      .then(meta => {
+        const clientId = meta.client_id;
+        setBrandName(meta.brand_name || '');
+        setThemeColor(meta.theme_color || '#FF2D55');
+
+        // Update OGP
+        if (meta.og) {
+          document.title = meta.og.title || 'AitherHub Video';
+          const setMeta = (prop, val) => {
+            if (!val) return;
+            let el = document.querySelector(`meta[property="${prop}"]`);
+            if (!el) { el = document.createElement('meta'); el.setAttribute('property', prop); document.head.appendChild(el); }
+            el.setAttribute('content', val);
+          };
+          setMeta('og:title', meta.og.title);
+          setMeta('og:description', meta.og.description);
+          setMeta('og:image', meta.og.image);
+          setMeta('og:url', meta.og.url);
+        }
+
+        if (!clientId) {
+          // No client_id → single clip mode
+          setClips([meta]);
+          setCurrentIndex(0);
+          setLoading(false);
+          return;
+        }
+
+        // Step 2: Get all clips from widget config
+        return fetch(`${API}/api/v1/widget/config/${clientId}`)
+          .then(r => r.json())
+          .then(config => {
+            const allClips = (config.clips || []).map(c => ({
+              ...c,
+              video_url: c.widget_url || c.exported_url || c.clip_url,
+            }));
+            if (!allClips.length) {
+              setClips([meta]);
+              setCurrentIndex(0);
+              setLoading(false);
+              return;
+            }
+            // Find the target clip index
+            let targetIdx = allClips.findIndex(c => c.clip_id === clipId);
+            if (targetIdx === -1) targetIdx = 0;
+            setClips(allClips);
+            setCurrentIndex(targetIdx);
+            setLoading(false);
+          });
+      })
       .catch(e => { setError(e.message); setLoading(false); });
   }, [clipId]);
 
-  // Update OGP meta tags dynamically (for SPA)
+  // ── Play current video ──
   useEffect(() => {
-    if (!meta?.og) return;
-    const og = meta.og;
-    document.title = og.title || 'AitherHub Video';
-    const setMetaTag = (property, content) => {
-      if (!content) return;
-      let el = document.querySelector(`meta[property="${property}"]`);
-      if (!el) { el = document.createElement('meta'); el.setAttribute('property', property); document.head.appendChild(el); }
-      el.setAttribute('content', content);
-    };
-    setMetaTag('og:title', og.title);
-    setMetaTag('og:description', og.description);
-    setMetaTag('og:image', og.image);
-    setMetaTag('og:url', og.url);
-    setMetaTag('og:type', og.type);
-    if (og.video) setMetaTag('og:video', og.video);
-    setMetaTag('twitter:card', og.image ? 'summary_large_image' : 'summary');
-    setMetaTag('twitter:title', og.title);
-    setMetaTag('twitter:description', og.description);
-    setMetaTag('twitter:image', og.image);
-  }, [meta]);
-
-  const handlePlay = () => {
-    if (videoRef.current) {
-      videoRef.current.play();
-      setIsPlaying(true);
-    }
-  };
-
-  const handleTimeUpdate = () => {
-    if (videoRef.current && videoRef.current.duration) {
-      const pct = (videoRef.current.currentTime / videoRef.current.duration) * 100;
-      setProgress(pct);
-      // Show product highlight at 50% progress
-      if (pct > 50 && !showProductHighlight) {
-        setShowProductHighlight(true);
+    if (!clips.length) return;
+    Object.entries(videoRefs.current).forEach(([idx, vid]) => {
+      if (!vid) return;
+      if (parseInt(idx) === currentIndex) {
+        vid.muted = isMuted;
+        vid.play().catch(() => {});
+      } else {
+        vid.pause();
+        vid.currentTime = 0;
       }
+    });
+  }, [currentIndex, clips.length]);
+
+  // ── Mute toggle ──
+  useEffect(() => {
+    const vid = videoRefs.current[currentIndex];
+    if (vid) vid.muted = isMuted;
+  }, [isMuted, currentIndex]);
+
+  // ── Touch/Swipe handling ──
+  const goTo = useCallback((newIndex) => {
+    if (isTransitioning.current) return;
+    if (newIndex < 0 || newIndex >= clips.length) return;
+    isTransitioning.current = true;
+    setShowProduct(false);
+    setCurrentIndex(newIndex);
+    setTimeout(() => { isTransitioning.current = false; }, 400);
+  }, [clips.length]);
+
+  const handleTouchStart = (e) => {
+    touchStartY.current = e.touches[0].clientY;
+    touchStartTime.current = Date.now();
+  };
+
+  const handleTouchEnd = (e) => {
+    const dy = touchStartY.current - e.changedTouches[0].clientY;
+    const dt = Date.now() - touchStartTime.current;
+    const threshold = 50;
+    const velocity = Math.abs(dy) / dt;
+
+    if (Math.abs(dy) > threshold || velocity > 0.3) {
+      if (dy > 0) goTo(currentIndex + 1);
+      else goTo(currentIndex - 1);
     }
   };
 
-  const handleVideoEnd = () => {
-    setShowProductHighlight(true);
+  // ── Wheel handling (desktop) ──
+  const wheelTimeout = useRef(null);
+  const handleWheel = (e) => {
+    e.preventDefault();
+    if (wheelTimeout.current) return;
+    wheelTimeout.current = setTimeout(() => { wheelTimeout.current = null; }, 600);
+    if (e.deltaY > 30) goTo(currentIndex + 1);
+    else if (e.deltaY < -30) goTo(currentIndex - 1);
   };
 
-  const buildUtmUrl = (baseUrl, medium = 'share') => {
-    try {
-      const url = new URL(baseUrl, window.location.origin);
-      url.searchParams.set('utm_source', 'aitherhub');
-      url.searchParams.set('utm_medium', medium);
-      url.searchParams.set('utm_campaign', clipId);
-      return url.toString();
-    } catch {
-      return baseUrl;
-    }
+  // ── Dismiss sound hint ──
+  const dismissSoundHint = () => {
+    setShowSoundHint(false);
+    setIsMuted(false);
   };
 
-  const handleProductClick = () => {
-    if (meta?.product_url) {
-      window.open(buildUtmUrl(meta.product_url), '_blank');
-    }
-  };
-
+  // ── Share ──
   const handleShare = async () => {
-    const shareUrl = `${API}/v/${clipId}`;
-    const shareTitle = meta?.title || 'AitherHub Video';
+    const shareUrl = `${API}/v/${clips[currentIndex]?.clip_id || clipId}`;
+    const shareTitle = brandName || 'AitherHub Video';
     if (navigator.share) {
-      try {
-        await navigator.share({ title: shareTitle, text: shareTitle, url: shareUrl });
-      } catch (e) { /* cancelled */ }
+      try { await navigator.share({ title: shareTitle, url: shareUrl }); } catch {}
     } else {
-      await navigator.clipboard.writeText(shareUrl);
+      await navigator.clipboard?.writeText(shareUrl);
       alert('リンクをコピーしました');
     }
   };
 
-  const themeColor = meta?.theme_color || '#FF2D55';
+  // ── Close ──
+  const handleClose = () => {
+    const clip = clips[currentIndex];
+    if (clip?.product_url) {
+      window.location.href = clip.product_url;
+    } else {
+      window.location.href = '/';
+    }
+  };
 
-  // --- Loading State ---
+  // ── Loading ──
   if (loading) return (
-    <div style={styles.pageWrap}>
-      <div style={styles.loaderContainer}>
-        <div style={{...styles.spinner, borderTopColor: themeColor}} />
-        <p style={styles.loadingText}>読み込み中...</p>
+    <div style={S.fullscreen}>
+      <div style={S.center}>
+        <div style={{...S.spinner, borderTopColor: themeColor}} />
       </div>
     </div>
   );
 
-  // --- Error State ---
-  if (error) return (
-    <div style={styles.pageWrap}>
-      <div style={styles.errorContainer}>
-        <div style={styles.errorIcon}>
-          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.5)" strokeWidth="1.5">
-            <circle cx="12" cy="12" r="10" />
-            <path d="M15 9l-6 6M9 9l6 6" />
-          </svg>
-        </div>
-        <p style={styles.errorText}>動画が見つかりませんでした</p>
-        <a href="/" style={{...styles.errorLink, color: themeColor}}>AitherHub トップへ</a>
+  // ── Error ──
+  if (error || !clips.length) return (
+    <div style={S.fullscreen}>
+      <div style={S.center}>
+        <p style={S.errorText}>動画が見つかりませんでした</p>
+        <a href="/" style={{color: themeColor, textDecoration: 'none'}}>トップへ</a>
       </div>
     </div>
   );
 
-  const hasProduct = meta.product_name || meta.product_price;
-  const hasProductImage = meta.product_image_url;
+  const currentClip = clips[currentIndex] || {};
 
   return (
-    <div style={styles.pageWrap}>
-      <div style={styles.card}>
-
-        {/* ── Brand Header ── */}
-        <div style={styles.brandBar}>
-          <div style={styles.brandLeft}>
-            {meta.brand_logo_url ? (
-              <img src={meta.brand_logo_url} alt={meta.brand_name} style={styles.brandLogo} />
-            ) : meta.brand_name ? (
-              <div style={{...styles.brandInitial, background: themeColor}}>
-                {meta.brand_name.charAt(0).toUpperCase()}
-              </div>
-            ) : null}
-            <div>
-              <span style={styles.brandName}>{meta.brand_name || 'AitherHub'}</span>
-              {meta.liver_name && <span style={styles.liverTag}>by {meta.liver_name}</span>}
+    <div
+      ref={containerRef}
+      style={S.fullscreen}
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
+      onWheel={handleWheel}
+    >
+      {/* ── Video Slides ── */}
+      <div style={S.slidesContainer}>
+        {clips.map((clip, idx) => {
+          const offset = idx - currentIndex;
+          if (Math.abs(offset) > 1) return null; // Only render adjacent slides
+          return (
+            <div
+              key={clip.clip_id || idx}
+              style={{
+                ...S.slide,
+                transform: `translateY(${offset * 100}%)`,
+                transition: 'transform 0.4s cubic-bezier(0.25, 0.1, 0.25, 1)',
+                zIndex: offset === 0 ? 2 : 1,
+              }}
+            >
+              <video
+                ref={el => { videoRefs.current[idx] = el; }}
+                src={clip.video_url || clip.widget_url || clip.exported_url || clip.clip_url}
+                poster={clip.thumbnail_url || undefined}
+                style={S.video}
+                playsInline
+                loop
+                muted={isMuted}
+                preload={Math.abs(offset) <= 1 ? 'auto' : 'none'}
+                onClick={() => {
+                  const vid = videoRefs.current[idx];
+                  if (vid) vid.paused ? vid.play().catch(() => {}) : vid.pause();
+                }}
+              />
             </div>
-          </div>
-          <button style={styles.shareIconBtn} onClick={handleShare} title="シェア">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M4 12v8a2 2 0 002 2h12a2 2 0 002-2v-8M16 6l-4-4-4 4M12 2v13" />
-            </svg>
-          </button>
-        </div>
+          );
+        })}
+      </div>
 
-        {/* ── Video Player ── */}
-        <div style={styles.videoContainer}>
-          <video
-            ref={videoRef}
-            src={meta.video_url}
-            poster={meta.thumbnail_url || undefined}
-            style={styles.video}
-            playsInline
-            loop
-            preload="metadata"
-            onEnded={handleVideoEnd}
-            onTimeUpdate={handleTimeUpdate}
-            onPlay={() => setIsPlaying(true)}
-            onPause={() => setIsPlaying(false)}
+      {/* ── Header ── */}
+      <div style={S.header}>
+        <div style={S.headerBrand}>
+          {brandName || 'KYOGOKU Professional'}
+        </div>
+        <button style={S.closeBtn} onClick={handleClose}>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
+            <path d="M18 6L6 18M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+
+      {/* ── Clip counter ── */}
+      <div style={S.counter}>
+        {currentIndex + 1}
+      </div>
+
+      {/* ── Right side actions ── */}
+      <div style={S.actions}>
+        {/* Like */}
+        <button
+          style={S.actionBtn}
+          onClick={() => setLiked(prev => ({ ...prev, [currentIndex]: !prev[currentIndex] }))}
+        >
+          <svg width="28" height="28" viewBox="0 0 24 24"
+            fill={liked[currentIndex] ? themeColor : 'none'}
+            stroke={liked[currentIndex] ? themeColor : 'white'}
+            strokeWidth="2"
+          >
+            <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
+          </svg>
+          <span style={S.actionLabel}>いいね</span>
+        </button>
+
+        {/* Share */}
+        <button style={S.actionBtn} onClick={handleShare}>
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
+            <path d="M4 12v8a2 2 0 002 2h12a2 2 0 002-2v-8M16 6l-4-4-4 4M12 2v13" />
+          </svg>
+          <span style={S.actionLabel}>シェア</span>
+        </button>
+
+        {/* Mute toggle */}
+        <button style={S.actionBtn} onClick={() => { setIsMuted(!isMuted); setShowSoundHint(false); }}>
+          {isMuted ? (
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
+              <path d="M11 5L6 9H2v6h4l5 4V5z" />
+              <line x1="23" y1="9" x2="17" y2="15" />
+              <line x1="17" y1="9" x2="23" y2="15" />
+            </svg>
+          ) : (
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
+              <path d="M11 5L6 9H2v6h4l5 4V5z" />
+              <path d="M19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07" />
+            </svg>
+          )}
+          <span style={S.actionLabel}>音声</span>
+        </button>
+      </div>
+
+      {/* ── Sound hint overlay ── */}
+      {showSoundHint && (
+        <div style={S.soundHint} onClick={dismissSoundHint}>
+          <div style={S.soundHintBox}>
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
+              <path d="M11 5L6 9H2v6h4l5 4V5z" />
+              <path d="M19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07" />
+            </svg>
+            <span style={S.soundHintText}>タップして音声ON</span>
+          </div>
+        </div>
+      )}
+
+      {/* ── Product CTA ── */}
+      {(currentClip.product_url) && (
+        <div style={S.ctaArea}>
+          <button
+            style={{...S.ctaBtn, background: themeColor}}
             onClick={() => {
-              if (videoRef.current) {
-                if (videoRef.current.paused) videoRef.current.play();
-                else videoRef.current.pause();
+              if (currentClip.product_url) {
+                window.open(currentClip.product_url, '_blank');
               }
             }}
-            controls={isPlaying}
-          />
-          {!isPlaying && (
-            <div style={styles.playOverlay} onClick={handlePlay}>
-              <div style={{...styles.playCircle, background: themeColor}}>
-                <svg width="28" height="28" viewBox="0 0 24 24" fill="white">
-                  <path d="M8 5v14l11-7z" />
-                </svg>
-              </div>
-              {meta.duration_sec && (
-                <span style={styles.durationBadge}>
-                  {Math.floor(meta.duration_sec / 60)}:{String(Math.floor(meta.duration_sec % 60)).padStart(2, '0')}
-                </span>
-              )}
-            </div>
-          )}
-          {/* Progress bar */}
-          {isPlaying && (
-            <div style={styles.progressTrack}>
-              <div style={{...styles.progressFill, width: `${progress}%`, background: themeColor}} />
-            </div>
-          )}
-        </div>
-
-        {/* ── Product Section ── */}
-        {hasProduct && (
-          <div style={{
-            ...styles.productSection,
-            ...(showProductHighlight ? { background: `${themeColor}10`, borderLeft: `3px solid ${themeColor}` } : {}),
-          }}>
-            <div style={styles.productRow}>
-              {hasProductImage && (
-                <img src={meta.product_image_url} alt={meta.product_name} style={styles.productImg} />
-              )}
-              <div style={styles.productDetails}>
-                <h2 style={styles.productTitle}>{meta.product_name}</h2>
-                {meta.product_price && (
-                  <span style={{...styles.priceTag, color: themeColor}}>{meta.product_price}</span>
-                )}
-                {meta.product_description && (
-                  <p style={styles.productDesc}>
-                    {meta.product_description.length > 80
-                      ? meta.product_description.slice(0, 80) + '...'
-                      : meta.product_description}
-                  </p>
-                )}
-              </div>
-            </div>
-
-            {meta.product_url && (
-              <button
-                style={{...styles.ctaBtn, background: `linear-gradient(135deg, ${themeColor}, ${themeColor}cc)`}}
-                onClick={handleProductClick}
-              >
-                この商品を見る
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{marginLeft: 6}}>
-                  <path d="M5 12h14M12 5l7 7-7 7" />
-                </svg>
-              </button>
-            )}
-            {meta.product_cart_url && (
-              <button
-                style={{...styles.cartBtn, color: themeColor, borderColor: themeColor}}
-                onClick={() => window.open(buildUtmUrl(meta.product_cart_url, 'share_cart'), '_blank')}
-              >
-                カートに追加
-              </button>
-            )}
-          </div>
-        )}
-
-        {/* ── If no product info, still show brand CTA ── */}
-        {!hasProduct && meta.product_url && (
-          <div style={styles.productSection}>
-            <button
-              style={{...styles.ctaBtn, background: `linear-gradient(135deg, ${themeColor}, ${themeColor}cc)`}}
-              onClick={handleProductClick}
-            >
-              詳しく見る
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{marginLeft: 6}}>
-                <path d="M5 12h14M12 5l7 7-7 7" />
-              </svg>
-            </button>
-          </div>
-        )}
-
-        {/* ── Action Bar ── */}
-        <div style={styles.actionBar}>
-          <button style={styles.actionBtn} onClick={handleShare}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M4 12v8a2 2 0 002 2h12a2 2 0 002-2v-8M16 6l-4-4-4 4M12 2v13" />
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" style={{marginRight: 8}}>
+              <path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4zM3 6h18M16 10a4 4 0 01-8 0" />
             </svg>
-            <span>シェア</span>
+            商品を見る
           </button>
-          <a href="/" style={styles.actionBtn}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <rect x="3" y="3" width="7" height="7" rx="1" />
-              <rect x="14" y="3" width="7" height="7" rx="1" />
-              <rect x="3" y="14" width="7" height="7" rx="1" />
-              <rect x="14" y="14" width="7" height="7" rx="1" />
-            </svg>
-            <span>他の動画</span>
-          </a>
         </div>
+      )}
 
-        {/* ── Footer ── */}
-        <div style={styles.footer}>
-          <span style={styles.footerText}>Powered by </span>
-          <a href="https://www.aitherhub.com" style={{...styles.footerLink, color: `${themeColor}88`}}>AitherHub</a>
-        </div>
+      {/* ── Brand footer ── */}
+      <div style={S.footer}>
+        <span style={S.footerBrand}>{brandName || 'KYOGOKU Professional'}</span>
+        <span style={S.footerPowered}>Powered by AitherHub</span>
       </div>
+
+      {/* ── Keyframe animation for spinner ── */}
+      <style>{`
+        @keyframes ath-spin { to { transform: rotate(360deg); } }
+      `}</style>
     </div>
   );
 }
 
 // ─── Styles ───
-const styles = {
-  pageWrap: {
-    minHeight: '100vh',
-    background: 'linear-gradient(160deg, #0a0a12 0%, #12122a 40%, #1a1a3e 100%)',
-    display: 'flex',
-    justifyContent: 'center',
-    alignItems: 'flex-start',
-    padding: '24px 16px',
+const S = {
+  fullscreen: {
+    position: 'fixed',
+    inset: 0,
+    background: '#000',
+    overflow: 'hidden',
     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Hiragino Sans", "Noto Sans JP", sans-serif',
     WebkitFontSmoothing: 'antialiased',
+    touchAction: 'none',
+    userSelect: 'none',
+    WebkitUserSelect: 'none',
   },
-  card: {
-    width: '100%',
-    maxWidth: '440px',
-    background: 'rgba(25, 25, 40, 0.95)',
-    borderRadius: '20px',
-    overflow: 'hidden',
-    boxShadow: '0 24px 80px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.06)',
-    backdropFilter: 'blur(20px)',
+  center: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: '100%',
+  },
+  spinner: {
+    width: 36, height: 36,
+    border: '3px solid rgba(255,255,255,0.1)',
+    borderTopColor: '#FF2D55',
+    borderRadius: '50%',
+    animation: 'ath-spin 0.7s linear infinite',
+  },
+  errorText: {
+    color: 'rgba(255,255,255,0.6)',
+    fontSize: 15,
+    marginBottom: 16,
   },
 
-  // Brand Bar
-  brandBar: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: '14px 18px',
-    borderBottom: '1px solid rgba(255,255,255,0.06)',
+  // Slides
+  slidesContainer: {
+    position: 'absolute',
+    inset: 0,
+    overflow: 'hidden',
   },
-  brandLeft: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '10px',
-  },
-  brandLogo: {
-    width: '34px',
-    height: '34px',
-    borderRadius: '50%',
-    objectFit: 'cover',
-    border: '1px solid rgba(255,255,255,0.1)',
-  },
-  brandInitial: {
-    width: '34px',
-    height: '34px',
-    borderRadius: '50%',
+  slide: {
+    position: 'absolute',
+    inset: 0,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    color: '#fff',
-    fontSize: '15px',
-    fontWeight: '700',
-    flexShrink: 0,
-  },
-  brandName: {
-    color: '#fff',
-    fontSize: '14px',
-    fontWeight: '600',
-    display: 'block',
-    lineHeight: '1.3',
-  },
-  liverTag: {
-    color: 'rgba(255,255,255,0.4)',
-    fontSize: '11px',
-    display: 'block',
-  },
-  shareIconBtn: {
-    background: 'rgba(255,255,255,0.08)',
-    border: 'none',
-    borderRadius: '50%',
-    width: '36px',
-    height: '36px',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    color: 'rgba(255,255,255,0.7)',
-    cursor: 'pointer',
-    transition: 'background 0.2s',
-  },
-
-  // Video
-  videoContainer: {
-    position: 'relative',
-    width: '100%',
-    aspectRatio: '9/16',
-    background: '#000',
-    cursor: 'pointer',
-    overflow: 'hidden',
   },
   video: {
     width: '100%',
     height: '100%',
     objectFit: 'cover',
   },
-  playOverlay: {
+
+  // Header
+  header: {
     position: 'absolute',
-    inset: 0,
+    top: 0,
+    left: 0,
+    right: 0,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: '48px 16px 12px',
+    background: 'linear-gradient(180deg, rgba(0,0,0,0.6) 0%, transparent 100%)',
+    zIndex: 10,
+  },
+  headerBrand: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 700,
+    textShadow: '0 1px 4px rgba(0,0,0,0.5)',
+  },
+  closeBtn: {
+    background: 'rgba(0,0,0,0.3)',
+    border: 'none',
+    borderRadius: '50%',
+    width: 36,
+    height: 36,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    cursor: 'pointer',
+    backdropFilter: 'blur(8px)',
+  },
+
+  // Counter
+  counter: {
+    position: 'absolute',
+    top: 56,
+    right: 16,
+    color: 'rgba(255,255,255,0.7)',
+    fontSize: 13,
+    fontWeight: 600,
+    zIndex: 10,
+    marginTop: 40,
+  },
+
+  // Right actions
+  actions: {
+    position: 'absolute',
+    right: 12,
+    bottom: 180,
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
-    justifyContent: 'center',
-    background: 'linear-gradient(180deg, rgba(0,0,0,0.1) 0%, rgba(0,0,0,0.4) 100%)',
-    cursor: 'pointer',
+    gap: 20,
+    zIndex: 10,
   },
-  playCircle: {
-    width: '64px',
-    height: '64px',
-    borderRadius: '50%',
+  actionBtn: {
+    background: 'none',
+    border: 'none',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 4,
+    cursor: 'pointer',
+    padding: 0,
+    filter: 'drop-shadow(0 1px 3px rgba(0,0,0,0.5))',
+  },
+  actionLabel: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: 500,
+    textShadow: '0 1px 3px rgba(0,0,0,0.5)',
+  },
+
+  // Sound hint
+  soundHint: {
+    position: 'absolute',
+    inset: 0,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
-    transition: 'transform 0.2s',
+    zIndex: 20,
+    cursor: 'pointer',
   },
-  durationBadge: {
-    marginTop: '12px',
+  soundHintBox: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 8,
     background: 'rgba(0,0,0,0.6)',
+    padding: '20px 32px',
+    borderRadius: 16,
+    backdropFilter: 'blur(12px)',
+  },
+  soundHintText: {
     color: '#fff',
-    fontSize: '12px',
-    fontWeight: '500',
-    padding: '4px 12px',
-    borderRadius: '20px',
-    backdropFilter: 'blur(8px)',
-  },
-  progressTrack: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    height: '3px',
-    background: 'rgba(255,255,255,0.15)',
-  },
-  progressFill: {
-    height: '100%',
-    borderRadius: '0 2px 2px 0',
-    transition: 'width 0.3s linear',
+    fontSize: 14,
+    fontWeight: 600,
   },
 
-  // Product
-  productSection: {
-    padding: '18px',
-    borderTop: '1px solid rgba(255,255,255,0.06)',
-    transition: 'all 0.4s ease',
-  },
-  productRow: {
-    display: 'flex',
-    gap: '14px',
-    marginBottom: '14px',
-  },
-  productImg: {
-    width: '72px',
-    height: '72px',
-    borderRadius: '12px',
-    objectFit: 'cover',
-    flexShrink: 0,
-    border: '1px solid rgba(255,255,255,0.08)',
-  },
-  productDetails: {
-    flex: 1,
-    minWidth: 0,
-  },
-  productTitle: {
-    color: '#fff',
-    fontSize: '15px',
-    fontWeight: '600',
-    margin: '0 0 6px 0',
-    lineHeight: '1.4',
-    display: '-webkit-box',
-    WebkitLineClamp: 2,
-    WebkitBoxOrient: 'vertical',
-    overflow: 'hidden',
-  },
-  priceTag: {
-    fontSize: '18px',
-    fontWeight: '700',
-    display: 'inline-block',
-    marginBottom: '4px',
-  },
-  productDesc: {
-    color: 'rgba(255,255,255,0.45)',
-    fontSize: '12px',
-    lineHeight: '1.5',
-    margin: '4px 0 0 0',
+  // CTA
+  ctaArea: {
+    position: 'absolute',
+    bottom: 80,
+    left: 16,
+    right: 16,
+    zIndex: 10,
   },
   ctaBtn: {
     width: '100%',
-    padding: '14px',
+    padding: '14px 20px',
     color: '#fff',
     border: 'none',
-    borderRadius: '12px',
-    fontSize: '15px',
-    fontWeight: '700',
+    borderRadius: 28,
+    fontSize: 15,
+    fontWeight: 700,
     cursor: 'pointer',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    transition: 'transform 0.15s, box-shadow 0.15s',
-    boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
-    marginBottom: '8px',
-  },
-  cartBtn: {
-    width: '100%',
-    padding: '12px',
-    background: 'transparent',
-    border: '1.5px solid',
-    borderRadius: '12px',
-    fontSize: '14px',
-    fontWeight: '600',
-    cursor: 'pointer',
-    transition: 'all 0.2s',
-  },
-
-  // Actions
-  actionBar: {
-    display: 'flex',
-    gap: '8px',
-    padding: '12px 18px',
-    borderTop: '1px solid rgba(255,255,255,0.06)',
-  },
-  actionBtn: {
-    flex: 1,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: '6px',
-    padding: '10px',
-    background: 'rgba(255,255,255,0.06)',
-    color: 'rgba(255,255,255,0.7)',
-    border: 'none',
-    borderRadius: '10px',
-    fontSize: '13px',
-    fontWeight: '500',
-    cursor: 'pointer',
-    textDecoration: 'none',
-    transition: 'background 0.2s',
+    boxShadow: '0 4px 20px rgba(0,0,0,0.4)',
+    backdropFilter: 'blur(8px)',
   },
 
   // Footer
   footer: {
-    padding: '10px 18px',
-    textAlign: 'center',
-    borderTop: '1px solid rgba(255,255,255,0.04)',
-  },
-  footerText: {
-    color: 'rgba(255,255,255,0.2)',
-    fontSize: '11px',
-  },
-  footerLink: {
-    fontSize: '11px',
-    textDecoration: 'none',
-    fontWeight: '500',
-  },
-
-  // Loading
-  loaderContainer: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    padding: '12px 16px 32px',
+    background: 'linear-gradient(0deg, rgba(0,0,0,0.6) 0%, transparent 100%)',
+    zIndex: 10,
     display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: '60vh',
+    justifyContent: 'space-between',
+    alignItems: 'flex-end',
   },
-  spinner: {
-    width: '36px',
-    height: '36px',
-    border: '3px solid rgba(255,255,255,0.08)',
-    borderTopColor: '#FF2D55',
-    borderRadius: '50%',
-    animation: 'spin 0.7s linear infinite',
+  footerBrand: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: 600,
+    textShadow: '0 1px 4px rgba(0,0,0,0.5)',
   },
-  loadingText: {
+  footerPowered: {
     color: 'rgba(255,255,255,0.4)',
-    marginTop: '14px',
-    fontSize: '13px',
-  },
-
-  // Error
-  errorContainer: {
-    textAlign: 'center',
-    padding: '80px 20px',
-  },
-  errorIcon: {
-    marginBottom: '16px',
-  },
-  errorText: {
-    color: 'rgba(255,255,255,0.6)',
-    fontSize: '15px',
-    marginBottom: '16px',
-  },
-  errorLink: {
-    textDecoration: 'none',
-    fontSize: '14px',
-    fontWeight: '500',
+    fontSize: 11,
   },
 };
