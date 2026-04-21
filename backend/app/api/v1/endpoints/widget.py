@@ -1859,7 +1859,7 @@ async def share_ogp_page(clip_id: str, request: Request, db: AsyncSession = Depe
     user_agent = (request.headers.get("user-agent") or "").lower()
     crawler_keywords = [
         "bot", "crawler", "spider", "facebookexternalhit", "twitterbot",
-        "slackbot", "discordbot", "linebot", "linkedinbot", "whatsapp",
+        "slackbot", "discordbot", "linebot", "line/", "linkedinbot", "whatsapp",
         "telegrambot", "applebot", "googlebot", "bingbot", "yandex",
         "pinterest", "redditbot", "embedly", "quora", "outbrain",
         "vkshare", "skypeuripreview", "nuzzel", "w3c_validator",
