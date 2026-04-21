@@ -142,6 +142,7 @@ class AutoLiveSession:
     # Track push count for queue length estimation
     _push_count: int = 0
     _consumed_count: int = 0  # Updated by frontend polling
+    _last_push_time: float = 0.0  # Timestamp of last push for stuck detection
     _task: Optional[asyncio.Task] = field(default=None, repr=False)
     _comment_task: Optional[asyncio.Task] = field(default=None, repr=False)
 
@@ -415,6 +416,7 @@ async def push_to_speak_queue(session_id: str, text: str, priority: str = "norma
         session = _sessions.get(session_id)
         if session:
             session._push_count += 1
+            session._last_push_time = time.time()
         logger.info(f"[AutoLive] Pushed to speak queue (priority={priority}): {text[:50]}...")
         return True
     except Exception as e:
@@ -427,24 +429,47 @@ def mark_consumed(session_id: str, count: int = 1):
     session = _sessions.get(session_id)
     if session:
         session._consumed_count += count
-        logger.debug(f"[AutoLive] Marked {count} items consumed. Pending: {session._push_count - session._consumed_count}")
+        pending = session._push_count - session._consumed_count
+        logger.info(f"[AutoLive] Marked {count} consumed. push={session._push_count}, consumed={session._consumed_count}, pending={pending}")
+    else:
+        logger.warning(f"[AutoLive] mark_consumed: session '{session_id}' NOT FOUND. Active sessions: {list(_sessions.keys())}")
+
 
 
 async def get_queue_length(session_id: str) -> int:
-    """未消費アイテム数を取得 — liveavatar_serviceの実際のキュー長を使用
+    """未消費アイテム数を取得 — push_count - consumed_count ベース
     
-    以前は _push_count - _consumed_count で計算していたが、
-    mark_consumed API呼び出しの失敗やタイミングのずれで
-    カウントが不正確になり、ループが停止する原因になっていた。
-    実際のキュー長を直接確認することで正確性を保証する。
+    liveavatar_serviceの_speak_queueは「OBS用のキュー」であり、
+    フロントエンドがpollしてもアイテムは削除されない（5分後に自動クリーンアップ）。
+    そのため、len(_speak_queue)は常に増え続け、正確な「未消費数」にならない。
+    
+    代わりに、push_count - consumed_count を使い、
+    mark_consumed APIの失敗に備えて安全策を追加する：
+    - pending が負の値にならないようにクランプ
+    - 長時間stuck防止のため、最後のpushから60秒経過したらpendingを0にリセット
     """
-    try:
-        from app.services.liveavatar_service import get_liveavatar_service
-        service = get_liveavatar_service()
-        # 実際のキューに残っているアイテム数を返す
-        return len(service._speak_queue)
-    except Exception:
+    session = _sessions.get(session_id)
+    if not session:
         return 0
+    
+    pending = session._push_count - session._consumed_count
+    logger.debug(f"[AutoLive] get_queue_length: push={session._push_count}, consumed={session._consumed_count}, pending={pending}")
+    
+    # Safety: clamp to non-negative
+    if pending < 0:
+        pending = 0
+        session._consumed_count = session._push_count
+    
+    # Safety: if pending seems stuck (>= buffer limit for more than 60s),
+    # auto-reset to allow generation to continue
+    if pending >= 3 and hasattr(session, '_last_push_time'):
+        elapsed = time.time() - session._last_push_time
+        if elapsed > 60:
+            logger.warning(f"[AutoLive] Queue seems stuck (pending={pending}, last push {elapsed:.0f}s ago). Resetting.")
+            session._consumed_count = session._push_count
+            pending = 0
+    
+    return pending
 
 
 # ============================================================

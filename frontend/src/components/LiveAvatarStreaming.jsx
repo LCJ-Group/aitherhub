@@ -607,10 +607,23 @@ export default function LiveAvatarStreaming({
       ].slice(0, 50));
 
       // Mark as consumed so backend knows to keep generating
+      // MUST await — otherwise the Promise rejection is silently swallowed
+      // and the backend never decrements its queue counter, causing it to
+      // stop generating new texts after the buffer fills up.
       try {
-        aiLiveCreatorService.autoLiveMarkConsumed(sessionId, 1);
+        await aiLiveCreatorService.autoLiveMarkConsumed(sessionId, 1);
+        console.debug("[LiveAvatar AutoLive] mark-consumed OK");
       } catch (e) {
-        console.debug("[LiveAvatar AutoLive] mark-consumed error:", e);
+        console.warn("[LiveAvatar AutoLive] mark-consumed FAILED:", e.message);
+        // Retry once after 1 second
+        setTimeout(async () => {
+          try {
+            await aiLiveCreatorService.autoLiveMarkConsumed(sessionId, 1);
+            console.debug("[LiveAvatar AutoLive] mark-consumed retry OK");
+          } catch (e2) {
+            console.warn("[LiveAvatar AutoLive] mark-consumed retry also failed:", e2.message);
+          }
+        }, 1000);
       }
 
       break; // Successfully sent one item, wait for speak_ended before next
