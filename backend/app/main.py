@@ -202,22 +202,32 @@ async def ogp_proxy(clip_id: str, request: Request):
     ]
     is_crawler = any(kw in user_agent for kw in crawler_keywords)
 
-    if not is_crawler:
-        return RedirectResponse(
-            url=f"https://www.aitherhub.com/v/{clip_id}",
-            status_code=302,
-        )
-
-    # Crawler → render OGP HTML
+    # Fetch clip metadata (needed for both browser redirect and crawler OGP)
     try:
         async for db in get_async_session():
             meta = await _get_share_clip_meta_impl(clip_id, db)
             break
     except Exception:
+        if not is_crawler:
+            return RedirectResponse(
+                url=f"https://www.aitherhub.com/v/{clip_id}",
+                status_code=302,
+            )
         return HTMLResponse(
             content="<html><head><title>Not Found</title></head><body>Video not found</body></html>",
             status_code=404,
         )
+
+    if not is_crawler:
+        # Browser → redirect to product page with ath_clip param for auto-open widget
+        product_url = meta.get("product_url") or ""
+        if product_url:
+            sep = "&" if "?" in product_url else "?"
+            redirect_url = f"{product_url}{sep}ath_clip={clip_id}"
+        else:
+            # Fallback: no product_url → redirect to SPA share page
+            redirect_url = f"https://www.aitherhub.com/v/{clip_id}"
+        return RedirectResponse(url=redirect_url, status_code=302)
 
     og = meta.get("og", {})
     title = _escape_html(og.get("title") or "AitherHub Video")
