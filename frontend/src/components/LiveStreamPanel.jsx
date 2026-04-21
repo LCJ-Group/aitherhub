@@ -79,6 +79,7 @@ const LiveStreamPanel = forwardRef(function LiveStreamPanel({
   const [showTiktokImport, setShowTiktokImport] = useState(true); // Show TikTok import by default
   const [isAnalyzingPhoto, setIsAnalyzingPhoto] = useState(false);
   const [photoPreview, setPhotoPreview] = useState(null);
+  const [photoAnalysisError, setPhotoAnalysisError] = useState(false);
   const photoInputRef = useRef(null);
 
   // ── Scripts ──
@@ -321,6 +322,7 @@ const LiveStreamPanel = forwardRef(function LiveStreamPanel({
     setPhotoPreview(previewUrl);
     setShowAddProduct(true);
     setIsAnalyzingPhoto(true);
+    setPhotoAnalysisError(false);
     try {
       const result = await aiLiveCreatorService.analyzeProductImage(file);
       if (result?.success && result?.product) {
@@ -332,12 +334,15 @@ const LiveStreamPanel = forwardRef(function LiveStreamPanel({
           price: p.price || prev.price,
           features: p.notes || prev.features,
         }));
+        setPhotoAnalysisError(false);
         showToast('success', '写真から商品情報を読み取りました');
       } else {
+        setPhotoAnalysisError(true);
         showToast('error', '写真から商品情報を読み取れませんでした');
       }
     } catch (err) {
       console.error('[LiveStreamPanel] Photo analysis failed:', err);
+      setPhotoAnalysisError(true);
       showToast('error', '写真解析に失敗しました');
     } finally {
       setIsAnalyzingPhoto(false);
@@ -1058,6 +1063,10 @@ const LiveStreamPanel = forwardRef(function LiveStreamPanel({
                           <Loader2 className="w-4 h-4 animate-spin" />
                           AIが写真を解析中...
                         </div>
+                      ) : photoAnalysisError ? (
+                        <p className="text-xs text-red-500 flex items-center gap-1">
+                          <AlertCircle className="w-4 h-4" /> 解析失敗。手動で入力してください。
+                        </p>
                       ) : (
                         <p className="text-xs text-green-600 flex items-center gap-1">
                           <CheckCircle className="w-4 h-4" /> 解析完了。内容を確認・編集してください。

@@ -436,6 +436,10 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
                           <Loader2 className="w-3 h-3 animate-spin" />
                           AIが写真を解析中...
                         </div>
+                      ) : error ? (
+                        <p className="text-[8px] text-red-400 flex items-center gap-1">
+                          <AlertCircle className="w-3 h-3" /> 解析失敗。手動で入力してください。
+                        </p>
                       ) : (
                         <p className="text-[8px] text-green-400 flex items-center gap-1">
                           <CheckCircle className="w-3 h-3" /> 解析完了。内容を確認・編集してください。
@@ -641,6 +645,10 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
                       <Loader2 className="w-3 h-3 animate-spin" />
                       AIが写真を解析中...
                     </div>
+                  ) : error ? (
+                    <p className="text-[8px] text-red-400 flex items-center gap-1">
+                      <AlertCircle className="w-3 h-3" /> 解析失敗。手動で入力してください。
+                    </p>
                   ) : (
                     <p className="text-[8px] text-green-400 flex items-center gap-1">
                       <CheckCircle className="w-3 h-3" /> 解析完了。内容を確認・編集してください。
