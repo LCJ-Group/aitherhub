@@ -334,12 +334,57 @@ async def sync_brands_bulk(
                 "error": str(e),
             })
 
+    # Deactivate brands that exist in AitherHub but were NOT in the bulk sync payload
+    # This handles cases where brands were deleted in LCJ Mall or IDs changed
+    deactivated = 0
+    try:
+        synced_lcj_ids = [b.lcj_brand_id for b in payload.brands]
+        if synced_lcj_ids:
+            # Find active widget_clients with lcj_brand_id NOT in the synced list
+            stale_result = await db.execute(
+                text("""
+                    SELECT client_id, name, lcj_brand_id
+                    FROM widget_clients
+                    WHERE lcj_brand_id IS NOT NULL
+                      AND is_active = TRUE
+                      AND lcj_brand_id NOT IN :ids
+                """),
+                {"ids": tuple(synced_lcj_ids)}
+            )
+            stale_brands = stale_result.fetchall()
+            if stale_brands:
+                stale_ids = [row[2] for row in stale_brands]
+                await db.execute(
+                    text("""
+                        UPDATE widget_clients
+                        SET is_active = FALSE, updated_at = NOW()
+                        WHERE lcj_brand_id IS NOT NULL
+                          AND lcj_brand_id NOT IN :ids
+                          AND is_active = TRUE
+                    """),
+                    {"ids": tuple(synced_lcj_ids)}
+                )
+                await db.commit()
+                deactivated = len(stale_brands)
+                for row in stale_brands:
+                    logger.info(f"Deactivated stale brand: {row[1]} (lcj_brand_id={row[2]}, client_id={row[0]})")
+                    results.append({
+                        "lcj_brand_id": row[2],
+                        "name": row[1],
+                        "client_id": row[0],
+                        "action": "deactivated",
+                    })
+    except Exception as e:
+        logger.error(f"Bulk sync deactivation error: {e}")
+        await db.rollback()
+
     return {
         "success": True,
         "summary": {
             "total": len(payload.brands),
             "created": created,
             "updated": updated,
+            "deactivated": deactivated,
             "errors": errors,
         },
         "results": results,
