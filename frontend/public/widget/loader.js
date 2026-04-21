@@ -61,10 +61,12 @@
  */
 (function () {
   "use strict";
+  console.log("[AitherHub] IIFE START v2.10-debug");
 
   // ── Prevent double-loading ──
-  if (window.__AITHERHUB_WIDGET_LOADED) return;
+  if (window.__AITHERHUB_WIDGET_LOADED) { console.log("[AitherHub] SKIPPED: already loaded"); return; }
   window.__AITHERHUB_WIDGET_LOADED = true;
+  console.log("[AitherHub] First load, proceeding...");
 
   // ── Configuration ──
   var SCRIPT_TAG = document.currentScript || (function () {
