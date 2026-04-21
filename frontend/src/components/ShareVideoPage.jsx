@@ -3,32 +3,47 @@ import { useParams } from 'react-router-dom';
 
 const DIRECT_API = 'https://aitherhubapi-cpcjcnezbgf5f7e2.japaneast-01.azurewebsites.net';
 
-// Try same-origin first (SWA proxy), then fall back to direct API
-async function apiFetch(path, retries = 2) {
+// Robust fetch with detailed debug logging
+async function apiFetch(path, dbgLog) {
   const urls = [
-    path,                    // same-origin via SWA proxy (no CORS issues)
-    `${DIRECT_API}${path}`,  // direct API (cross-origin, needs CORS)
+    { url: path, label: 'proxy' },
+    { url: `${DIRECT_API}${path}`, label: 'direct' },
   ];
-  let lastError = null;
-  for (const url of urls) {
-    for (let attempt = 0; attempt <= retries; attempt++) {
-      try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 10000);
-        const resp = await fetch(url, { signal: controller.signal });
-        clearTimeout(timeout);
-        if (!resp.ok) {
-          lastError = new Error(`HTTP ${resp.status} from ${url}`);
-          continue;
-        }
-        return await resp.json();
-      } catch (e) {
-        lastError = new Error(`${e.message} (${url}, attempt ${attempt + 1})`);
-        if (attempt < retries) await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
+
+  for (const { url, label } of urls) {
+    try {
+      dbgLog(`[${label}] GET ${url}`);
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 12000);
+      const resp = await fetch(url, {
+        signal: controller.signal,
+        headers: { 'Accept': 'application/json' },
+      });
+      clearTimeout(tid);
+      const ct = resp.headers.get('content-type') || '';
+      dbgLog(`[${label}] ${resp.status} ct=${ct.substring(0, 40)}`);
+
+      if (!resp.ok) {
+        const body = await resp.text().catch(() => '');
+        dbgLog(`[${label}] body=${body.substring(0, 80)}`);
+        continue;
       }
+
+      // Check if response is actually JSON
+      if (!ct.includes('json')) {
+        const body = await resp.text().catch(() => '');
+        dbgLog(`[${label}] NOT JSON: ${body.substring(0, 80)}`);
+        continue;
+      }
+
+      const data = await resp.json();
+      dbgLog(`[${label}] OK`);
+      return data;
+    } catch (e) {
+      dbgLog(`[${label}] ERR: ${e.message}`);
     }
   }
-  throw lastError || new Error('All API attempts failed');
+  throw new Error('All API attempts failed');
 }
 
 export default function ShareVideoPage() {
@@ -53,13 +68,15 @@ export default function ShareVideoPage() {
   // ── Fetch data ──
   useEffect(() => {
     if (!clipId) return;
-    let dbg = `clipId=${clipId}\n`;
+    const logs = [];
+    const dbgLog = (msg) => { logs.push(msg); };
+    dbgLog(`clipId=${clipId}`);
+    dbgLog(`UA=${navigator.userAgent.substring(0, 60)}`);
+    dbgLog(`origin=${location.origin}`);
 
     (async () => {
       try {
-        dbg += 'Fetching share API...\n';
-        const meta = await apiFetch(`/api/v1/widget/share/${clipId}`);
-        dbg += `share OK: client_id=${meta.client_id}\n`;
+        const meta = await apiFetch(`/api/v1/widget/share/${clipId}`, dbgLog);
 
         const clientId = meta.client_id;
         setBrandName(meta.brand_name || '');
@@ -80,46 +97,42 @@ export default function ShareVideoPage() {
         }
 
         if (!clientId) {
-          dbg += 'No client_id, using meta as single clip\n';
+          dbgLog('No client_id, single clip mode');
           setClips([meta]);
           setCurrentIndex(0);
           setLoading(false);
-          setDebugInfo(dbg);
+          setDebugInfo(logs.join('\n'));
           return;
         }
 
-        dbg += 'Fetching config API...\n';
-        const config = await apiFetch(`/api/v1/widget/config/${clientId}`);
-        dbg += `config OK: ${(config.clips || []).length} clips\n`;
-
+        const config = await apiFetch(`/api/v1/widget/config/${clientId}`, dbgLog);
         const allClips = (config.clips || []).map(c => ({
           ...c,
           video_url: c.clip_url || c.widget_url || c.exported_url,
         }));
 
         if (!allClips.length) {
-          dbg += 'No clips in config, using meta\n';
+          dbgLog('No clips in config');
           setClips([meta]);
           setCurrentIndex(0);
           setLoading(false);
-          setDebugInfo(dbg);
+          setDebugInfo(logs.join('\n'));
           return;
         }
 
         let targetIdx = allClips.findIndex(c => c.clip_id === clipId);
         if (targetIdx === -1) targetIdx = 0;
-        dbg += `targetIdx=${targetIdx}, total=${allClips.length}\n`;
-        dbg += `video_url=${(allClips[targetIdx]?.video_url || 'none').substring(0, 80)}...\n`;
+        dbgLog(`clips=${allClips.length} target=${targetIdx}`);
 
         setClips(allClips);
         setCurrentIndex(targetIdx);
         setLoading(false);
-        setDebugInfo(dbg);
+        setDebugInfo(logs.join('\n'));
       } catch (e) {
-        dbg += `ERROR: ${e.message}\n`;
+        dbgLog(`FATAL: ${e.message}`);
         setError(e.message);
         setLoading(false);
-        setDebugInfo(dbg);
+        setDebugInfo(logs.join('\n'));
       }
     })();
   }, [clipId]);
@@ -226,7 +239,7 @@ export default function ShareVideoPage() {
       <div style={S.center}>
         <p style={S.errorText}>動画が見つかりませんでした</p>
         {debugInfo && (
-          <pre style={{color: 'rgba(255,255,255,0.4)', fontSize: 10, maxWidth: '90vw', overflow: 'auto', whiteSpace: 'pre-wrap', marginBottom: 12, textAlign: 'left', padding: 8, background: 'rgba(255,255,255,0.05)', borderRadius: 8}}>
+          <pre style={{color: 'rgba(255,255,255,0.5)', fontSize: 9, maxWidth: '90vw', overflow: 'auto', whiteSpace: 'pre-wrap', marginBottom: 12, textAlign: 'left', padding: 8, background: 'rgba(255,255,255,0.05)', borderRadius: 8, lineHeight: 1.4}}>
             {debugInfo}
           </pre>
         )}
