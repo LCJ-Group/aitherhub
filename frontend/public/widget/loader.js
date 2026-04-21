@@ -240,7 +240,8 @@
     for (var ci = 0; ci < rawClips.length; ci++) {
       if (rawClips[ci].clip_url) clips.push(rawClips[ci]);
     }
-    if (clips.length === 0) return;
+    console.log("[AitherHub] buildWidget: rawClips=", rawClips.length, "filtered clips=", clips.length);
+    if (clips.length === 0) { console.warn("[AitherHub] No clips with clip_url, aborting widget"); return; }
 
     var themeColor = config.theme_color || "#FF2D55";
     var position = config.position || "bottom-right";
@@ -2425,12 +2426,20 @@
 
   // ── Initialize ──
   function init() {
+    console.log("[AitherHub] init() called, CLIENT_ID=", CLIENT_ID);
     scrapePageContext();
     trackEvent("page_view", { title: document.title, referrer: document.referrer });
     checkConversionPage();
     loadConfig(function (config) {
+      console.log("[AitherHub] config loaded, clips:", (config.clips || []).length);
       var shadow = createWidgetContainer();
-      buildWidget(shadow, config);
+      console.log("[AitherHub] shadow container created");
+      try {
+        buildWidget(shadow, config);
+        console.log("[AitherHub] buildWidget completed");
+      } catch (e) {
+        console.error("[AitherHub] buildWidget ERROR:", e.message, e.stack);
+      }
     });
   }
 
