@@ -1,7 +1,35 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 
-const API = import.meta.env.VITE_API_URL || 'https://aitherhubapi-cpcjcnezbgf5f7e2.japaneast-01.azurewebsites.net';
+const DIRECT_API = 'https://aitherhubapi-cpcjcnezbgf5f7e2.japaneast-01.azurewebsites.net';
+
+// Try same-origin first (SWA proxy), then fall back to direct API
+async function apiFetch(path, retries = 2) {
+  const urls = [
+    path,                    // same-origin via SWA proxy (no CORS issues)
+    `${DIRECT_API}${path}`,  // direct API (cross-origin, needs CORS)
+  ];
+  let lastError = null;
+  for (const url of urls) {
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        const resp = await fetch(url, { signal: controller.signal });
+        clearTimeout(timeout);
+        if (!resp.ok) {
+          lastError = new Error(`HTTP ${resp.status} from ${url}`);
+          continue;
+        }
+        return await resp.json();
+      } catch (e) {
+        lastError = new Error(`${e.message} (${url}, attempt ${attempt + 1})`);
+        if (attempt < retries) await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
+      }
+    }
+  }
+  throw lastError || new Error('All API attempts failed');
+}
 
 export default function ShareVideoPage() {
   const { clipId } = useParams();
@@ -14,6 +42,7 @@ export default function ShareVideoPage() {
   const [isMuted, setIsMuted] = useState(true);
   const [showSoundHint, setShowSoundHint] = useState(true);
   const [liked, setLiked] = useState({});
+  const [debugInfo, setDebugInfo] = useState('');
 
   const containerRef = useRef(null);
   const videoRefs = useRef({});
@@ -24,9 +53,14 @@ export default function ShareVideoPage() {
   // ── Fetch data ──
   useEffect(() => {
     if (!clipId) return;
-    fetch(`${API}/api/v1/widget/share/${clipId}`)
-      .then(r => { if (!r.ok) throw new Error('Clip not found'); return r.json(); })
-      .then(meta => {
+    let dbg = `clipId=${clipId}\n`;
+
+    (async () => {
+      try {
+        dbg += 'Fetching share API...\n';
+        const meta = await apiFetch(`/api/v1/widget/share/${clipId}`);
+        dbg += `share OK: client_id=${meta.client_id}\n`;
+
         const clientId = meta.client_id;
         setBrandName(meta.brand_name || '');
         setThemeColor(meta.theme_color || '#FF2D55');
@@ -46,33 +80,48 @@ export default function ShareVideoPage() {
         }
 
         if (!clientId) {
+          dbg += 'No client_id, using meta as single clip\n';
           setClips([meta]);
           setCurrentIndex(0);
           setLoading(false);
+          setDebugInfo(dbg);
           return;
         }
 
-        return fetch(`${API}/api/v1/widget/config/${clientId}`)
-          .then(r => r.json())
-          .then(config => {
-            const allClips = (config.clips || []).map(c => ({
-              ...c,
-              video_url: c.clip_url || c.widget_url || c.exported_url,
-            }));
-            if (!allClips.length) {
-              setClips([meta]);
-              setCurrentIndex(0);
-              setLoading(false);
-              return;
-            }
-            let targetIdx = allClips.findIndex(c => c.clip_id === clipId);
-            if (targetIdx === -1) targetIdx = 0;
-            setClips(allClips);
-            setCurrentIndex(targetIdx);
-            setLoading(false);
-          });
-      })
-      .catch(e => { setError(e.message); setLoading(false); });
+        dbg += 'Fetching config API...\n';
+        const config = await apiFetch(`/api/v1/widget/config/${clientId}`);
+        dbg += `config OK: ${(config.clips || []).length} clips\n`;
+
+        const allClips = (config.clips || []).map(c => ({
+          ...c,
+          video_url: c.clip_url || c.widget_url || c.exported_url,
+        }));
+
+        if (!allClips.length) {
+          dbg += 'No clips in config, using meta\n';
+          setClips([meta]);
+          setCurrentIndex(0);
+          setLoading(false);
+          setDebugInfo(dbg);
+          return;
+        }
+
+        let targetIdx = allClips.findIndex(c => c.clip_id === clipId);
+        if (targetIdx === -1) targetIdx = 0;
+        dbg += `targetIdx=${targetIdx}, total=${allClips.length}\n`;
+        dbg += `video_url=${(allClips[targetIdx]?.video_url || 'none').substring(0, 80)}...\n`;
+
+        setClips(allClips);
+        setCurrentIndex(targetIdx);
+        setLoading(false);
+        setDebugInfo(dbg);
+      } catch (e) {
+        dbg += `ERROR: ${e.message}\n`;
+        setError(e.message);
+        setLoading(false);
+        setDebugInfo(dbg);
+      }
+    })();
   }, [clipId]);
 
   // ── Play current video ──
@@ -141,7 +190,7 @@ export default function ShareVideoPage() {
 
   // ── Share ──
   const handleShare = async () => {
-    const shareUrl = `${API}/v/${clips[currentIndex]?.clip_id || clipId}`;
+    const shareUrl = `https://www.aitherhub.com/v/${clips[currentIndex]?.clip_id || clipId}`;
     const shareTitle = brandName || 'AitherHub Video';
     if (navigator.share) {
       try { await navigator.share({ title: shareTitle, url: shareUrl }); } catch {}
@@ -176,6 +225,11 @@ export default function ShareVideoPage() {
     <div style={S.fullscreen}>
       <div style={S.center}>
         <p style={S.errorText}>動画が見つかりませんでした</p>
+        {debugInfo && (
+          <pre style={{color: 'rgba(255,255,255,0.4)', fontSize: 10, maxWidth: '90vw', overflow: 'auto', whiteSpace: 'pre-wrap', marginBottom: 12, textAlign: 'left', padding: 8, background: 'rgba(255,255,255,0.05)', borderRadius: 8}}>
+            {debugInfo}
+          </pre>
+        )}
         <a href="/" style={{color: themeColor, textDecoration: 'none'}}>トップへ</a>
       </div>
     </div>
