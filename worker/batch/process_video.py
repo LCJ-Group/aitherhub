@@ -530,16 +530,29 @@ def main():
     for _env_key in ("MKL_NUM_THREADS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
         if _env_key not in os.environ:
             os.environ[_env_key] = "4"
-    # Apply process-level virtual address space limit to prevent OOM crashes.
-    # VM has 28GB RAM, systemd MemoryMax=14GB. Default raised from 8→14GB
-    # because Whisper large-v3 (~3-4GB) + ffmpeg + Python easily exceeds 8GB.
-    _mem_limit_gb = int(os.getenv("FFMPEG_MEM_LIMIT_GB", "14"))
-    _mem_limit_bytes = _mem_limit_gb * 1024 * 1024 * 1024
-    try:
-        resource.setrlimit(resource.RLIMIT_AS, (_mem_limit_bytes, _mem_limit_bytes))
-        logging.getLogger("process_video").info(f"Memory limit set: {_mem_limit_gb}GB per process")
-    except (ValueError, OSError):
-        pass
+    # ── v9: RLIMIT_AS DISABLED ──
+    # Previously set to 8GB, then 14GB, but this causes:
+    # 1. mkl_malloc failures (Intel MKL can't allocate per-thread buffers)
+    # 2. CUDNN_STATUS_SUBLIBRARY_LOADING_FAILED (cuDNN can't mmap .so files)
+    # The root issue is that RLIMIT_AS limits *virtual* address space, not
+    # physical RAM. GPU libraries (cuDNN, CUDA) map large .so files into
+    # virtual memory via dlopen/mmap, which counts against RLIMIT_AS even
+    # though they don't consume physical RAM.
+    #
+    # Protection is already provided by:
+    # - systemd MemoryMax=14GB (kills process if physical RAM exceeds limit)
+    # - systemd MemoryHigh=12GB (triggers kernel memory reclaim)
+    # These are sufficient OOM guards without breaking GPU library loading.
+    _mem_limit_gb = int(os.getenv("FFMPEG_MEM_LIMIT_GB", "0"))  # 0 = disabled
+    if _mem_limit_gb > 0:
+        _mem_limit_bytes = _mem_limit_gb * 1024 * 1024 * 1024
+        try:
+            resource.setrlimit(resource.RLIMIT_AS, (_mem_limit_bytes, _mem_limit_bytes))
+            logging.getLogger("process_video").info(f"Memory limit set: {_mem_limit_gb}GB per process")
+        except (ValueError, OSError):
+            pass
+    else:
+        logging.getLogger("process_video").info("RLIMIT_AS disabled (systemd MemoryMax provides OOM protection)")
 
     parser = argparse.ArgumentParser(description="Process a livestream video")
     parser.add_argument("--video-id", dest="video_id", type=str, required=True)
