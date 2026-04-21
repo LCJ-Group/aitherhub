@@ -2426,21 +2426,42 @@
     })();
   }
 
+  // ── Debug helper: write to DOM since console may not be visible ──
+  var _dbgLines = [];
+  function _dbg(msg) {
+    _dbgLines.push(msg);
+    console.log("[AitherHub] " + msg);
+    var el = document.getElementById('aitherhub-debug');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'aitherhub-debug';
+      el.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:rgba(0,0,0,0.85);color:#0f0;font:11px monospace;padding:8px;z-index:2147483646;max-height:200px;overflow:auto;pointer-events:auto;';
+      document.body.appendChild(el);
+    }
+    el.textContent = _dbgLines.join('\n');
+  }
+
   // ── Initialize ──
   function init() {
-    console.log("[AitherHub] init() called, CLIENT_ID=", CLIENT_ID);
+    _dbg("init() CLIENT_ID=" + CLIENT_ID);
     scrapePageContext();
     trackEvent("page_view", { title: document.title, referrer: document.referrer });
     checkConversionPage();
+    _dbg("calling loadConfig...");
     loadConfig(function (config) {
-      console.log("[AitherHub] config loaded, clips:", (config.clips || []).length);
+      _dbg("config loaded, clips=" + (config.clips || []).length);
       var shadow = createWidgetContainer();
-      console.log("[AitherHub] shadow container created");
+      _dbg("shadow created");
       try {
         buildWidget(shadow, config);
-        console.log("[AitherHub] buildWidget completed");
+        _dbg("buildWidget OK");
+        // Remove debug panel after success
+        setTimeout(function() {
+          var dbgEl = document.getElementById('aitherhub-debug');
+          if (dbgEl) dbgEl.remove();
+        }, 5000);
       } catch (e) {
-        console.error("[AitherHub] buildWidget ERROR:", e.message, e.stack);
+        _dbg("buildWidget ERROR: " + e.message);
       }
     });
   }
