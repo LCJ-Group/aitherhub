@@ -189,7 +189,7 @@ async def ogp_proxy(clip_id: str, request: Request):
     Browsers get redirected to the SPA frontend.
     Crawlers get server-rendered HTML with proper OGP meta tags."""
     from fastapi.responses import HTMLResponse, RedirectResponse
-    from app.core.db import get_async_session
+    from app.core.db import AsyncSessionLocal
     from app.api.v1.endpoints.widget import _get_share_clip_meta_impl, _escape_html
 
     user_agent = (request.headers.get("user-agent") or "").lower()
@@ -204,9 +204,8 @@ async def ogp_proxy(clip_id: str, request: Request):
 
     # Fetch clip metadata (needed for both browser redirect and crawler OGP)
     try:
-        async for db in get_async_session():
+        async with AsyncSessionLocal() as db:
             meta = await _get_share_clip_meta_impl(clip_id, db)
-            break
     except Exception:
         if not is_crawler:
             return RedirectResponse(
