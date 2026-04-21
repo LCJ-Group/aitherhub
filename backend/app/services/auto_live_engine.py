@@ -313,17 +313,17 @@ async def _generate_speech(
 {phase_instructions.get(phase, '')}
 
 CRITICAL RULES:
-- Generate a LONG, DETAILED speech segment of {max_length}-{max_length + 200} characters
-- Talk at length — explain, describe, share stories, give tips, compare products
+- Generate a speech segment of {max_length}-{max_length + 150} characters (this will be read by TTS, keep it concise)
+- Be informative and engaging — explain, describe, share tips
 - Do NOT end with a question unless the phase specifically calls for it
 - Do NOT ask viewers to comment, reply, or answer — just TALK and PRESENT
-- Be NATURAL and conversational, like a real livestream host who loves talking
-- Vary your tone and energy based on the phase
+- Be NATURAL and conversational, like a real livestream host
 - ABSOLUTELY DO NOT repeat or paraphrase anything from the conversation history below
 - Each segment must be COMPLETELY DIFFERENT from all previous ones
-- Do NOT start with the same greeting twice (e.g. if you already said "大家好", use a different opener)
+- Do NOT start with the same greeting twice
 - Output ONLY the speech text, no labels, no formatting, no quotes
 - Do NOT use quotation marks around the text
+- AUDIO STABILITY: Use moderate punctuation. Avoid excessive exclamation marks (!!!), ALL CAPS, or dramatic emphasis. Keep energy through word choice, not punctuation. Use at most one exclamation mark per sentence.
 {recent_history}
 {product_context}
 
@@ -336,7 +336,7 @@ This is speech segment #{session.speak_count + 1} of the livestream. You MUST sa
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"Generate the next {phase.value} speech segment."},
             ],
-            max_tokens=600,
+            max_tokens=400,
             temperature=0.75,
         )
         text = response.choices[0].message.content.strip()
@@ -460,11 +460,11 @@ async def get_queue_length(session_id: str) -> int:
         pending = 0
         session._consumed_count = session._push_count
     
-    # Safety: if pending seems stuck (>= buffer limit for more than 60s),
+    # Safety: if pending seems stuck (>= buffer limit for more than 45s),
     # auto-reset to allow generation to continue
-    if pending >= 3 and hasattr(session, '_last_push_time'):
+    if pending >= 4 and hasattr(session, '_last_push_time'):
         elapsed = time.time() - session._last_push_time
-        if elapsed > 60:
+        if elapsed > 45:
             logger.warning(f"[AutoLive] Queue seems stuck (pending={pending}, last push {elapsed:.0f}s ago). Resetting.")
             session._consumed_count = session._push_count
             pending = 0
@@ -489,41 +489,92 @@ def _get_next_chat_topic(session: AutoLiveSession) -> str:
     return topic
 
 
-async def _flow_speech_loop(session: AutoLiveSession):
-    """直播フローに基づく自動スピーチループ v2"""
-    logger.info(f"[AutoLive v2] Starting flow speech loop for session {session.session_id}")
-    logger.info(f"[AutoLive v2] Products: {len(session.products)}, Language: {session.language}, Style: {session.style}")
+def _normalize_speech_text(text: str) -> str:
+    """音声安定化のためテキストを正規化する
+    
+    - 連続する感嘆符/疑問符を1つに（音量の急激な変化を防ぐ）
+    - 過度な句読点を整理
+    - 空白の正規化
+    """
+    import re
+    # 連続する感嘆符を1つに
+    text = re.sub(r'！{2,}', '！', text)
+    text = re.sub(r'!{2,}', '!', text)
+    # 連続する疑問符を1つに
+    text = re.sub(r'？{2,}', '？', text)
+    text = re.sub(r'\?{2,}', '?', text)
+    # 感嘆符+疑問符の組み合わせを整理
+    text = re.sub(r'[！!][？?]', '！', text)
+    text = re.sub(r'[？?][！!]', '？', text)
+    # 連続する「。」を1つに
+    text = re.sub(r'。{2,}', '。', text)
+    # 連続する「…」を1つに
+    text = re.sub(r'…{2,}', '…', text)
+    text = re.sub(r'\.{3,}', '…', text)
+    # 空白の正規化
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
 
-    has_products = len(session.products) > 0
+
+async def _flow_speech_loop(session: AutoLiveSession):
+    """直播フローに基づく自動スピーチループ v3
+    
+    v3 improvements:
+    - Dynamic product detection: switches from chat-only to product flow
+      when products are added mid-session
+    - Shorter text segments (200-350 chars) for TTS stability
+    - Text normalization for consistent audio volume
+    - Larger queue buffer (4) for smoother transitions
+    """
+    logger.info(f"[AutoLive v3] Starting flow speech loop for session {session.session_id}")
+    logger.info(f"[AutoLive v3] Products: {len(session.products)}, Language: {session.language}, Style: {session.style}")
+
+    # Track whether we had products at last check (for dynamic switching)
+    had_products = len(session.products) > 0
 
     # Define the flow based on whether we have products
-    if has_products:
-        # Full flow with products
-        flow_template = list(FLOW_WITH_PRODUCTS)  # copy
+    if had_products:
+        flow_template = list(FLOW_WITH_PRODUCTS)
     else:
-        # Chat-only mode
         flow_template = list(FLOW_CHAT_ONLY)
 
     flow_index = 0
     phase_segments_done = 0
+    opening_done = False
 
     while session.is_running:
         if session.is_paused:
             await asyncio.sleep(1)
             continue
 
-        # Check queue capacity — keep buffer small to stay responsive
-        # (Old items are auto-cleaned after 5 min by liveavatar_service)
+        # ── Dynamic product detection ──
+        # Check if products were added since last iteration
+        has_products_now = len(session.products) > 0
+        if has_products_now and not had_products:
+            # Products were just added! Switch from chat-only to product flow
+            logger.info(f"[AutoLive v3] Products detected mid-session! Switching to product flow. Products: {[p.item_name for p in session.products]}")
+            had_products = True
+            # Insert a transition to product intro at current position
+            flow_template = [
+                (FlowPhase.TRANSITION, 1),
+                (FlowPhase.PRODUCT_INTRO, 2),
+                (FlowPhase.PRODUCT_DEEP, 3),
+                (FlowPhase.CHAT, 1),
+                (FlowPhase.TRANSITION, 1),
+            ]
+            flow_index = 0
+            phase_segments_done = 0
+
+        # ── Queue capacity check ──
+        # Keep buffer at 4 items for smoother transitions between speeches
         queue_len = await get_queue_length(session.session_id)
-        if queue_len >= 3:
-            await asyncio.sleep(1)  # Queue has enough buffer, wait briefly
+        if queue_len >= 4:
+            await asyncio.sleep(0.5)  # Shorter wait for faster response
             continue
 
-        # Get current phase from flow template
+        # ── Flow template cycling ──
         if flow_index >= len(flow_template):
-            # Loop back (skip opening on repeat)
-            if has_products:
-                # After first cycle, skip opening, start from CHAT
+            if has_products_now:
                 flow_template = [
                     (FlowPhase.CHAT, 1),
                     (FlowPhase.PRODUCT_INTRO, 2),
@@ -539,36 +590,44 @@ async def _flow_speech_loop(session: AutoLiveSession):
         current_phase, target_segments = flow_template[flow_index]
         session.current_phase = current_phase
 
-        # Get current product for product-related phases
+        # ── Current product for product-related phases ──
         current_product = None
-        if has_products and current_phase in (FlowPhase.PRODUCT_INTRO, FlowPhase.PRODUCT_DEEP, FlowPhase.TRANSITION):
+        if has_products_now and current_phase in (FlowPhase.PRODUCT_INTRO, FlowPhase.PRODUCT_DEEP, FlowPhase.TRANSITION):
             current_product = session.products[session.current_product_index % len(session.products)]
+            logger.info(f"[AutoLive v3] Phase={current_phase.value}, Product={current_product.item_name}")
 
-        # Extra context for chat phases
+        # ── Extra context for chat phases ──
         extra_context = ""
         if current_phase == FlowPhase.CHAT:
             extra_context = _get_next_chat_topic(session)
+            # If we have products, mention them in chat context too
+            if has_products_now:
+                product_names = [p.item_name for p in session.products]
+                extra_context += f"\nProducts available: {', '.join(product_names)}"
 
-        # Generate speech
+        # ── Generate speech (shorter segments for TTS stability) ──
         text = await _generate_speech(
             session=session,
             phase=current_phase,
             product=current_product,
             extra_context=extra_context,
+            max_length=200,  # Reduced from 400 for TTS stability
         )
 
         if text:
+            # Normalize text for audio stability
+            text = _normalize_speech_text(text)
+            
             success = await push_to_speak_queue(session.session_id, text)
             if success:
                 session.speak_count += 1
                 phase_segments_done += 1
 
-                # Add to conversation history (FULL text for dedup)
+                # Add to conversation history
                 session.conversation_history.append(f"[{current_phase.value}] {text}")
                 if len(session.conversation_history) > 20:
                     session.conversation_history = session.conversation_history[-20:]
                 
-                # Track exact texts for duplicate detection
                 session.generated_texts.append(text)
                 if len(session.generated_texts) > 50:
                     session.generated_texts = session.generated_texts[-50:]
@@ -579,17 +638,17 @@ async def _flow_speech_loop(session: AutoLiveSession):
                     phase_segments_done = 0
 
                     # Move to next product after TRANSITION
-                    if current_phase == FlowPhase.TRANSITION and has_products:
+                    if current_phase == FlowPhase.TRANSITION and has_products_now:
                         session.current_product_index += 1
                         if session.current_product_index >= len(session.products):
                             session.current_product_index = 0
                         next_product = session.products[session.current_product_index % len(session.products)]
-                        logger.info(f"[AutoLive v2] Moving to next product: {next_product.item_name}")
+                        logger.info(f"[AutoLive v3] Moving to next product: {next_product.item_name}")
 
-        # Brief pause between generations to avoid overwhelming the API
-        await asyncio.sleep(0.3)
+        # Brief pause between generations
+        await asyncio.sleep(0.2)
 
-    logger.info(f"[AutoLive v2] Flow speech loop ended for session {session.session_id}")
+    logger.info(f"[AutoLive v3] Flow speech loop ended for session {session.session_id}")
 
 
 # ============================================================

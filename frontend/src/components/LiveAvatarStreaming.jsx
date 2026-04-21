@@ -221,10 +221,9 @@ export default function LiveAvatarStreaming({
           // Reset auto-live speaking flag so next queue item can be sent
           autoLiveSpeakingRef.current = false;
           speakStartTimeRef.current = null;
-          // Immediately try to send next item from queue (don't wait for next poll)
-          // Use refs to avoid stale closure (handleDataReceived has [] deps)
+          // Immediately try to send next item from queue (minimal delay for seamless transition)
           if (autoLiveModeRef.current && pollAndSendQueueRef.current) {
-            setTimeout(() => pollAndSendQueueRef.current(), 100);
+            setTimeout(() => pollAndSendQueueRef.current(), 30);
           }
           break;
         case "user.speak_started":
@@ -420,10 +419,9 @@ export default function LiveAvatarStreaming({
                 // Reset auto-live speaking flag so next queue item can be sent
                 autoLiveSpeakingRef.current = false;
                 speakStartTimeRef.current = null;
-                // Immediately try to send next item from queue
-                // Use refs to avoid stale closure (WebSocket handler is created in startSession)
+                // Immediately try to send next item from queue (minimal delay)
                 if (autoLiveModeRef.current && pollAndSendQueueRef.current) {
-                  setTimeout(() => pollAndSendQueueRef.current(), 100);
+                  setTimeout(() => pollAndSendQueueRef.current(), 30);
                 }
               } else if (data.type === "session.stopped") {
                 console.log("[LiveAvatar] Session stopped via WebSocket");
@@ -559,12 +557,12 @@ export default function LiveAvatarStreaming({
       console.debug("[LiveAvatar AutoLive] Queue poll error:", err.message);
     }
 
-    // Timeout protection: if speaking for more than 45 seconds, force reset
-    // (Increased from 15s to handle longer speech segments)
+    // Timeout protection: if speaking for more than 30 seconds, force reset
+    // (Reduced from 45s since text segments are now shorter for TTS stability)
     if (autoLiveSpeakingRef.current && speakStartTimeRef.current) {
       const elapsed = Date.now() - speakStartTimeRef.current;
-      if (elapsed > 45000) {
-        console.warn("[LiveAvatar AutoLive] Speak timeout (45s), forcing reset");
+      if (elapsed > 30000) {
+        console.warn("[LiveAvatar AutoLive] Speak timeout (30s), forcing reset");
         autoLiveSpeakingRef.current = false;
         speakStartTimeRef.current = null;
       }
