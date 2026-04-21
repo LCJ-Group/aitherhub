@@ -3,18 +3,18 @@ import { useParams } from 'react-router-dom';
 
 const DIRECT_API = 'https://aitherhubapi-cpcjcnezbgf5f7e2.japaneast-01.azurewebsites.net';
 
-// Robust fetch with detailed debug logging
+// Race both proxy and direct API in parallel — first valid JSON wins
 async function apiFetch(path, dbgLog) {
-  const urls = [
+  const endpoints = [
     { url: path, label: 'proxy' },
     { url: `${DIRECT_API}${path}`, label: 'direct' },
   ];
 
-  for (const { url, label } of urls) {
+  async function tryFetch({ url, label }) {
+    dbgLog(`[${label}] GET ${url}`);
+    const controller = new AbortController();
+    const tid = setTimeout(() => controller.abort(), 30000);
     try {
-      dbgLog(`[${label}] GET ${url}`);
-      const controller = new AbortController();
-      const tid = setTimeout(() => controller.abort(), 12000);
       const resp = await fetch(url, {
         signal: controller.signal,
         headers: { 'Accept': 'application/json' },
@@ -22,28 +22,32 @@ async function apiFetch(path, dbgLog) {
       clearTimeout(tid);
       const ct = resp.headers.get('content-type') || '';
       dbgLog(`[${label}] ${resp.status} ct=${ct.substring(0, 40)}`);
-
       if (!resp.ok) {
         const body = await resp.text().catch(() => '');
         dbgLog(`[${label}] body=${body.substring(0, 80)}`);
-        continue;
+        throw new Error(`HTTP ${resp.status}`);
       }
-
-      // Check if response is actually JSON
       if (!ct.includes('json')) {
         const body = await resp.text().catch(() => '');
         dbgLog(`[${label}] NOT JSON: ${body.substring(0, 80)}`);
-        continue;
+        throw new Error('Not JSON');
       }
-
       const data = await resp.json();
       dbgLog(`[${label}] OK`);
       return data;
     } catch (e) {
+      clearTimeout(tid);
       dbgLog(`[${label}] ERR: ${e.message}`);
+      throw e;
     }
   }
-  throw new Error('All API attempts failed');
+
+  // Race: first successful response wins
+  try {
+    return await Promise.any(endpoints.map(ep => tryFetch(ep)));
+  } catch (aggErr) {
+    throw new Error('All API attempts failed');
+  }
 }
 
 export default function ShareVideoPage() {
