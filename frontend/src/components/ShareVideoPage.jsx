@@ -14,7 +14,6 @@ export default function ShareVideoPage() {
   const [isMuted, setIsMuted] = useState(true);
   const [showSoundHint, setShowSoundHint] = useState(true);
   const [liked, setLiked] = useState({});
-  const [showProduct, setShowProduct] = useState(false);
 
   const containerRef = useRef(null);
   const videoRefs = useRef({});
@@ -25,7 +24,6 @@ export default function ShareVideoPage() {
   // ── Fetch data ──
   useEffect(() => {
     if (!clipId) return;
-    // Step 1: Get clip meta to find client_id
     fetch(`${API}/api/v1/widget/share/${clipId}`)
       .then(r => { if (!r.ok) throw new Error('Clip not found'); return r.json(); })
       .then(meta => {
@@ -33,7 +31,6 @@ export default function ShareVideoPage() {
         setBrandName(meta.brand_name || '');
         setThemeColor(meta.theme_color || '#FF2D55');
 
-        // Update OGP
         if (meta.og) {
           document.title = meta.og.title || 'AitherHub Video';
           const setMeta = (prop, val) => {
@@ -49,14 +46,12 @@ export default function ShareVideoPage() {
         }
 
         if (!clientId) {
-          // No client_id → single clip mode
           setClips([meta]);
           setCurrentIndex(0);
           setLoading(false);
           return;
         }
 
-        // Step 2: Get all clips from widget config
         return fetch(`${API}/api/v1/widget/config/${clientId}`)
           .then(r => r.json())
           .then(config => {
@@ -70,7 +65,6 @@ export default function ShareVideoPage() {
               setLoading(false);
               return;
             }
-            // Find the target clip index
             let targetIdx = allClips.findIndex(c => c.clip_id === clipId);
             if (targetIdx === -1) targetIdx = 0;
             setClips(allClips);
@@ -88,7 +82,8 @@ export default function ShareVideoPage() {
       if (!vid) return;
       if (parseInt(idx) === currentIndex) {
         vid.muted = isMuted;
-        vid.play().catch(() => {});
+        const playPromise = vid.play();
+        if (playPromise) playPromise.catch(() => {});
       } else {
         vid.pause();
         vid.currentTime = 0;
@@ -107,7 +102,6 @@ export default function ShareVideoPage() {
     if (isTransitioning.current) return;
     if (newIndex < 0 || newIndex >= clips.length) return;
     isTransitioning.current = true;
-    setShowProduct(false);
     setCurrentIndex(newIndex);
     setTimeout(() => { isTransitioning.current = false; }, 400);
   }, [clips.length]);
@@ -173,6 +167,7 @@ export default function ShareVideoPage() {
       <div style={S.center}>
         <div style={{...S.spinner, borderTopColor: themeColor}} />
       </div>
+      <style>{`@keyframes ath-spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 
@@ -200,7 +195,7 @@ export default function ShareVideoPage() {
       <div style={S.slidesContainer}>
         {clips.map((clip, idx) => {
           const offset = idx - currentIndex;
-          if (Math.abs(offset) > 1) return null; // Only render adjacent slides
+          if (Math.abs(offset) > 1) return null;
           return (
             <div
               key={clip.clip_id || idx}
@@ -208,6 +203,7 @@ export default function ShareVideoPage() {
                 ...S.slide,
                 transform: `translateY(${offset * 100}%)`,
                 transition: 'transform 0.4s cubic-bezier(0.25, 0.1, 0.25, 1)',
+                WebkitTransition: '-webkit-transform 0.4s cubic-bezier(0.25, 0.1, 0.25, 1)',
                 zIndex: offset === 0 ? 2 : 1,
               }}
             >
@@ -217,6 +213,8 @@ export default function ShareVideoPage() {
                 poster={clip.thumbnail_url || undefined}
                 style={S.video}
                 playsInline
+                webkit-playsinline=""
+                x5-playsinline=""
                 loop
                 muted={isMuted}
                 preload={Math.abs(offset) <= 1 ? 'auto' : 'none'}
@@ -249,7 +247,6 @@ export default function ShareVideoPage() {
 
       {/* ── Right side actions ── */}
       <div style={S.actions}>
-        {/* Like */}
         <button
           style={S.actionBtn}
           onClick={() => setLiked(prev => ({ ...prev, [currentIndex]: !prev[currentIndex] }))}
@@ -264,7 +261,6 @@ export default function ShareVideoPage() {
           <span style={S.actionLabel}>いいね</span>
         </button>
 
-        {/* Share */}
         <button style={S.actionBtn} onClick={handleShare}>
           <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
             <path d="M4 12v8a2 2 0 002 2h12a2 2 0 002-2v-8M16 6l-4-4-4 4M12 2v13" />
@@ -272,7 +268,6 @@ export default function ShareVideoPage() {
           <span style={S.actionLabel}>シェア</span>
         </button>
 
-        {/* Mute toggle */}
         <button style={S.actionBtn} onClick={() => { setIsMuted(!isMuted); setShowSoundHint(false); }}>
           {isMuted ? (
             <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
@@ -303,16 +298,12 @@ export default function ShareVideoPage() {
         </div>
       )}
 
-      {/* ── Product CTA ── */}
-      {(currentClip.product_url) && (
+      {/* ── CTA Button ── */}
+      {currentClip.product_url && (
         <div style={S.ctaArea}>
           <button
             style={{...S.ctaBtn, background: themeColor}}
-            onClick={() => {
-              if (currentClip.product_url) {
-                window.open(currentClip.product_url, '_blank');
-              }
-            }}
+            onClick={() => { window.open(currentClip.product_url, '_blank'); }}
           >
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" style={{marginRight: 8}}>
               <path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4zM3 6h18M16 10a4 4 0 01-8 0" />
@@ -322,25 +313,34 @@ export default function ShareVideoPage() {
         </div>
       )}
 
-      {/* ── Brand footer ── */}
+      {/* ── Footer ── */}
       <div style={S.footer}>
-        <span style={S.footerBrand}>{brandName || 'KYOGOKU Professional'}</span>
-        <span style={S.footerPowered}>Powered by AitherHub</span>
+        <div style={S.footerBrand}>{brandName || 'KYOGOKU Professional'}</div>
+        <div style={S.footerPowered}>Powered by AitherHub</div>
       </div>
 
-      {/* ── Keyframe animation for spinner ── */}
       <style>{`
         @keyframes ath-spin { to { transform: rotate(360deg); } }
+        * { -webkit-tap-highlight-color: transparent; }
+        html, body { margin: 0; padding: 0; overflow: hidden; height: 100%; width: 100%; background: #000; }
+        #root { height: 100%; width: 100%; }
+        video::-webkit-media-controls { display: none !important; }
+        video::-webkit-media-controls-enclosure { display: none !important; }
       `}</style>
     </div>
   );
 }
 
-// ─── Styles ───
+// ─── Styles (Safari/iOS compatible - no 'inset' shorthand) ───
 const S = {
   fullscreen: {
     position: 'fixed',
-    inset: 0,
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    width: '100%',
+    height: '100%',
     background: '#000',
     overflow: 'hidden',
     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Hiragino Sans", "Noto Sans JP", sans-serif',
@@ -372,12 +372,20 @@ const S = {
   // Slides
   slidesContainer: {
     position: 'absolute',
-    inset: 0,
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
     overflow: 'hidden',
   },
   slide: {
     position: 'absolute',
-    inset: 0,
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    width: '100%',
+    height: '100%',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -386,6 +394,7 @@ const S = {
     width: '100%',
     height: '100%',
     objectFit: 'cover',
+    WebkitTransform: 'translateZ(0)',
   },
 
   // Header
@@ -417,6 +426,7 @@ const S = {
     alignItems: 'center',
     justifyContent: 'center',
     cursor: 'pointer',
+    WebkitBackdropFilter: 'blur(8px)',
     backdropFilter: 'blur(8px)',
   },
 
@@ -453,6 +463,7 @@ const S = {
     cursor: 'pointer',
     padding: 0,
     filter: 'drop-shadow(0 1px 3px rgba(0,0,0,0.5))',
+    WebkitFilter: 'drop-shadow(0 1px 3px rgba(0,0,0,0.5))',
   },
   actionLabel: {
     color: '#fff',
@@ -464,7 +475,10 @@ const S = {
   // Sound hint
   soundHint: {
     position: 'absolute',
-    inset: 0,
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -479,6 +493,7 @@ const S = {
     background: 'rgba(0,0,0,0.6)',
     padding: '20px 32px',
     borderRadius: 16,
+    WebkitBackdropFilter: 'blur(12px)',
     backdropFilter: 'blur(12px)',
   },
   soundHintText: {
@@ -508,6 +523,7 @@ const S = {
     alignItems: 'center',
     justifyContent: 'center',
     boxShadow: '0 4px 20px rgba(0,0,0,0.4)',
+    WebkitBackdropFilter: 'blur(8px)',
     backdropFilter: 'blur(8px)',
   },
 
