@@ -88,16 +88,50 @@ def _get_whisper_model():
     else:
         compute_type = WHISPER_COMPUTE_TYPE
 
+    # ── v8: Pre-load GPU VRAM check & cleanup ──
+    # Whisper large-v3 needs ~3-4GB VRAM. If VRAM is low after ffmpeg NVDEC,
+    # force cleanup or fall back to CPU to avoid CUDA OOM.
+    if device == "cuda":
+        try:
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+            _free_vram, _total_vram = torch.cuda.mem_get_info()
+            _free_gb = _free_vram / (1024**3)
+            print(f"[WHISPER-LOCAL] GPU VRAM before load: {_free_gb:.1f}GB free / {_total_vram/(1024**3):.1f}GB total")
+            # Whisper large-v3 int8_float16 needs ~3.5GB. If <4GB free, use CPU.
+            _min_vram_gb = float(os.environ.get("WHISPER_MIN_VRAM_GB", "4.0"))
+            if _free_gb < _min_vram_gb:
+                print(f"[WHISPER-LOCAL] VRAM too low ({_free_gb:.1f}GB < {_min_vram_gb}GB), falling back to CPU")
+                device = "cpu"
+                compute_type = "int8"
+        except Exception as _vram_err:
+            print(f"[WHISPER-LOCAL] VRAM check failed ({_vram_err}), proceeding with {device}")
+
     print(f"[WHISPER-LOCAL] Loading model: {WHISPER_MODEL_SIZE}")
     print(f"[WHISPER-LOCAL] Device: {device}, Compute: {compute_type}")
 
-    _whisper_model = WhisperModel(
-        WHISPER_MODEL_SIZE,
-        device=device,
-        compute_type=compute_type,
-    )
+    try:
+        _whisper_model = WhisperModel(
+            WHISPER_MODEL_SIZE,
+            device=device,
+            compute_type=compute_type,
+        )
+    except Exception as _load_err:
+        # CUDA OOM during model load → retry on CPU
+        if device == "cuda" and "out of memory" in str(_load_err).lower():
+            print(f"[WHISPER-LOCAL] CUDA OOM during load, retrying on CPU: {_load_err}")
+            torch.cuda.empty_cache()
+            device = "cpu"
+            compute_type = "int8"
+            _whisper_model = WhisperModel(
+                WHISPER_MODEL_SIZE,
+                device=device,
+                compute_type=compute_type,
+            )
+        else:
+            raise
 
-    print(f"[WHISPER-LOCAL] Model loaded successfully")
+    print(f"[WHISPER-LOCAL] Model loaded successfully (device={device})")
     return _whisper_model
 
 

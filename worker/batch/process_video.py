@@ -796,9 +796,21 @@ def main():
                     logger.error("[SEQUENTIAL] Frame extraction failed: %s", e)
                     raise PipelineStepError("STEP_0_EXTRACT_FRAMES", "FRAME_EXTRACT_FAIL", e) from e
 
-                # Force garbage collection between heavy steps
+                # Force garbage collection + GPU VRAM release between heavy steps.
+                # ffmpeg NVDEC uses GPU VRAM for hardware decoding; releasing it
+                # prevents CUDA OOM when Whisper loads its model (~3-4GB VRAM).
                 gc.collect()
-                logger.info("[SEQUENTIAL] Phase 2/2: Audio transcription (gc.collect done)")
+                try:
+                    import torch
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                        torch.cuda.synchronize()
+                        _free, _total = torch.cuda.mem_get_info()
+                        logger.info("[SEQUENTIAL] GPU VRAM after cleanup: %.1fGB free / %.1fGB total",
+                                    _free / 1e9, _total / 1e9)
+                except Exception as _gpu_e:
+                    logger.debug("[SEQUENTIAL] GPU cleanup skipped: %s", _gpu_e)
+                logger.info("[SEQUENTIAL] Phase 2/2: Audio transcription (gc.collect + cuda.empty_cache done)")
 
                 try:
                     _do_audio_transcription()
