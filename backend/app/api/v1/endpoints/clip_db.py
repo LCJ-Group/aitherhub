@@ -126,6 +126,8 @@ class ClipSearchResult(BaseModel):
     is_unusable: Optional[bool] = None
     unusable_reason: Optional[str] = None
     unusable_comment: Optional[str] = None
+    # Language detection
+    detected_language: Optional[str] = None
 
 
 class ClipSearchResponse(BaseModel):
@@ -153,6 +155,7 @@ class ClipStatsResponse(BaseModel):
     subtitle_clips: Optional[int] = 0
     trimmed_clips: Optional[int] = 0
     ng_by_reason: Optional[list] = None  # [{reason: str, count: int}]
+    language_stats: Optional[list] = None  # [{language: str, count: int}]
 
 
 class EnrichResult(BaseModel):
@@ -183,6 +186,7 @@ async def search_clips(
     no_brand: Optional[bool] = Query(None, description="Filter clips with no brand assigned"),
     has_subtitle: Optional[bool] = Query(None, description="Filter clips with/without subtitle export"),
     has_trim: Optional[bool] = Query(None, description="Filter clips with/without trim data"),
+    language: Optional[str] = Query(None, description="Filter by detected language: ja, zh-TW, zh-CN, en, ko, th"),
     # Sorting
     sort_by: str = Query("created_at", description="Sort field: created_at, gmv, cta_score, importance_score, duration_sec"),
     sort_order: str = Query("desc", description="Sort order: asc or desc"),
@@ -310,6 +314,11 @@ async def search_clips(
     elif has_trim is False:
         conditions.append("vc.trim_data IS NULL")
 
+    # Language filter
+    if language:
+        conditions.append("vc.detected_language = :language")
+        params["language"] = language
+
     where_clause = " AND ".join(conditions)
 
     # Validate sort
@@ -386,7 +395,8 @@ async def search_clips(
             COALESCE(cdl.download_count, 0) as download_count,
             COALESCE(vc.is_unusable, FALSE) as is_unusable,
             vc.unusable_reason,
-            vc.unusable_comment
+            vc.unusable_comment,
+            vc.detected_language
         FROM video_clips vc
         LEFT JOIN video_phases vp ON vp.video_id = vc.video_id
             AND vp.phase_index = CASE
@@ -512,6 +522,7 @@ async def search_clips(
                 is_unusable=bool(row.is_unusable) if hasattr(row, 'is_unusable') else False,
                 unusable_reason=row.unusable_reason if hasattr(row, 'unusable_reason') else None,
                 unusable_comment=row.unusable_comment if hasattr(row, 'unusable_comment') else None,
+                detected_language=row.detected_language if hasattr(row, 'detected_language') else None,
             ))
 
         return ClipSearchResponse(
@@ -668,6 +679,21 @@ async def get_clip_stats(
             for r in ng_reason_result.fetchall()
         ]
 
+        # Language statistics
+        lang_sql = text("""
+            SELECT COALESCE(vc.detected_language, 'unknown') as lang, COUNT(*) as cnt
+            FROM video_clips vc
+            WHERE vc.status = 'completed' AND vc.clip_url IS NOT NULL
+                AND COALESCE(vc.is_unusable, FALSE) = FALSE
+            GROUP BY COALESCE(vc.detected_language, 'unknown')
+            ORDER BY cnt DESC
+        """)
+        lang_result = await db.execute(lang_sql)
+        language_stats = [
+            {"language": r.lang, "count": r.cnt}
+            for r in lang_result.fetchall()
+        ]
+
         return ClipStatsResponse(
             total_clips=stats_row.total or 0,
             sold_clips=stats_row.sold or 0,
@@ -685,6 +711,7 @@ async def get_clip_stats(
             subtitle_clips=ng_stats_row.subtitle_count or 0,
             trimmed_clips=ng_stats_row.trimmed_count or 0,
             ng_by_reason=ng_by_reason,
+            language_stats=language_stats,
         )
 
     except Exception as e:
@@ -1371,3 +1398,157 @@ async def list_unusable_reasons(
         "other": "その他",
     }
     return {"reasons": [{"key": k, "label": v} for k, v in REASON_LABELS.items()]}
+
+
+# ─── Language Detection ───
+
+import re as _re
+import unicodedata as _ud
+
+def _detect_language(text_str: str) -> str:
+    """
+    Detect language from transcript text using Unicode character analysis.
+    Returns: 'ja', 'zh-TW', 'zh-CN', 'en', 'ko', 'th', or 'unknown'
+    """
+    if not text_str or len(text_str.strip()) < 5:
+        return "unknown"
+
+    text_str = text_str.strip()
+
+    # Count character types
+    hiragana = 0
+    katakana = 0
+    cjk = 0
+    hangul = 0
+    thai = 0
+    latin = 0
+
+    # Traditional Chinese specific characters (not used in Japanese or Simplified Chinese)
+    trad_only = set("這個們對會說請問還從點裡買賣價錢東關學與對應當經過區體發現問題認為開關實際點選單項導對話視窗確認選擇設計資訊連結頁面內容標題圖片檔案資料庫")
+    # Simplified Chinese specific characters
+    simp_only = set("这个们对会说请问还从点里买卖价钱东关学与对应当经过区体发现问题认为开关实际点选单项导对话视窗确认选择设计资讯连结页面内容标题图片档案资料库")
+
+    trad_count = 0
+    simp_count = 0
+
+    for ch in text_str:
+        cp = ord(ch)
+        name = _ud.name(ch, "")
+
+        if 0x3040 <= cp <= 0x309F:
+            hiragana += 1
+        elif 0x30A0 <= cp <= 0x30FF:
+            katakana += 1
+        elif 0xAC00 <= cp <= 0xD7AF or 0x1100 <= cp <= 0x11FF:
+            hangul += 1
+        elif 0x0E00 <= cp <= 0x0E7F:
+            thai += 1
+        elif 0x4E00 <= cp <= 0x9FFF or 0x3400 <= cp <= 0x4DBF:
+            cjk += 1
+            if ch in trad_only:
+                trad_count += 1
+            if ch in simp_only:
+                simp_count += 1
+        elif ch.isalpha() and cp < 0x0250:
+            latin += 1
+
+    total_meaningful = hiragana + katakana + cjk + hangul + thai + latin
+    if total_meaningful < 3:
+        return "unknown"
+
+    # Japanese: has hiragana or katakana
+    if hiragana + katakana > 2:
+        return "ja"
+
+    # Korean
+    if hangul > 3:
+        return "ko"
+
+    # Thai
+    if thai > 3:
+        return "th"
+
+    # Chinese: CJK without hiragana/katakana
+    if cjk > 5:
+        if trad_count > simp_count:
+            return "zh-TW"
+        elif simp_count > trad_count:
+            return "zh-CN"
+        # Ambiguous — default to zh-TW for Taiwan market
+        return "zh-TW"
+
+    # Mostly Latin
+    if latin > total_meaningful * 0.5:
+        return "en"
+
+    return "unknown"
+
+
+@router.post("/detect-languages")
+async def detect_languages_batch(
+    dry_run: bool = Query(False, description="If true, only return detection results without updating DB"),
+    limit: int = Query(0, description="Max clips to process (0 = all)"),
+    db: AsyncSession = Depends(get_db),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """
+    Batch detect languages for all clips with transcript_text.
+    Updates detected_language column in video_clips.
+    """
+    _check_admin_or_user(x_admin_key=x_admin_key)
+
+    try:
+        # Fetch clips that need language detection
+        where = "vc.status = 'completed' AND vc.clip_url IS NOT NULL AND vc.transcript_text IS NOT NULL AND vc.transcript_text != ''"
+        if not dry_run:
+            # Only process clips without detected_language
+            where += " AND (vc.detected_language IS NULL OR vc.detected_language = '')"
+
+        limit_clause = f"LIMIT {limit}" if limit > 0 else ""
+
+        sql = text(f"""
+            SELECT vc.id, vc.transcript_text
+            FROM video_clips vc
+            WHERE {where}
+            {limit_clause}
+        """)
+        result = await db.execute(sql)
+        rows = result.fetchall()
+
+        detections = []
+        update_count = 0
+
+        for row in rows:
+            lang = _detect_language(row.transcript_text)
+            detections.append({
+                "clip_id": str(row.id),
+                "detected_language": lang,
+                "transcript_preview": (row.transcript_text or "")[:80],
+            })
+
+            if not dry_run and lang != "unknown":
+                await db.execute(
+                    text("UPDATE video_clips SET detected_language = :lang WHERE id = :cid"),
+                    {"lang": lang, "cid": row.id},
+                )
+                update_count += 1
+
+        if not dry_run:
+            await db.commit()
+
+        # Summary
+        from collections import Counter
+        lang_counts = Counter(d["detected_language"] for d in detections)
+
+        return {
+            "total_processed": len(detections),
+            "updated": update_count,
+            "dry_run": dry_run,
+            "language_counts": dict(lang_counts),
+            "samples": detections[:20],  # Return first 20 for review
+        }
+
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"[clip-db] Language detection failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Language detection failed: {str(e)}")

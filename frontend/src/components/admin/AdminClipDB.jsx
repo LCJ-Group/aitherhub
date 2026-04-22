@@ -314,6 +314,23 @@ function ClipCard({ clip, onPlay, brands, adminKey, onBrandChange }) {
               <ThumbsDown className="w-2.5 h-2.5" /> Bad
             </span>
           )}
+          {clip.detected_language && clip.detected_language !== 'ja' && clip.detected_language !== 'unknown' && (
+            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold shadow ${
+              clip.detected_language === 'zh-TW' ? 'bg-rose-500 text-white' :
+              clip.detected_language === 'zh-CN' ? 'bg-red-600 text-white' :
+              clip.detected_language === 'en' ? 'bg-blue-600 text-white' :
+              clip.detected_language === 'ko' ? 'bg-sky-500 text-white' :
+              clip.detected_language === 'th' ? 'bg-amber-500 text-white' :
+              'bg-gray-500 text-white'
+            }`}>
+              {clip.detected_language === 'zh-TW' ? '繁中' :
+               clip.detected_language === 'zh-CN' ? '簡中' :
+               clip.detected_language === 'en' ? 'EN' :
+               clip.detected_language === 'ko' ? '韓' :
+               clip.detected_language === 'th' ? 'TH' :
+               clip.detected_language.toUpperCase()}
+            </span>
+          )}
         </div>
         {/* Edit/Download status badges - top right */}
         <div className="absolute top-2 right-2 flex flex-col gap-1 items-end">
@@ -956,6 +973,25 @@ function VideoPlayerModal({ clip, clips, onClose, brands, adminKey, onBrandChang
                 {clip.is_sold ? "SOLD" : "未売"}
               </span>
               {clip.duration_sec && <span className="text-xs text-gray-500">{formatDuration(clip.duration_sec)}</span>}
+              {clip.detected_language && clip.detected_language !== 'unknown' && (
+                <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
+                  clip.detected_language === 'ja' ? 'bg-white/10 text-gray-300' :
+                  clip.detected_language === 'zh-TW' ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30' :
+                  clip.detected_language === 'zh-CN' ? 'bg-red-500/20 text-red-300 border border-red-500/30' :
+                  clip.detected_language === 'en' ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' :
+                  clip.detected_language === 'ko' ? 'bg-sky-500/20 text-sky-300 border border-sky-500/30' :
+                  clip.detected_language === 'th' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' :
+                  'bg-gray-500/20 text-gray-300'
+                }`}>
+                  {clip.detected_language === 'ja' ? '🇯🇵 日本語' :
+                   clip.detected_language === 'zh-TW' ? '🇹🇼 繁中' :
+                   clip.detected_language === 'zh-CN' ? '🇨🇳 簡中' :
+                   clip.detected_language === 'en' ? '🇬🇧 EN' :
+                   clip.detected_language === 'ko' ? '🇰🇷 韓国語' :
+                   clip.detected_language === 'th' ? '🇹🇭 TH' :
+                   clip.detected_language.toUpperCase()}
+                </span>
+              )}
               {assignments.length > 0 && (
                 <div className="flex gap-1 ml-auto">
                   {assignments.map((a) => (
@@ -1184,6 +1220,7 @@ export default function AdminClipDB({ adminKey }) {
   const [noBrandFilter, setNoBrandFilter] = useState(null);
   const [hasSubtitleFilter, setHasSubtitleFilter] = useState(null);
   const [hasTrimFilter, setHasTrimFilter] = useState(null);
+  const [languageFilter, setLanguageFilter] = useState("");
   const [sortBy, setSortBy] = useState("created_at");
   const [sortOrder, setSortOrder] = useState("desc");
   const [page, setPage] = useState(1);
@@ -1223,7 +1260,7 @@ export default function AdminClipDB({ adminKey }) {
     if (searchMode === "structured" && enrichTriggered.current) {
       loadClips();
     }
-  }, [page, sortBy, sortOrder, selectedTag, soldFilter, ratingFilter, selectedBrand, unusableFilter, noBrandFilter, hasSubtitleFilter, hasTrimFilter]);
+  }, [page, sortBy, sortOrder, selectedTag, soldFilter, ratingFilter, selectedBrand, unusableFilter, noBrandFilter, hasSubtitleFilter, hasTrimFilter, languageFilter]);
 
   async function autoEnrichAndLoad() {
     // 1. Auto enrich (non-blocking for already-enriched clips)
@@ -1297,6 +1334,7 @@ export default function AdminClipDB({ adminKey }) {
       if (noBrandFilter !== null) params.no_brand = noBrandFilter;
       if (hasSubtitleFilter !== null) params.has_subtitle = hasSubtitleFilter;
       if (hasTrimFilter !== null) params.has_trim = hasTrimFilter;
+      if (languageFilter) params.language = languageFilter;
 
       const data = await clipDbFetch("/search", params, adminKey);
       setClips(data.clips || []);
@@ -2080,6 +2118,49 @@ export default function AdminClipDB({ adminKey }) {
               </button>
             )}
           </div>
+
+          {/* Language filter */}
+          {stats.language_stats && stats.language_stats.length > 0 && (
+            <div className="mt-3 pt-3 border-t border-gray-100">
+              <h4 className="text-xs font-medium text-gray-500 mb-2">言語フィルター</h4>
+              <div className="flex gap-2 flex-wrap">
+                {stats.language_stats.filter(ls => ls.language !== 'unknown').map((ls) => {
+                  const langLabels = {
+                    'ja': { label: '\ud83c\uddef\ud83c\uddf5 日本語', active: 'bg-gray-100 border-gray-400 text-gray-700', hover: 'hover:border-gray-300 hover:bg-gray-50' },
+                    'zh-TW': { label: '\ud83c\uddf9\ud83c\uddfc 繁体中文', active: 'bg-rose-100 border-rose-400 text-rose-700', hover: 'hover:border-rose-300 hover:bg-rose-50' },
+                    'zh-CN': { label: '\ud83c\udde8\ud83c\uddf3 簡体中文', active: 'bg-red-100 border-red-400 text-red-700', hover: 'hover:border-red-300 hover:bg-red-50' },
+                    'en': { label: '\ud83c\uddec\ud83c\udde7 English', active: 'bg-blue-100 border-blue-400 text-blue-700', hover: 'hover:border-blue-300 hover:bg-blue-50' },
+                    'ko': { label: '\ud83c\uddf0\ud83c\uddf7 韓国語', active: 'bg-sky-100 border-sky-400 text-sky-700', hover: 'hover:border-sky-300 hover:bg-sky-50' },
+                    'th': { label: '\ud83c\uddf9\ud83c\udded Thai', active: 'bg-amber-100 border-amber-400 text-amber-700', hover: 'hover:border-amber-300 hover:bg-amber-50' },
+                  };
+                  const cfg = langLabels[ls.language] || { label: ls.language, active: 'bg-gray-100 border-gray-400 text-gray-700', hover: 'hover:border-gray-300 hover:bg-gray-50' };
+                  const isActive = languageFilter === ls.language;
+                  return (
+                    <button
+                      key={ls.language}
+                      onClick={() => {
+                        setLanguageFilter(isActive ? '' : ls.language);
+                        setPage(1);
+                      }}
+                      className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${
+                        isActive ? `${cfg.active} shadow-sm` : `bg-white border-gray-200 text-gray-600 ${cfg.hover}`
+                      }`}
+                    >
+                      {cfg.label} <span className="ml-0.5 font-bold">{ls.count}</span>
+                    </button>
+                  );
+                })}
+                {languageFilter && (
+                  <button
+                    onClick={() => { setLanguageFilter(''); setPage(1); }}
+                    className="px-2 py-1.5 rounded-full text-xs text-gray-400 hover:text-red-500 hover:bg-red-50 border border-gray-200"
+                  >
+                    <X className="w-3 h-3 inline" /> クリア
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
