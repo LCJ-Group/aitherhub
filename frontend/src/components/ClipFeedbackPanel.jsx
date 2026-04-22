@@ -16,15 +16,15 @@ import { useTranslation } from 'react-i18next';
  *            instead of VideoService (which requires user auth token).
  */
 
-const REASON_TAGS = [
-  { key: 'hook_weak', label: window.__t('auto_322', 'フック弱い'), emoji: '🎣' },
-  { key: 'too_long', label: window.__t('auto_354', '長すぎ'), emoji: '⏱️' },
-  { key: 'too_short', label: window.__t('auto_350', '短すぎ'), emoji: '⚡' },
-  { key: 'cut_position', label: window.__t('auto_313', 'カット位置'), emoji: '✂️' },
-  { key: 'subtitle', label: window.__t('auto_334', '字幕'), emoji: '💬' },
-  { key: 'audio', label: window.__t('auto_356', '音声'), emoji: '🔊' },
-  { key: 'irrelevant', label: window.__t('auto_355', '関係ない'), emoji: '❌' },
-  { key: 'perfect', label: window.__t('auto_337', '完璧'), emoji: '✨' },
+const REASON_TAGS_KEYS = [
+  { key: 'hook_weak', tKey: 'auto_322', fallback: 'フック弱い', emoji: '🎣' },
+  { key: 'too_long', tKey: 'auto_354', fallback: '長すぎ', emoji: '⏱️' },
+  { key: 'too_short', tKey: 'auto_350', fallback: '短すぎ', emoji: '⚡' },
+  { key: 'cut_position', tKey: 'auto_313', fallback: 'カット位置', emoji: '✂️' },
+  { key: 'subtitle', tKey: 'auto_334', fallback: '字幕', emoji: '💬' },
+  { key: 'audio', tKey: 'auto_356', fallback: '音声', emoji: '🔊' },
+  { key: 'irrelevant', tKey: 'auto_355', fallback: '関係ない', emoji: '❌' },
+  { key: 'perfect', tKey: 'auto_337', fallback: '完璧', emoji: '✨' },
 ];
 
 // Admin API helper — bypasses user auth, uses X-Admin-Key
@@ -63,7 +63,8 @@ const ClipFeedbackPanel = ({
   compact = false,
   adminMode = false,
 }) => {
-  useTranslation(); // triggers re-render on language change
+  const { t } = useTranslation(); // triggers re-render on language change
+  const REASON_TAGS = REASON_TAGS_KEYS.map(r => ({ key: r.key, label: t(r.tKey, r.fallback), emoji: r.emoji }));
   const [rating, setRating] = useState(null); // 'good' | 'bad' | null
   const [selectedReasons, setSelectedReasons] = useState([]);
   const [salesConfirm, setSalesConfirm] = useState(null); // true | false | null
