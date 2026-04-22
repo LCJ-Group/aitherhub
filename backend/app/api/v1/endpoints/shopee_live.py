@@ -40,19 +40,24 @@ class SessionActionRequest(BaseModel):
 # Health Check
 # ============================================================
 @router.get("/health")
-async def health_check():
+async def health_check(test_api: bool = Query(default=False)):
     """Shopeeトークン取得テスト（自己完結型）"""
-    from app.services.shopee_live_service import get_shopee_token
+    from app.services.shopee_live_service import get_shopee_token, get_product_list
     token = await get_shopee_token()
-    if token:
-        return {
-            "status": "ok",
-            "shop_id": token.get("shop_id"),
-            "partner_id": token.get("partner_id"),
-            "has_access_token": bool(token.get("access_token")),
-            "has_refresh_token": bool(token.get("refresh_token")),
-        }
-    return {"status": "error", "message": "Failed to get Shopee token"}
+    if not token:
+        return {"status": "error", "message": "Failed to get Shopee token"}
+    result = {
+        "status": "ok",
+        "shop_id": token.get("shop_id"),
+        "partner_id": token.get("partner_id"),
+        "has_access_token": bool(token.get("access_token")),
+        "has_refresh_token": bool(token.get("refresh_token")),
+    }
+    if test_api:
+        # 実際にShopee APIを呼んでテスト
+        products = await get_product_list(token.get("shop_id", 1542634108), 0, 1)
+        result["test_api_result"] = products
+    return result
 
 
 # ============================================================
@@ -68,7 +73,8 @@ async def list_products(
     from app.services.shopee_live_service import get_product_list
     result = await get_product_list(shop_id, offset, page_size)
     if result is None:
-        raise HTTPException(status_code=500, detail="Failed to fetch products")
+        raise HTTPException(status_code=500, detail="Failed to fetch products from Shopee API")
+    # Shopee APIエラーレスポンスもそのまま返す
     return result
 
 
