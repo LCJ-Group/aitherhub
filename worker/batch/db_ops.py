@@ -126,6 +126,23 @@ def close_db_sync():
     loop.run_until_complete(close_db())
 
 
+async def reset_pool():
+    """Dispose and recreate the connection pool to recover from stale connections."""
+    global _loop
+    try:
+        await engine.dispose()
+    except Exception:
+        pass
+    # Force new connections on next use
+    print("[DB] Connection pool reset")
+
+
+def reset_pool_sync():
+    """Synchronous wrapper for pool reset."""
+    loop = get_event_loop()
+    loop.run_until_complete(reset_pool())
+
+
 async def insert_phase(
     video_id: str,
     phase_index: int,

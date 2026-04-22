@@ -2046,8 +2046,43 @@ def main():
             last_heartbeat_time = time.time()
             HEARTBEAT_INTERVAL = 60  # Update updated_at every 60 seconds
 
+            _db_error_count = 0
+            _MAX_DB_ERRORS = 10  # Allow up to 10 consecutive DB errors before giving up
+
             while True:
-                split_status = get_video_split_status_sync(video_id)
+                # ── DB-resilient split status check ──
+                try:
+                    split_status = get_video_split_status_sync(video_id)
+                    _db_error_count = 0  # Reset on success
+                except Exception as _db_err:
+                    _db_error_count += 1
+                    logger.warning(
+                        "[FINALIZE] DB error #%d/%d getting split_status: %s",
+                        _db_error_count, _MAX_DB_ERRORS, _db_err,
+                    )
+                    if _db_error_count >= _MAX_DB_ERRORS:
+                        logger.error(
+                            "[FINALIZE] Too many consecutive DB errors (%d) → mark DONE (partial split)",
+                            _db_error_count,
+                        )
+                        # Try one last time to mark as DONE after pool reset
+                        try:
+                            from db_ops import reset_pool_sync
+                            reset_pool_sync()
+                            update_video_step_progress_sync(video_id, 100)
+                            update_video_status_sync(video_id, VideoStatus.DONE)
+                        except Exception as _final_err:
+                            logger.error("[FINALIZE] Final DONE update also failed: %s", _final_err)
+                        break
+                    # Reset pool and retry after a short delay
+                    try:
+                        from db_ops import reset_pool_sync
+                        reset_pool_sync()
+                    except Exception:
+                        pass
+                    time.sleep(min(10 * _db_error_count, 60))  # Backoff: 10s, 20s, ..., 60s
+                    waited += min(10 * _db_error_count, 60)
+                    continue
 
                 # Heartbeat: periodically touch updated_at to prevent
                 # stuck_video_monitor from misidentifying this as stuck
@@ -2056,18 +2091,18 @@ def main():
                         # Re-write current progress; updated_at is set by the SQL
                         update_video_step_progress_sync(video_id, 0)
                     except Exception as _e:
-                        logger.debug(f"Suppressed: {_e}")
+                        logger.debug(f"Suppressed heartbeat error: {_e}")
                     last_heartbeat_time = time.time()
 
                 if split_status == "done":
-                    logger.info("[FINALIZE] Split DONE \u2192 mark video DONE")
+                    logger.info("[FINALIZE] Split DONE → mark video DONE")
                     update_video_step_progress_sync(video_id, 100)
                     update_video_status_sync(video_id, VideoStatus.DONE)
                     break
 
                 # Handle error status from split process
                 if split_status and str(split_status).lower() in ("error", "failed"):
-                    logger.warning("[FINALIZE] Split reported error status=%s \u2192 mark DONE anyway (partial split)", split_status)
+                    logger.warning("[FINALIZE] Split reported error status=%s → mark DONE anyway (partial split)", split_status)
                     update_video_step_progress_sync(video_id, 100)
                     update_video_status_sync(video_id, VideoStatus.DONE)
                     break
@@ -2078,7 +2113,7 @@ def main():
                     last_progress_time = time.time()
                 elif time.time() - last_progress_time >= STALL_TIMEOUT:
                     logger.warning(
-                        "[FINALIZE] Split stalled for %ds at status=%s \u2192 mark DONE (partial split)",
+                        "[FINALIZE] Split stalled for %ds at status=%s → mark DONE (partial split)",
                         int(time.time() - last_progress_time), split_status
                     )
                     update_video_step_progress_sync(video_id, 100)
@@ -2088,7 +2123,7 @@ def main():
                 if waited >= MAX_WAIT_SEC:
                     # Instead of raising error, mark as DONE with partial split
                     logger.warning(
-                        "[FINALIZE] Split timeout after %ds (split_status=%s) \u2192 mark DONE (partial split)",
+                        "[FINALIZE] Split timeout after %ds (split_status=%s) → mark DONE (partial split)",
                         MAX_WAIT_SEC, split_status
                     )
                     update_video_step_progress_sync(video_id, 100)

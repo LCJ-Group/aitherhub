@@ -122,9 +122,10 @@ def main():
     )
 
     if compressed_path is None:
-        logger.error("Compression failed")
+        logger.error("Compression failed (non-fatal, video analysis is still complete)")
         _record_compress_error(video_id, "COMPRESS_FAILED", "compress_to_1080p returned None")
-        sys.exit(1)
+        # Exit 0: compression failure is non-fatal; the original video is still usable
+        sys.exit(0)
 
     logger.info("Compression complete: %s", compressed_path)
 
