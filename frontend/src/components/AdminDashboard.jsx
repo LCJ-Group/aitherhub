@@ -1379,9 +1379,8 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx }) {
                 clipId={fb.clip_id}
                 adminMode={true}
                 onFeedbackSubmitted={() => {
-                  // After saving feedback, refresh the list and auto-advance to next
-                  if (onRated) onRated();
-                  // Auto-advance to next card after successful save
+                  // Do NOT call onRated() here — it triggers a full list refresh
+                  // which resets expanded state. Just auto-advance to next card.
                   setTimeout(() => handleNext(), 500);
                 }}
               />
