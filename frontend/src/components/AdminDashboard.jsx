@@ -26,6 +26,8 @@ export default function AdminDashboard() {
   const [stats, setStats] = useState(null);
   const [feedbackData, setFeedbackData] = useState(null);
   const [feedbackLoading, setFeedbackLoading] = useState(false);
+  const [feedbackIncludeUnrated, setFeedbackIncludeUnrated] = useState(true);
+  const [feedbackRefreshKey, setFeedbackRefreshKey] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   // Support ?tab= URL parameter for shareable links
@@ -104,7 +106,7 @@ export default function AdminDashboard() {
 
   // Fetch feedbacks when tab switches
   useEffect(() => {
-    if (!authenticated || activeTab !== "feedbacks" || feedbackData) return;
+    if (!authenticated || activeTab !== "feedbacks") return;
     let cancelled = false;
     (async () => {
       try {
@@ -112,7 +114,8 @@ export default function AdminDashboard() {
         const baseURL = import.meta.env.VITE_API_BASE_URL;
         const res = await axios.get(`${baseURL}/api/v1/admin/feedbacks`, {
           headers: { "X-Admin-Key": `${ADMIN_ID}:${ADMIN_PASS}` },
-          timeout: 30000,
+          params: { include_unrated: feedbackIncludeUnrated },
+          timeout: 60000,
         });
         if (!cancelled) setFeedbackData(res.data);
       } catch (err) {
@@ -122,7 +125,7 @@ export default function AdminDashboard() {
       }
     })();
     return () => { cancelled = true; };
-  }, [authenticated, activeTab, feedbackData]);
+  }, [authenticated, activeTab, feedbackIncludeUnrated, feedbackRefreshKey]);
 
   // Fetch upload health when tab switches
   useEffect(() => {
@@ -438,7 +441,13 @@ export default function AdminDashboard() {
         )}
 
         {activeTab === "feedbacks" && (
-          <FeedbackSection data={feedbackData} loading={feedbackLoading} />
+          <FeedbackSection
+            data={feedbackData}
+            loading={feedbackLoading}
+            includeUnrated={feedbackIncludeUnrated}
+            setIncludeUnrated={(v) => { setFeedbackIncludeUnrated(v); setFeedbackData(null); }}
+            onRefresh={() => { setFeedbackData(null); setFeedbackRefreshKey(k => k + 1); }}
+          />
         )}
 
         {activeTab === "videos" && (
@@ -851,13 +860,15 @@ function UploadHealthSection({ data, loading }) {
 }
 
 // ── Feedback Section ──
-function FeedbackSection({ data, loading }) {
-  const [filterRating, setFilterRating] = useState(0); // 0 = all
+function FeedbackSection({ data, loading, includeUnrated, setIncludeUnrated, onRefresh }) {
+  // filterRating: 0=all, 1-5=star filter, -1=unrated only
+  const [filterRating, setFilterRating] = useState(0);
 
   if (loading) {
     return (
       <div className="flex items-center justify-center py-16">
         <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-orange-500"></div>
+        <span className="ml-3 text-sm text-gray-500">読み込み中...</span>
       </div>
     );
   }
@@ -871,23 +882,38 @@ function FeedbackSection({ data, loading }) {
   }
 
   const { summary, feedbacks } = data;
+  const unratedCount = summary.total_unrated || feedbacks.filter(f => f.user_rating == null).length;
+  const ratedCount = summary.total_feedbacks || feedbacks.filter(f => f.user_rating != null).length;
+  const totalCount = feedbacks.length;
+
   const filtered = filterRating === 0
     ? feedbacks
+    : filterRating === -1
+    ? feedbacks.filter((f) => f.user_rating == null)
     : feedbacks.filter((f) => f.user_rating === filterRating);
 
   return (
     <div>
       {/* Summary Cards */}
       <section className="mb-8">
-        <div className="flex items-center gap-2 mb-4">
-          <span className="text-lg">⭐</span>
-          <h2 className="text-lg font-semibold text-gray-700">{window.__t('adminDashboard_446612', 'フィードバック概要')}</h2>
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <span className="text-lg">⭐</span>
+            <h2 className="text-lg font-semibold text-gray-700">{window.__t('adminDashboard_446612', 'フィードバック概要')}</h2>
+          </div>
+          <button
+            onClick={onRefresh}
+            className="px-3 py-1.5 text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg transition-all"
+          >
+            🔄 更新
+          </button>
         </div>
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-          <StatCard label={window.__t('adminDashboard_18ecb6', '総採点数')} value={summary.total_feedbacks} unit={window.__t('errorLogCount', '件')} color="orange" />
+        <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
+          <StatCard label="総フェーズ数" value={totalCount} unit={window.__t('errorLogCount', '件')} color="gray" />
+          <StatCard label={window.__t('adminDashboard_18ecb6', '総採点数')} value={ratedCount} unit={window.__t('errorLogCount', '件')} color="orange" />
+          <StatCard label="未採点" value={unratedCount} unit={window.__t('errorLogCount', '件')} color="red" />
           <StatCard label={window.__t('adminDashboard_15e370', '平均スコア')} value={summary.average_rating} unit="/ 5" color="blue" />
           <StatCard label={window.__t('adminDashboard_424176', 'コメント付き')} value={summary.with_comments} unit={window.__t('errorLogCount', '件')} color="green" />
-          <StatCard label={window.__t('adminDashboard_e919fe', 'ダウンロード済')} value={summary.downloaded_clips || 0} unit={window.__t('errorLogCount', '件')} color="teal" />
           <div className="rounded-xl border p-4 border-purple-300 bg-purple-50 transition-all duration-200 hover:shadow-md">
             <p className="text-xs text-gray-500 mb-2">{window.__t('adminDashboard_804dd5', 'スコア分布')}</p>
             <div className="flex items-end gap-1 h-8">
@@ -912,7 +938,7 @@ function FeedbackSection({ data, loading }) {
       </section>
 
       {/* Filter */}
-      <div className="flex items-center gap-2 mb-4">
+      <div className="flex flex-wrap items-center gap-2 mb-4">
         <span className="text-sm text-gray-500">{window.__t('adminDashboard_12bfab', 'フィルタ:')}</span>
         <button
           onClick={() => setFilterRating(0)}
@@ -922,7 +948,17 @@ function FeedbackSection({ data, loading }) {
               : "bg-gray-100 text-gray-600 hover:bg-gray-200"
           }`}
         >
-          すべて ({summary.total_feedbacks})
+          すべて ({totalCount})
+        </button>
+        <button
+          onClick={() => setFilterRating(-1)}
+          className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${
+            filterRating === -1
+              ? "bg-red-500 text-white"
+              : "bg-red-50 text-red-600 hover:bg-red-100 border border-red-200"
+          }`}
+        >
+          未採点 ({unratedCount})
         </button>
         {[1, 2, 3, 4, 5].map((star) => (
           <button
@@ -947,7 +983,7 @@ function FeedbackSection({ data, loading }) {
           </div>
         ) : (
           filtered.map((fb, idx) => (
-            <FeedbackCard key={`${fb.video_id}-${fb.phase_index}-${idx}`} fb={fb} />
+            <FeedbackCard key={`${fb.video_id}-${fb.phase_index}-${idx}`} fb={fb} onRated={onRefresh} />
           ))
         )}
       </div>
@@ -956,19 +992,25 @@ function FeedbackSection({ data, loading }) {
 }
 
 // ── Feedback Card ──
-function FeedbackCard({ fb }) {
-  const stars = "★".repeat(fb.user_rating) + "☆".repeat(5 - fb.user_rating);
-  const ratingColor =
-    fb.user_rating >= 4
-      ? "text-green-600"
-      : fb.user_rating >= 3
-      ? "text-yellow-600"
-      : "text-red-500";
+function FeedbackCard({ fb, onRated }) {
+  const isUnrated = fb.user_rating == null;
+  const [hoverStar, setHoverStar] = useState(0);
+  const [saving, setSaving] = useState(false);
+  const [localRating, setLocalRating] = useState(fb.user_rating);
+
+  const displayRating = localRating || 0;
+  const stars = "★".repeat(displayRating) + "☆".repeat(5 - displayRating);
+  const ratingColor = isUnrated && localRating == null
+    ? "text-gray-300"
+    : displayRating >= 4
+    ? "text-green-600"
+    : displayRating >= 3
+    ? "text-yellow-600"
+    : "text-red-500";
 
   const timeRange = formatSeconds(fb.time_start) + " – " + formatSeconds(fb.time_end);
 
   const handleClick = () => {
-    // Navigate to clip editor with phase_index and time range as query params
     const params = new URLSearchParams({
       phase: fb.phase_index,
       t_start: fb.time_start,
@@ -978,17 +1020,72 @@ function FeedbackCard({ fb }) {
     window.open(`/video/${fb.video_id}?${params.toString()}`, '_blank');
   };
 
+  const handleRate = async (e, star) => {
+    e.stopPropagation();
+    if (saving) return;
+    setSaving(true);
+    try {
+      const baseURL = import.meta.env.VITE_API_BASE_URL;
+      await axios.put(
+        `${baseURL}/api/v1/admin/feedbacks/${fb.video_id}/phases/${fb.phase_index}/rating`,
+        { rating: star },
+        { headers: { "X-Admin-Key": "aither:hub" }, timeout: 10000 }
+      );
+      setLocalRating(star);
+      // Don't refresh the whole list, just update locally for speed
+    } catch (err) {
+      console.error("Failed to rate:", err);
+      alert("採点に失敗しました: " + (err.response?.data?.detail || err.message));
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div
-      className="bg-white rounded-xl border border-gray-200 p-4 hover:shadow-md hover:border-orange-300 transition-all cursor-pointer group"
-      onClick={handleClick}
-      title={window.__t('adminDashboard_8661e9', 'クリックしてクリップエディタを開く')}
+      className={`rounded-xl border p-4 hover:shadow-md transition-all group ${
+        isUnrated && localRating == null
+          ? "bg-yellow-50 border-yellow-200 hover:border-yellow-400"
+          : "bg-white border-gray-200 hover:border-orange-300"
+      }`}
     >
       <div className="flex items-start justify-between gap-4">
         {/* Left: Rating + Content */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-3 mb-2">
-            <span className={`text-lg font-bold ${ratingColor}`}>{stars}</span>
+            {/* Interactive star rating */}
+            <div className="flex items-center gap-0.5" onMouseLeave={() => setHoverStar(0)}>
+              {[1, 2, 3, 4, 5].map((star) => {
+                const filled = hoverStar > 0 ? star <= hoverStar : star <= displayRating;
+                return (
+                  <button
+                    key={star}
+                    type="button"
+                    disabled={saving}
+                    className={`text-lg font-bold transition-all cursor-pointer hover:scale-125 ${
+                      filled
+                        ? (hoverStar > 0 ? "text-orange-400" : ratingColor)
+                        : "text-gray-300"
+                    } ${saving ? "opacity-50" : ""}`}
+                    onMouseEnter={() => setHoverStar(star)}
+                    onClick={(e) => handleRate(e, star)}
+                    title={`${star}点をつける`}
+                  >
+                    ★
+                  </button>
+                );
+              })}
+            </div>
+            {isUnrated && localRating == null && (
+              <span className="text-[10px] font-medium text-yellow-700 bg-yellow-200 px-2 py-0.5 rounded-full">
+                未採点
+              </span>
+            )}
+            {localRating != null && localRating !== fb.user_rating && (
+              <span className="text-[10px] font-medium text-green-700 bg-green-100 px-2 py-0.5 rounded-full">
+                保存済
+              </span>
+            )}
             <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded">
               {timeRange}
             </span>
@@ -1010,7 +1107,7 @@ function FeedbackCard({ fb }) {
           )}
         </div>
 
-        {/* Right: Meta */}
+        {/* Right: Meta + Open link */}
         <div className="text-right shrink-0">
           <p className="text-xs text-gray-500 font-medium truncate max-w-[180px]" title={fb.video_name}>
             {fb.video_name}
@@ -1018,14 +1115,17 @@ function FeedbackCard({ fb }) {
           <p className="text-[10px] text-gray-400 mt-1">
             {fb.user_email || fb.user_id}
           </p>
-          {fb.rated_at && (
+          {fb.rated_at && localRating === fb.user_rating && (
             <p className="text-[10px] text-gray-400 mt-0.5">
               {formatDate(fb.rated_at)}
             </p>
           )}
-          <p className="text-[10px] text-orange-400 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button
+            onClick={handleClick}
+            className="text-[10px] text-orange-500 hover:text-orange-700 mt-1 underline"
+          >
             → エディタを開く
-          </p>
+          </button>
         </div>
       </div>
     </div>

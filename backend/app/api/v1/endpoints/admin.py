@@ -129,11 +129,13 @@ async def get_dashboard_stats_public(
 
 @router.get("/feedbacks")
 async def get_all_feedbacks(
+    include_unrated: bool = False,
     x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
     db: AsyncSession = Depends(get_db),
 ):
     """
     Get all phase feedbacks (ratings + comments) across all users and videos.
+    If include_unrated=true, also returns phases that have not been rated yet.
     Returns a list sorted by most recent first.
     """
     expected_key = f"{ADMIN_ID}:{ADMIN_PASS}"
@@ -155,7 +157,10 @@ async def get_all_feedbacks(
             )
         """))
 
-        sql = text("""
+        # Build WHERE clause based on include_unrated flag
+        where_clause = "" if include_unrated else "WHERE vp.user_rating IS NOT NULL"
+
+        sql = text(f"""
             SELECT
                 vp.video_id,
                 vp.phase_index,
@@ -168,6 +173,7 @@ async def get_all_feedbacks(
                 vp.importance_score,
                 v.original_filename,
                 v.user_id,
+                v.status as video_status,
                 u.email as user_email,
                 COALESCE(dl.download_count, 0) as download_count
             FROM video_phases vp
@@ -179,8 +185,8 @@ async def get_all_feedbacks(
                 GROUP BY video_id, phase_index
             ) dl ON CAST(vp.video_id AS VARCHAR) = CAST(dl.video_id AS VARCHAR)
                 AND CAST(vp.phase_index AS VARCHAR) = dl.phase_index
-            WHERE vp.user_rating IS NOT NULL
-            ORDER BY vp.rated_at DESC NULLS LAST
+            {where_clause}
+            ORDER BY vp.rated_at DESC NULLS LAST, vp.video_id, vp.phase_index
         """)
         result = await db.execute(sql)
         rows = result.fetchall()
@@ -203,11 +209,14 @@ async def get_all_feedbacks(
                 "download_count": r.download_count,
             })
 
-        # Summary stats
-        total = len(feedbacks)
-        avg_rating = sum(f["user_rating"] for f in feedbacks) / total if total > 0 else 0
+        # Summary stats (only count rated items)
+        rated = [f for f in feedbacks if f["user_rating"] is not None]
+        total_rated = len(rated)
+        total_all = len(feedbacks)
+        total_unrated = total_all - total_rated
+        avg_rating = sum(f["user_rating"] for f in rated) / total_rated if total_rated > 0 else 0
         rating_dist = {i: 0 for i in range(1, 6)}
-        for f in feedbacks:
+        for f in rated:
             if f["user_rating"] in rating_dist:
                 rating_dist[f["user_rating"]] += 1
         with_comments = sum(1 for f in feedbacks if f.get("user_comment"))
@@ -216,7 +225,9 @@ async def get_all_feedbacks(
 
         return {
             "summary": {
-                "total_feedbacks": total,
+                "total_feedbacks": total_rated,
+                "total_phases": total_all,
+                "total_unrated": total_unrated,
                 "average_rating": round(avg_rating, 2),
                 "rating_distribution": rating_dist,
                 "with_comments": with_comments,
@@ -228,6 +239,70 @@ async def get_all_feedbacks(
     except Exception as e:
         logger.exception(f"Failed to fetch feedbacks: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch feedbacks: {e}")
+
+
+@router.put("/feedbacks/{video_id}/phases/{phase_index}/rating")
+async def admin_rate_phase(
+    video_id: str,
+    phase_index: int,
+    request_body: dict,
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Admin endpoint to rate a phase directly from the admin dashboard.
+    Body: { "rating": 1-5, "comment": "optional text" }
+    """
+    expected_key = f"{ADMIN_ID}:{ADMIN_PASS}"
+    if x_admin_key != expected_key:
+        raise HTTPException(status_code=403, detail="Invalid admin credentials")
+
+    try:
+        rating = request_body.get("rating")
+        comment = request_body.get("comment", "")
+
+        if rating is None or not isinstance(rating, int) or rating < 1 or rating > 5:
+            raise HTTPException(status_code=400, detail="rating must be an integer between 1 and 5")
+
+        importance_score = (rating - 1) / 4.0  # 1->0.0, 2->0.25, 3->0.5, 4->0.75, 5->1.0
+
+        sql_update = text("""
+            UPDATE video_phases
+            SET user_rating = :rating,
+                user_comment = :comment,
+                importance_score = :importance_score,
+                rated_at = NOW(),
+                updated_at = NOW()
+            WHERE video_id = :video_id AND phase_index = :phase_index
+        """)
+        result = await db.execute(sql_update, {
+            "rating": rating,
+            "comment": comment,
+            "importance_score": importance_score,
+            "video_id": video_id,
+            "phase_index": phase_index,
+        })
+        await db.commit()
+
+        if result.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Phase not found")
+
+        logger.info(f"[Admin] Phase rated: video={video_id}, phase={phase_index}, rating={rating}")
+
+        return {
+            "success": True,
+            "video_id": video_id,
+            "phase_index": phase_index,
+            "rating": rating,
+            "comment": comment,
+            "importance_score": importance_score,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        logger.exception(f"Failed to rate phase: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to rate phase: {e}")
 
 
 @router.get("/stuck-videos")
