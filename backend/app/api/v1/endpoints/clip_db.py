@@ -1038,6 +1038,7 @@ async def list_brands_for_clips(
     result = await db.execute(
         text("""
             SELECT wc.client_id, wc.name, wc.logo_url, wc.theme_color,
+                   wc.company_name, wc.name_ja, wc.lcj_brand_id, wc.brand_keywords,
                    COUNT(wca.id) FILTER (WHERE wca.is_active = TRUE) as clip_count,
                    COUNT(wca.id) FILTER (WHERE wca.is_active = TRUE AND vc.is_sold = TRUE) as sold_count,
                    COALESCE(SUM(vc.gmv) FILTER (WHERE wca.is_active = TRUE), 0) as total_gmv,
@@ -1046,7 +1047,8 @@ async def list_brands_for_clips(
             LEFT JOIN widget_clip_assignments wca ON wca.client_id = wc.client_id
             LEFT JOIN video_clips vc ON vc.id::text = wca.clip_id AND wca.is_active = TRUE
             WHERE wc.is_active = TRUE
-            GROUP BY wc.client_id, wc.name, wc.logo_url, wc.theme_color
+            GROUP BY wc.client_id, wc.name, wc.logo_url, wc.theme_color,
+                     wc.company_name, wc.name_ja, wc.lcj_brand_id, wc.brand_keywords
             ORDER BY clip_count DESC, wc.name
         """)
     )
@@ -1056,6 +1058,10 @@ async def list_brands_for_clips(
             "name": r["name"],
             "logo_url": r["logo_url"],
             "theme_color": r["theme_color"],
+            "company_name": r["company_name"] or "",
+            "name_ja": r["name_ja"] or "",
+            "lcj_brand_id": r["lcj_brand_id"],
+            "brand_keywords": r["brand_keywords"] or "",
             "clip_count": r["clip_count"],
             "sold_count": r["sold_count"],
             "total_gmv": float(r["total_gmv"] or 0),

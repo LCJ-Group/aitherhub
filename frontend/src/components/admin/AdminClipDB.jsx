@@ -217,7 +217,16 @@ function ClipCard({ clip, onPlay, brands, adminKey, onBrandChange }) {
   const unassignedBrands = brands.filter(
     (b) => !assignments.some((a) => a.client_id === b.client_id)
   ).filter(
-    (b) => !brandSearch || b.name.toLowerCase().includes(brandSearch.toLowerCase())
+    (b) => {
+      if (!brandSearch) return true;
+      const q = brandSearch.toLowerCase();
+      return (
+        b.name.toLowerCase().includes(q) ||
+        (b.company_name || "").toLowerCase().includes(q) ||
+        (b.name_ja || "").toLowerCase().includes(q) ||
+        (b.brand_keywords || "").toLowerCase().includes(q)
+      );
+    }
   );
 
   // Get NG reason label
@@ -400,7 +409,7 @@ function ClipCard({ clip, onPlay, brands, adminKey, onBrandChange }) {
                     className="w-full text-left px-3 py-1.5 text-xs hover:bg-blue-50 flex items-center gap-1.5 transition"
                   >
                     <Building2 className="w-3 h-3 text-gray-400 flex-shrink-0" />
-                    <span className="truncate">{b.name}</span>
+                    <span className="truncate">{b.name}{b.company_name ? ` (${b.company_name})` : ""}</span>
                     <span className="text-gray-300 ml-auto flex-shrink-0">({b.clip_count})</span>
                   </button>
                 ))}
@@ -755,7 +764,16 @@ function VideoPlayerModal({ clip, clips, onClose, brands, adminKey, onBrandChang
   const unassignedBrands = brands.filter(
     (b) => !assignments.some((a) => a.client_id === b.client_id)
   ).filter(
-    (b) => !brandSearch || b.name.toLowerCase().includes(brandSearch.toLowerCase())
+    (b) => {
+      if (!brandSearch) return true;
+      const q = brandSearch.toLowerCase();
+      return (
+        b.name.toLowerCase().includes(q) ||
+        (b.company_name || "").toLowerCase().includes(q) ||
+        (b.name_ja || "").toLowerCase().includes(q) ||
+        (b.brand_keywords || "").toLowerCase().includes(q)
+      );
+    }
   );
 
   return (
@@ -960,7 +978,7 @@ function VideoPlayerModal({ clip, clips, onClose, brands, adminKey, onBrandChang
                         <span className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold" style={{ background: color.bg, color: color.text }}>
                           {b.name.charAt(0).toUpperCase()}
                         </span>
-                        <span className="text-gray-200 truncate">{b.name}</span>
+                        <span className="text-gray-200 truncate">{b.name}{b.company_name ? ` (${b.company_name})` : ""}</span>
                         <span className="text-gray-600 text-[10px] ml-auto">{b.clip_count || 0}件</span>
                       </button>
                     );

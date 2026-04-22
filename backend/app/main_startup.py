@@ -449,6 +449,8 @@ async def run_all_ddl_migrations():
                         "ALTER TABLE widget_clients ADD COLUMN IF NOT EXISTS brand_keywords TEXT",
                         "ALTER TABLE widget_clients ADD COLUMN IF NOT EXISTS lcj_brand_id INTEGER",
                         "ALTER TABLE widget_clients ADD COLUMN IF NOT EXISTS logo_url TEXT",
+                        "ALTER TABLE widget_clients ADD COLUMN IF NOT EXISTS company_name TEXT",
+                        "ALTER TABLE widget_clients ADD COLUMN IF NOT EXISTS name_ja TEXT",
                         "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS uploaded_by_brand VARCHAR(20)",
                         "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS product_price TEXT",
                         "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'processed'",

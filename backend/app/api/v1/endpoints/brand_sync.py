@@ -58,8 +58,8 @@ def _hash_password(password: str) -> str:
     return f"{salt}:{hashed}"
 
 
-def _build_keywords(name: str, name_ja: str = "", category: str = "") -> str:
-    """Build brand_keywords from brand name and category."""
+def _build_keywords(name: str, name_ja: str = "", category: str = "", company_name: str = "") -> str:
+    """Build brand_keywords from brand name, company name, and category."""
     keywords = set()
     if name:
         keywords.add(name.strip())
@@ -67,6 +67,8 @@ def _build_keywords(name: str, name_ja: str = "", category: str = "") -> str:
         keywords.add(name.strip().lower())
     if name_ja and name_ja != name:
         keywords.add(name_ja.strip())
+    if company_name and company_name != name:
+        keywords.add(company_name.strip())
     if category:
         keywords.add(category.strip())
     return ", ".join(sorted(keywords))
@@ -147,7 +149,8 @@ async def sync_brand(
         keywords = _build_keywords(
             payload.name,
             payload.name_ja or "",
-            payload.category or ""
+            payload.category or "",
+            payload.company_name or ""
         )
 
         if existing:
@@ -159,6 +162,8 @@ async def sync_brand(
                     SET name = :name,
                         brand_keywords = :keywords,
                         logo_url = :logo_url,
+                        company_name = :company_name,
+                        name_ja = :name_ja,
                         updated_at = NOW()
                     WHERE lcj_brand_id = :bid
                 """),
@@ -166,6 +171,8 @@ async def sync_brand(
                     "name": payload.name,
                     "keywords": keywords,
                     "logo_url": payload.logo_url or "",
+                    "company_name": payload.company_name or "",
+                    "name_ja": payload.name_ja or "",
                     "bid": payload.lcj_brand_id,
                 }
             )
@@ -194,10 +201,10 @@ async def sync_brand(
                 text("""
                     INSERT INTO widget_clients 
                     (client_id, name, domain, theme_color, position, cta_text, is_active,
-                     password_hash, brand_keywords, lcj_brand_id, logo_url, created_at, updated_at)
+                     password_hash, brand_keywords, lcj_brand_id, logo_url, company_name, name_ja, created_at, updated_at)
                     VALUES 
                     (:client_id, :name, :domain, '#FF2D55', 'bottom-right', '購入する', TRUE,
-                     :password_hash, :keywords, :lcj_brand_id, :logo_url, NOW(), NOW())
+                     :password_hash, :keywords, :lcj_brand_id, :logo_url, :company_name, :name_ja, NOW(), NOW())
                 """),
                 {
                     "client_id": client_id,
@@ -207,6 +214,8 @@ async def sync_brand(
                     "keywords": keywords,
                     "lcj_brand_id": payload.lcj_brand_id,
                     "logo_url": payload.logo_url or "",
+                    "company_name": payload.company_name or "",
+                    "name_ja": payload.name_ja or "",
                 }
             )
             await db.commit()
@@ -256,7 +265,8 @@ async def sync_brands_bulk(
             keywords = _build_keywords(
                 brand.name,
                 brand.name_ja or "",
-                brand.category or ""
+                brand.category or "",
+                brand.company_name or ""
             )
 
             if existing:
@@ -265,13 +275,16 @@ async def sync_brands_bulk(
                     text("""
                         UPDATE widget_clients 
                         SET name = :name, brand_keywords = :keywords,
-                            logo_url = :logo_url, updated_at = NOW()
+                            logo_url = :logo_url, company_name = :company_name,
+                            name_ja = :name_ja, updated_at = NOW()
                         WHERE lcj_brand_id = :bid
                     """),
                     {
                         "name": brand.name,
                         "keywords": keywords,
                         "logo_url": brand.logo_url or "",
+                        "company_name": brand.company_name or "",
+                        "name_ja": brand.name_ja or "",
                         "bid": brand.lcj_brand_id,
                     }
                 )
@@ -292,10 +305,10 @@ async def sync_brands_bulk(
                     text("""
                         INSERT INTO widget_clients 
                         (client_id, name, domain, theme_color, position, cta_text, is_active,
-                         password_hash, brand_keywords, lcj_brand_id, logo_url, created_at, updated_at)
+                         password_hash, brand_keywords, lcj_brand_id, logo_url, company_name, name_ja, created_at, updated_at)
                         VALUES 
                         (:client_id, :name, :domain, '#FF2D55', 'bottom-right', '購入する', TRUE,
-                         :password_hash, :keywords, :lcj_brand_id, :logo_url, NOW(), NOW())
+                         :password_hash, :keywords, :lcj_brand_id, :logo_url, :company_name, :name_ja, NOW(), NOW())
                     """),
                     {
                         "client_id": client_id,
@@ -305,6 +318,8 @@ async def sync_brands_bulk(
                         "keywords": keywords,
                         "lcj_brand_id": brand.lcj_brand_id,
                         "logo_url": brand.logo_url or "",
+                        "company_name": brand.company_name or "",
+                        "name_ja": brand.name_ja or "",
                     }
                 )
                 created += 1
