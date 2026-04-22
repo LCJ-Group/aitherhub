@@ -148,8 +148,8 @@ class HeartbeatManager:
             except Exception as e:
                 logger.error("[heartbeat] Failed to update heartbeats: %s", e)
 
-    async def _update_heartbeats(self, clip_ids: list):
-        """Batch-update heartbeat_at for all active clip jobs."""
+    async def _update_heartbeats(self, job_ids: list):
+        """Batch-update heartbeat_at for all active jobs (clips AND videos)."""
         from sqlalchemy.ext.asyncio import AsyncSession
         from sqlalchemy.orm import sessionmaker
         from sqlalchemy import text
@@ -157,31 +157,61 @@ class HeartbeatManager:
         factory = sessionmaker(bind=self._engine, class_=AsyncSession, expire_on_commit=False)
         async with factory() as session:
             try:
-                if len(clip_ids) == 1:
+                # ── Update video_clips table (clip jobs) ──
+                if len(job_ids) == 1:
                     await session.execute(
                         text("""
                             UPDATE video_clips
                             SET heartbeat_at = NOW(), updated_at = NOW()
-                            WHERE id = :clip_id
+                            WHERE id = :job_id
                               AND status IN ('downloading', 'processing', 'uploading')
                         """),
-                        {"clip_id": clip_ids[0]},
+                        {"job_id": job_ids[0]},
                     )
                 else:
                     await session.execute(
                         text("""
                             UPDATE video_clips
                             SET heartbeat_at = NOW(), updated_at = NOW()
-                            WHERE id = ANY(:clip_ids)
+                            WHERE id = ANY(:job_ids)
                               AND status IN ('downloading', 'processing', 'uploading')
                         """),
-                        {"clip_ids": clip_ids},
+                        {"job_ids": job_ids},
                     )
+
+                # ── Update videos table (video analysis jobs) ──
+                # This prevents startup_stuck_recovery from misidentifying
+                # long-running video analysis as "stuck" and requeuing them.
+                if len(job_ids) == 1:
+                    await session.execute(
+                        text("""
+                            UPDATE videos
+                            SET updated_at = NOW(),
+                                worker_claimed_at = NOW()
+                            WHERE id = :job_id
+                              AND status != 'completed'
+                              AND status != 'ERROR'
+                        """),
+                        {"job_id": job_ids[0]},
+                    )
+                else:
+                    await session.execute(
+                        text("""
+                            UPDATE videos
+                            SET updated_at = NOW(),
+                                worker_claimed_at = NOW()
+                            WHERE id = ANY(:job_ids)
+                              AND status != 'completed'
+                              AND status != 'ERROR'
+                        """),
+                        {"job_ids": job_ids},
+                    )
+
                 await session.commit()
                 logger.info(
                     "[heartbeat] Updated %d job(s): %s",
-                    len(clip_ids),
-                    ", ".join(clip_ids[:5]) + ("..." if len(clip_ids) > 5 else ""),
+                    len(job_ids),
+                    ", ".join(job_ids[:5]) + ("..." if len(job_ids) > 5 else ""),
                 )
             except Exception as e:
                 await session.rollback()

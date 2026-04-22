@@ -690,6 +690,10 @@ def _run_video_job(payload: dict) -> bool:
     except Exception:
         metrics = None
 
+    # ── Heartbeat: keep alive during long video processing ──
+    if _heartbeat_manager:
+        _heartbeat_manager.register_job(video_id)
+
     print(f"[worker] Starting video analysis: video_id={video_id}")
     cmd = [
         sys.executable,
@@ -832,6 +836,9 @@ def _run_video_job(payload: dict) -> bool:
             metrics.finish(status="error")
         return False
     finally:
+        # ── Unregister heartbeat ──
+        if _heartbeat_manager:
+            _heartbeat_manager.unregister_job(video_id)
         # Close log file if still open
         if _log_file and not _log_file.closed:
             try:
