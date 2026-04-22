@@ -876,6 +876,7 @@ def get_auto_live_status(session_id: str) -> Dict:
         "session_id": session_id,
         "speak_count": session.speak_count,
         "comment_count": session.comment_count,
+        "comments_responded": session.comment_count,
         "current_product": current_product,
         "product_count": len(session.products),
         "language": session.language,

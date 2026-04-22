@@ -59,6 +59,11 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
   const [selectedProductIds, setSelectedProductIds] = useState([]);
   const [isLoadingProducts, setIsLoadingProducts] = useState(false);
   
+  // Shopee Livestream session
+  const [shopeeLiveSession, setShopeeLiveSession] = useState(null); // { session_id, status }
+  const [isCreatingShopeeSession, setIsCreatingShopeeSession] = useState(false);
+  const [shopeeSessionTitle, setShopeeSessionTitle] = useState("KYOGOKU Live");
+  
   // Manual products
   const [manualProducts, setManualProducts] = useState([]);
   const [showAddProduct, setShowAddProduct] = useState(false);
@@ -99,6 +104,51 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
       setIsLoadingProducts(false);
     }
   }, []);
+
+  // ── Shopee Livestream Session Management ──
+  const handleCreateShopeeSession = async () => {
+    setIsCreatingShopeeSession(true);
+    setError("");
+    try {
+      const result = await aiLiveCreatorService.shopeeCreateLiveSession({
+        title: shopeeSessionTitle || "KYOGOKU Live",
+      });
+      if (result?.session_id) {
+        setShopeeLiveSession({ session_id: result.session_id, status: "created" });
+        console.log("[AutoLive] Shopee session created:", result.session_id);
+      } else {
+        setError("Shopeeセッション作成に失敗しました");
+      }
+    } catch (err) {
+      console.error("[AutoLive] Failed to create Shopee session:", err);
+      setError(err.response?.data?.detail || "Shopeeセッション作成に失敗しました");
+    } finally {
+      setIsCreatingShopeeSession(false);
+    }
+  };
+
+  const handleStartShopeeSession = async () => {
+    if (!shopeeLiveSession?.session_id) return;
+    try {
+      await aiLiveCreatorService.shopeeStartLiveSession(shopeeLiveSession.session_id);
+      setShopeeLiveSession(prev => ({ ...prev, status: "live" }));
+      console.log("[AutoLive] Shopee session started");
+    } catch (err) {
+      console.error("[AutoLive] Failed to start Shopee session:", err);
+      setError(err.response?.data?.detail || "Shopeeセッション開始に失敗しました");
+    }
+  };
+
+  const handleEndShopeeSession = async () => {
+    if (!shopeeLiveSession?.session_id) return;
+    try {
+      await aiLiveCreatorService.shopeeEndLiveSession(shopeeLiveSession.session_id);
+      setShopeeLiveSession(null);
+      console.log("[AutoLive] Shopee session ended");
+    } catch (err) {
+      console.error("[AutoLive] Failed to end Shopee session:", err);
+    }
+  };
 
   // ── Analyze Product Photo ──
   const handlePhotoSelect = async (e) => {
@@ -299,6 +349,19 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
             models: p.models || [],
           }));
         }
+        // Pass Shopee Livestream session ID for comment monitoring
+        if (shopeeLiveSession?.session_id) {
+          params.shopee_session_id = shopeeLiveSession.session_id;
+          // Auto-start Shopee session if not yet live
+          if (shopeeLiveSession.status !== "live") {
+            try {
+              await aiLiveCreatorService.shopeeStartLiveSession(shopeeLiveSession.session_id);
+              setShopeeLiveSession(prev => ({ ...prev, status: "live" }));
+            } catch (e) {
+              console.warn("[AutoLive] Could not auto-start Shopee session:", e);
+            }
+          }
+        }
       } else if (productSource === "manual" && manualProducts.length > 0) {
         params.products_manual = manualProducts;
         params.skip_shopee = true;
@@ -329,6 +392,16 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
       setIsAutoMode(false);
       stopStatusPolling();
       onStatusChange?.("stopped");
+      // End Shopee Livestream session if active
+      if (shopeeLiveSession?.session_id && shopeeLiveSession.status === "live") {
+        try {
+          await aiLiveCreatorService.shopeeEndLiveSession(shopeeLiveSession.session_id);
+          setShopeeLiveSession(null);
+          console.log("[AutoLive] Shopee session ended with Auto Live stop");
+        } catch (e) {
+          console.warn("[AutoLive] Could not end Shopee session:", e);
+        }
+      }
     } catch (err) {
       console.error("[AutoLive] Failed to stop:", err);
     } finally {
@@ -664,9 +737,75 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
             </div>
           )}
 
-          {/* Shopee Products */}
+          {/* Shopee Livestream Session + Products */}
           {productSource === "shopee" && (
-            <div>
+            <div className="space-y-1.5">
+              {/* Shopee Livestream Session Management */}
+              <div className="p-2 bg-gray-900/50 rounded-lg border border-orange-500/30">
+                <p className="text-[9px] text-orange-300 font-medium mb-1.5 flex items-center gap-1">
+                  <Zap className="w-3 h-3" /> Shopee Livestream
+                </p>
+                {!shopeeLiveSession ? (
+                  <div className="space-y-1.5">
+                    <input
+                      type="text"
+                      value={shopeeSessionTitle}
+                      onChange={(e) => setShopeeSessionTitle(e.target.value)}
+                      placeholder="ライブタイトル"
+                      className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-[10px] text-gray-200 placeholder-gray-500 focus:border-orange-500/50 focus:outline-none"
+                    />
+                    <button
+                      onClick={handleCreateShopeeSession}
+                      disabled={isCreatingShopeeSession}
+                      className="w-full py-1.5 bg-orange-500/20 border border-orange-500/40 rounded text-[9px] text-orange-300 hover:bg-orange-500/30 transition-colors flex items-center justify-center gap-1.5"
+                    >
+                      {isCreatingShopeeSession ? (
+                        <><Loader2 className="w-3 h-3 animate-spin" /> 作成中...</>
+                      ) : (
+                        <><Zap className="w-3 h-3" /> Shopeeセッション作成</>
+                      )}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[9px] text-gray-400">
+                        Session: <span className="text-orange-300">{shopeeLiveSession.session_id}</span>
+                      </span>
+                      <span className={`text-[8px] px-1.5 py-0.5 rounded ${
+                        shopeeLiveSession.status === "live" 
+                          ? "bg-green-500/20 text-green-300" 
+                          : "bg-yellow-500/20 text-yellow-300"
+                      }`}>
+                        {shopeeLiveSession.status === "live" ? "LIVE" : "Ready"}
+                      </span>
+                    </div>
+                    <div className="flex gap-1">
+                      {shopeeLiveSession.status !== "live" && (
+                        <button
+                          onClick={handleStartShopeeSession}
+                          className="flex-1 py-1 bg-green-500/20 border border-green-500/40 rounded text-[8px] text-green-300 hover:bg-green-500/30 transition-colors"
+                        >
+                          ▶ 開始
+                        </button>
+                      )}
+                      <button
+                        onClick={handleEndShopeeSession}
+                        className="flex-1 py-1 bg-red-500/20 border border-red-500/40 rounded text-[8px] text-red-300 hover:bg-red-500/30 transition-colors"
+                      >
+                        ■ 終了
+                      </button>
+                    </div>
+                    {shopeeLiveSession.status === "live" && (
+                      <p className="text-[8px] text-green-400/70">
+                        ✔ コメント監視が有効になります。AIがコメントに自動応答します。
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Shopee Products List */}
               <button
                 onClick={() => {
                   setShowProducts(!showProducts);
@@ -941,6 +1080,23 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
             <div className="mt-1.5 pt-1.5 border-t border-gray-700/30">
               <p className="text-[8px] text-gray-500">Now presenting:</p>
               <p className="text-[9px] text-amber-200 truncate">{autoStatus.current_product.itemName}</p>
+            </div>
+          )}
+          {shopeeLiveSession?.status === "live" && (
+            <div className="mt-1.5 pt-1.5 border-t border-gray-700/30 flex items-center justify-between">
+              <p className="text-[8px] text-orange-300 flex items-center gap-1">
+                <Zap className="w-2.5 h-2.5" /> Shopee Live
+              </p>
+              <div className="flex items-center gap-2">
+                {autoStatus.comments_responded > 0 && (
+                  <span className="text-[8px] text-cyan-300">
+                    {autoStatus.comments_responded} コメント応答
+                  </span>
+                )}
+                <span className="text-[7px] bg-green-500/20 text-green-300 px-1 py-0.5 rounded animate-pulse">
+                  LIVE
+                </span>
+              </div>
             </div>
           )}
         </div>
