@@ -656,96 +656,54 @@ async def brand_analytics(
     }
 
 
-# ─── Recommended Clips Endpoint (auto-match by brand keywords + product exposures) ───
+# ─── Recommended Clips Endpoint (brand-tagged clips from widget_clip_assignments) ───
 
 @router.get("/brand/recommended-clips")
 async def brand_recommended_clips(
     client_id: str = Depends(_get_brand_client_id),
-    q: Optional[str] = Query(default=None, description="Additional search query"),
+    q: Optional[str] = Query(default=None, description="Additional search query to filter within brand clips"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get recommended clips for this brand based on:
-    1. video_product_exposures.brand_name matching brand keywords (fast, indexed)
-    2. transcript_text search only when user provides additional query (q param)
+    """Get clips tagged to this brand via widget_clip_assignments.
+    Only shows clips that have been assigned (brand-tagged) to this brand in ClipDB.
+    Optionally filter by keyword search within those clips.
     """
     try:
-        # Get brand keywords
-        kw_result = await db.execute(
-            text("SELECT brand_keywords FROM widget_clients WHERE client_id = :cid"),
-            {"cid": client_id},
-        )
-        kw_row = kw_result.mappings().first()
-        brand_keywords = []
-        if kw_row and kw_row["brand_keywords"]:
-            brand_keywords = [k.strip() for k in kw_row["brand_keywords"].split(",") if k.strip()]
+        # Build optional text search filter
+        search_clause = ""
+        search_params: dict = {"cid": client_id, "lim": limit, "off": offset}
+        if q and q.strip():
+            search_clause = """AND (vc.product_name ILIKE :q
+                                OR vc.transcript_text ILIKE :q
+                                OR vc.liver_name ILIKE :q)"""
+            search_params["q"] = f"%{q.strip()}%"
 
-        if not brand_keywords and not q:
-            return {"clips": [], "total": 0, "message": "ブランドキーワードが設定されていません。設定タブでキーワードを追加してください。"}
-
-        # Get clips already assigned to this brand's widget (to mark them)
-        assigned_result = await db.execute(
-            text("SELECT clip_id FROM widget_clip_assignments WHERE client_id = :cid AND is_active = TRUE"),
-            {"cid": client_id},
-        )
-        assigned_ids = {str(r["clip_id"]) for r in assigned_result.mappings().all()}
-
-        # Two-step approach for speed:
-        # Step 1: Get matching video_ids from VPE (small indexed table, fast)
-        # Step 2: Fetch clips by those video_ids (indexed lookup)
-        all_keywords = list(brand_keywords)
-        if q:
-            all_keywords.append(q.strip())
-
-        # Step 1: Query VPE for matching video_ids
-        vpe_conditions = []
-        vpe_params = {}
-        for i, kw in enumerate(all_keywords):
-            vpe_conditions.append(f"vpe.brand_name ILIKE :bkw{i} OR vpe.product_name ILIKE :bkw{i}")
-            vpe_params[f"bkw{i}"] = f"%{kw}%"
-        where_vpe = " OR ".join(vpe_conditions)
-
-        vpe_result = await db.execute(
-            text(f"""
-                SELECT DISTINCT vpe.video_id FROM video_product_exposures vpe
-                WHERE {where_vpe}
-            """),
-            vpe_params,
-        )
-        matching_video_ids = [str(r["video_id"]) for r in vpe_result.mappings().all()]
-
-        if not matching_video_ids:
-            return {
-                "clips": [],
-                "total": 0,
-                "keywords": all_keywords,
-                "message": "マッチするクリップが見つかりませんでした。",
-            }
-
-        # Step 2: Fetch clips for those video_ids (fast indexed lookup)
-        # Use ANY() with array parameter for efficient IN clause
-        clip_params = {"vids": matching_video_ids, "lim": limit, "off": offset}
-
+        # Fetch brand-tagged clips (widget_clip_assignments with is_active=TRUE)
         result = await db.execute(
-            text("""
+            text(f"""
                 SELECT vc.id as clip_id, vc.clip_url, vc.exported_url, vc.thumbnail_url,
                        vc.product_name, vc.product_price, vc.transcript_text,
-                       vc.duration_sec, vc.liver_name, vc.created_at, vc.video_id
-                FROM video_clips vc
-                WHERE vc.clip_url IS NOT NULL
+                       vc.duration_sec, vc.liver_name, vc.created_at, vc.video_id,
+                       wca.sort_order
+                FROM widget_clip_assignments wca
+                JOIN video_clips vc ON vc.id = wca.clip_id
+                WHERE wca.client_id = :cid
+                  AND wca.is_active = TRUE
+                  AND vc.clip_url IS NOT NULL
                   AND vc.status != 'deleted'
-                  AND vc.video_id = ANY(:vids)
-                ORDER BY vc.created_at DESC
+                  {search_clause}
+                ORDER BY wca.sort_order ASC, vc.created_at DESC
                 LIMIT :lim OFFSET :off
             """),
-            clip_params,
+            search_params,
         )
 
         clips = []
         for row in result.mappings().all():
             clip = dict(row)
-            clip["is_assigned"] = str(clip["clip_id"]) in assigned_ids
+            clip["is_assigned"] = True  # All clips here are brand-tagged
             # Use exported_url (subtitled version) if available
             if clip.get("exported_url"):
                 clip["original_clip_url"] = clip["clip_url"]
@@ -760,22 +718,32 @@ async def brand_recommended_clips(
                             pass
             clips.append(clip)
 
-        # Fast count
+        # Total count
+        count_params: dict = {"cid": client_id}
+        count_search = ""
+        if q and q.strip():
+            count_search = search_clause
+            count_params["q"] = f"%{q.strip()}%"
+
         count_result = await db.execute(
-            text("""
-                SELECT COUNT(*) FROM video_clips vc
-                WHERE vc.clip_url IS NOT NULL
+            text(f"""
+                SELECT COUNT(*)
+                FROM widget_clip_assignments wca
+                JOIN video_clips vc ON vc.id = wca.clip_id
+                WHERE wca.client_id = :cid
+                  AND wca.is_active = TRUE
+                  AND vc.clip_url IS NOT NULL
                   AND vc.status != 'deleted'
-                  AND vc.video_id = ANY(:vids)
+                  {count_search}
             """),
-            {"vids": matching_video_ids},
+            count_params,
         )
         total = count_result.scalar() or 0
 
         return {
             "clips": clips,
             "total": total,
-            "keywords": all_keywords,
+            "keywords": [],
         }
     except Exception as e:
         logger.exception(f"brand_recommended_clips error for {client_id}: {e}")

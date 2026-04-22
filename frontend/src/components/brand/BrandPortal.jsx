@@ -825,7 +825,7 @@ function BrandDashboard({ brandInfo, onLogout }) {
               おすすめクリップ
             </h2>
             <p style={{ color: colors.textSecondary, fontSize: 13, margin: '0 0 20px' }}>
-              あなたのブランドに関連するライブ配信の切り抜き動画です。ウィジェットに追加したり、ダウンロードしてSNSで使えます。
+              あなたのブランドにタグ付けされたライブ配信の切り抜き動画です。ウィジェットに追加したり、ダウンロードしてSNSで使えます。
             </p>
 
             {/* Search */}
@@ -855,12 +855,8 @@ function BrandDashboard({ brandInfo, onLogout }) {
               <p style={{ color: colors.textMuted, textAlign: 'center', padding: 40 }}>検索中...</p>
             ) : recommendedClips.length === 0 ? (
               <div style={{ ...baseCard, textAlign: 'center', padding: 40 }}>
-                <p style={{ color: colors.textMuted, fontSize: 15 }}>おすすめクリップが見つかりません</p>
-                <p style={{ color: colors.textMuted, fontSize: 13 }}>「設定」タブでブランドキーワードを設定してください</p>
-                <button onClick={() => setTab('settings')}
-                  style={{ marginTop: 16, padding: '10px 24px', background: colors.accent, color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>
-                  キーワードを設定
-                </button>
+                <p style={{ color: colors.textMuted, fontSize: 15 }}>ブランドタグ付きのクリップがまだありません</p>
+                <p style={{ color: colors.textMuted, fontSize: 13 }}>管理者がクリップにブランドタグを付けると、ここに表示されます</p>
               </div>
             ) : (
               <>
