@@ -258,9 +258,17 @@ async def get_all_feedbacks(
         import os, re
         from azure.storage.blob import generate_blob_sas, BlobSasPermissions
         from datetime import datetime as _dt, timedelta, timezone
-        account_name = os.getenv("AZURE_STORAGE_ACCOUNT_NAME", "")
-        account_key = os.getenv("AZURE_STORAGE_ACCOUNT_KEY", "")
-        container_name = os.getenv("AZURE_BLOB_CONTAINER", "videos")
+        from app.services.storage_service import ACCOUNT_NAME as _ACCT_NAME, CONTAINER_NAME as _CTR_NAME
+        _conn_str = os.getenv("AZURE_STORAGE_CONNECTION_STRING", "")
+        account_name = _ACCT_NAME or os.getenv("AZURE_STORAGE_ACCOUNT_NAME", "")
+        account_key = ""
+        for _part in _conn_str.split(";"):
+            if _part.startswith("AccountKey="):
+                account_key = _part.split("=", 1)[1]
+                break
+        if not account_key:
+            account_key = os.getenv("AZURE_STORAGE_ACCOUNT_KEY", "")
+        container_name = _CTR_NAME or os.getenv("AZURE_BLOB_CONTAINER", "videos")
         sas_expiry = _dt.now(timezone.utc) + timedelta(hours=2)
 
         def _build_source_url(compressed_blob, email, video_id):
