@@ -1,5 +1,5 @@
 /**
- * AitherHub Widget Loader v3.3 — TikTok-Style Fullscreen Feed + Product Card + Subtitles
+ * AitherHub Widget Loader v4.0 — TikTok-Style Fullscreen Feed + Product Card + Subtitles
  *
  * GTM経由で配信される軽量エントリーポイント。
  * 先方のECサイトに1行のタグを追加するだけで、
@@ -58,10 +58,17 @@
  * v2.7 – Changes:
  *   - CTA buttons hidden when clip has no product_url/product_cart_url (no dead links)
  *   - Video counter no longer shows total count (prevents "I've seen enough" effect)
+ *
+ * v4.0 – Virtual Scroll + Performance:
+ *   - Virtual scroll: only ±3 slides exist in DOM (7 max), down from 57 all-at-once
+ *   - Slides created/destroyed dynamically as user swipes (createSlide/destroySlide)
+ *   - OGP prefetch: product info for adjacent clips pre-fetched in background
+ *   - Memory: video elements released (src removed + load()) when scrolled out of window
+ *   - timeupdate listeners attached per-slide in createSlide() instead of bulk forEach
  */
 (function () {
   "use strict";
-  console.log("[AitherHub] IIFE START v3.3");
+  console.log("[AitherHub] IIFE START v4.0");
 
   // ── Prevent double-loading ──
   if (window.__AITHERHUB_WIDGET_LOADED) { console.log("[AitherHub] SKIPPED: already loaded"); return; }
@@ -955,6 +962,8 @@
     var velocity = 0;
     var lastY = 0;
     var videoElements = {};
+    var slideElements = {};  // Virtual scroll: track slide DOM elements by index
+    var VIRTUAL_WINDOW = 3; // Only keep ±3 slides in DOM (7 total max)
     var longPressTimer = null;
     var isSpeedUp = false;
     var hintShown = false;
@@ -1055,19 +1064,19 @@
     // Upgrade all loaded videos to HD if network is fast
     function upgradeToHD() {
       if (!useHD) return;
-      clips.forEach(function (clip, idx) {
+      // Only upgrade videos currently in DOM (virtual scroll)
+      Object.keys(videoElements).forEach(function (key) {
+        var idx = parseInt(key);
         var v = videoElements[idx];
-        if (!v) return;
+        var clip = clips[idx];
+        if (!v || !clip) return;
         var hdUrl = clip.clip_url_hd;
         if (!hdUrl || hdUrl === clip.clip_url) return;
-        // Skip raw originals (no 'widget_' in HD URL path)
         var hdPath = hdUrl.split('?')[0];
         if (hdPath.indexOf('widget_') === -1) return;
-        // Only upgrade if not currently playing or if it's a future video
         if (idx !== currentIndex) {
           var currentSrc = v.src || v.getAttribute("data-src") || "";
           if (currentSrc && currentSrc.indexOf("widget_") > -1) {
-            // Currently has 720p, upgrade to HD
             if (v.src && v.src !== "" && v.src !== window.location.href) {
               v.src = hdUrl;
             } else {
@@ -1168,8 +1177,13 @@
     var feed = document.createElement("div");
     feed.className = "ath-feed";
 
-    // Create slides for each clip
-    clips.forEach(function (clip, index) {
+    // ── Virtual Scroll: Create/destroy slides on demand ──
+    // Only ±VIRTUAL_WINDOW slides exist in DOM at any time
+    function createSlide(index) {
+      if (slideElements[index]) return; // Already exists
+      var clip = clips[index];
+      if (!clip) return;
+
       var slide = document.createElement("div");
       slide.className = "ath-slide";
       slide.setAttribute("data-index", index);
@@ -1181,43 +1195,83 @@
       video.className = "ath-video";
       video.setAttribute("playsinline", "");
       video.setAttribute("webkit-playsinline", "");
-      // Only preload first video; rest load on demand for fast initial playback
-      video.setAttribute("preload", index === 0 ? "auto" : "none");
+      video.setAttribute("preload", index === currentIndex ? "auto" : "none");
       video.setAttribute("loop", "");
       video.muted = true;
-      // Set poster for instant visual feedback
       if (clip.thumbnail_url) {
         video.setAttribute("poster", clip.thumbnail_url);
       }
-      // Only set src for first 2 videos; rest are lazy-loaded
-      // Use getClipUrl() for adaptive quality (720p/1080p based on network)
-      if (index <= 1) {
+      // Set src for current and adjacent; data-src for others in window
+      if (Math.abs(index - currentIndex) <= 1 || (clips.length > 2 && (Math.abs(index - currentIndex - clips.length) <= 1 || Math.abs(index - currentIndex + clips.length) <= 1))) {
         video.src = getClipUrl(clip);
       } else {
         video.setAttribute("data-src", getClipUrl(clip));
       }
-      // Error handler for debugging video load failures
       video.addEventListener("error", function() {
         var err = video.error;
         console.warn("[AitherHub] Video error idx=" + index + " code=" + (err ? err.code : "?") + " msg=" + (err ? err.message : "unknown"));
       });
-      // Stalled handler: retry load if video stalls
       video.addEventListener("stalled", function() {
         console.warn("[AitherHub] Video stalled idx=" + index + ", retrying load");
         setTimeout(function() { try { video.load(); } catch(e){} }, 1000);
       });
+      // Attach timeupdate listener for this video
+      video.addEventListener("timeupdate", function () {
+        if (index === currentIndex) {
+          onTimeUpdate();
+          updateSubtitle();
+          var c = clips[currentIndex];
+          if (c) checkVideoDepth(videoElements[currentIndex], c.clip_id);
+        }
+      });
       inner.appendChild(video);
       videoElements[index] = video;
 
-      // Play/pause indicator
       var playIndicator = document.createElement("div");
       playIndicator.className = "ath-play-indicator";
       playIndicator.innerHTML = ICONS.play;
       inner.appendChild(playIndicator);
 
       slide.appendChild(inner);
+      slideElements[index] = slide;
       feed.appendChild(slide);
-    });
+    }
+
+    function destroySlide(index) {
+      var slide = slideElements[index];
+      if (!slide) return;
+      // Pause and release video resources
+      var video = videoElements[index];
+      if (video) {
+        video.pause();
+        video.removeAttribute("src");
+        video.load(); // Release memory
+      }
+      delete videoElements[index];
+      delete slideElements[index];
+      if (slide.parentNode) slide.parentNode.removeChild(slide);
+    }
+
+    // Materialize slides within ±VIRTUAL_WINDOW of currentIndex, destroy the rest
+    function syncVirtualSlides() {
+      var needed = {};
+      for (var w = -VIRTUAL_WINDOW; w <= VIRTUAL_WINDOW; w++) {
+        var idx = ((currentIndex + w) % clips.length + clips.length) % clips.length;
+        needed[idx] = true;
+        createSlide(idx);
+      }
+      // Destroy slides outside the window
+      var existingKeys = Object.keys(slideElements);
+      for (var k = 0; k < existingKeys.length; k++) {
+        var key = parseInt(existingKeys[k]);
+        if (!needed[key]) {
+          destroySlide(key);
+        }
+      }
+    }
+
+    // Initialize: create only the first ±VIRTUAL_WINDOW slides
+    syncVirtualSlides();
 
     overlay.appendChild(feed);
 
@@ -1449,6 +1503,25 @@
     // OGP preview cache (keyed by product_url)
     var ogpCache = {};
 
+    // OGP prefetch: preload OGP data for adjacent clips
+    function prefetchOGP(idx) {
+      for (var w = -1; w <= 2; w++) {
+        var i = ((idx + w) % clips.length + clips.length) % clips.length;
+        var clip = clips[i];
+        if (!clip || !clip.product_url) continue;
+        var url = clip.product_url;
+        if (ogpCache[url]) continue;
+        // Mark as pending to avoid duplicate fetches
+        ogpCache[url] = { _pending: true };
+        (function(u) {
+          fetch(API_BASE + "/widget/product-preview?url=" + encodeURIComponent(u))
+            .then(function(r) { return r.json(); })
+            .then(function(ogp) { if (ogp && ogp.success) ogpCache[u] = ogp; else delete ogpCache[u]; })
+            .catch(function() { delete ogpCache[u]; });
+        })(url);
+      }
+    }
+
     function openProductDetail(clip) {
       if (!clip) return;
 
@@ -1483,8 +1556,8 @@
       // If we have a product_url, fetch OGP data
       var productUrl = clip.product_url;
       if (productUrl) {
-        // Check cache first
-        if (ogpCache[productUrl]) {
+        // Check cache first (skip if still pending)
+        if (ogpCache[productUrl] && !ogpCache[productUrl]._pending) {
           populateDetailFromOGP(ogpCache[productUrl], clip);
           return;
         }
@@ -1844,6 +1917,8 @@
 
     // ── Helper: Update slide positions ──
     function updateSlidePositions(animate) {
+      // Virtual scroll: ensure correct slides are in DOM
+      syncVirtualSlides();
       var slides = feed.querySelectorAll(".ath-slide");
       for (var i = 0; i < slides.length; i++) {
         var idx = parseInt(slides[i].getAttribute("data-index"));
@@ -1852,11 +1927,6 @@
         if (clips.length > 2) {
           if (diff > clips.length / 2) diff -= clips.length;
           if (diff < -clips.length / 2) diff += clips.length;
-        }
-        // Only render nearby slides
-        if (Math.abs(diff) > 2) {
-          slides[i].style.display = "none";
-          continue;
         }
         slides[i].style.display = "block";
         var translateY = diff * 100;
@@ -2039,6 +2109,8 @@
       trackEvent("video_play", { clip_id: clip.clip_id, clip_index: currentIndex });
       // Reset depth tracking for this clip
       resetDepthTracking(clip.clip_id);
+      // Prefetch OGP data for adjacent clips (so product detail opens instantly)
+      prefetchOGP(currentIndex);
 
       // Show swipe hint on first video
       if (!hintShown && clips.length > 1) {
@@ -2089,18 +2161,7 @@
         progressBar.style.width = (video.currentTime / video.duration * 100) + "%";
       }
     }
-    // Attach timeupdate to all videos
-    clips.forEach(function (clip, index) {
-      videoElements[index].addEventListener("timeupdate", function () {
-        if (index === currentIndex) {
-          onTimeUpdate();
-          updateSubtitle();
-          // AI Learning: track video depth
-          var c = clips[currentIndex];
-          if (c) checkVideoDepth(videoElements[currentIndex], c.clip_id);
-        }
-      });
-    });
+    // timeupdate listeners are now attached in createSlide() for virtual scroll
 
     // ── Progress bar seek ──
     progressWrap.addEventListener("click", function (e) {
