@@ -164,6 +164,7 @@ async def sync_brand(
                         logo_url = :logo_url,
                         company_name = :company_name,
                         name_ja = :name_ja,
+                        is_active = TRUE,
                         updated_at = NOW()
                     WHERE lcj_brand_id = :bid
                 """),
@@ -276,7 +277,7 @@ async def sync_brands_bulk(
                         UPDATE widget_clients 
                         SET name = :name, brand_keywords = :keywords,
                             logo_url = :logo_url, company_name = :company_name,
-                            name_ja = :name_ja, updated_at = NOW()
+                            name_ja = :name_ja, is_active = TRUE, updated_at = NOW()
                         WHERE lcj_brand_id = :bid
                     """),
                     {
