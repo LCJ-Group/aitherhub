@@ -162,6 +162,11 @@ async def get_widget_config(
     # Filter out clips without a playable clip_url
     clips = [c for c in clips if c.get("clip_url")]
 
+    # Filter out unprocessed raw uploads: if a clip has no widget_url AND no exported_url,
+    # it means the original source video is being served directly, which may be too large
+    # or use unsupported codecs (e.g., HEVC). Only serve processed clips.
+    clips = [c for c in clips if c.get("widget_url") or c.get("exported_url") or "/clips/" in (c.get("original_clip_url") or "")]
+
     # Parse captions JSON if stored as string
     for clip in clips:
         if clip.get("captions") and isinstance(clip["captions"], str):

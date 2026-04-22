@@ -1,5 +1,5 @@
 /**
- * AitherHub Widget Loader v3.0 — TikTok-Style Fullscreen Feed + Product Card + Subtitles
+ * AitherHub Widget Loader v3.1 — TikTok-Style Fullscreen Feed + Product Card + Subtitles
  *
  * GTM経由で配信される軽量エントリーポイント。
  * 先方のECサイトに1行のタグを追加するだけで、
@@ -61,7 +61,7 @@
  */
 (function () {
   "use strict";
-  console.log("[AitherHub] IIFE START v3.0");
+  console.log("[AitherHub] IIFE START v3.1");
 
   // ── Prevent double-loading ──
   if (window.__AITHERHUB_WIDGET_LOADED) { console.log("[AitherHub] SKIPPED: already loaded"); return; }
@@ -1930,9 +1930,25 @@
       // Safety timeout: hide spinner after 8s regardless
       setTimeout(function () { if (spinner) spinner.style.display = "none"; }, 8000);
 
-      // ── Robust mobile playback with retry ──
+      // ── Robust mobile playback with retry + broken video detection ──
       var playAttempt = 0;
       var MAX_PLAY_RETRIES = 3;
+      var _skipChecked = false;
+
+      // Detect broken videos (videoWidth===0 after play) and auto-skip
+      function checkVideoHealth() {
+        if (_skipChecked) return;
+        _skipChecked = true;
+        setTimeout(function () {
+          if (video.videoWidth === 0 && video.videoHeight === 0 && !video.paused && video.currentTime > 0) {
+            console.warn("[AitherHub] Broken video detected (videoWidth=0), skipping clip " + currentIndex);
+            if (clips.length > 1) {
+              goToIndex(currentIndex + 1);
+            }
+          }
+        }, 3000); // Check 3 seconds after play starts
+      }
+
       function attemptPlay() {
         playAttempt++;
         video.muted = true;
@@ -1945,6 +1961,7 @@
             console.log("[AitherHub] Play OK attempt=" + playAttempt);
             if (!isMuted) { video.muted = false; }
             preloadAdjacent(currentIndex);
+            checkVideoHealth();
           }).catch(function (err) {
             console.warn("[AitherHub] Play fail attempt=" + playAttempt + ": " + err.message);
             if (playAttempt < MAX_PLAY_RETRIES) {
@@ -1953,16 +1970,20 @@
                 setTimeout(attemptPlay, 300);
               }, 500 * playAttempt);
             } else {
-              console.warn("[AitherHub] All play attempts failed, showing poster");
+              console.warn("[AitherHub] All play attempts failed, skipping to next");
               if (spinner) spinner.style.display = "none";
-              video.muted = true;
-              try { video.load(); } catch(e){}
-              preloadAdjacent(currentIndex);
+              // Auto-skip to next video instead of showing black screen
+              if (clips.length > 1) {
+                goToIndex(currentIndex + 1);
+              } else {
+                preloadAdjacent(currentIndex);
+              }
             }
           });
         } else {
           if (!isMuted) video.muted = false;
           preloadAdjacent(currentIndex);
+          checkVideoHealth();
         }
       }
       attemptPlay();
