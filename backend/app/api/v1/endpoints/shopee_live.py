@@ -94,6 +94,20 @@ async def get_product_details(
     return result
 
 
+@router.get("/products/{shop_id}")
+async def list_products_by_path(
+    shop_id: int,
+    offset: int = Query(default=0),
+    page_size: int = Query(default=50),
+):
+    """Shopee商品一覧を取得（パスパラメータ版 - フロントエンド互換）"""
+    from app.services.shopee_live_service import get_product_list
+    result = await get_product_list(shop_id, offset, page_size)
+    if result is None:
+        raise HTTPException(status_code=500, detail="Failed to fetch products from Shopee API")
+    return result
+
+
 # ============================================================
 # Livestream Session Endpoints
 # ============================================================
