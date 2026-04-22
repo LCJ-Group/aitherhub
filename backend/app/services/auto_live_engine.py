@@ -462,7 +462,7 @@ async def get_queue_length(session_id: str) -> int:
     
     # Safety: if pending seems stuck (>= buffer limit for more than 45s),
     # auto-reset to allow generation to continue
-    if pending >= 4 and hasattr(session, '_last_push_time'):
+    if pending >= 6 and hasattr(session, '_last_push_time'):
         elapsed = time.time() - session._last_push_time
         if elapsed > 45:
             logger.warning(f"[AutoLive] Queue seems stuck (pending={pending}, last push {elapsed:.0f}s ago). Resetting.")
@@ -524,7 +524,7 @@ async def _flow_speech_loop(session: AutoLiveSession):
       when products are added mid-session
     - Shorter text segments (200-350 chars) for TTS stability
     - Text normalization for consistent audio volume
-    - Larger queue buffer (4) for smoother transitions
+    - Larger queue buffer (6) for seamless transitions
     """
     logger.info(f"[AutoLive v3] Starting flow speech loop for session {session.session_id}")
     logger.info(f"[AutoLive v3] Products: {len(session.products)}, Language: {session.language}, Style: {session.style}")
@@ -566,10 +566,11 @@ async def _flow_speech_loop(session: AutoLiveSession):
             phase_segments_done = 0
 
         # ── Queue capacity check ──
-        # Keep buffer at 4 items for smoother transitions between speeches
+        # Keep buffer at 6 items to prevent gaps between speeches
+        # Higher buffer compensates for AI generation latency (~1-3s per segment)
         queue_len = await get_queue_length(session.session_id)
-        if queue_len >= 4:
-            await asyncio.sleep(0.5)  # Shorter wait for faster response
+        if queue_len >= 6:
+            await asyncio.sleep(0.3)  # Short wait, check again quickly
             continue
 
         # ── Flow template cycling ──
@@ -645,8 +646,8 @@ async def _flow_speech_loop(session: AutoLiveSession):
                         next_product = session.products[session.current_product_index % len(session.products)]
                         logger.info(f"[AutoLive v3] Moving to next product: {next_product.item_name}")
 
-        # Brief pause between generations
-        await asyncio.sleep(0.2)
+        # Minimal pause between generations to keep buffer full
+        await asyncio.sleep(0.1)
 
     logger.info(f"[AutoLive v3] Flow speech loop ended for session {session.session_id}")
 

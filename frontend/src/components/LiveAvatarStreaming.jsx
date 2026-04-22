@@ -224,9 +224,12 @@ export default function LiveAvatarStreaming({
           // Reset auto-live speaking flag so next queue item can be sent
           autoLiveSpeakingRef.current = false;
           speakStartTimeRef.current = null;
-          // Immediately try to send next item from queue (minimal delay for seamless transition)
+          // Immediately send next item from queue for seamless transition
+          // Call synchronously first, then backup retry at 50ms and 150ms
           if (autoLiveModeRef.current && pollAndSendQueueRef.current) {
-            setTimeout(() => pollAndSendQueueRef.current(), 30);
+            pollAndSendQueueRef.current();
+            setTimeout(() => pollAndSendQueueRef.current(), 50);
+            setTimeout(() => pollAndSendQueueRef.current(), 150);
           }
           break;
         case "user.speak_started":
@@ -436,9 +439,11 @@ export default function LiveAvatarStreaming({
                 // Reset auto-live speaking flag so next queue item can be sent
                 autoLiveSpeakingRef.current = false;
                 speakStartTimeRef.current = null;
-                // Immediately try to send next item from queue (minimal delay)
+                // Immediately send next item for seamless transition
                 if (autoLiveModeRef.current && pollAndSendQueueRef.current) {
-                  setTimeout(() => pollAndSendQueueRef.current(), 30);
+                  pollAndSendQueueRef.current();
+                  setTimeout(() => pollAndSendQueueRef.current(), 50);
+                  setTimeout(() => pollAndSendQueueRef.current(), 150);
                 }
               } else if (data.type === "session.stopped") {
                 console.log("[LiveAvatar] Session stopped via WebSocket");
@@ -683,7 +688,9 @@ export default function LiveAvatarStreaming({
                 autoLiveSpeakingRef.current = false;
                 speakStartTimeRef.current = null;
                 if (autoLiveModeRef.current && pollAndSendQueueRef.current) {
-                  setTimeout(() => pollAndSendQueueRef.current(), 30);
+                  pollAndSendQueueRef.current();
+                  setTimeout(() => pollAndSendQueueRef.current(), 50);
+                  setTimeout(() => pollAndSendQueueRef.current(), 150);
                 }
               } else if (data.type === "session.stopped") {
                 if (!isRenewingRef.current) renewSession();
@@ -861,10 +868,11 @@ export default function LiveAvatarStreaming({
       processedTextsRef.current = new Set(); // Clear dedup cache for new session
       speakStartTimeRef.current = null;
 
-      // Poll every 1 second for faster response
+      // Poll every 500ms for minimal gap between speeches
+      // (speak_ended also triggers immediate poll, this is the fallback)
       autoLivePollRef.current = setInterval(() => {
         pollAndSendQueue();
-      }, 1000);
+      }, 500);
 
       return () => {
         if (autoLivePollRef.current) {
