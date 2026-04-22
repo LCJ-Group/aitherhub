@@ -332,11 +332,13 @@ async def sync_brands_bulk(
                     "portal_url": f"https://www.aitherhub.com/brand?id={client_id}",
                 })
 
-            # Auto-assign clips for this brand
-            await _auto_assign_clips(db, client_id, keywords)
-
-            # Commit after each successful brand
+            # Commit the brand upsert FIRST, before auto-assigning clips
+            # (auto_assign_clips has its own try/except with rollback,
+            #  which would undo the upsert if it ran before commit)
             await db.commit()
+
+            # Auto-assign clips for this brand (after commit)
+            await _auto_assign_clips(db, client_id, keywords)
 
         except Exception as e:
             logger.error(f"Bulk sync error for brand {brand.lcj_brand_id}: {e}")
@@ -356,28 +358,32 @@ async def sync_brands_bulk(
         synced_lcj_ids = [b.lcj_brand_id for b in payload.brands]
         if synced_lcj_ids:
             # Find active widget_clients with lcj_brand_id NOT in the synced list
+            # Build dynamic placeholders for NOT IN clause (TiDB/MySQL compatible)
+            placeholders = ", ".join([f":id_{i}" for i in range(len(synced_lcj_ids))])
+            id_params = {f"id_{i}": lid for i, lid in enumerate(synced_lcj_ids)}
+
             stale_result = await db.execute(
-                text("""
+                text(f"""
                     SELECT client_id, name, lcj_brand_id
                     FROM widget_clients
                     WHERE lcj_brand_id IS NOT NULL
                       AND is_active = TRUE
-                      AND lcj_brand_id NOT IN :ids
+                      AND lcj_brand_id NOT IN ({placeholders})
                 """),
-                {"ids": tuple(synced_lcj_ids)}
+                id_params
             )
             stale_brands = stale_result.fetchall()
             if stale_brands:
                 stale_ids = [row[2] for row in stale_brands]
                 await db.execute(
-                    text("""
+                    text(f"""
                         UPDATE widget_clients
                         SET is_active = FALSE, updated_at = NOW()
                         WHERE lcj_brand_id IS NOT NULL
-                          AND lcj_brand_id NOT IN :ids
+                          AND lcj_brand_id NOT IN ({placeholders})
                           AND is_active = TRUE
                     """),
-                    {"ids": tuple(synced_lcj_ids)}
+                    id_params
                 )
                 await db.commit()
                 deactivated = len(stale_brands)
@@ -478,7 +484,7 @@ async def _auto_assign_clips(db: AsyncSession, client_id: str, keywords: str) ->
     # Find matching clips not already assigned
     query = f"""
         INSERT INTO widget_clip_assignments (id, client_id, clip_id, is_active, created_at)
-        SELECT gen_random_uuid()::text, :client_id, vc.id, TRUE, NOW()
+        SELECT REPLACE(UUID(), '-', ''), :client_id, vc.id, TRUE, NOW()
         FROM video_clips vc
         WHERE ({where_clause})
           AND vc.id NOT IN (
