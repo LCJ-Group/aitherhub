@@ -1197,15 +1197,25 @@ async def transcribe_clip(
         })
         clip_row = clip_result.fetchone()
         if clip_row:
+            # Build transcript_text from segments for clip-db display
+            transcript_text = " ".join(
+                seg["text"] for seg in local_segments if seg.get("text")
+            ).strip()[:500] or None
+
             update_sql = text("""
-                UPDATE video_clips SET captions = :captions WHERE id = :id
+                UPDATE video_clips
+                SET captions = CAST(:captions AS jsonb),
+                    transcript_text = COALESCE(:transcript_text, transcript_text),
+                    updated_at = NOW()
+                WHERE id = :id
             """)
             await db.execute(update_sql, {
                 "captions": captions_json,
+                "transcript_text": transcript_text,
                 "id": clip_row.id,
             })
             await db.commit()
-            logger.info(f"[transcribe] Updated video_clips captions for clip {clip_row.id}")
+            logger.info(f"[transcribe] Updated video_clips captions + transcript_text for clip {clip_row.id}")
     except Exception as e:
         logger.warning(f"[transcribe] Failed to update video_clips captions: {e}")
         try:

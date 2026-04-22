@@ -5534,3 +5534,53 @@ async def admin_analytics_hourly_heatmap(
     except Exception as e:
         logger.error(f"Admin heatmap error: {e}")
         return {"heatmap": [], "error": str(e)}
+
+
+# ── Backfill transcript_text from captions ─────────────────────────
+@router.post("/backfill-transcript-text")
+async def backfill_transcript_text(
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    One-shot backfill: for clips that have captions JSONB but NULL transcript_text,
+    build transcript_text by joining all caption texts.
+    """
+    expected_key = f"{ADMIN_ID}:{ADMIN_PASS}"
+    if x_admin_key != expected_key:
+        raise HTTPException(status_code=403, detail="Invalid admin credentials")
+
+    try:
+        sql = text("""
+            UPDATE video_clips
+            SET transcript_text = sub.built_text,
+                updated_at = NOW()
+            FROM (
+                SELECT id,
+                       LEFT(
+                           string_agg(elem->>'text', ' ' ORDER BY (elem->>'start')::float),
+                           500
+                       ) AS built_text
+                FROM video_clips,
+                     jsonb_array_elements(captions) AS elem
+                WHERE (transcript_text IS NULL OR transcript_text = '')
+                  AND captions IS NOT NULL
+                  AND jsonb_array_length(captions) > 0
+                GROUP BY id
+            ) sub
+            WHERE video_clips.id = sub.id
+              AND sub.built_text IS NOT NULL
+              AND sub.built_text != ''
+        """)
+        result = await db.execute(sql)
+        count = result.rowcount
+        await db.commit()
+        logger.info(f"[BACKFILL] Updated transcript_text for {count} clips from captions")
+        return {"updated": count, "message": f"Backfilled transcript_text for {count} clips"}
+    except Exception as e:
+        logger.error(f"[BACKFILL] transcript_text backfill failed: {e}")
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail=str(e))

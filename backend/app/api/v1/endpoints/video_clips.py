@@ -651,15 +651,28 @@ async def update_clip_captions(
         import json as _json
         captions_json = _json.dumps(captions, ensure_ascii=False)
 
+        # Also build transcript_text from captions for clip-db display
+        transcript_text = " ".join(
+            c.get("text", "") for c in captions if c.get("text")
+        ).strip()
+        # Truncate to 500 chars for the summary field
+        transcript_text = transcript_text[:500] if transcript_text else None
+
         update_sql = text("""
             UPDATE video_clips
-            SET captions = CAST(:captions_json AS jsonb), updated_at = NOW()
+            SET captions = CAST(:captions_json AS jsonb),
+                transcript_text = COALESCE(:transcript_text, transcript_text),
+                updated_at = NOW()
             WHERE id = :clip_id
         """)
-        await db.execute(update_sql, {"captions_json": captions_json, "clip_id": clip_id})
+        await db.execute(update_sql, {
+            "captions_json": captions_json,
+            "clip_id": clip_id,
+            "transcript_text": transcript_text,
+        })
         await db.commit()
 
-        logger.info(f"[CAPTIONS] Updated {len(captions)} captions for clip {clip_id}")
+        logger.info(f"[CAPTIONS] Updated {len(captions)} captions + transcript_text for clip {clip_id}")
 
         return {
             "clip_id": clip_id,
