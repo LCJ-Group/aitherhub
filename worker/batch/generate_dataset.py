@@ -343,7 +343,7 @@ async def fetch_phases(session, video_id=None, user_id=None):
         FROM video_phases vp
         LEFT JOIN video_clips vc
             ON vc.video_id = vp.video_id
-            AND vc.phase_index = vp.phase_index
+            AND vc.phase_index = vp.phase_index::text
         LEFT JOIN clip_feedback cf
             ON cf.video_id = vp.video_id
             AND cf.phase_index = vp.phase_index::text
