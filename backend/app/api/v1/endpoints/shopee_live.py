@@ -41,17 +41,18 @@ class SessionActionRequest(BaseModel):
 # ============================================================
 @router.get("/health")
 async def health_check():
-    """Sales DashブリッジAPIとの接続テスト"""
+    """Shopeeトークン取得テスト（自己完結型）"""
     from app.services.shopee_live_service import get_shopee_token
     token = await get_shopee_token()
     if token:
         return {
             "status": "ok",
-            "shopId": token.get("shopId"),
-            "country": token.get("country"),
-            "storeName": token.get("storeName"),
+            "shop_id": token.get("shop_id"),
+            "partner_id": token.get("partner_id"),
+            "has_access_token": bool(token.get("access_token")),
+            "has_refresh_token": bool(token.get("refresh_token")),
         }
-    return {"status": "error", "message": "Failed to get Shopee token from Sales Dash"}
+    return {"status": "error", "message": "Failed to get Shopee token"}
 
 
 # ============================================================

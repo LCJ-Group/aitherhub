@@ -157,6 +157,10 @@ jobs:
               WEBSITES_CONTAINER_START_TIME_LIMIT="1800" \
               SALES_DASH_API_KEY="${{ secrets.SALES_DASH_API_KEY }}" \
               SALES_DASH_URL="${{ secrets.SALES_DASH_URL }}" \
+              SHOPEE_PARTNER_ID="${{ secrets.SHOPEE_PARTNER_ID }}" \
+              SHOPEE_PARTNER_KEY="${{ secrets.SHOPEE_PARTNER_KEY }}" \
+              SHOPEE_ACCESS_TOKEN="${{ secrets.SHOPEE_ACCESS_TOKEN }}" \
+              SHOPEE_REFRESH_TOKEN="${{ secrets.SHOPEE_REFRESH_TOKEN }}" \
             --output none
           echo "Staging slot configured."
 
@@ -289,6 +293,10 @@ jobs:
               ENABLE_ORYX_BUILD="false" \
               SALES_DASH_API_KEY="${{ secrets.SALES_DASH_API_KEY }}" \
               SALES_DASH_URL="${{ secrets.SALES_DASH_URL }}" \
+              SHOPEE_PARTNER_ID="${{ secrets.SHOPEE_PARTNER_ID }}" \
+              SHOPEE_PARTNER_KEY="${{ secrets.SHOPEE_PARTNER_KEY }}" \
+              SHOPEE_ACCESS_TOKEN="${{ secrets.SHOPEE_ACCESS_TOKEN }}" \
+              SHOPEE_REFRESH_TOKEN="${{ secrets.SHOPEE_REFRESH_TOKEN }}" \
             --output none
 
       # ── Step 8: Configure health check & Always On ──
