@@ -640,7 +640,15 @@ async def _check_and_requeue_stuck_videos():
                     for row in zombie_videos:
                         video_id = str(row.id)
                         try:
-                            await db.execute(
+                            # Atomic UPDATE: only update if STILL at STEP_0.
+                            # This prevents duplicate cleanup when multiple backend
+                            # instances run the monitor concurrently.
+                            _err_msg = (
+                                f"Zombie cleanup: stuck at STEP_0 with 0% progress "
+                                f"for >{ZOMBIE_HOURS}h after {row.dequeue_count} retries. "
+                                f"Use admin retry to re-process."
+                            )
+                            _upd_result = await db.execute(
                                 text("""
                                     UPDATE videos
                                     SET status = 'ERROR',
@@ -649,42 +657,44 @@ async def _check_and_requeue_stuck_videos():
                                         last_error_message = :err_msg,
                                         updated_at = NOW()
                                     WHERE id = :vid
+                                      AND status = 'STEP_0_EXTRACT_FRAMES'
                                 """),
-                                {
-                                    "vid": video_id,
-                                    "err_msg": f"Zombie cleanup: stuck at STEP_0 with 0% progress "
-                                               f"for >{ZOMBIE_HOURS}h after {row.dequeue_count} retries. "
-                                               f"Use admin retry to re-process.",
-                                },
+                                {"vid": video_id, "err_msg": _err_msg},
                             )
                             await db.commit()
-                            health["zombie_cleaned"] += 1
-                            logger.info(
-                                f"[stuck-monitor] Zombie cleanup: {video_id} "
-                                f"({row.original_filename}) → ERROR"
-                            )
-                            # Record error log
-                            try:
-                                await db.execute(
-                                    text("""
-                                        INSERT INTO video_error_logs
-                                            (video_id, error_code, error_step, error_message, source)
-                                        VALUES
-                                            (:vid, 'ZOMBIE_CLEANUP', 'STEP_0_EXTRACT_FRAMES',
-                                             :msg, 'monitor')
-                                    """),
-                                    {
-                                        "vid": video_id,
-                                        "msg": f"Zombie cleanup: stuck at STEP_0 with 0% progress "
-                                               f"for >{ZOMBIE_HOURS}h after {row.dequeue_count} retries.",
-                                    },
+
+                            # Only log if THIS instance actually updated the row
+                            if _upd_result.rowcount > 0:
+                                health["zombie_cleaned"] += 1
+                                logger.info(
+                                    f"[stuck-monitor] Zombie cleanup: {video_id} "
+                                    f"({row.original_filename}) → ERROR"
                                 )
-                                await db.commit()
-                            except Exception:
                                 try:
-                                    await db.rollback()
+                                    await db.execute(
+                                        text("""
+                                            INSERT INTO video_error_logs
+                                                (video_id, error_code, error_step, error_message, source)
+                                            VALUES
+                                                (:vid, 'ZOMBIE_CLEANUP', 'STEP_0_EXTRACT_FRAMES',
+                                                 :msg, 'monitor')
+                                        """),
+                                        {
+                                            "vid": video_id,
+                                            "msg": f"Zombie cleanup: stuck at STEP_0 with 0% progress "
+                                                   f"for >{ZOMBIE_HOURS}h after {row.dequeue_count} retries.",
+                                        },
+                                    )
+                                    await db.commit()
                                 except Exception:
-                                    pass
+                                    try:
+                                        await db.rollback()
+                                    except Exception:
+                                        pass
+                            else:
+                                logger.debug(
+                                    f"[stuck-monitor] Zombie {video_id} already cleaned by another instance"
+                                )
                         except Exception as e:
                             logger.warning(f"[stuck-monitor] Zombie cleanup failed for {video_id}: {e}")
                             try:

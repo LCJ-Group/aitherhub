@@ -1013,7 +1013,7 @@ async def batch_cleanup_zombies(
         for z in zombies:
             vid = str(z.id)
             try:
-                await db.execute(
+                _upd = await db.execute(
                     text("""
                         UPDATE videos
                         SET status = 'ERROR',
@@ -1022,6 +1022,7 @@ async def batch_cleanup_zombies(
                             last_error_message = :err_msg,
                             updated_at = NOW()
                         WHERE id = :vid
+                          AND status = 'STEP_0_EXTRACT_FRAMES'
                     """),
                     {
                         "vid": vid,
@@ -1030,30 +1031,30 @@ async def batch_cleanup_zombies(
                     },
                 )
                 await db.commit()
-                cleaned += 1
-                
-                # Record error log
-                try:
-                    await db.execute(
-                        text("""
-                            INSERT INTO video_error_logs
-                                (video_id, error_code, error_step, error_message, source)
-                            VALUES
-                                (:vid, 'ZOMBIE_CLEANUP', 'STEP_0_EXTRACT_FRAMES',
-                                 :msg, 'admin')
-                        """),
-                        {
-                            "vid": vid,
-                            "msg": f"Admin zombie cleanup: {z.original_filename} "
-                                   f"stuck for >{max_age_hours}h",
-                        },
-                    )
-                    await db.commit()
-                except Exception:
+                if _upd.rowcount > 0:
+                    cleaned += 1
+                    # Record error log
                     try:
-                        await db.rollback()
+                        await db.execute(
+                            text("""
+                                INSERT INTO video_error_logs
+                                    (video_id, error_code, error_step, error_message, source)
+                                VALUES
+                                    (:vid, 'ZOMBIE_CLEANUP', 'STEP_0_EXTRACT_FRAMES',
+                                     :msg, 'admin')
+                            """),
+                            {
+                                "vid": vid,
+                                "msg": f"Admin zombie cleanup: {z.original_filename} "
+                                       f"stuck for >{max_age_hours}h",
+                            },
+                        )
+                        await db.commit()
                     except Exception:
-                        pass
+                        try:
+                            await db.rollback()
+                        except Exception:
+                            pass
             except Exception as e:
                 logger.warning(f"Failed to cleanup zombie {vid}: {e}")
                 try:
