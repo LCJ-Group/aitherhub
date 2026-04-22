@@ -28,6 +28,8 @@ export default function AdminDashboard() {
   const [feedbackLoading, setFeedbackLoading] = useState(false);
   const [feedbackIncludeUnrated, setFeedbackIncludeUnrated] = useState(true);
   const [feedbackRefreshKey, setFeedbackRefreshKey] = useState(0);
+  const [feedbackPage, setFeedbackPage] = useState(1);
+  const [feedbackFilterRating, setFeedbackFilterRating] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   // Support ?tab= URL parameter for shareable links
@@ -114,8 +116,13 @@ export default function AdminDashboard() {
         const baseURL = import.meta.env.VITE_API_BASE_URL;
         const res = await axios.get(`${baseURL}/api/v1/admin/feedbacks`, {
           headers: { "X-Admin-Key": `${ADMIN_ID}:${ADMIN_PASS}` },
-          params: { include_unrated: feedbackIncludeUnrated },
-          timeout: 60000,
+          params: {
+            include_unrated: feedbackIncludeUnrated,
+            page: feedbackPage,
+            per_page: 50,
+            filter_rating: feedbackFilterRating,
+          },
+          timeout: 30000,
         });
         if (!cancelled) setFeedbackData(res.data);
       } catch (err) {
@@ -125,7 +132,7 @@ export default function AdminDashboard() {
       }
     })();
     return () => { cancelled = true; };
-  }, [authenticated, activeTab, feedbackIncludeUnrated, feedbackRefreshKey]);
+  }, [authenticated, activeTab, feedbackIncludeUnrated, feedbackRefreshKey, feedbackPage, feedbackFilterRating]);
 
   // Fetch upload health when tab switches
   useEffect(() => {
@@ -445,8 +452,12 @@ export default function AdminDashboard() {
             data={feedbackData}
             loading={feedbackLoading}
             includeUnrated={feedbackIncludeUnrated}
-            setIncludeUnrated={(v) => { setFeedbackIncludeUnrated(v); setFeedbackData(null); }}
+            setIncludeUnrated={(v) => { setFeedbackIncludeUnrated(v); setFeedbackPage(1); setFeedbackData(null); }}
             onRefresh={() => { setFeedbackData(null); setFeedbackRefreshKey(k => k + 1); }}
+            filterRating={feedbackFilterRating}
+            setFilterRating={(v) => { setFeedbackFilterRating(v); setFeedbackPage(1); setFeedbackData(null); }}
+            page={feedbackPage}
+            setPage={(p) => { setFeedbackPage(p); setFeedbackData(null); }}
           />
         )}
 
@@ -860,10 +871,7 @@ function UploadHealthSection({ data, loading }) {
 }
 
 // ── Feedback Section ──
-function FeedbackSection({ data, loading, includeUnrated, setIncludeUnrated, onRefresh }) {
-  // filterRating: 0=all, 1-5=star filter, -1=unrated only
-  const [filterRating, setFilterRating] = useState(0);
-
+function FeedbackSection({ data, loading, includeUnrated, setIncludeUnrated, onRefresh, filterRating, setFilterRating, page, setPage }) {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-16">
@@ -881,16 +889,13 @@ function FeedbackSection({ data, loading, includeUnrated, setIncludeUnrated, onR
     );
   }
 
-  const { summary, feedbacks } = data;
-  const unratedCount = summary.total_unrated || feedbacks.filter(f => f.user_rating == null).length;
-  const ratedCount = summary.total_feedbacks || feedbacks.filter(f => f.user_rating != null).length;
-  const totalCount = feedbacks.length;
-
-  const filtered = filterRating === 0
-    ? feedbacks
-    : filterRating === -1
-    ? feedbacks.filter((f) => f.user_rating == null)
-    : feedbacks.filter((f) => f.user_rating === filterRating);
+  const { summary, feedbacks, pagination } = data;
+  const unratedCount = summary.total_unrated || 0;
+  const ratedCount = summary.total_feedbacks || 0;
+  const totalCount = summary.total_phases || 0;
+  const totalFiltered = pagination?.total_filtered || feedbacks.length;
+  const totalPages = pagination?.total_pages || 1;
+  const currentPage = pagination?.page || page;
 
   return (
     <div>
@@ -909,9 +914,9 @@ function FeedbackSection({ data, loading, includeUnrated, setIncludeUnrated, onR
           </button>
         </div>
         <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
-          <StatCard label="総フェーズ数" value={totalCount} unit={window.__t('errorLogCount', '件')} color="gray" />
-          <StatCard label={window.__t('adminDashboard_18ecb6', '総採点数')} value={ratedCount} unit={window.__t('errorLogCount', '件')} color="orange" />
-          <StatCard label="未採点" value={unratedCount} unit={window.__t('errorLogCount', '件')} color="red" />
+          <StatCard label="総フェーズ数" value={totalCount.toLocaleString()} unit={window.__t('errorLogCount', '件')} color="gray" />
+          <StatCard label={window.__t('adminDashboard_18ecb6', '総採点数')} value={ratedCount.toLocaleString()} unit={window.__t('errorLogCount', '件')} color="orange" />
+          <StatCard label="未採点" value={unratedCount.toLocaleString()} unit={window.__t('errorLogCount', '件')} color="red" />
           <StatCard label={window.__t('adminDashboard_15e370', '平均スコア')} value={summary.average_rating} unit="/ 5" color="blue" />
           <StatCard label={window.__t('adminDashboard_424176', 'コメント付き')} value={summary.with_comments} unit={window.__t('errorLogCount', '件')} color="green" />
           <div className="rounded-xl border p-4 border-purple-300 bg-purple-50 transition-all duration-200 hover:shadow-md">
@@ -948,7 +953,7 @@ function FeedbackSection({ data, loading, includeUnrated, setIncludeUnrated, onR
               : "bg-gray-100 text-gray-600 hover:bg-gray-200"
           }`}
         >
-          すべて ({totalCount})
+          すべて ({totalCount.toLocaleString()})
         </button>
         <button
           onClick={() => setFilterRating(-1)}
@@ -958,7 +963,7 @@ function FeedbackSection({ data, loading, includeUnrated, setIncludeUnrated, onR
               : "bg-red-50 text-red-600 hover:bg-red-100 border border-red-200"
           }`}
         >
-          未採点 ({unratedCount})
+          未採点 ({unratedCount.toLocaleString()})
         </button>
         {[1, 2, 3, 4, 5].map((star) => (
           <button
@@ -975,18 +980,104 @@ function FeedbackSection({ data, loading, includeUnrated, setIncludeUnrated, onR
         ))}
       </div>
 
+      {/* Pagination Info */}
+      <div className="flex items-center justify-between mb-3">
+        <p className="text-xs text-gray-400">
+          {totalFiltered.toLocaleString()} 件中 {((currentPage - 1) * 50 + 1).toLocaleString()} - {Math.min(currentPage * 50, totalFiltered).toLocaleString()} 件を表示
+        </p>
+        {totalPages > 1 && (
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setPage(1)}
+              disabled={currentPage <= 1}
+              className="px-2 py-1 text-xs rounded bg-gray-100 hover:bg-gray-200 disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              «
+            </button>
+            <button
+              onClick={() => setPage(currentPage - 1)}
+              disabled={currentPage <= 1}
+              className="px-2 py-1 text-xs rounded bg-gray-100 hover:bg-gray-200 disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              ‹ 前へ
+            </button>
+            <span className="px-3 py-1 text-xs font-medium text-gray-700">
+              {currentPage} / {totalPages}
+            </span>
+            <button
+              onClick={() => setPage(currentPage + 1)}
+              disabled={currentPage >= totalPages}
+              className="px-2 py-1 text-xs rounded bg-gray-100 hover:bg-gray-200 disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              次へ ›
+            </button>
+            <button
+              onClick={() => setPage(totalPages)}
+              disabled={currentPage >= totalPages}
+              className="px-2 py-1 text-xs rounded bg-gray-100 hover:bg-gray-200 disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              »
+            </button>
+          </div>
+        )}
+      </div>
+
       {/* Feedback List */}
       <div className="space-y-3">
-        {filtered.length === 0 ? (
+        {feedbacks.length === 0 ? (
           <div className="text-center py-12 text-gray-400">
             該当するフィードバックはありません
           </div>
         ) : (
-          filtered.map((fb, idx) => (
+          feedbacks.map((fb, idx) => (
             <FeedbackCard key={`${fb.video_id}-${fb.phase_index}-${idx}`} fb={fb} onRated={onRefresh} />
           ))
         )}
       </div>
+
+      {/* Bottom Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-center gap-1 mt-6 mb-4">
+          <button
+            onClick={() => { setPage(currentPage - 1); window.scrollTo(0, 0); }}
+            disabled={currentPage <= 1}
+            className="px-3 py-1.5 text-xs rounded-lg bg-gray-100 hover:bg-gray-200 disabled:opacity-30 disabled:cursor-not-allowed"
+          >
+            ‹ 前のページ
+          </button>
+          {/* Page number buttons */}
+          {(() => {
+            const pages = [];
+            const start = Math.max(1, currentPage - 3);
+            const end = Math.min(totalPages, currentPage + 3);
+            if (start > 1) pages.push(<span key="s" className="px-1 text-xs text-gray-400">...</span>);
+            for (let i = start; i <= end; i++) {
+              pages.push(
+                <button
+                  key={i}
+                  onClick={() => { setPage(i); window.scrollTo(0, 0); }}
+                  className={`px-2.5 py-1.5 text-xs rounded-lg transition-all ${
+                    i === currentPage
+                      ? "bg-orange-500 text-white font-bold"
+                      : "bg-gray-100 hover:bg-gray-200 text-gray-600"
+                  }`}
+                >
+                  {i}
+                </button>
+              );
+            }
+            if (end < totalPages) pages.push(<span key="e" className="px-1 text-xs text-gray-400">...</span>);
+            return pages;
+          })()}
+          <button
+            onClick={() => { setPage(currentPage + 1); window.scrollTo(0, 0); }}
+            disabled={currentPage >= totalPages}
+            className="px-3 py-1.5 text-xs rounded-lg bg-gray-100 hover:bg-gray-200 disabled:opacity-30 disabled:cursor-not-allowed"
+          >
+            次のページ ›
+          </button>
+        </div>
+      )}
     </div>
   );
 }

@@ -130,13 +130,18 @@ async def get_dashboard_stats_public(
 @router.get("/feedbacks")
 async def get_all_feedbacks(
     include_unrated: bool = False,
+    page: int = 1,
+    per_page: int = 50,
+    filter_rating: int = 0,
     x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Get all phase feedbacks (ratings + comments) across all users and videos.
-    If include_unrated=true, also returns phases that have not been rated yet.
-    Returns a list sorted by most recent first.
+    Get phase feedbacks with server-side pagination and filtering.
+    - include_unrated: if true, also returns unrated phases
+    - page: page number (1-indexed)
+    - per_page: items per page (default 50)
+    - filter_rating: 0=all, 1-5=specific star, -1=unrated only
     """
     expected_key = f"{ADMIN_ID}:{ADMIN_PASS}"
     if x_admin_key != expected_key:
@@ -157,23 +162,71 @@ async def get_all_feedbacks(
             )
         """))
 
-        # Build WHERE clause based on include_unrated flag
-        where_clause = "" if include_unrated else "WHERE vp.user_rating IS NOT NULL"
+        # --- Summary query (always counts all) ---
+        summary_where = "" if include_unrated else "WHERE vp.user_rating IS NOT NULL"
+        summary_sql = text(f"""
+            SELECT
+                COUNT(*) as total,
+                COUNT(vp.user_rating) as rated_count,
+                COUNT(*) - COUNT(vp.user_rating) as unrated_count,
+                COALESCE(AVG(vp.user_rating), 0) as avg_rating,
+                COUNT(CASE WHEN vp.user_rating = 1 THEN 1 END) as r1,
+                COUNT(CASE WHEN vp.user_rating = 2 THEN 1 END) as r2,
+                COUNT(CASE WHEN vp.user_rating = 3 THEN 1 END) as r3,
+                COUNT(CASE WHEN vp.user_rating = 4 THEN 1 END) as r4,
+                COUNT(CASE WHEN vp.user_rating = 5 THEN 1 END) as r5,
+                COUNT(CASE WHEN vp.user_comment IS NOT NULL AND vp.user_comment != '' THEN 1 END) as with_comments
+            FROM video_phases vp
+            JOIN videos v ON CAST(vp.video_id AS UUID) = v.id
+            {summary_where}
+        """)
+        summary_result = await db.execute(summary_sql)
+        sr = summary_result.fetchone()
 
+        # Download stats (separate lightweight query)
+        dl_sql = text("""
+            SELECT COUNT(DISTINCT (video_id, phase_index)) as downloaded_clips,
+                   COUNT(*) as total_downloads
+            FROM clip_download_log
+        """)
+        dl_result = await db.execute(dl_sql)
+        dl = dl_result.fetchone()
+
+        # --- Build WHERE clause for filtered list ---
+        conditions = []
+        if not include_unrated and filter_rating != -1:
+            conditions.append("vp.user_rating IS NOT NULL")
+        if filter_rating > 0:
+            conditions.append(f"vp.user_rating = {int(filter_rating)}")
+        elif filter_rating == -1:
+            conditions.append("vp.user_rating IS NULL")
+
+        where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+        # Count for pagination
+        count_sql = text(f"""
+            SELECT COUNT(*) FROM video_phases vp
+            JOIN videos v ON CAST(vp.video_id AS UUID) = v.id
+            {where_clause}
+        """)
+        count_result = await db.execute(count_sql)
+        total_filtered = count_result.scalar()
+
+        # Paginated data query
+        offset = (max(1, page) - 1) * per_page
         sql = text(f"""
             SELECT
                 vp.video_id,
                 vp.phase_index,
                 vp.time_start,
                 vp.time_end,
-                vp.phase_description,
+                SUBSTRING(vp.phase_description, 1, 200) as phase_description,
                 vp.user_rating,
                 vp.user_comment,
                 vp.rated_at,
                 vp.importance_score,
                 v.original_filename,
                 v.user_id,
-                v.status as video_status,
                 u.email as user_email,
                 COALESCE(dl.download_count, 0) as download_count
             FROM video_phases vp
@@ -187,8 +240,9 @@ async def get_all_feedbacks(
                 AND CAST(vp.phase_index AS VARCHAR) = dl.phase_index
             {where_clause}
             ORDER BY vp.rated_at DESC NULLS LAST, vp.video_id, vp.phase_index
+            LIMIT :limit OFFSET :offset
         """)
-        result = await db.execute(sql)
+        result = await db.execute(sql, {"limit": per_page, "offset": offset})
         rows = result.fetchall()
 
         feedbacks = []
@@ -198,7 +252,7 @@ async def get_all_feedbacks(
                 "phase_index": r.phase_index,
                 "time_start": r.time_start,
                 "time_end": r.time_end,
-                "summary": r.phase_description[:200] if r.phase_description else None,
+                "summary": r.phase_description,
                 "user_rating": r.user_rating,
                 "user_comment": r.user_comment,
                 "rated_at": str(r.rated_at) if r.rated_at else None,
@@ -209,32 +263,28 @@ async def get_all_feedbacks(
                 "download_count": r.download_count,
             })
 
-        # Summary stats (only count rated items)
-        rated = [f for f in feedbacks if f["user_rating"] is not None]
-        total_rated = len(rated)
-        total_all = len(feedbacks)
-        total_unrated = total_all - total_rated
-        avg_rating = sum(f["user_rating"] for f in rated) / total_rated if total_rated > 0 else 0
-        rating_dist = {i: 0 for i in range(1, 6)}
-        for f in rated:
-            if f["user_rating"] in rating_dist:
-                rating_dist[f["user_rating"]] += 1
-        with_comments = sum(1 for f in feedbacks if f.get("user_comment"))
-        downloaded = sum(1 for f in feedbacks if f.get("download_count", 0) > 0)
-        total_downloads = sum(f.get("download_count", 0) for f in feedbacks)
+        total_pages = max(1, -(-total_filtered // per_page))  # ceil division
 
         return {
             "summary": {
-                "total_feedbacks": total_rated,
-                "total_phases": total_all,
-                "total_unrated": total_unrated,
-                "average_rating": round(avg_rating, 2),
-                "rating_distribution": rating_dist,
-                "with_comments": with_comments,
-                "downloaded_clips": downloaded,
-                "total_downloads": total_downloads,
+                "total_feedbacks": sr.rated_count,
+                "total_phases": sr.total,
+                "total_unrated": sr.unrated_count,
+                "average_rating": round(float(sr.avg_rating), 2),
+                "rating_distribution": {
+                    1: sr.r1, 2: sr.r2, 3: sr.r3, 4: sr.r4, 5: sr.r5,
+                },
+                "with_comments": sr.with_comments,
+                "downloaded_clips": dl.downloaded_clips if dl else 0,
+                "total_downloads": dl.total_downloads if dl else 0,
             },
             "feedbacks": feedbacks,
+            "pagination": {
+                "page": page,
+                "per_page": per_page,
+                "total_filtered": total_filtered,
+                "total_pages": total_pages,
+            },
         }
     except Exception as e:
         logger.exception(f"Failed to fetch feedbacks: {e}")
