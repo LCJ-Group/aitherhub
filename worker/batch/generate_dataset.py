@@ -88,6 +88,8 @@ load_dotenv()
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import text
+import ssl as _ssl
+from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
@@ -95,13 +97,38 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 engine = None
 AsyncSessionLocal = None
 
+def _prepare_database_url(url: str):
+    """Strip sslmode from URL for asyncpg compatibility."""
+    parsed = urlparse(url)
+    qp = parse_qs(parsed.query)
+    connect_args = {}
+    if "sslmode" in qp:
+        mode = qp.pop("sslmode")[0]
+        if mode == "require":
+            ctx = _ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = _ssl.CERT_NONE
+            connect_args["ssl"] = ctx
+    if "ssl" in qp:
+        mode = qp.pop("ssl")[0]
+        if mode == "require":
+            ctx = _ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = _ssl.CERT_NONE
+            connect_args["ssl"] = ctx
+    new_query = urlencode(qp, doseq=True)
+    cleaned = urlunparse(parsed._replace(query=new_query))
+    return cleaned, connect_args
+
 def _init_db():
     global engine, AsyncSessionLocal
     if engine is not None:
         return
     if not DATABASE_URL:
         raise RuntimeError("DATABASE_URL not set")
-    engine = create_async_engine(DATABASE_URL, pool_pre_ping=True, echo=False)
+    cleaned_url, connect_args = _prepare_database_url(DATABASE_URL)
+    engine = create_async_engine(cleaned_url, pool_pre_ping=True, echo=False,
+                                 connect_args=connect_args)
     AsyncSessionLocal = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 
 # ── Config ──
