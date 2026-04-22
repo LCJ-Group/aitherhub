@@ -898,6 +898,7 @@ async def brand_analytics_funnel(
     pv_sql = text("""
         SELECT
             COUNT(*) FILTER (WHERE event_type = 'page_view') as page_views,
+            COUNT(*) FILTER (WHERE event_type = 'fab_impression') as fab_impressions,
             COUNT(*) FILTER (WHERE event_type = 'widget_open') as widget_opens
         FROM widget_tracking_events
         WHERE client_id = :cid AND created_at >= :since
@@ -905,6 +906,7 @@ async def brand_analytics_funnel(
     pv_result = await db.execute(pv_sql, {"cid": client_id, "since": since})
     pv_row = pv_result.mappings().first()
     page_views = pv_row["page_views"] or 0
+    fab_impressions = pv_row["fab_impressions"] or 0
     widget_opens = pv_row["widget_opens"] or 0
 
     funnel_sql = text("""
@@ -944,7 +946,9 @@ async def brand_analytics_funnel(
     play_sessions = row["play_sessions"] or 0
     stages = [
         {"stage": "ページビュー", "stage_key": "page_view", "count": page_views, "rate": 100.0},
-        {"stage": "ウィジェット表示", "stage_key": "widget_open", "count": widget_opens,
+        {"stage": "FAB表示", "stage_key": "fab_impression", "count": fab_impressions,
+         "rate": round((fab_impressions / top_of_funnel) * 100, 1)},
+        {"stage": "ウィジェットオープン", "stage_key": "widget_open", "count": widget_opens,
          "rate": round((widget_opens / top_of_funnel) * 100, 1)},
         {"stage": "動画再生", "stage_key": "play", "count": play_sessions,
          "rate": round((play_sessions / top_of_funnel) * 100, 1)},
@@ -1274,6 +1278,7 @@ async def brand_analytics_overview(
     current_sql = text("""
         SELECT
             COUNT(*) FILTER (WHERE event_type = 'page_view') as page_views,
+            COUNT(*) FILTER (WHERE event_type = 'fab_impression') as fab_impressions,
             COUNT(*) FILTER (WHERE event_type = 'widget_open') as widget_opens,
             COUNT(*) FILTER (WHERE event_type = 'video_play') as plays,
             COUNT(DISTINCT session_id) FILTER (WHERE event_type = 'video_play') as unique_viewers,
@@ -1333,6 +1338,7 @@ async def brand_analytics_overview(
         "period_days": days,
         "kpi": {
             "page_views": curr["page_views"] or 0,
+            "fab_impressions": curr["fab_impressions"] or 0,
             "widget_opens": curr["widget_opens"] or 0,
             "plays": plays,
             "plays_growth": growth(plays, prev["plays"]),

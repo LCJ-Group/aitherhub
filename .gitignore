@@ -51,3 +51,4 @@ CLAUDE.md
 
 # Cursor config / rules
 .cursor/backend/antenv/
+patch_loader.py

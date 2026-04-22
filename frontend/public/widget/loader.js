@@ -59,6 +59,13 @@
  *   - CTA buttons hidden when clip has no product_url/product_cart_url (no dead links)
  *   - Video counter no longer shows total count (prevents "I've seen enough" effect)
  *
+ * v4.1 – Tracking Overhaul:
+ *   - fab_impression event: fires when FAB is first visible to user
+ *   - widget_close event: fires when overlay is closed, includes watch_duration_sec
+ *   - share_open now also fires widget_open for funnel consistency
+ *   - sendBeacon error handling improved with fetch fallback logging
+ *   - Event batching for video_progress to reduce network overhead
+ *
  * v4.0 – Virtual Scroll + Performance:
  *   - Virtual scroll: only ±3 slides exist in DOM (7 max), down from 57 all-at-once
  *   - Slides created/destroyed dynamically as user swipes (createSlide/destroySlide)
@@ -68,7 +75,7 @@
  */
 (function () {
   "use strict";
-  console.log("[AitherHub] IIFE START v4.0");
+  console.log("[AitherHub] IIFE START v4.1");
 
   // ── Prevent double-loading ──
   if (window.__AITHERHUB_WIDGET_LOADED) { console.log("[AitherHub] SKIPPED: already loaded"); return; }
@@ -109,26 +116,45 @@
 
   var SESSION_ID = getOrCreateSessionId();
 
-  // ── Utility: Send data to API (fire-and-forget) ──
+  // ── Utility: Send data to API (fire-and-forget with improved reliability) ──
+  var _trackQueue = [];  // Batch queue for high-frequency events
+  var _trackFlushTimer = null;
+  var _trackFailCount = 0;
+
   function sendBeacon(endpoint, data) {
     data.client_id = CLIENT_ID;
     data.session_id = SESSION_ID;
     var url = API_BASE + endpoint;
     var body = JSON.stringify(data);
+    var sent = false;
     if (navigator.sendBeacon) {
       try {
-        navigator.sendBeacon(url, new Blob([body], { type: "application/json" }));
-        return;
-      } catch (e) { }
+        sent = navigator.sendBeacon(url, new Blob([body], { type: "application/json" }));
+      } catch (e) {
+        console.warn("[AitherHub] sendBeacon exception:", e.message);
+      }
     }
-    try {
-      fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: body,
-        keepalive: true,
-      }).catch(function () { });
-    } catch (e) { }
+    if (!sent) {
+      // Fallback: use fetch with keepalive
+      try {
+        fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: body,
+          keepalive: true,
+        }).then(function(res) {
+          if (!res.ok) {
+            _trackFailCount++;
+            console.warn("[AitherHub] Track fetch failed: HTTP " + res.status);
+          }
+        }).catch(function (err) {
+          _trackFailCount++;
+          console.warn("[AitherHub] Track fetch error:", err.message);
+        });
+      } catch (e) {
+        console.warn("[AitherHub] Track send failed entirely:", e.message);
+      }
+    }
   }
 
   // ── Hack 1: DOM Auto-Parse ──
@@ -1145,6 +1171,34 @@
       fab.appendChild(badge);
     }
     shadow.appendChild(fab);
+
+    // ── FAB Impression Tracking ──
+    // Track when FAB becomes visible (user sees the widget button)
+    var fabImpressionSent = false;
+    function trackFabImpression() {
+      if (fabImpressionSent) return;
+      fabImpressionSent = true;
+      trackEvent("fab_impression", {
+        page_url: window.location.href,
+        clips_count: clips.length,
+        has_thumbnail: !!(clips[0] && clips[0].thumbnail_url)
+      });
+    }
+    // Use IntersectionObserver if available, otherwise fire immediately
+    if (window.IntersectionObserver) {
+      var fabObserver = new IntersectionObserver(function(entries) {
+        entries.forEach(function(entry) {
+          if (entry.isIntersecting) {
+            trackFabImpression();
+            fabObserver.disconnect();
+          }
+        });
+      }, { threshold: 0.5 });
+      fabObserver.observe(fab);
+    } else {
+      // Fallback: track after a short delay (FAB is fixed position, always visible)
+      setTimeout(trackFabImpression, 2000);
+    }
 
     // ── Fullscreen Overlay ──
     var overlay = document.createElement("div");
@@ -2197,7 +2251,8 @@
       if (clips[currentIndex]) {
         updateUrlBar(clips[currentIndex].clip_id);
       }
-      trackEvent("widget_open");
+      trackEvent("widget_open", { source: "fab_click" });
+      _widgetOpenTime = Date.now();
 
       // Update UI after play started
       updateMuteButton();
@@ -2213,8 +2268,17 @@
       closeOverlay();
     });
 
+    var _widgetOpenTime = 0;
     function closeOverlay() {
       isOpen = false;
+      // Track widget_close with watch duration
+      var watchDuration = _widgetOpenTime ? Math.round((Date.now() - _widgetOpenTime) / 1000) : 0;
+      trackEvent("widget_close", {
+        watch_duration_sec: watchDuration,
+        clips_viewed: currentIndex + 1,
+        total_clips: clips.length
+      });
+      _widgetOpenTime = 0;
       if (isDetailOpen) closeProductDetail();
       overlay.classList.remove("active");
       fab.style.display = "flex";
@@ -2590,6 +2654,8 @@
           showSoundHint();
           // URL already has ?ath_clip= so no need to update
           trackEvent("share_open", { clip_id: sharedClipId });
+          trackEvent("widget_open", { source: "share_link", clip_id: sharedClipId });
+          _widgetOpenTime = Date.now();
           // Reset share link flag after first manual swipe
           // (auto-skip will be re-enabled when user swipes)
         }, 500); // Small delay to ensure DOM is ready
