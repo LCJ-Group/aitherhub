@@ -1,5 +1,5 @@
 /**
- * AitherHub Widget Loader v2.6 — TikTok-Style Fullscreen Feed + Product Card + Subtitles
+ * AitherHub Widget Loader v3.3 — TikTok-Style Fullscreen Feed + Product Card + Subtitles
  *
  * GTM経由で配信される軽量エントリーポイント。
  * 先方のECサイトに1行のタグを追加するだけで、
@@ -45,13 +45,28 @@
  *   - Mute button pulse animation when muted to draw attention
  *   - localStorage remembers user sound preference for next visit
  *   - Returning users with sound ON get auto-unmute attempt
+ *
+ * v2.10 – OGP product preview: fetch real product info (image, title, description, price) from product page via server-side OGP API
+ * v2.9 – Product detail panel: tap product card or CTA → slide-up detail panel
+ *         with large product image, full name, price, description, and action buttons.
+ *         product_detail_view tracking event added to conversion funnel.
+ *         Design balance: compact product card (48px img, 12px name, 36px CTA buttons).
+ *
+ * v2.8 – 2-tier CTA system: product_url only → "商品を見る" single button;
+ *         product_url + product_cart_url → dual "カートに入れる" + "購入する" buttons;
+ *         no URLs → CTA hidden. Tracking: product_click / add_to_cart / purchase_click.
+ * v2.7 – Changes:
+ *   - CTA buttons hidden when clip has no product_url/product_cart_url (no dead links)
+ *   - Video counter no longer shows total count (prevents "I've seen enough" effect)
  */
 (function () {
   "use strict";
+  console.log("[AitherHub] IIFE START v3.3");
 
   // ── Prevent double-loading ──
-  if (window.__AITHERHUB_WIDGET_LOADED) return;
+  if (window.__AITHERHUB_WIDGET_LOADED) { console.log("[AitherHub] SKIPPED: already loaded"); return; }
   window.__AITHERHUB_WIDGET_LOADED = true;
+  console.log("[AitherHub] First load, proceeding...");
 
   // ── Configuration ──
   var SCRIPT_TAG = document.currentScript || (function () {
@@ -173,15 +188,23 @@
   }
 
   // ── Load widget config from API ──
-  function loadConfig(callback) {
+  function loadConfig(callback, attempt) {
+    attempt = attempt || 1;
+    var MAX_RETRIES = 3;
+    var RETRY_DELAYS = [3000, 6000, 12000]; // 3s, 6s, 12s
     fetch(API_BASE + "/widget/config/" + CLIENT_ID)
       .then(function (res) {
-        if (!res.ok) throw new Error("Config not found");
+        if (!res.ok) throw new Error("Config HTTP " + res.status);
         return res.json();
       })
       .then(callback)
       .catch(function (err) {
-        console.warn("[AitherHub] Failed to load config:", err.message);
+        if (attempt < MAX_RETRIES) {
+          console.warn("[AitherHub] Config load attempt " + attempt + " failed (" + err.message + "), retrying in " + (RETRY_DELAYS[attempt - 1] / 1000) + "s...");
+          setTimeout(function () { loadConfig(callback, attempt + 1); }, RETRY_DELAYS[attempt - 1]);
+        } else {
+          console.warn("[AitherHub] Failed to load config after " + MAX_RETRIES + " attempts:", err.message);
+        }
       });
   }
 
@@ -191,7 +214,12 @@
     host.id = "aitherhub-widget-host";
     host.style.cssText = "position:fixed;z-index:2147483647;pointer-events:none;top:0;left:0;width:100%;height:100%;";
     document.body.appendChild(host);
-    var shadow = host.attachShadow({ mode: "closed" });
+    var shadow = host.attachShadow({ mode: "open" });
+    // Load Google Fonts via <link> instead of @import (more reliable in Shadow DOM)
+    var fontLink = document.createElement("link");
+    fontLink.rel = "stylesheet";
+    fontLink.href = "https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&display=swap";
+    shadow.appendChild(fontLink);
     return shadow;
   }
 
@@ -219,7 +247,8 @@
     for (var ci = 0; ci < rawClips.length; ci++) {
       if (rawClips[ci].clip_url) clips.push(rawClips[ci]);
     }
-    if (clips.length === 0) return;
+    console.log("[AitherHub] buildWidget: rawClips=", rawClips.length, "filtered clips=", clips.length);
+    if (clips.length === 0) { console.warn("[AitherHub] No clips with clip_url, aborting widget"); return; }
 
     var themeColor = config.theme_color || "#FF2D55";
     var position = config.position || "bottom-right";
@@ -229,7 +258,7 @@
     // ── CSS ──
     var style = document.createElement("style");
     style.textContent = '\
-      @import url("https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&display=swap");\
+      /* Font loaded via <link> in createWidgetContainer() */\
       * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }\
       \
       .ath-fab {\
@@ -436,20 +465,20 @@
       .ath-product-card {\
         display: flex;\
         align-items: center;\
-        gap: 10px;\
+        gap: 8px;\
         background: rgba(255,255,255,0.12);\
         backdrop-filter: blur(12px);\
         -webkit-backdrop-filter: blur(12px);\
-        border-radius: 12px;\
-        padding: 10px;\
-        margin-bottom: 10px;\
+        border-radius: 10px;\
+        padding: 8px;\
+        margin-bottom: 8px;\
         border: 1px solid rgba(255,255,255,0.15);\
         cursor: pointer;\
         transition: background 0.2s;\
       }\
       .ath-product-card:active { background: rgba(255,255,255,0.2); }\
       .ath-product-img {\
-        width: 56px; height: 56px;\
+        width: 48px; height: 48px;\
         border-radius: 8px;\
         object-fit: cover;\
         flex-shrink: 0;\
@@ -461,16 +490,17 @@
       }\
       .ath-product-name {\
         color: white;\
-        font-size: 13px;\
+        font-size: 12px;\
         font-weight: 600;\
         line-height: 1.3;\
         white-space: nowrap;\
         overflow: hidden;\
         text-overflow: ellipsis;\
+        max-width: 180px;\
       }\
       .ath-product-price {\
         color: ' + themeColor + ';\
-        font-size: 15px;\
+        font-size: 14px;\
         font-weight: 900;\
         margin-top: 2px;\
       }\
@@ -483,10 +513,10 @@
       }\
       .ath-cta {\
         flex: 1;\
-        height: 44px;\
+        height: 36px;\
         border: none;\
-        border-radius: 22px;\
-        font-size: 14px;\
+        border-radius: 18px;\
+        font-size: 13px;\
         font-weight: 700;\
         cursor: pointer;\
         display: flex;\
@@ -497,7 +527,7 @@
         pointer-events: auto;\
       }\
       .ath-cta:active { transform: scale(0.96); }\
-      .ath-cta svg { width: 18px; height: 18px; flex-shrink: 0; }\
+      .ath-cta svg { width: 16px; height: 16px; flex-shrink: 0; }\
       .ath-cta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }\
       .ath-cta-cart {\
         background: rgba(255,255,255,0.2);\
@@ -672,6 +702,232 @@
       .ath-subtitle.hidden { opacity: 0; }\
       .ath-subtitle.visible { opacity: 1; }\
       \
+      /* ── Sound confirm popup ── */\
+      .ath-sound-confirm {\
+        position: absolute;\
+        top: 0; left: 0; right: 0; bottom: 0;\
+        z-index: 60;\
+        display: flex;\
+        align-items: center;\
+        justify-content: center;\
+        background: rgba(0,0,0,0.6);\
+        backdrop-filter: blur(4px);\
+        -webkit-backdrop-filter: blur(4px);\
+        opacity: 0;\
+        pointer-events: none;\
+        transition: opacity 0.25s ease;\
+      }\
+      .ath-sound-confirm.visible { opacity: 1; pointer-events: auto; }\
+      .ath-sound-confirm-box {\
+        background: rgba(30,30,30,0.95);\
+        border-radius: 16px;\
+        padding: 24px 28px;\
+        text-align: center;\
+        max-width: 280px;\
+        width: 80%;\
+        box-shadow: 0 8px 32px rgba(0,0,0,0.4);\
+        transform: scale(0.9);\
+        transition: transform 0.25s ease;\
+      }\
+      .ath-sound-confirm.visible .ath-sound-confirm-box { transform: scale(1); }\
+      .ath-sound-confirm-icon {\
+        width: 56px; height: 56px;\
+        margin: 0 auto 16px;\
+        background: rgba(255,255,255,0.1);\
+        border-radius: 50%;\
+        display: flex; align-items: center; justify-content: center;\
+      }\
+      .ath-sound-confirm-icon svg { width: 28px; height: 28px; }\
+      .ath-sound-confirm-title {\
+        color: white;\
+        font-size: 16px;\
+        font-weight: 700;\
+        margin-bottom: 8px;\
+      }\
+      .ath-sound-confirm-desc {\
+        color: rgba(255,255,255,0.6);\
+        font-size: 12px;\
+        margin-bottom: 20px;\
+        line-height: 1.4;\
+      }\
+      .ath-sound-confirm-btns {\
+        display: flex;\
+        gap: 10px;\
+      }\
+      .ath-sound-confirm-btn {\
+        flex: 1;\
+        padding: 12px 0;\
+        border-radius: 10px;\
+        border: none;\
+        font-size: 14px;\
+        font-weight: 600;\
+        cursor: pointer;\
+        transition: transform 0.15s ease, opacity 0.15s ease;\
+      }\
+      .ath-sound-confirm-btn:active { transform: scale(0.95); }\
+      .ath-sound-confirm-btn.cancel {\
+        background: rgba(255,255,255,0.15);\
+        color: rgba(255,255,255,0.8);\
+      }\
+      .ath-sound-confirm-btn.confirm {\
+        background: #FF2D55;\
+        color: white;\
+      }\
+      \
+      /* ── Loading Spinner ── */\
+      .ath-loading-spinner {\
+        position: absolute;\
+        top: 0; left: 0; right: 0; bottom: 0;\
+        display: flex;\
+        align-items: center;\
+        justify-content: center;\
+        z-index: 5;\
+        pointer-events: none;\
+      }\
+      .ath-spinner-ring {\
+        width: 40px; height: 40px;\
+        border: 3px solid rgba(255,255,255,0.2);\
+        border-top-color: white;\
+        border-radius: 50%;\
+        animation: ath-spin 0.8s linear infinite;\
+      }\
+      @keyframes ath-spin {\
+        to { transform: rotate(360deg); }\
+      }\
+      \
+      /* ── Product Detail Panel ── */\
+      .ath-detail-overlay {\
+        position: absolute;\
+        top: 0; left: 0; right: 0; bottom: 0;\
+        background: rgba(0,0,0,0.6);\
+        z-index: 40;\
+        display: none;\
+        pointer-events: auto;\
+      }\
+      .ath-detail-overlay.active { display: block; }\
+      .ath-detail-panel {\
+        position: absolute;\
+        bottom: 0; left: 0; right: 0;\
+        max-height: 75vh;\
+        background: #1a1a1a;\
+        border-radius: 16px 16px 0 0;\
+        padding: 0;\
+        transform: translateY(100%);\
+        transition: transform 0.35s cubic-bezier(0.25, 0.46, 0.45, 0.94);\
+        overflow-y: auto;\
+        -webkit-overflow-scrolling: touch;\
+      }\
+      .ath-detail-overlay.active .ath-detail-panel { transform: translateY(0); }\
+      .ath-detail-handle {\
+        width: 36px; height: 4px;\
+        background: rgba(255,255,255,0.3);\
+        border-radius: 2px;\
+        margin: 12px auto 8px;\
+      }\
+      .ath-detail-close {\
+        position: absolute;\
+        top: 12px; right: 12px;\
+        width: 32px; height: 32px;\
+        background: rgba(255,255,255,0.15);\
+        border: none; border-radius: 50%;\
+        cursor: pointer;\
+        display: flex; align-items: center; justify-content: center;\
+        z-index: 2;\
+      }\
+      .ath-detail-close svg { width: 18px; height: 18px; }\
+      .ath-detail-close:active { background: rgba(255,255,255,0.25); }\
+      .ath-detail-img {\
+        width: 100%;\
+        max-height: 280px;\
+        object-fit: contain;\
+        background: #111;\
+        display: block;\
+      }\
+      .ath-detail-loading {\
+        display: flex;\
+        align-items: center;\
+        justify-content: center;\
+        padding: 40px 0;\
+        color: rgba(255,255,255,0.5);\
+        font-size: 13px;\
+        gap: 8px;\
+      }\
+      .ath-detail-loading.hidden { display: none; }\
+      .ath-detail-spinner {\
+        width: 20px; height: 20px;\
+        border: 2px solid rgba(255,255,255,0.2);\
+        border-top-color: ' + themeColor + ';\
+        border-radius: 50%;\
+        animation: ath-spin 0.8s linear infinite;\
+      }\
+      @keyframes ath-spin { to { transform: rotate(360deg); } }\
+      .ath-detail-site {\
+        display: flex;\
+        align-items: center;\
+        gap: 6px;\
+        margin-bottom: 10px;\
+        color: rgba(255,255,255,0.5);\
+        font-size: 11px;\
+      }\
+      .ath-detail-favicon {\
+        width: 14px; height: 14px;\
+        border-radius: 2px;\
+      }\
+      .ath-detail-body {\
+        padding: 16px;\
+      }\
+      .ath-detail-name {\
+        color: white;\
+        font-size: 16px;\
+        font-weight: 700;\
+        line-height: 1.4;\
+        margin-bottom: 6px;\
+      }\
+      .ath-detail-price {\
+        color: ' + themeColor + ';\
+        font-size: 20px;\
+        font-weight: 900;\
+        margin-bottom: 12px;\
+      }\
+      .ath-detail-desc {\
+        color: rgba(255,255,255,0.6);\
+        font-size: 13px;\
+        line-height: 1.6;\
+        margin-bottom: 16px;\
+      }\
+      .ath-detail-actions {\
+        display: flex;\
+        gap: 10px;\
+      }\
+      .ath-detail-btn {\
+        flex: 1;\
+        height: 44px;\
+        border: none;\
+        border-radius: 22px;\
+        font-size: 14px;\
+        font-weight: 700;\
+        cursor: pointer;\
+        display: flex;\
+        align-items: center;\
+        justify-content: center;\
+        gap: 6px;\
+        transition: transform 0.15s, opacity 0.15s;\
+      }\
+      .ath-detail-btn:active { transform: scale(0.96); }\
+      .ath-detail-btn svg { width: 18px; height: 18px; flex-shrink: 0; }\
+      .ath-detail-btn-primary {\
+        background: ' + themeColor + ';\
+        color: white;\
+        box-shadow: 0 4px 16px ' + themeColor + '66;\
+      }\
+      .ath-detail-btn-primary:hover { opacity: 0.9; }\
+      .ath-detail-btn-secondary {\
+        background: rgba(255,255,255,0.15);\
+        color: white;\
+        border: 1px solid rgba(255,255,255,0.2);\
+      }\
+      .ath-detail-btn-secondary:hover { background: rgba(255,255,255,0.25); }\
+      \
       /* ── Powered by ── */\
       .ath-powered {\
         position: absolute;\
@@ -703,34 +959,156 @@
     var isSpeedUp = false;
     var hintShown = false;
     var fabVideo = null;
+    var _consecutiveSkips = 0; // Track consecutive auto-skips to prevent chain reactions
+    var MAX_CONSECUTIVE_SKIPS = 2; // Stop auto-skipping after this many consecutive failures
+    var _isShareLinkOpen = false; // When true, disable auto-skip entirely (user opened via share link)
+
+    // ── Video Depth Tracking (AI Learning) ──
+    var depthSent = {};          // { "clipId_25": true, ... }
+    var clipWatchStart = {};     // { clipId: Date.now() }
+    var clipLoopCount = {};      // { clipId: 0 }
+    var DEPTH_THRESHOLDS = [25, 50, 75, 100];
+
+    function resetDepthTracking(clipId) {
+      DEPTH_THRESHOLDS.forEach(function (t) { delete depthSent[clipId + "_" + t]; });
+      clipWatchStart[clipId] = Date.now();
+      clipLoopCount[clipId] = 0;
+    }
+
+    function checkVideoDepth(video, clipId) {
+      if (!video || !video.duration || video.duration < 1) return;
+      var pct = (video.currentTime / video.duration) * 100;
+      DEPTH_THRESHOLDS.forEach(function (t) {
+        var key = clipId + "_" + t;
+        if (pct >= t && !depthSent[key]) {
+          depthSent[key] = true;
+          var watchSec = clipWatchStart[clipId] ? (Date.now() - clipWatchStart[clipId]) / 1000 : 0;
+          trackEvent("video_progress", {
+            clip_id: clipId,
+            progress_pct: t,
+            watch_duration_sec: Math.round(watchSec * 10) / 10,
+            total_duration_sec: Math.round(video.duration * 10) / 10,
+            loop_count: clipLoopCount[clipId] || 0
+          });
+        }
+      });
+      // Detect loop restart (video loops back near start after being near end)
+      if (pct < 5 && depthSent[clipId + "_100"]) {
+        clipLoopCount[clipId] = (clipLoopCount[clipId] || 0) + 1;
+        // Track replay event on each loop
+        trackEvent("video_replay", {
+          clip_id: clipId,
+          loop_count: clipLoopCount[clipId],
+          total_watch_sec: clipWatchStart[clipId] ? Math.round((Date.now() - clipWatchStart[clipId]) / 100) / 10 : 0
+        });
+        // Reset depth for next loop (except 100% which stays to detect future loops)
+        [25, 50, 75].forEach(function (t) { delete depthSent[clipId + "_" + t]; });
+      }
+    }
+
+    // ── Adaptive Quality: detect network speed and choose 720p or 1080p ──
+    var useHD = false; // default: 720p for fast loading
+    function detectNetworkQuality() {
+      // Method 1: Navigator.connection API (Chrome/Android)
+      var conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+      if (conn) {
+        // WiFi or fast connection → HD
+        if (conn.type === "wifi" || conn.type === "ethernet") { useHD = true; return; }
+        // effectiveType: 4g with good downlink → HD
+        if (conn.effectiveType === "4g" && (conn.downlink || 0) >= 5) { useHD = true; return; }
+        // 3g or slower → stay 720p
+        useHD = false;
+        return;
+      }
+      // Method 2: Measure actual download speed with first clip thumbnail
+      var testUrl = (clips[0] && clips[0].thumbnail_url) || "";
+      if (!testUrl) return;
+      var startTime = performance.now();
+      var img = new Image();
+      img.onload = function () {
+        var elapsed = (performance.now() - startTime) / 1000; // seconds
+        // Thumbnail is typically 20-50KB; if loads in < 200ms → fast connection
+        if (elapsed < 0.3) {
+          useHD = true;
+          upgradeToHD();
+        }
+      };
+      img.src = testUrl + (testUrl.indexOf("?") > -1 ? "&" : "?") + "_t=" + Date.now();
+    }
+    detectNetworkQuality();
+
+    // Get the best URL for a clip based on quality setting
+    function getClipUrl(clip) {
+      if (useHD && clip.clip_url_hd) {
+        // Only use HD if it's a processed file (contains 'widget_' in path)
+        // Raw unprocessed originals may be too large or use unsupported codecs (H.265)
+        var hdPath = clip.clip_url_hd.split('?')[0]; // strip SAS token for check
+        if (hdPath.indexOf('widget_') > -1 || hdPath.indexOf('/clips/') === -1) {
+          return clip.clip_url_hd;
+        }
+        // HD URL is raw original — fall back to optimized 720p
+        console.log('[AitherHub] HD URL is raw original, falling back to 720p for clip ' + clip.clip_id);
+      }
+      return clip.clip_url || "";
+    }
+
+    // Upgrade all loaded videos to HD if network is fast
+    function upgradeToHD() {
+      if (!useHD) return;
+      clips.forEach(function (clip, idx) {
+        var v = videoElements[idx];
+        if (!v) return;
+        var hdUrl = clip.clip_url_hd;
+        if (!hdUrl || hdUrl === clip.clip_url) return;
+        // Only upgrade if not currently playing or if it's a future video
+        if (idx !== currentIndex) {
+          var currentSrc = v.src || v.getAttribute("data-src") || "";
+          if (currentSrc && currentSrc.indexOf("widget_") > -1) {
+            // Currently has 720p, upgrade to HD
+            if (v.src && v.src !== "" && v.src !== window.location.href) {
+              v.src = hdUrl;
+            } else {
+              v.setAttribute("data-src", hdUrl);
+            }
+          }
+        }
+      });
+    }
+
+    // Listen for network changes
+    var conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+    if (conn) {
+      conn.addEventListener("change", function () {
+        var wasHD = useHD;
+        detectNetworkQuality();
+        if (useHD && !wasHD) upgradeToHD();
+      });
+    }
 
     // ── FAB (Floating Action Button) with Video Preview ──
     var fab = document.createElement("div");
     fab.className = "ath-fab";
-    if (clips[0] && clips[0].clip_url) {
+    // Use thumbnail for FAB if available, otherwise use lightweight video
+    if (clips[0] && clips[0].thumbnail_url) {
+      var fabImg = document.createElement("img");
+      fabImg.src = clips[0].thumbnail_url;
+      fabImg.alt = "Watch video";
+      fabImg.style.cssText = "width:100%;height:100%;object-fit:cover;border-radius:50%;";
+      fab.appendChild(fabImg);
+    } else if (clips[0] && (clips[0].clip_url || clips[0].widget_url)) {
       fabVideo = document.createElement("video");
       fabVideo.setAttribute("playsinline", "");
       fabVideo.setAttribute("webkit-playsinline", "");
-      fabVideo.setAttribute("preload", "auto");
+      fabVideo.setAttribute("preload", "metadata");
       fabVideo.setAttribute("loop", "");
       fabVideo.setAttribute("autoplay", "");
       fabVideo.muted = true;
-      fabVideo.src = clips[0].clip_url;
+      fabVideo.src = getClipUrl(clips[0]);
       fab.appendChild(fabVideo);
-      // Small play icon overlay
-      var fabPlayOverlay = document.createElement("div");
-      fabPlayOverlay.className = "ath-fab-play-overlay";
-      fabPlayOverlay.innerHTML = ICONS.play;
-      fab.appendChild(fabPlayOverlay);
-      // Auto-play when ready
       fabVideo.addEventListener("loadeddata", function () {
         fabVideo.play().catch(function () { });
       });
-      fabVideo.addEventListener("canplay", function () {
-        fabVideo.play().catch(function () { });
-      });
       try { fabVideo.play().catch(function () { }); } catch (e) { }
-      // iOS fallback: try play on first user touch anywhere on page
       var fabPlayOnTouch = function () {
         if (fabVideo && fabVideo.paused) {
           fabVideo.play().catch(function () { });
@@ -740,14 +1118,14 @@
       };
       document.addEventListener("touchstart", fabPlayOnTouch, { once: true, passive: true });
       document.addEventListener("click", fabPlayOnTouch, { once: true });
-    } else if (clips[0] && clips[0].thumbnail_url) {
-      var fabImg = document.createElement("img");
-      fabImg.src = clips[0].thumbnail_url;
-      fabImg.alt = "Watch video";
-      fab.appendChild(fabImg);
     } else {
       fab.innerHTML = '<div class="ath-fab-icon">' + ICONS.play + '</div>';
     }
+    // Small play icon overlay
+    var fabPlayOverlay = document.createElement("div");
+    fabPlayOverlay.className = "ath-fab-play-overlay";
+    fabPlayOverlay.innerHTML = ICONS.play;
+    fab.appendChild(fabPlayOverlay);
     if (clips.length > 1) {
       var badge = document.createElement("span");
       badge.className = "ath-badge";
@@ -800,10 +1178,31 @@
       video.className = "ath-video";
       video.setAttribute("playsinline", "");
       video.setAttribute("webkit-playsinline", "");
-      video.setAttribute("preload", index <= 2 ? "auto" : "metadata");
+      // Only preload first video; rest load on demand for fast initial playback
+      video.setAttribute("preload", index === 0 ? "auto" : "none");
       video.setAttribute("loop", "");
       video.muted = true;
-      video.src = clip.clip_url || "";
+      // Set poster for instant visual feedback
+      if (clip.thumbnail_url) {
+        video.setAttribute("poster", clip.thumbnail_url);
+      }
+      // Only set src for first 2 videos; rest are lazy-loaded
+      // Use getClipUrl() for adaptive quality (720p/1080p based on network)
+      if (index <= 1) {
+        video.src = getClipUrl(clip);
+      } else {
+        video.setAttribute("data-src", getClipUrl(clip));
+      }
+      // Error handler for debugging video load failures
+      video.addEventListener("error", function() {
+        var err = video.error;
+        console.warn("[AitherHub] Video error idx=" + index + " code=" + (err ? err.code : "?") + " msg=" + (err ? err.message : "unknown"));
+      });
+      // Stalled handler: retry load if video stalls
+      video.addEventListener("stalled", function() {
+        console.warn("[AitherHub] Video stalled idx=" + index + ", retrying load");
+        setTimeout(function() { try { video.load(); } catch(e){} }, 1000);
+      });
       inner.appendChild(video);
       videoElements[index] = video;
 
@@ -940,18 +1339,12 @@
     soundHint.appendChild(soundHintText);
     overlay.appendChild(soundHint);
 
-    // Sound hint click → unmute
+    // Sound hint click → show confirm popup
     soundHint.addEventListener("click", function (e) {
       e.stopPropagation();
-      isMuted = false;
       soundHintDismissed = true;
-      var video = videoElements[currentIndex];
-      if (video) video.muted = false;
-      updateMuteButton();
       hideSoundHint();
-      // Remember preference
-      try { localStorage.setItem(SOUND_PREF_KEY, "1"); } catch (e) { }
-      userPreferSound = true;
+      soundConfirm.className = "ath-sound-confirm visible";
     });
 
     function showSoundHint() {
@@ -979,6 +1372,288 @@
     powered.className = "ath-powered";
     powered.textContent = "Powered by AitherHub";
     overlay.appendChild(powered);
+
+    // ── Product Detail Panel (slide-up overlay) ──
+    var detailOverlay = document.createElement("div");
+    detailOverlay.className = "ath-detail-overlay";
+    var detailPanel = document.createElement("div");
+    detailPanel.className = "ath-detail-panel";
+
+    var detailHandle = document.createElement("div");
+    detailHandle.className = "ath-detail-handle";
+    detailPanel.appendChild(detailHandle);
+
+    var detailCloseBtn = document.createElement("button");
+    detailCloseBtn.className = "ath-detail-close";
+    detailCloseBtn.innerHTML = ICONS.close;
+    detailPanel.appendChild(detailCloseBtn);
+
+    var detailImg = document.createElement("img");
+    detailImg.className = "ath-detail-img";
+    detailPanel.appendChild(detailImg);
+
+    // Loading indicator
+    var detailLoading = document.createElement("div");
+    detailLoading.className = "ath-detail-loading hidden";
+    detailLoading.innerHTML = '<div class="ath-detail-spinner"></div><span>\u8AAD\u307F\u8FBC\u307F\u4E2D...</span>';
+    detailPanel.appendChild(detailLoading);
+
+    var detailBody = document.createElement("div");
+    detailBody.className = "ath-detail-body";
+
+    // Site info (favicon + site name)
+    var detailSite = document.createElement("div");
+    detailSite.className = "ath-detail-site";
+    var detailFavicon = document.createElement("img");
+    detailFavicon.className = "ath-detail-favicon";
+    var detailSiteName = document.createElement("span");
+    detailSite.appendChild(detailFavicon);
+    detailSite.appendChild(detailSiteName);
+    detailBody.appendChild(detailSite);
+
+    var detailName = document.createElement("div");
+    detailName.className = "ath-detail-name";
+    detailBody.appendChild(detailName);
+
+    var detailPrice = document.createElement("div");
+    detailPrice.className = "ath-detail-price";
+    detailBody.appendChild(detailPrice);
+
+    var detailDesc = document.createElement("div");
+    detailDesc.className = "ath-detail-desc";
+    detailBody.appendChild(detailDesc);
+
+    var detailActions = document.createElement("div");
+    detailActions.className = "ath-detail-actions";
+
+    var detailCartBtn = document.createElement("button");
+    detailCartBtn.className = "ath-detail-btn ath-detail-btn-secondary";
+    detailCartBtn.innerHTML = ICONS.cart + '<span>\u30AB\u30FC\u30C8\u306B\u5165\u308C\u308B</span>';
+
+    var detailBuyBtn = document.createElement("button");
+    detailBuyBtn.className = "ath-detail-btn ath-detail-btn-primary";
+    detailBuyBtn.innerHTML = ICONS.bag + '<span>\u5546\u54C1\u30DA\u30FC\u30B8\u3078</span>';
+
+    detailActions.appendChild(detailCartBtn);
+    detailActions.appendChild(detailBuyBtn);
+    detailBody.appendChild(detailActions);
+    detailPanel.appendChild(detailBody);
+    detailOverlay.appendChild(detailPanel);
+    overlay.appendChild(detailOverlay);
+
+    var isDetailOpen = false;
+
+    // OGP preview cache (keyed by product_url)
+    var ogpCache = {};
+
+    function openProductDetail(clip) {
+      if (!clip) return;
+
+      // Pause video
+      var video = videoElements[currentIndex];
+      if (video && !video.paused) {
+        video.pause();
+      }
+
+      // Show panel immediately with loading state
+      detailOverlay.classList.add("active");
+      isDetailOpen = true;
+
+      // Show loading, hide content initially
+      detailLoading.classList.remove("hidden");
+      detailBody.style.display = "none";
+      detailImg.style.display = "none";
+
+      // Track product_detail_view event
+      trackEvent("product_detail_view", {
+        clip_id: clip.clip_id,
+        product_name: clip.product_name,
+        product_price: clip.product_price,
+        video_time: video ? video.currentTime : 0,
+      });
+
+      // Show/hide cart button based on product_cart_url
+      detailCartBtn.style.display = clip.product_cart_url ? "flex" : "none";
+      // Show/hide buy button based on product_url
+      detailBuyBtn.style.display = clip.product_url ? "flex" : "none";
+
+      // If we have a product_url, fetch OGP data
+      var productUrl = clip.product_url;
+      if (productUrl) {
+        // Check cache first
+        if (ogpCache[productUrl]) {
+          populateDetailFromOGP(ogpCache[productUrl], clip);
+          return;
+        }
+        // Fetch OGP data from API
+        fetch(API_BASE + "/widget/product-preview?url=" + encodeURIComponent(productUrl))
+          .then(function (resp) { return resp.json(); })
+          .then(function (ogp) {
+            if (ogp && ogp.success) {
+              ogpCache[productUrl] = ogp;
+              // Only update if panel is still open for this clip
+              if (isDetailOpen && clips[currentIndex] === clip) {
+                populateDetailFromOGP(ogp, clip);
+              }
+            } else {
+              // Fallback to clip data
+              populateDetailFallback(clip);
+            }
+          })
+          .catch(function () {
+            // Fallback to clip data on error
+            populateDetailFallback(clip);
+          });
+      } else {
+        // No product_url, use clip data directly
+        populateDetailFallback(clip);
+      }
+    }
+
+    function populateDetailFromOGP(ogp, clip) {
+      detailLoading.classList.add("hidden");
+      detailBody.style.display = "block";
+
+      // Site info
+      if (ogp.site_name || ogp.favicon) {
+        detailSite.style.display = "flex";
+        detailSiteName.textContent = ogp.site_name || "";
+        if (ogp.favicon) {
+          detailFavicon.src = ogp.favicon;
+          detailFavicon.style.display = "block";
+          detailFavicon.onerror = function () { detailFavicon.style.display = "none"; };
+        } else {
+          detailFavicon.style.display = "none";
+        }
+      } else {
+        detailSite.style.display = "none";
+      }
+
+      // Title: prefer OGP, fallback to clip
+      detailName.textContent = ogp.title || clip.product_name || "";
+
+      // Price: prefer OGP, fallback to clip
+      var price = ogp.price || clip.product_price || "";
+      detailPrice.textContent = price;
+      detailPrice.style.display = price ? "block" : "none";
+
+      // Description from OGP
+      var desc = ogp.description || "";
+      detailDesc.textContent = desc;
+      detailDesc.style.display = desc ? "block" : "none";
+
+      // Image from OGP
+      if (ogp.image) {
+        detailImg.src = ogp.image;
+        detailImg.style.display = "block";
+        detailImg.onerror = function () {
+          // Fallback to clip image or hide
+          if (clip.product_image_url) {
+            detailImg.src = clip.product_image_url;
+          } else {
+            detailImg.style.display = "none";
+          }
+        };
+      } else if (clip.product_image_url) {
+        detailImg.src = clip.product_image_url;
+        detailImg.style.display = "block";
+      } else {
+        detailImg.style.display = "none";
+      }
+    }
+
+    function populateDetailFallback(clip) {
+      detailLoading.classList.add("hidden");
+      detailBody.style.display = "block";
+
+      // Hide site info in fallback mode
+      detailSite.style.display = "none";
+
+      detailName.textContent = clip.product_name || "";
+      detailPrice.textContent = clip.product_price || "";
+      detailPrice.style.display = clip.product_price ? "block" : "none";
+
+      // Use transcript_text as description fallback
+      detailDesc.textContent = clip.transcript_text || "";
+      detailDesc.style.display = clip.transcript_text ? "block" : "none";
+
+      if (clip.product_image_url) {
+        detailImg.src = clip.product_image_url;
+        detailImg.style.display = "block";
+      } else {
+        detailImg.style.display = "none";
+      }
+    }
+
+    function closeProductDetail() {
+      detailOverlay.classList.remove("active");
+      isDetailOpen = false;
+      // Resume video
+      var video = videoElements[currentIndex];
+      if (video && video.paused) {
+        video.play().catch(function () { });
+      }
+    }
+
+    // Close detail panel handlers
+    detailCloseBtn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      closeProductDetail();
+    });
+    detailOverlay.addEventListener("click", function (e) {
+      // Close when clicking outside the panel
+      if (e.target === detailOverlay) {
+        closeProductDetail();
+      }
+    });
+
+    // Detail panel: Buy button → external navigation
+    detailBuyBtn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      var clip = clips[currentIndex];
+      if (!clip || !clip.product_url) return;
+      trackEvent("product_click", {
+        clip_id: clip.clip_id,
+        product_name: clip.product_name,
+        product_price: clip.product_price,
+        source: "detail_panel",
+      });
+      var targetUrl = addUtmParams(clip.product_url, clip.clip_id, "detail_buy");
+      window.open(targetUrl, "_blank");
+    });
+
+    // Detail panel: Cart button → add to cart or navigate
+    detailCartBtn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      var clip = clips[currentIndex];
+      if (!clip) return;
+      trackEvent("add_to_cart", {
+        clip_id: clip.clip_id,
+        product_name: clip.product_name,
+        product_price: clip.product_price,
+        source: "detail_panel",
+      });
+      // Strategy 1: DOM manipulation
+      if (config.cart_selector) {
+        try {
+          var domCartBtn = document.querySelector(config.cart_selector);
+          if (domCartBtn) {
+            domCartBtn.click();
+            detailCartBtn.innerHTML = '<span>&#10003; \u30AB\u30FC\u30C8\u306B\u8FFD\u52A0\u3057\u307E\u3057\u305F</span>';
+            setTimeout(function () {
+              detailCartBtn.innerHTML = ICONS.cart + '<span>\u30AB\u30FC\u30C8\u306B\u5165\u308C\u308B</span>';
+            }, 2000);
+            return;
+          }
+        } catch (err) { }
+      }
+      // Strategy 2: Navigate to cart URL
+      var cartUrl = clip.product_cart_url || clip.product_url;
+      if (cartUrl) {
+        var targetUrl = addUtmParams(cartUrl, clip.clip_id, "detail_cart");
+        window.open(targetUrl, "_blank");
+      }
+    });
 
     shadow.appendChild(overlay);
 
@@ -1119,21 +1794,34 @@
           productCard.style.display = "none";
         }
 
-        // Show dual CTA buttons
-        var cartUrl = clip.product_cart_url || clip.product_url;
-        var buyUrl = clip.product_url;
+        // Show CTA buttons based on available URLs (2-tier system)
+        var hasCartUrl = !!clip.product_cart_url;
+        var hasBuyUrl = !!clip.product_url;
 
-        if (cartUrl && buyUrl && cartUrl !== buyUrl) {
-          // Both cart and buy URLs are different → show both
+        if (!hasCartUrl && !hasBuyUrl) {
+          // No URLs at all → hide all CTA buttons
+          cartBtn.style.display = "none";
+          buyBtn.style.display = "none";
+          singleCta.style.display = "none";
+        } else if (hasCartUrl && hasBuyUrl) {
+          // Tier 2: Both cart + buy URLs → show dual buttons
           cartBtn.style.display = "flex";
           buyBtn.style.display = "flex";
           singleCta.style.display = "none";
-        } else {
-          // Only one URL → show single buy button
-          cartBtn.style.display = "none";
-          buyBtn.style.display = "flex";
-          singleCta.style.display = "none";
+          cartBtn.innerHTML = ICONS.cart + '<span>カートに入れる</span>';
           buyBtn.innerHTML = ICONS.bag + '<span>' + ctaText + '</span>';
+        } else if (hasBuyUrl) {
+          // Tier 1: Only product_url → show single "商品を見る" button
+          cartBtn.style.display = "none";
+          buyBtn.style.display = "none";
+          singleCta.style.display = "flex";
+          singleCta.innerHTML = ICONS.bag + '<span>商品を見る</span>';
+        } else {
+          // Only cart URL (rare) → show single cart button
+          cartBtn.style.display = "flex";
+          buyBtn.style.display = "none";
+          singleCta.style.display = "none";
+          cartBtn.innerHTML = ICONS.cart + '<span>カートに入れる</span>';
         }
 
         // Track product view
@@ -1143,12 +1831,11 @@
           product_price: clip.product_price,
         });
       } else {
-        // No product info → hide product card, show single CTA (v2.2 behavior)
+        // No product info → hide product card AND all CTA buttons
         productCard.style.display = "none";
         cartBtn.style.display = "none";
         buyBtn.style.display = "none";
-        singleCta.style.display = "flex";
-        singleCta.innerHTML = ICONS.cart + '<span>' + ctaText + '</span>';
+        singleCta.style.display = "none";
       }
     }
 
@@ -1177,9 +1864,62 @@
     }
 
     // ── Helper: Play current video ──
+    // ── Helper: Lazy-load video src if not yet set ──
+    function ensureVideoSrc(idx) {
+      var v = videoElements[idx];
+      if (!v) return;
+      var clip = clips[idx];
+      if (!v.src || v.src === "" || v.src === window.location.href) {
+        var dataSrc = v.getAttribute("data-src");
+        if (dataSrc) {
+          // Use adaptive quality URL
+          v.src = clip ? getClipUrl(clip) : dataSrc;
+          v.removeAttribute("data-src");
+        }
+      } else if (useHD && clip && clip.clip_url_hd) {
+        // If HD mode activated and current src is 720p, upgrade
+        var currentSrc = v.src || "";
+        if (currentSrc.indexOf("widget_") > -1 && clip.clip_url_hd.indexOf("widget_") === -1) {
+          v.src = clip.clip_url_hd;
+        }
+      }
+    }
+
+    // ── Helper: Preload adjacent videos for seamless swiping ──
+    function preloadAdjacent(idx) {
+      var next = (idx + 1) % clips.length;
+      var next2 = (idx + 2) % clips.length;
+      var prev = ((idx - 1) + clips.length) % clips.length;
+      // Load src for next 2 and previous
+      ensureVideoSrc(next);
+      ensureVideoSrc(next2);
+      ensureVideoSrc(prev);
+      // Set preload to auto for next 2 videos so they buffer ahead
+      var nextV = videoElements[next];
+      if (nextV) { nextV.setAttribute("preload", "auto"); nextV.load(); }
+      var next2V = videoElements[next2];
+      if (next2V) { next2V.setAttribute("preload", "auto"); next2V.load(); }
+      var prevV = videoElements[prev];
+      if (prevV) { prevV.setAttribute("preload", "metadata"); prevV.load(); }
+    }
+
     function playCurrentVideo() {
       var video = videoElements[currentIndex];
       if (!video) return;
+
+      // Show loading spinner
+      var slide = video.closest(".ath-slide") || video.parentElement.parentElement;
+      var spinner = slide.querySelector(".ath-loading-spinner");
+      if (!spinner) {
+        spinner = document.createElement("div");
+        spinner.className = "ath-loading-spinner";
+        spinner.innerHTML = '<div class="ath-spinner-ring"></div>';
+        (video.parentElement || slide).appendChild(spinner);
+      }
+      spinner.style.display = "flex";
+
+      // Ensure current video has src loaded
+      ensureVideoSrc(currentIndex);
 
       // Pause all others
       Object.keys(videoElements).forEach(function (key) {
@@ -1190,17 +1930,89 @@
       });
 
       video.currentTime = 0;
-      video.muted = isMuted;
-      var playPromise = video.play();
-      if (playPromise !== undefined) {
-        playPromise.catch(function () {
-          // If blocked, try muted
-          video.muted = true;
-          isMuted = true;
-          updateMuteButton();
-          video.play().catch(function () { });
-        });
+
+      // Hide spinner once enough data is buffered
+      var hideSpinner = function () {
+        if (spinner) spinner.style.display = "none";
+        video.removeEventListener("canplay", hideSpinner);
+        video.removeEventListener("playing", hideSpinner);
+      };
+      video.addEventListener("canplay", hideSpinner);
+      video.addEventListener("playing", hideSpinner);
+      // Safety timeout: hide spinner after 8s regardless
+      setTimeout(function () { if (spinner) spinner.style.display = "none"; }, 8000);
+
+      // ── Robust mobile playback with retry + broken video detection ──
+      var playAttempt = 0;
+      var MAX_PLAY_RETRIES = 3;
+      var _skipChecked = false;
+
+      // Detect broken videos (videoWidth===0 after play) — only auto-skip if under consecutive limit
+      function checkVideoHealth() {
+        if (_skipChecked) return;
+        _skipChecked = true;
+        setTimeout(function () {
+          if (video.videoWidth === 0 && video.videoHeight === 0 && !video.paused && video.currentTime > 0) {
+            console.warn("[AitherHub] Broken video detected (videoWidth=0) at clip " + currentIndex + " (consecutiveSkips=" + _consecutiveSkips + ")");
+            if (!_isShareLinkOpen && clips.length > 1 && _consecutiveSkips < MAX_CONSECUTIVE_SKIPS) {
+              _consecutiveSkips++;
+              goToIndex(currentIndex + 1);
+            } else {
+              if (_isShareLinkOpen) console.log("[AitherHub] Share link open: auto-skip disabled");
+              else console.warn("[AitherHub] Stopping auto-skip: reached max consecutive skips");
+              if (spinner) spinner.style.display = "none";
+            }
+          } else if (video.videoWidth > 0) {
+            // Video is playing correctly — reset consecutive skip counter
+            _consecutiveSkips = 0;
+            _isShareLinkOpen = false; // Clear share link flag on successful play
+          }
+        }, 3000); // Check 3 seconds after play starts
       }
+
+      function attemptPlay() {
+        playAttempt++;
+        video.muted = true;
+        video.setAttribute("playsinline", "");
+        video.setAttribute("webkit-playsinline", "");
+        if (video.readyState < 2) { try { video.load(); } catch(e){} }
+        var playPromise = video.play();
+        if (playPromise !== undefined) {
+          playPromise.then(function () {
+            console.log("[AitherHub] Play OK attempt=" + playAttempt);
+            if (!isMuted) { video.muted = false; }
+            // Reset consecutive skip counter on successful play start
+            // (checkVideoHealth will confirm actual video rendering)
+            preloadAdjacent(currentIndex);
+            checkVideoHealth();
+          }).catch(function (err) {
+            console.warn("[AitherHub] Play fail attempt=" + playAttempt + ": " + err.message);
+            if (playAttempt < MAX_PLAY_RETRIES) {
+              setTimeout(function () {
+                try { video.load(); } catch(e){}
+                setTimeout(attemptPlay, 300);
+              }, 500 * playAttempt);
+            } else {
+              console.warn("[AitherHub] All play attempts failed at clip " + currentIndex + " (consecutiveSkips=" + _consecutiveSkips + ")");
+              if (spinner) spinner.style.display = "none";
+              // Only auto-skip if under consecutive limit and NOT opened via share link
+              if (!_isShareLinkOpen && clips.length > 1 && _consecutiveSkips < MAX_CONSECUTIVE_SKIPS) {
+                _consecutiveSkips++;
+                goToIndex(currentIndex + 1);
+              } else {
+                if (_isShareLinkOpen) console.log("[AitherHub] Share link open: auto-skip disabled");
+                else console.warn("[AitherHub] Stopping auto-skip: reached max consecutive skips");
+                preloadAdjacent(currentIndex);
+              }
+            }
+          });
+        } else {
+          if (!isMuted) video.muted = false;
+          preloadAdjacent(currentIndex);
+          checkVideoHealth();
+        }
+      }
+      attemptPlay();
 
       // Update UI
       var clip = clips[currentIndex];
@@ -1208,7 +2020,7 @@
       var showingProductCard = hasProductInfo(clip) && (clip.product_name || clip.product_price);
       infoTitle.textContent = showingProductCard ? (clip.liver_name || brandName) : (clip.product_name || clip.liver_name || brandName);
       infoDesc.textContent = clip.transcript_text ? clip.transcript_text.substring(0, 80) + (clip.transcript_text.length > 80 ? "..." : "") : "";
-      counter.textContent = (currentIndex + 1) + " / " + clips.length;
+      counter.textContent = (currentIndex + 1);
       progressBar.style.width = "0%";
 
       // Update product card and CTA buttons
@@ -1220,6 +2032,8 @@
 
       // Track
       trackEvent("video_play", { clip_id: clip.clip_id, clip_index: currentIndex });
+      // Reset depth tracking for this clip
+      resetDepthTracking(clip.clip_id);
 
       // Show swipe hint on first video
       if (!hintShown && clips.length > 1) {
@@ -1232,13 +2046,18 @@
     // ── Helper: Navigate ──
     function goToIndex(newIndex) {
       if (clips.length <= 1) return;
+      if (isDetailOpen) closeProductDetail();
       currentIndex = ((newIndex % clips.length) + clips.length) % clips.length;
       updateSlidePositions(true);
       playCurrentVideo();
+      // Update URL bar with current clip for sharing
+      if (isOpen && clips[currentIndex]) {
+        updateUrlBar(clips[currentIndex].clip_id);
+      }
     }
 
-    function goNext() { goToIndex(currentIndex + 1); }
-    function goPrev() { goToIndex(currentIndex - 1); }
+    function goNext() { _isShareLinkOpen = false; goToIndex(currentIndex + 1); }
+    function goPrev() { _isShareLinkOpen = false; goToIndex(currentIndex - 1); }
 
     // ── Helper: Update mute button ──
     function updateMuteButton() {
@@ -1271,6 +2090,9 @@
         if (index === currentIndex) {
           onTimeUpdate();
           updateSubtitle();
+          // AI Learning: track video depth
+          var c = clips[currentIndex];
+          if (c) checkVideoDepth(videoElements[currentIndex], c.clip_id);
         }
       });
     });
@@ -1296,34 +2118,28 @@
       document.documentElement.style.overflow = "hidden";
       currentIndex = 0;
       updateSlidePositions(false);
-      playCurrentVideo();
-      trackEvent("widget_open");
 
-      // Sound UX: if user previously chose sound ON, try to unmute
+      // Sound UX: set isMuted BEFORE playCurrentVideo so it uses correct state
       if (userPreferSound) {
         isMuted = false;
-        var video = videoElements[currentIndex];
-        if (video) {
-          video.muted = false;
-          // If browser blocks unmuted playback, fall back to muted
-          video.play().then(function () {
-            updateMuteButton();
-          }).catch(function () {
-            video.muted = true;
-            isMuted = true;
-            updateMuteButton();
-            // Show hint since autoplay policy blocked unmuted
-            if (!soundHintDismissed) showSoundHint();
-          });
-        }
       } else {
+        isMuted = true;
+      }
+
+      playCurrentVideo();
+      // Update URL bar with first clip for sharing
+      if (clips[currentIndex]) {
+        updateUrlBar(clips[currentIndex].clip_id);
+      }
+      trackEvent("widget_open");
+
+      // Update UI after play started
+      updateMuteButton();
+      if (!userPreferSound) {
         // First-time user: show "tap to unmute" hint
         soundHintDismissed = false;
         showSoundHint();
       }
-
-      // Mute button pulse animation when muted
-      if (isMuted) muteBtn.classList.add("ath-mute-pulse");
     });
 
     closeBtn.addEventListener("click", function (e) {
@@ -1333,8 +2149,11 @@
 
     function closeOverlay() {
       isOpen = false;
+      if (isDetailOpen) closeProductDetail();
       overlay.classList.remove("active");
       fab.style.display = "flex";
+      // Restore original URL (remove ?ath_clip= parameter)
+      restoreUrl();
       // Resume FAB video
       if (fabVideo) { try { fabVideo.play().catch(function () { }); } catch (e) { } }
       // Unlock body scroll
@@ -1352,6 +2171,7 @@
 
     // ── Touch Swipe (TikTok-style) ──
     feed.addEventListener("touchstart", function (e) {
+      if (isDetailOpen) return;
       dragStartY = e.touches[0].clientY;
       lastY = dragStartY;
       isDragging = true;
@@ -1394,8 +2214,9 @@
     // ── Tap to play/pause (left half) & long-press 2x speed (right half) ──
     feed.addEventListener("click", function (e) {
       if (isSpeedUp) return;
+      if (isDetailOpen) return;
       // Ignore if clicking on buttons
-      if (e.target.closest && (e.target.closest(".ath-action-btn") || e.target.closest(".ath-cta") || e.target.closest(".ath-close-btn") || e.target.closest(".ath-product-card"))) return;
+      if (e.target.closest && (e.target.closest(".ath-action-btn") || e.target.closest(".ath-cta") || e.target.closest(".ath-close-btn") || e.target.closest(".ath-product-card") || e.target.closest(".ath-detail-overlay"))) return;
 
       var video = videoElements[currentIndex];
       if (!video) return;
@@ -1405,11 +2226,8 @@
       var isLeftHalf = clickX < feedRect.width / 2;
 
       if (isLeftHalf && isMuted) {
-        // First tap on left: unmute
-        isMuted = false;
-        video.muted = false;
-        updateMuteButton();
-        showPlayIndicator(ICONS.volumeOn);
+        // First tap on left: show sound confirm popup
+        soundConfirm.className = "ath-sound-confirm visible";
         return;
       }
 
@@ -1497,44 +2315,114 @@
     });
 
     // ── Action: Share ──
+    // ── URL Share Link System ──
+    // Build a share URL on the current EC site with ?ath_clip= parameter
+    function buildShareUrl(clipId) {
+      var base = window.location.origin + window.location.pathname;
+      var params = new URLSearchParams(window.location.search);
+      params.set("ath_clip", clipId);
+      return base + "?" + params.toString();
+    }
+
+    // Update browser URL bar when navigating between clips (no page reload)
+    function updateUrlBar(clipId) {
+      if (!window.history || !window.history.replaceState) return;
+      try {
+        var newUrl = buildShareUrl(clipId);
+        window.history.replaceState({ ath_clip: clipId }, document.title, newUrl);
+      } catch(e) {}
+    }
+
+    // Restore original URL when widget is closed
+    var _originalUrl = window.location.href;
+    function restoreUrl() {
+      if (!window.history || !window.history.replaceState) return;
+      try {
+        window.history.replaceState({}, document.title, _originalUrl);
+      } catch(e) {}
+    }
+
     shareBtn.addEventListener("click", function (e) {
       e.stopPropagation();
       var clip = clips[currentIndex];
-      var shareUrl = window.location.href;
+      // Build share URL on the SAME EC site (not aitherhub.com)
+      var shareUrl = buildShareUrl(clip.clip_id);
       var shareTitle = clip.product_name || brandName;
+      var shareText = shareTitle + (clip.product_price ? " " + clip.product_price : "") + "\n" + shareUrl;
       if (navigator.share) {
-        navigator.share({ title: shareTitle, url: shareUrl }).catch(function () { });
+        navigator.share({ title: shareTitle, text: shareText, url: shareUrl }).catch(function () { });
       } else if (navigator.clipboard) {
-        navigator.clipboard.writeText(shareUrl);
-        // Visual feedback
-        var label = shareBtn.querySelector(".ath-action-label");
-        label.textContent = "コピー!";
-        setTimeout(function () { label.textContent = "シェア"; }, 2000);
+        navigator.clipboard.writeText(shareUrl).then(function() {
+          var label = shareBtn.querySelector(".ath-action-label");
+          label.textContent = "\u30B3\u30D4\u30FC!";
+          setTimeout(function () { label.textContent = "\u30B7\u30A7\u30A2"; }, 2000);
+        }).catch(function() {});
       }
-      trackEvent("share", { clip_id: clip.clip_id });
+      trackEvent("share", { clip_id: clip.clip_id, share_url: shareUrl });
+    });
+
+    // ── Sound confirm popup DOM ──
+    var soundConfirm = document.createElement("div");
+    soundConfirm.className = "ath-sound-confirm";
+    soundConfirm.innerHTML = '<div class="ath-sound-confirm-box">' +
+      '<div class="ath-sound-confirm-icon">' + ICONS.volumeOn + '</div>' +
+      '<div class="ath-sound-confirm-title">\u97F3\u58F0\u3092ON\u306B\u3057\u307E\u3059\u304B\uFF1F</div>' +
+      '<div class="ath-sound-confirm-desc">\u52D5\u753B\u306E\u97F3\u58F0\u304C\u518D\u751F\u3055\u308C\u307E\u3059</div>' +
+      '<div class="ath-sound-confirm-btns">' +
+        '<button class="ath-sound-confirm-btn cancel">\u3044\u3044\u3048</button>' +
+        '<button class="ath-sound-confirm-btn confirm">\u97F3\u58F0ON</button>' +
+      '</div>' +
+    '</div>';
+    overlay.appendChild(soundConfirm);
+
+    // Popup backdrop click → close
+    soundConfirm.addEventListener("click", function (e) {
+      if (e.target === soundConfirm) {
+        soundConfirm.className = "ath-sound-confirm";
+      }
+    });
+
+    // Cancel button
+    soundConfirm.querySelector(".ath-sound-confirm-btn.cancel").addEventListener("click", function (e) {
+      e.stopPropagation();
+      soundConfirm.className = "ath-sound-confirm";
+    });
+
+    // Confirm button → unmute
+    soundConfirm.querySelector(".ath-sound-confirm-btn.confirm").addEventListener("click", function (e) {
+      e.stopPropagation();
+      isMuted = false;
+      var video = videoElements[currentIndex];
+      if (video) video.muted = false;
+      updateMuteButton();
+      soundConfirm.className = "ath-sound-confirm";
+      try { localStorage.setItem(SOUND_PREF_KEY, "1"); } catch (e) { }
+      userPreferSound = true;
     });
 
     // ── Action: Mute/Unmute ──
     muteBtn.addEventListener("click", function (e) {
       e.stopPropagation();
-      isMuted = !isMuted;
-      var video = videoElements[currentIndex];
-      if (video) video.muted = isMuted;
-      updateMuteButton();
+      if (isMuted) {
+        // Show confirmation popup before unmuting
+        soundConfirm.className = "ath-sound-confirm visible";
+      } else {
+        // Muting doesn't need confirmation
+        isMuted = true;
+        var video = videoElements[currentIndex];
+        if (video) video.muted = true;
+        updateMuteButton();
+        try { localStorage.setItem(SOUND_PREF_KEY, "0"); } catch (e) { }
+        userPreferSound = false;
+      }
     });
 
     // ── Product card click → navigate to product page ──
     productCard.addEventListener("click", function (e) {
       e.stopPropagation();
       var clip = clips[currentIndex];
-      if (!clip.product_url) return;
-      trackEvent("product_click", {
-        clip_id: clip.clip_id,
-        product_name: clip.product_name,
-        product_price: clip.product_price,
-      });
-      var targetUrl = addUtmParams(clip.product_url, clip.clip_id, "product_card");
-      window.open(targetUrl, "_blank");
+      if (!hasProductInfo(clip)) return;
+      openProductDetail(clip);
     });
 
     // ── CTA: Cart button ──
@@ -1593,51 +2481,81 @@
       }
     });
 
-    // ── CTA: Single button (fallback, v2.2 behavior) ──
+    // ── CTA: Single button ("商品を見る" — Tier 1: product_url only) ──
     singleCta.addEventListener("click", function (e) {
       e.stopPropagation();
       var clip = clips[currentIndex];
-      trackEvent("cta_click", {
-        clip_id: clip.clip_id,
-        product_name: clip.product_name,
-        video_time: videoElements[currentIndex] ? videoElements[currentIndex].currentTime : 0,
-      });
-
-      // Strategy 1: DOM manipulation (add to cart)
-      if (config.cart_selector) {
-        try {
-          var domCartBtn = document.querySelector(config.cart_selector);
-          if (domCartBtn) {
-            domCartBtn.click();
-            singleCta.innerHTML = '<span>&#10003; カートに追加しました</span>';
-            setTimeout(function () {
-              var clip2 = clips[currentIndex];
-              singleCta.innerHTML = ICONS.cart + '<span>' + ctaText + (clip2.product_name ? ' · ' + clip2.product_name : '') + '</span>';
-            }, 2000);
-            return;
-          }
-        } catch (err) { }
-      }
-
-      // Strategy 2: Navigate to product URL
-      var targetUrl = config.cta_url_template
-        ? config.cta_url_template.replace("{product}", encodeURIComponent(clip.product_name || ""))
-        : (clip.product_url || window.location.href);
-      if (targetUrl && targetUrl !== window.location.href) {
-        targetUrl = addUtmParams(targetUrl, clip.clip_id, "cta_click");
-        window.location.href = targetUrl;
-      }
+      if (!hasProductInfo(clip)) return;
+      openProductDetail(clip);
     });
+
+    // ── Auto-open from share link: detect ?ath_clip=CLIP_ID in URL ──
+    (function checkShareLink() {
+      try {
+        var params = new URLSearchParams(window.location.search);
+        var sharedClipId = params.get("ath_clip");
+        if (!sharedClipId) return;
+
+        // Find the clip index matching the shared clip ID
+        var targetIndex = -1;
+        for (var si = 0; si < clips.length; si++) {
+          if (clips[si].clip_id === sharedClipId) {
+            targetIndex = si;
+            break;
+          }
+        }
+        if (targetIndex === -1) return; // Clip not found in this client's list
+
+        // Auto-open the widget at the target clip
+        _isShareLinkOpen = true; // Disable auto-skip for share link opens
+        setTimeout(function () {
+          isOpen = true;
+          overlay.classList.add("active");
+          fab.style.display = "none";
+          if (fabVideo) { try { fabVideo.pause(); } catch (e) { } }
+          document.body.style.overflow = "hidden";
+          document.documentElement.style.overflow = "hidden";
+          currentIndex = targetIndex;
+          updateSlidePositions(false);
+          isMuted = true;
+          playCurrentVideo();
+          updateMuteButton();
+          soundHintDismissed = false;
+          showSoundHint();
+          // URL already has ?ath_clip= so no need to update
+          trackEvent("share_open", { clip_id: sharedClipId });
+          // Reset share link flag after first manual swipe
+          // (auto-skip will be re-enabled when user swipes)
+        }, 500); // Small delay to ensure DOM is ready
+
+        // Keep the URL as-is so the user sees the same URL they can share
+        // URL will be restored when widget is closed via restoreUrl()
+      } catch (e) { /* Silently fail if URLSearchParams not supported */ }
+    })();
+  }
+
+  // ── Debug helper: console-only logging (no DOM panel in production) ──
+  function _dbg(msg) {
+    console.log("[AitherHub] " + msg);
   }
 
   // ── Initialize ──
   function init() {
+    _dbg("init() CLIENT_ID=" + CLIENT_ID);
     scrapePageContext();
     trackEvent("page_view", { title: document.title, referrer: document.referrer });
     checkConversionPage();
+    _dbg("calling loadConfig...");
     loadConfig(function (config) {
+      _dbg("config loaded, clips=" + (config.clips || []).length);
       var shadow = createWidgetContainer();
-      buildWidget(shadow, config);
+      _dbg("shadow created");
+      try {
+        buildWidget(shadow, config);
+        _dbg("buildWidget OK");
+      } catch (e) {
+        _dbg("buildWidget ERROR: " + e.message);
+      }
     });
   }
 

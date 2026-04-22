@@ -1,5 +1,5 @@
 /**
- * AitherHub Widget Loader v3.2 — TikTok-Style Fullscreen Feed + Product Card + Subtitles
+ * AitherHub Widget Loader v3.3 — TikTok-Style Fullscreen Feed + Product Card + Subtitles
  *
  * GTM経由で配信される軽量エントリーポイント。
  * 先方のECサイトに1行のタグを追加するだけで、
@@ -61,7 +61,7 @@
  */
 (function () {
   "use strict";
-  console.log("[AitherHub] IIFE START v3.2");
+  console.log("[AitherHub] IIFE START v3.3");
 
   // ── Prevent double-loading ──
   if (window.__AITHERHUB_WIDGET_LOADED) { console.log("[AitherHub] SKIPPED: already loaded"); return; }
@@ -961,6 +961,7 @@
     var fabVideo = null;
     var _consecutiveSkips = 0; // Track consecutive auto-skips to prevent chain reactions
     var MAX_CONSECUTIVE_SKIPS = 2; // Stop auto-skipping after this many consecutive failures
+    var _isShareLinkOpen = false; // When true, disable auto-skip entirely (user opened via share link)
 
     // ── Video Depth Tracking (AI Learning) ──
     var depthSent = {};          // { "clipId_25": true, ... }
@@ -1038,7 +1039,16 @@
 
     // Get the best URL for a clip based on quality setting
     function getClipUrl(clip) {
-      if (useHD && clip.clip_url_hd) return clip.clip_url_hd;
+      if (useHD && clip.clip_url_hd) {
+        // Only use HD if it's a processed/optimized file (contains 'widget_' in path)
+        // Raw unprocessed originals may be 50-100MB+ or use unsupported codecs (H.265)
+        var hdPath = clip.clip_url_hd.split('?')[0]; // strip SAS token for check
+        if (hdPath.indexOf('widget_') > -1) {
+          return clip.clip_url_hd;
+        }
+        // HD URL is raw original (no 'widget_' prefix) — fall back to optimized 720p
+        console.log('[AitherHub] HD URL is raw original, falling back to 720p for clip ' + clip.clip_id);
+      }
       return clip.clip_url || "";
     }
 
@@ -1050,6 +1060,9 @@
         if (!v) return;
         var hdUrl = clip.clip_url_hd;
         if (!hdUrl || hdUrl === clip.clip_url) return;
+        // Skip raw originals (no 'widget_' in HD URL path)
+        var hdPath = hdUrl.split('?')[0];
+        if (hdPath.indexOf('widget_') === -1) return;
         // Only upgrade if not currently playing or if it's a future video
         if (idx !== currentIndex) {
           var currentSrc = v.src || v.getAttribute("data-src") || "";
@@ -1867,9 +1880,11 @@
           v.removeAttribute("data-src");
         }
       } else if (useHD && clip && clip.clip_url_hd) {
-        // If HD mode activated and current src is 720p, upgrade
+        // If HD mode activated and current src is 720p, upgrade to HD
+        // But only if HD URL is also a processed file (contains 'widget_')
         var currentSrc = v.src || "";
-        if (currentSrc.indexOf("widget_") > -1 && clip.clip_url_hd.indexOf("widget_") === -1) {
+        var hdPath = clip.clip_url_hd.split('?')[0];
+        if (currentSrc.indexOf("widget_") > -1 && hdPath.indexOf("widget_") > -1 && currentSrc !== clip.clip_url_hd) {
           v.src = clip.clip_url_hd;
         }
       }
@@ -1944,16 +1959,18 @@
         setTimeout(function () {
           if (video.videoWidth === 0 && video.videoHeight === 0 && !video.paused && video.currentTime > 0) {
             console.warn("[AitherHub] Broken video detected (videoWidth=0) at clip " + currentIndex + " (consecutiveSkips=" + _consecutiveSkips + ")");
-            if (clips.length > 1 && _consecutiveSkips < MAX_CONSECUTIVE_SKIPS) {
+            if (!_isShareLinkOpen && clips.length > 1 && _consecutiveSkips < MAX_CONSECUTIVE_SKIPS) {
               _consecutiveSkips++;
               goToIndex(currentIndex + 1);
             } else {
-              console.warn("[AitherHub] Stopping auto-skip: reached max consecutive skips");
+              if (_isShareLinkOpen) console.log("[AitherHub] Share link open: auto-skip disabled");
+              else console.warn("[AitherHub] Stopping auto-skip: reached max consecutive skips");
               if (spinner) spinner.style.display = "none";
             }
           } else if (video.videoWidth > 0) {
             // Video is playing correctly — reset consecutive skip counter
             _consecutiveSkips = 0;
+            _isShareLinkOpen = false; // Clear share link flag on successful play
           }
         }, 3000); // Check 3 seconds after play starts
       }
@@ -1983,12 +2000,13 @@
             } else {
               console.warn("[AitherHub] All play attempts failed at clip " + currentIndex + " (consecutiveSkips=" + _consecutiveSkips + ")");
               if (spinner) spinner.style.display = "none";
-              // Only auto-skip if under consecutive limit to prevent chain reactions
-              if (clips.length > 1 && _consecutiveSkips < MAX_CONSECUTIVE_SKIPS) {
+              // Only auto-skip if under consecutive limit and NOT opened via share link
+              if (!_isShareLinkOpen && clips.length > 1 && _consecutiveSkips < MAX_CONSECUTIVE_SKIPS) {
                 _consecutiveSkips++;
                 goToIndex(currentIndex + 1);
               } else {
-                console.warn("[AitherHub] Stopping auto-skip: reached max consecutive skips");
+                if (_isShareLinkOpen) console.log("[AitherHub] Share link open: auto-skip disabled");
+                else console.warn("[AitherHub] Stopping auto-skip: reached max consecutive skips");
                 preloadAdjacent(currentIndex);
               }
             }
@@ -2043,8 +2061,8 @@
       }
     }
 
-    function goNext() { goToIndex(currentIndex + 1); }
-    function goPrev() { goToIndex(currentIndex - 1); }
+    function goNext() { _isShareLinkOpen = false; goToIndex(currentIndex + 1); }
+    function goPrev() { _isShareLinkOpen = false; goToIndex(currentIndex - 1); }
 
     // ── Helper: Update mute button ──
     function updateMuteButton() {
@@ -2494,6 +2512,7 @@
         if (targetIndex === -1) return; // Clip not found in this client's list
 
         // Auto-open the widget at the target clip
+        _isShareLinkOpen = true; // Disable auto-skip for share link opens
         setTimeout(function () {
           isOpen = true;
           overlay.classList.add("active");
@@ -2510,6 +2529,8 @@
           showSoundHint();
           // URL already has ?ath_clip= so no need to update
           trackEvent("share_open", { clip_id: sharedClipId });
+          // Reset share link flag after first manual swipe
+          // (auto-skip will be re-enabled when user swipes)
         }, 500); // Small delay to ensure DOM is ready
 
         // Keep the URL as-is so the user sees the same URL they can share
