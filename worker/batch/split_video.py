@@ -17,7 +17,7 @@ from datetime import datetime
 from urllib.parse import urlparse, unquote
 from dotenv import load_dotenv
 
-from db_ops import load_video_phases_sync
+from db_ops import load_video_phases_sync, get_unusable_phases_sync
 
 # Load environment variables
 load_dotenv()
@@ -306,14 +306,39 @@ def split_video_into_segments(video_id: str, video_url: str, video_path: str | N
     blob_info = parse_blob_url(video_url)
     logger.info("Parsed blob URL: container=%s, parent_path=%s", blob_info["container"], blob_info["parent_path"])
 
+    # v6: Load NG (unusable) phases to skip clip generation
+    ng_phases = set()
+    try:
+        ng_map = get_unusable_phases_sync(video_id)
+        if ng_map:
+            ng_phases = set(ng_map.keys())
+            logger.info("Loaded %d NG (unusable) phases for video_id=%s", len(ng_phases), video_id)
+    except Exception as e:
+        logger.warning("Failed to load NG phases for %s: %s (proceeding without filter)", video_id, e)
+
     # Cut each phase into a separate video segment
     segments = []
+    n_skipped_ng = 0
     for phase in phases:
         time_start = phase.get("time_start")
         time_end = phase.get("time_end")
 
         if time_start is None or time_end is None:
             logger.warning("Skipping phase %s: missing time_start or time_end", phase.get("phase_index"))
+            continue
+
+        # v6: Skip NG (unusable) phases
+        phase_idx = phase.get("phase_index")
+        if isinstance(phase_idx, str) and phase_idx.isdigit():
+            phase_idx_int = int(phase_idx)
+        elif isinstance(phase_idx, int):
+            phase_idx_int = phase_idx
+        else:
+            phase_idx_int = None
+
+        if phase_idx_int is not None and phase_idx_int in ng_phases:
+            n_skipped_ng += 1
+            logger.info("Skipping NG phase %s (unusable) for video_id=%s", phase_idx, video_id)
             continue
 
         # Convert to float (seconds)
@@ -353,7 +378,7 @@ def split_video_into_segments(video_id: str, video_url: str, video_path: str | N
         else:
             logger.warning("Failed to cut segment for phase %s", phase.get("phase_index"))
 
-    logger.info("Split complete: %d/%d segments created", len(segments), len(phases))
+    logger.info("Split complete: %d/%d segments created (skipped %d NG phases)", len(segments), len(phases), n_skipped_ng)
 
     # Cleanup: remove splitvideo/{video_id} folder after upload
     try:

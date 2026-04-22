@@ -144,9 +144,15 @@ def save_group_best_phases(best_data, art_root: str, video_id: str):
 # =========================
 
 def update_group_best_phases(phase_units, best_data, video_id):
+    n_skipped_ng = 0
     for p in phase_units:
         group_id = p.get("group_id")
         if not group_id:
+            continue
+
+        # v6: Skip NG (unusable) phases from best-phase candidates
+        if p.get("is_unusable"):
+            n_skipped_ng += 1
             continue
 
         group_id = str(group_id)
@@ -183,5 +189,8 @@ def update_group_best_phases(phase_units, best_data, video_id):
 
         # giữ top K
         group["phases"] = group["phases"][:TOP_K]
+
+    if n_skipped_ng > 0:
+        print(f"[best_phase] Skipped {n_skipped_ng} NG (unusable) phases from best-phase candidates")
 
     return best_data

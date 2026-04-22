@@ -7,6 +7,17 @@
   ④ 正例:負例 = 1:3 サンプリング
   ⑤ 情報リーク防止: GMV/注文数/クリック数は特徴量に入れない
 
+v6 変更点 (NGフィードバック統合):
+  - fetch_phases()にvideo_clips.is_unusable/unusable_reasonとclip_feedback.ratingをLEFT JOIN
+  - NG特徴量追加:
+    is_ng (is_unusable=TRUE OR feedback_rating='bad' → 1)
+    ng_source ('unusable' / 'feedback' / 'both' / 'none')
+    unusable_reason_* (6種 one-hot: irrelevant, too_short, too_long, no_product, audio_bad, low_quality)
+    has_ng_feedback (clip_feedbackにrating='bad'があれば1)
+    ng_reason_tag_count (reason_tagsの数)
+  - NGフェーズ強制負例化: is_ng=1のフェーズはy_click=0, y_order=0, y_strong=0に強制上書き
+  - dataset_stats.jsonにng_feedback集計追加
+
 v5 変更点 (confidence weight):
   - sample_weightにconfidence-based重みを反映
     csv=1.0, purchase_popup=0.9, product_viewers_popup=0.75, viewer/comment_spike=0.5
@@ -33,7 +44,7 @@ v3 変更点:
 
 出力: train_click.jsonl / train_order.jsonl
 
-特徴量 (v4):
+特徴量 (v6):
   テキスト系: keyword flags (円/¥/割引/今だけ/残り/リンク/カート/タップ etc.)
               数字出現フラグ, text_length
   構造系:     event_type, event_duration, event_position_min
@@ -47,6 +58,13 @@ v3 変更点:
     htag_EMPATHY, htag_PROBLEM, ... (販売心理タグ one-hot × 14)
     comment_length (コメント文字数)
     comment_kw_price, comment_kw_cta, ... (コメントからのキーワードフラグ)
+  NGフィードバック系 (v6):
+    is_ng (0/1: is_unusable OR feedback_rating='bad')
+    ng_source ('unusable'/'feedback'/'both'/'none')
+    has_ng_feedback (0/1)
+    ng_reason_tag_count (タグ数)
+    unusable_reason_irrelevant, unusable_reason_too_short, unusable_reason_too_long,
+    unusable_reason_no_product, unusable_reason_audio_bad, unusable_reason_low_quality (one-hot)
 
 使い方:
   python generate_dataset.py --output-dir /tmp/datasets
@@ -124,6 +142,70 @@ KEYWORD_GROUPS = [
     ("kw_quality",    [r"品質", r"成分", r"効果", r"おすすめ", r"人気", r"ランキング"]),
     ("kw_number",     [r"\d{3,}"]),  # 3桁以上の数字 = 価格っぽい
 ]
+
+# ── NG Unusable Reason categories (for one-hot encoding) ──
+UNUSABLE_REASONS = [
+    "irrelevant",
+    "too_short",
+    "too_long",
+    "no_product",
+    "audio_bad",
+    "low_quality",
+]
+
+
+def extract_ng_features(is_unusable, unusable_reason, feedback_rating, feedback_reason_tags) -> dict:
+    """NGフィードバック情報から特徴量を抽出.
+
+    Args:
+        is_unusable: video_clips.is_unusable (bool or None)
+        unusable_reason: video_clips.unusable_reason (str or None)
+        feedback_rating: clip_feedback.rating (str or None)
+        feedback_reason_tags: clip_feedback.reason_tags (list/dict or None)
+
+    Returns:
+        dict with NG feature values
+    """
+    clip_unusable = bool(is_unusable) if is_unusable is not None else False
+    has_bad_feedback = (feedback_rating == 'bad') if feedback_rating else False
+
+    is_ng = 1 if (clip_unusable or has_bad_feedback) else 0
+
+    # Determine NG source
+    if clip_unusable and has_bad_feedback:
+        ng_source = "both"
+    elif clip_unusable:
+        ng_source = "unusable"
+    elif has_bad_feedback:
+        ng_source = "feedback"
+    else:
+        ng_source = "none"
+
+    # Unusable reason one-hot
+    reason_lower = (unusable_reason or "").lower().strip()
+    reason_features = {}
+    for reason in UNUSABLE_REASONS:
+        reason_features[f"unusable_reason_{reason}"] = 1 if reason in reason_lower else 0
+
+    # Feedback reason tags count
+    reason_tags = feedback_reason_tags
+    if isinstance(reason_tags, str):
+        try:
+            reason_tags = json.loads(reason_tags)
+        except (json.JSONDecodeError, TypeError):
+            reason_tags = []
+    if not isinstance(reason_tags, (list, dict)):
+        reason_tags = []
+    ng_reason_tag_count = len(reason_tags) if isinstance(reason_tags, list) else len(reason_tags.keys()) if isinstance(reason_tags, dict) else 0
+
+    return {
+        "is_ng": is_ng,
+        "ng_source": ng_source,
+        "has_ng_feedback": 1 if has_bad_feedback else 0,
+        "ng_reason_tag_count": ng_reason_tag_count,
+        **reason_features,
+    }
+
 
 # ── Keyword flags for user_comment extraction ──
 COMMENT_KEYWORD_GROUPS = [
@@ -225,8 +307,19 @@ async def fetch_phases(session, video_id=None, user_id=None):
             vp.user_comment,
             vp.reviewer_name,
             COALESCE(vp.importance_score, 0) as importance_score,
-            vp.group_id
+            vp.group_id,
+            -- NG feedback columns (v6)
+            COALESCE(vc.is_unusable, FALSE) as is_unusable,
+            vc.unusable_reason,
+            cf.rating as feedback_rating,
+            cf.reason_tags as feedback_reason_tags
         FROM video_phases vp
+        LEFT JOIN video_clips vc
+            ON vc.video_id = vp.video_id
+            AND vc.phase_index = vp.phase_index
+        LEFT JOIN clip_feedback cf
+            ON cf.video_id = vp.video_id
+            AND cf.phase_index = vp.phase_index
         {where}
         ORDER BY vp.video_id, vp.phase_index
     """)
@@ -524,6 +617,8 @@ async def generate(output_dir: str, video_id=None, user_id=None):
     # ── Build all records ──
     all_records = []
     n_reviewed = 0
+    n_ng_phases = 0
+    n_ng_forced_negative = 0
 
     for r in phases:
         vid = str(r.video_id)
@@ -548,12 +643,34 @@ async def generate(output_dir: str, video_id=None, user_id=None):
         if has_human_review:
             n_reviewed += 1
 
+        # NG feedback features (v6)
+        ng_feats = extract_ng_features(
+            is_unusable=getattr(r, 'is_unusable', None),
+            unusable_reason=getattr(r, 'unusable_reason', None),
+            feedback_rating=getattr(r, 'feedback_rating', None),
+            feedback_reason_tags=getattr(r, 'feedback_reason_tags', None),
+        )
+        if ng_feats["is_ng"]:
+            n_ng_phases += 1
+
         # Description text for feature extraction
         desc = r.phase_description or ""
 
         # Labels
         video_moments = moments_idx.get(vid, [])
         labels = compute_labels_v2(phase_start, phase_end, video_moments)
+
+        # ★ CRITICAL: NGフェーズは強制的に負例にする (v6)
+        # is_unusable=TRUE or feedback_rating='bad' → 全ラベルを0に上書き
+        if ng_feats["is_ng"]:
+            was_positive = labels["y_click"] == 1 or labels["y_order"] == 1
+            labels["y_click"] = 0
+            labels["y_order"] = 0
+            labels["y_strong"] = 0
+            labels["weight_click"] = 0.0
+            labels["weight_order"] = 0.0
+            if was_positive:
+                n_ng_forced_negative += 1
 
         # Product match
         video_products = products_idx.get(vid, [])
@@ -615,6 +732,9 @@ async def generate(output_dir: str, video_id=None, user_id=None):
             # Comment features
             **comment_feats,
 
+            # ── NG FEEDBACK FEATURES (v6) ──
+            **ng_feats,
+
             # ── METADATA (not used as features in training) ──
             "tags": tags,
             "human_tags": human_tags,
@@ -630,6 +750,13 @@ async def generate(output_dir: str, video_id=None, user_id=None):
 
     print(f"[dataset] Human-reviewed phases: {n_reviewed} / {len(all_records)}"
           f" ({n_reviewed / max(len(all_records), 1) * 100:.1f}%)")
+    print(f"[dataset] NG phases: {n_ng_phases} / {len(all_records)}"
+          f" (forced negative override: {n_ng_forced_negative})")
+    if n_ng_phases > 0:
+        print(f"[dataset] NG breakdown: "
+              f"{sum(1 for r in all_records if r.get('ng_source') == 'unusable')} unusable, "
+              f"{sum(1 for r in all_records if r.get('ng_source') == 'feedback')} feedback, "
+              f"{sum(1 for r in all_records if r.get('ng_source') == 'both')} both")
 
     # ── Split into positive/negative and sample ──
     os.makedirs(output_dir, exist_ok=True)
@@ -720,6 +847,16 @@ async def generate(output_dir: str, video_id=None, user_id=None):
         "total_moments": n_csv + n_screen,
         "phases_by_source": dict(source_counts),
     }
+    # NG feedback stats (v6)
+    ng_source_counts = defaultdict(int)
+    for r in all_records:
+        ng_source_counts[r.get("ng_source", "none")] += 1
+    stats["ng_feedback"] = {
+        "total_ng_phases": n_ng_phases,
+        "forced_negative_overrides": n_ng_forced_negative,
+        "ng_by_source": dict(ng_source_counts),
+        "unusable_reason_features": [f"unusable_reason_{r}" for r in UNUSABLE_REASONS],
+    }
     stats_path = os.path.join(output_dir, "dataset_stats.json")
     with open(stats_path, "w", encoding="utf-8") as f:
         json.dump(stats, f, indent=2, ensure_ascii=False)
@@ -729,7 +866,7 @@ async def generate(output_dir: str, video_id=None, user_id=None):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate AI training dataset v4")
+    parser = argparse.ArgumentParser(description="Generate AI training dataset v6")
     parser.add_argument("--output-dir", "-o", default="/tmp/datasets",
                         help="Output directory for JSONL files")
     parser.add_argument("--video-id", default=None,
