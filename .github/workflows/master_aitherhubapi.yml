@@ -155,6 +155,8 @@ jobs:
               BUILD_TIME="$BUILD_TIME" \
               DEPLOY_TIME="$BUILD_TIME" \
               WEBSITES_CONTAINER_START_TIME_LIMIT="1800" \
+              SALES_DASH_API_KEY="${{ secrets.SALES_DASH_API_KEY }}" \
+              SALES_DASH_URL="${{ secrets.SALES_DASH_URL }}" \
             --output none
           echo "Staging slot configured."
 
@@ -285,6 +287,8 @@ jobs:
               WEBSITES_CONTAINER_START_TIME_LIMIT="1800" \
               SCM_DO_BUILD_DURING_DEPLOYMENT="false" \
               ENABLE_ORYX_BUILD="false" \
+              SALES_DASH_API_KEY="${{ secrets.SALES_DASH_API_KEY }}" \
+              SALES_DASH_URL="${{ secrets.SALES_DASH_URL }}" \
             --output none
 
       # ── Step 8: Configure health check & Always On ──
