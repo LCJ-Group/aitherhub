@@ -119,6 +119,10 @@ function ClipCard({ clip, onPlay, brands, adminKey, onBrandChange }) {
   const [showBrandPicker, setShowBrandPicker] = useState(false);
   const [assigning, setAssigning] = useState(false);
   const [brandSearch, setBrandSearch] = useState("");
+  const [showNewBrandForm, setShowNewBrandForm] = useState(false);
+  const [newBrandName, setNewBrandName] = useState("");
+  const [newBrandCompany, setNewBrandCompany] = useState("");
+  const [creatingBrand, setCreatingBrand] = useState(false);
   const [showNgPicker, setShowNgPicker] = useState(false);
   const [ngLoading, setNgLoading] = useState(false);
   const [localUnusable, setLocalUnusable] = useState(clip.is_unusable || false);
@@ -193,6 +197,35 @@ function ClipCard({ clip, onPlay, brands, adminKey, onBrandChange }) {
     } finally {
       setAssigning(false);
       setShowBrandPicker(false);
+    }
+  };
+
+  const handleCreateAndAssignBrand = async () => {
+    if (!newBrandName.trim()) return;
+    setCreatingBrand(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/clip-db/brands/create`, {
+        method: "POST",
+        headers: { "X-Admin-Key": adminKey, "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newBrandName.trim(), company_name: newBrandCompany.trim() || null }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        // Assign the newly created brand to this clip
+        await fetch(
+          `${API_BASE}/api/v1/clip-db/assign-brand?clip_id=${clip.clip_id}&client_id=${data.client_id}`,
+          { method: "POST", headers: { "X-Admin-Key": adminKey } }
+        );
+        setShowNewBrandForm(false);
+        setNewBrandName("");
+        setNewBrandCompany("");
+        setShowBrandPicker(false);
+        onBrandChange?.();
+      }
+    } catch (e) {
+      console.error("Create brand failed:", e);
+    } finally {
+      setCreatingBrand(false);
     }
   };
 
@@ -414,14 +447,59 @@ function ClipCard({ clip, onPlay, brands, adminKey, onBrandChange }) {
                   </button>
                 ))}
               </div>
-              <div className="border-t border-gray-100 pt-1 pb-0.5">
-                <button
-                  onClick={() => { setShowBrandPicker(false); setBrandSearch(""); }}
-                  className="w-full text-left px-3 py-1 text-[10px] text-gray-400 hover:text-gray-600"
-                >
-                  閉じる
-                </button>
-              </div>
+              {/* New brand form */}
+              {showNewBrandForm ? (
+                <div className="border-t border-gray-100 px-2 py-2 space-y-1.5">
+                  <input
+                    type="text"
+                    placeholder="ブランド名（英語）"
+                    value={newBrandName}
+                    onChange={(e) => setNewBrandName(e.target.value)}
+                    onClick={(e) => e.stopPropagation()}
+                    className="w-full px-2 py-1 text-xs border border-gray-200 rounded focus:outline-none focus:border-blue-400"
+                    autoFocus
+                  />
+                  <input
+                    type="text"
+                    placeholder="会社名（任意）"
+                    value={newBrandCompany}
+                    onChange={(e) => setNewBrandCompany(e.target.value)}
+                    onClick={(e) => e.stopPropagation()}
+                    className="w-full px-2 py-1 text-xs border border-gray-200 rounded focus:outline-none focus:border-blue-400"
+                  />
+                  <div className="flex gap-1">
+                    <button
+                      onClick={handleCreateAndAssignBrand}
+                      disabled={!newBrandName.trim() || creatingBrand}
+                      className="flex-1 px-2 py-1 text-xs bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50 flex items-center justify-center gap-1"
+                    >
+                      {creatingBrand ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
+                      作成&割当
+                    </button>
+                    <button
+                      onClick={() => { setShowNewBrandForm(false); setNewBrandName(""); setNewBrandCompany(""); }}
+                      className="px-2 py-1 text-xs text-gray-400 hover:text-gray-600 border border-gray-200 rounded"
+                    >
+                      取消
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="border-t border-gray-100 pt-1 pb-0.5">
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setShowNewBrandForm(true); }}
+                    className="w-full text-left px-3 py-1.5 text-xs text-blue-500 hover:bg-blue-50 flex items-center gap-1 transition"
+                  >
+                    <Plus className="w-3 h-3" /> 新規ブランド追加
+                  </button>
+                  <button
+                    onClick={() => { setShowBrandPicker(false); setBrandSearch(""); }}
+                    className="w-full text-left px-3 py-1 text-[10px] text-gray-400 hover:text-gray-600"
+                  >
+                    閉じる
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -687,6 +765,10 @@ function VideoPlayerModal({ clip, clips, onClose, brands, adminKey, onBrandChang
   const [muted, setMuted] = useState(false);
   const [actionDone, setActionDone] = useState(null); // "ng" | "brand" | null
   const [brandSearch, setBrandSearch] = useState("");
+  const [showNewBrandForm, setShowNewBrandForm] = useState(false);
+  const [newBrandName, setNewBrandName] = useState("");
+  const [newBrandCompany, setNewBrandCompany] = useState("");
+  const [creatingBrand, setCreatingBrand] = useState(false);
 
   if (!clip) return null;
 
@@ -759,6 +841,31 @@ function VideoPlayerModal({ clip, clips, onClose, brands, adminKey, onBrandChang
       }
     } catch (e) { console.error("Assign brand failed:", e); }
     finally { setAssignLoading(false); }
+  };
+
+  const handleCreateAndAssignBrand = async () => {
+    if (!newBrandName.trim()) return;
+    setCreatingBrand(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/clip-db/brands/create`, {
+        method: "POST",
+        headers: { "X-Admin-Key": adminKey, "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newBrandName.trim(), company_name: newBrandCompany.trim() || null }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        await fetch(
+          `${API_BASE}/api/v1/clip-db/assign-brand?clip_id=${clip.clip_id}&client_id=${data.client_id}`,
+          { method: "POST", headers: { "X-Admin-Key": adminKey } }
+        );
+        setActionDone("brand");
+        setShowBrands(false); setShowNewBrandForm(false);
+        setNewBrandName(""); setNewBrandCompany(""); setBrandSearch("");
+        onBrandChange?.();
+        setTimeout(() => { if (hasNext) navigate(1); }, 800);
+      }
+    } catch (e) { console.error("Create brand failed:", e); }
+    finally { setCreatingBrand(false); }
   };
 
   const unassignedBrands = brands.filter(
@@ -989,6 +1096,49 @@ function VideoPlayerModal({ clip, clips, onClose, brands, adminKey, onBrandChang
                     </p>
                   )}
                 </div>
+                {/* New brand creation */}
+                {showNewBrandForm ? (
+                  <div className="mt-2 p-3 rounded-lg bg-gray-800 border border-gray-700 space-y-2">
+                    <input
+                      type="text"
+                      placeholder="ブランド名（英語）"
+                      value={newBrandName}
+                      onChange={(e) => setNewBrandName(e.target.value)}
+                      className="w-full px-3 py-2 rounded-lg bg-gray-900 border border-gray-600 text-white text-xs placeholder-gray-500 focus:outline-none focus:border-green-500"
+                      autoFocus
+                    />
+                    <input
+                      type="text"
+                      placeholder="会社名（任意）"
+                      value={newBrandCompany}
+                      onChange={(e) => setNewBrandCompany(e.target.value)}
+                      className="w-full px-3 py-2 rounded-lg bg-gray-900 border border-gray-600 text-white text-xs placeholder-gray-500 focus:outline-none focus:border-green-500"
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        onClick={handleCreateAndAssignBrand}
+                        disabled={!newBrandName.trim() || creatingBrand}
+                        className="flex-1 py-2 rounded-lg bg-green-600 hover:bg-green-500 text-white text-xs font-bold disabled:opacity-50 flex items-center justify-center gap-1 transition-colors"
+                      >
+                        {creatingBrand ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
+                        作成&割当
+                      </button>
+                      <button
+                        onClick={() => { setShowNewBrandForm(false); setNewBrandName(""); setNewBrandCompany(""); }}
+                        className="px-3 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs transition-colors"
+                      >
+                        取消
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setShowNewBrandForm(true)}
+                    className="mt-2 w-full py-2 rounded-lg border border-dashed border-gray-600 text-gray-400 hover:text-green-400 hover:border-green-500 text-xs flex items-center justify-center gap-1 transition-colors"
+                  >
+                    <Plus className="w-3 h-3" /> 新規ブランド追加
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -1975,6 +2125,15 @@ export default function AdminClipDB({ adminKey }) {
                       </div>
                     )}
                     <span className="text-xs font-medium text-gray-800 truncate max-w-[100px]">{b.name}</span>
+                    {b.source === "aitherhub" ? (
+                      <span className="px-1 py-0.5 text-[8px] font-bold rounded bg-purple-100 text-purple-600 border border-purple-200 flex-shrink-0" title="AitherHubで追加">
+                        AH
+                      </span>
+                    ) : b.lcj_brand_id ? (
+                      <span className="px-1 py-0.5 text-[8px] font-bold rounded bg-orange-100 text-orange-600 border border-orange-200 flex-shrink-0" title="LCJ Mall同期">
+                        LCJ
+                      </span>
+                    ) : null}
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="text-lg font-bold text-gray-900">{b.clip_count}</span>

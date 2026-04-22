@@ -1039,6 +1039,7 @@ async def list_brands_for_clips(
         text("""
             SELECT wc.client_id, wc.name, wc.logo_url, wc.theme_color,
                    wc.company_name, wc.name_ja, wc.lcj_brand_id, wc.brand_keywords,
+                   wc.source,
                    COUNT(wca.id) FILTER (WHERE wca.is_active = TRUE) as clip_count,
                    COUNT(wca.id) FILTER (WHERE wca.is_active = TRUE AND vc.is_sold = TRUE) as sold_count,
                    COALESCE(SUM(vc.gmv) FILTER (WHERE wca.is_active = TRUE), 0) as total_gmv,
@@ -1048,7 +1049,8 @@ async def list_brands_for_clips(
             LEFT JOIN video_clips vc ON vc.id::text = wca.clip_id AND wca.is_active = TRUE
             WHERE wc.is_active = TRUE
             GROUP BY wc.client_id, wc.name, wc.logo_url, wc.theme_color,
-                     wc.company_name, wc.name_ja, wc.lcj_brand_id, wc.brand_keywords
+                     wc.company_name, wc.name_ja, wc.lcj_brand_id, wc.brand_keywords,
+                     wc.source
             ORDER BY clip_count DESC, wc.name
         """)
     )
@@ -1062,6 +1064,7 @@ async def list_brands_for_clips(
             "name_ja": r["name_ja"] or "",
             "lcj_brand_id": r["lcj_brand_id"],
             "brand_keywords": r["brand_keywords"] or "",
+            "source": r["source"] or "",
             "clip_count": r["clip_count"],
             "sold_count": r["sold_count"],
             "total_gmv": float(r["total_gmv"] or 0),
@@ -1150,6 +1153,72 @@ async def unassign_clip_from_brand(
     await db.commit()
 
     return {"status": "unassigned", "clip_id": clip_id, "client_id": client_id}
+
+
+# ─── Manual Brand Creation ───
+
+class CreateBrandRequest(BaseModel):
+    name: str = Field(..., description="Brand name (English)")
+    company_name: Optional[str] = Field(None, description="Company name (Japanese)")
+    name_ja: Optional[str] = Field(None, description="Brand name in Japanese")
+
+
+@router.post("/brands/create")
+async def create_brand_manual(
+    req: CreateBrandRequest,
+    db: AsyncSession = Depends(get_db),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """Create a new brand manually from AitherHub admin (not from LCJ Mall sync)."""
+    if not _check_admin_or_user(x_admin_key=x_admin_key):
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    import uuid
+    import secrets as _secrets
+
+    client_id = str(uuid.uuid4())[:8]
+    brand_password = _secrets.token_urlsafe(12)
+    from app.api.v1.endpoints.brand_portal import _hash_password
+    password_hash = _hash_password(brand_password)
+
+    # Build brand_keywords from name, name_ja, company_name
+    kw_parts = [req.name, req.name.lower()]
+    if req.name_ja:
+        kw_parts.append(req.name_ja)
+    if req.company_name:
+        kw_parts.append(req.company_name)
+    keywords = ", ".join(dict.fromkeys(kw_parts))  # deduplicate preserving order
+
+    await db.execute(
+        text("""
+            INSERT INTO widget_clients
+                (client_id, name, domain, theme_color, position, cta_text, is_active,
+                 password_hash, brand_keywords, lcj_brand_id, logo_url, company_name, name_ja,
+                 source, created_at, updated_at)
+            VALUES
+                (:client_id, :name, '', '#FF2D55', 'bottom-right', '購入する', TRUE,
+                 :password_hash, :keywords, NULL, '', :company_name, :name_ja,
+                 'aitherhub', NOW(), NOW())
+        """),
+        {
+            "client_id": client_id,
+            "name": req.name,
+            "password_hash": password_hash,
+            "keywords": keywords,
+            "company_name": req.company_name or "",
+            "name_ja": req.name_ja or "",
+        },
+    )
+    await db.commit()
+
+    return {
+        "status": "created",
+        "client_id": client_id,
+        "name": req.name,
+        "company_name": req.company_name or "",
+        "name_ja": req.name_ja or "",
+        "source": "aitherhub",
+    }
 
 
 # ─── Unusable Clip Marking ───
