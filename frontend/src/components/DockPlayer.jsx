@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useTranslation } from 'react-i18next';
 
 /**
  * DockPlayer – Sales Intelligence Player (方法2: LCJ分析ツール型)
@@ -1820,7 +1821,6 @@ export default function DockPlayer({
         }
         @keyframes fadeInDown {
           from { opacity: 0; transform: translate(-50%, -16px); }
-import { useTranslation } from 'react-i18next';
           to { opacity: 1; transform: translate(-50%, 0); }
         }
       `}</style>
