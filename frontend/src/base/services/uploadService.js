@@ -22,6 +22,12 @@ const MAX_RETRIES = 5;
 const RETRY_DELAY_MS = 2000;
 const FINALIZE_TIMEOUT_MS = 300_000;
 
+// ── Proxy fallback constants ──
+const PROXY_BLOCK_SIZE     = 4 * 1024 * 1024;   // 4 MB per block via proxy
+const PROXY_MAX_RETRIES    = 3;
+const PROXY_RETRY_DELAY_MS = 3000;
+const PROBE_FAILURE_THRESHOLD = 2; // Switch to proxy after 2 consecutive probe failures
+
 // ── Speed tracker (shared across uploads in same session) ──
 class SpeedTracker {
   constructor() {
@@ -79,6 +85,8 @@ class UploadService extends BaseApiService {
     this.db = null;
     this._fileHandleCache = new Map();
     this._speedTracker = new SpeedTracker();
+    this._useProxy = false;  // Fallback flag: true = route blocks through backend
+    this._probeFailures = 0; // Consecutive probe failures across uploads
   }
 
   // ── File handle cache ──
@@ -130,6 +138,134 @@ class UploadService extends BaseApiService {
     const db = await this.initDB();
     await db.delete(STORE_NAME, uploadId);
     this.clearCachedFileHandle(uploadId);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  PROXY: Upload blocks through backend server (fallback)
+  // ═══════════════════════════════════════════════════════════════════
+
+  /**
+   * Upload a single block via the backend proxy.
+   * The backend forwards the block to Azure Blob Storage server-to-server.
+   */
+  async _proxyUploadBlock(videoId, blockIndex, blockData, uploadUrl) {
+    const token = (await import('../utils/tokenManager')).default.getToken();
+    const url = `${URL_CONSTANTS.UPLOAD_PROXY_BLOCK}/${videoId}/${blockIndex}`;
+
+    for (let attempt = 0; attempt <= PROXY_MAX_RETRIES; attempt++) {
+      try {
+        const resp = await this.client.put(url, blockData, {
+          headers: {
+            'Content-Type': 'application/octet-stream',
+            'X-Upload-Url': uploadUrl,
+            ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+          },
+          timeout: 120_000, // 2 min per block
+          maxContentLength: Infinity,
+          maxBodyLength: Infinity,
+        });
+        return resp.data;
+      } catch (error) {
+        if (attempt < PROXY_MAX_RETRIES) {
+          const delay = PROXY_RETRY_DELAY_MS * Math.pow(2, attempt);
+          console.warn(`[UploadService:Proxy] block ${blockIndex} failed (attempt ${attempt + 1}), retrying in ${delay}ms...`, error.message);
+          await new Promise(r => setTimeout(r, delay));
+        } else {
+          throw error;
+        }
+      }
+    }
+  }
+
+  /**
+   * Commit block list via the backend proxy.
+   */
+  async _proxyCommitBlocks(videoId, blockIds, contentType, uploadUrl) {
+    const token = (await import('../utils/tokenManager')).default.getToken();
+    const url = `${URL_CONSTANTS.UPLOAD_PROXY_COMMIT}/${videoId}`;
+
+    for (let attempt = 0; attempt <= PROXY_MAX_RETRIES; attempt++) {
+      try {
+        const resp = await this.client.post(url, {
+          block_ids: blockIds,
+          content_type: contentType,
+        }, {
+          headers: {
+            'X-Upload-Url': uploadUrl,
+            ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+          },
+          timeout: 300_000,
+        });
+        return resp.data;
+      } catch (error) {
+        if (attempt < PROXY_MAX_RETRIES) {
+          const delay = PROXY_RETRY_DELAY_MS * Math.pow(2, attempt);
+          console.warn(`[UploadService:Proxy] commit failed (attempt ${attempt + 1}), retrying in ${delay}ms...`, error.message);
+          await new Promise(r => setTimeout(r, delay));
+        } else {
+          throw error;
+        }
+      }
+    }
+  }
+
+  /**
+   * Full proxy upload: split file into blocks, upload each via backend, then commit.
+   */
+  async _uploadViaProxy(file, uploadUrl, uploadId, videoId, onProgress) {
+    console.log(`[UploadService:Proxy] Starting proxy upload for ${file.name} (${(file.size / (1024 * 1024)).toFixed(1)} MB)`);
+    const contentType = this._detectContentType(file);
+    const blockSize = PROXY_BLOCK_SIZE;
+    const allBlockIds = [];
+    let offset = 0;
+    let blockIndex = 0;
+    let totalBytesUploaded = 0;
+
+    // Build block list
+    while (offset < file.size) {
+      const end = Math.min(offset + blockSize, file.size);
+      const blockIdString = String(blockIndex).padStart(6, '0');
+      const blockId = btoa(blockIdString);
+      allBlockIds.push({ id: blockId, index: blockIndex, start: offset, end });
+      offset = end;
+      blockIndex++;
+    }
+
+    console.log(`[UploadService:Proxy] ${allBlockIds.length} blocks to upload (${(blockSize / (1024 * 1024)).toFixed(0)}MB each)`);
+
+    // Upload blocks sequentially (proxy mode = 1 concurrent to avoid overloading backend)
+    for (const block of allBlockIds) {
+      const blockData = file.slice(block.start, block.end);
+      const arrayBuffer = await blockData.arrayBuffer();
+
+      try {
+        await this._proxyUploadBlock(videoId, block.index, new Uint8Array(arrayBuffer), uploadUrl);
+      } catch (error) {
+        console.error(`[UploadService:Proxy] Block ${block.index} failed permanently`, error);
+        throw wrapStageError(UPLOAD_STAGES.BLOB_PUT, error);
+      }
+
+      totalBytesUploaded += (block.end - block.start);
+      const pct = Math.round((totalBytesUploaded / file.size) * 100);
+      if (onProgress) onProgress(Math.min(pct, 99));
+    }
+
+    // Commit all blocks
+    console.log(`[UploadService:Proxy] Committing ${allBlockIds.length} blocks...`);
+    try {
+      await this._proxyCommitBlocks(
+        videoId,
+        allBlockIds.map(b => b.id),
+        contentType,
+        uploadUrl
+      );
+      console.log(`[UploadService:Proxy] Commit successful for ${file.name}`);
+    } catch (error) {
+      console.error(`[UploadService:Proxy] Commit FAILED for ${file.name}`, error);
+      throw wrapStageError(UPLOAD_STAGES.BLOCK_COMMIT, error);
+    }
+
+    await this.clearUploadMetadata(uploadId);
   }
 
   async getAllUploads() {
@@ -281,8 +417,17 @@ class UploadService extends BaseApiService {
 
   // ═══════════════════════════════════════════════════════════════════
   //  CORE: Adaptive block upload to Azure Blob Storage
+  //  With automatic proxy fallback when direct upload fails
   // ═══════════════════════════════════════════════════════════════════
   async uploadToAzure(file, uploadUrl, uploadId, onProgress, startFrom = 0) {
+    // ── Check if we should use proxy mode (from previous failures) ──
+    if (this._useProxy || this._probeFailures >= PROBE_FAILURE_THRESHOLD) {
+      const metadata = await this.getUploadMetadata(uploadId) || {};
+      const videoId = metadata.videoId || uploadId;
+      console.log(`[UploadService] Using PROXY mode (previous failures: ${this._probeFailures})`);
+      return this._uploadViaProxy(file, uploadUrl, uploadId, videoId, onProgress);
+    }
+
     const uploadStartTime = Date.now();
     const contentType = this._detectContentType(file);
     const blockBlobClient = new BlockBlobClient(uploadUrl);
@@ -329,16 +474,30 @@ class UploadService extends BaseApiService {
       return writeQueue;
     };
 
-    // ── Upload probe block ──
+    // ── Upload probe block (with proxy fallback) ──
     if (!uploadedSet.has(probeId) && startFrom === 0) {
-      const probeData = file.slice(0, probeSize);
-      const probeMs = await uploadBlock(probeId, probeData, probeSize, 'probe');
-      await safeMarkUploaded(probeId);
-      uploadedSet.add(probeId);
-      totalBytesUploaded += probeSize;
+      try {
+        const probeData = file.slice(0, probeSize);
+        const probeMs = await uploadBlock(probeId, probeData, probeSize, 'probe');
+        await safeMarkUploaded(probeId);
+        uploadedSet.add(probeId);
+        totalBytesUploaded += probeSize;
+        // Reset probe failure counter on success
+        this._probeFailures = 0;
 
-      const probeMBps = ((probeSize / (1024 * 1024)) / (probeMs / 1000)).toFixed(2);
-      console.log(`[UploadService] Probe: ${probeSize / 1024}KB in ${probeMs}ms (${probeMBps} MB/s)`);
+        const probeMBps = ((probeSize / (1024 * 1024)) / (probeMs / 1000)).toFixed(2);
+        console.log(`[UploadService] Probe: ${probeSize / 1024}KB in ${probeMs}ms (${probeMBps} MB/s)`);
+      } catch (probeError) {
+        // Probe failed after all retries → switch to proxy mode
+        this._probeFailures++;
+        console.error(
+          `[UploadService] Direct upload probe FAILED (failure #${this._probeFailures}). ` +
+          `Switching to server proxy mode.`, probeError.message
+        );
+        this._useProxy = true;
+        const videoId = existingMetadata.videoId || uploadId;
+        return this._uploadViaProxy(file, uploadUrl, uploadId, videoId, onProgress);
+      }
     } else {
       // Probe already uploaded (resume) – assume default speed initially
       totalBytesUploaded += probeSize;
@@ -404,8 +563,14 @@ class UploadService extends BaseApiService {
           try {
             await uploadBlock(block.id, file.slice(block.start, block.end), blockSize, `block[${block.index}]`);
           } catch (error) {
-            console.error(`[UploadService] Block ${block.index}/${totalBlocks} failed permanently`, error);
-            throw wrapStageError(UPLOAD_STAGES.BLOB_PUT, error);
+            // Block failed after all retries → switch to proxy mode for remaining blocks
+            console.error(`[UploadService] Block ${block.index}/${totalBlocks} failed. Switching to proxy mode for remaining blocks.`, error);
+            this._useProxy = true;
+            this._probeFailures++;
+            const metadata = await this.getUploadMetadata(uploadId) || {};
+            const videoId = metadata.videoId || uploadId;
+            // Upload remaining file via proxy (from current offset)
+            return this._uploadViaProxy(file, uploadUrl, uploadId, videoId, onProgress);
           }
 
           await safeMarkUploaded(block.id);

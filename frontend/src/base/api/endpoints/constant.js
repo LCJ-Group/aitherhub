@@ -12,6 +12,8 @@ export const URL_CONSTANTS = {
   BATCH_UPLOAD_COMPLETE: "/api/v1/videos/batch-upload-complete",
   UPLOAD_RESUME_CHECK: "/api/v1/videos/uploads/check",
   UPLOADS_CLEAR: "/api/v1/videos/uploads/clear",
+  UPLOAD_PROXY_BLOCK: "/api/v1/videos/upload-proxy/block",
+  UPLOAD_PROXY_COMMIT: "/api/v1/videos/upload-proxy/commit",
   GET_USER_VIDEOS: "/api/v1/videos/user",
   GET_VIDEO: "/api/v1/videos",
   FEEDBACK_SUBMIT: "/api/v1/feedback",

@@ -437,3 +437,192 @@ async def clear_user_uploads(
     except Exception as exc:
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to clear uploads: {exc}")
+
+
+# ──────────────────────────────────────────────
+# 8. Server-Side Upload Proxy (Fallback)
+# ──────────────────────────────────────────────
+# When direct browser-to-Azure Blob upload fails (e.g., due to network
+# restrictions, ISP blocking, or mobile browser limitations), the frontend
+# can fall back to uploading blocks through our backend server.
+# The backend then forwards each block to Azure Blob Storage server-to-server.
+# ──────────────────────────────────────────────
+
+from fastapi import Request, Response, Header
+from typing import Optional
+import base64
+import httpx
+import time as _time
+
+
+@router.post("/upload-proxy/init")
+async def upload_proxy_init(
+    payload: GenerateUploadURLRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Generate upload URL and return proxy-compatible metadata.
+    Same as generate-upload-url but signals that proxy mode will be used."""
+    service = VideoService()
+    try:
+        result = await service.generate_upload_url(
+            email=payload.email, filename=payload.filename
+        )
+        return {
+            **result,
+            "proxy_mode": True,
+            "max_block_size": 4 * 1024 * 1024,  # 4MB recommended for proxy
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.put("/upload-proxy/block/{video_id}/{block_index}")
+async def upload_proxy_stage_block(
+    video_id: str,
+    block_index: int,
+    request: Request,
+    upload_url: str = Header(..., alias="X-Upload-Url"),
+):
+    """Proxy a single block upload to Azure Blob Storage.
+
+    The frontend sends the block data as the request body, and this endpoint
+    forwards it to Azure Blob Storage using the SAS URL.
+
+    Headers:
+        X-Upload-Url: The SAS upload URL for the blob
+    Request body: Raw binary block data
+    """
+    try:
+        body = await request.body()
+        block_size = len(body)
+
+        if block_size == 0:
+            raise HTTPException(status_code=400, detail="Empty block data")
+        if block_size > 8 * 1024 * 1024:  # 8MB max per block
+            raise HTTPException(status_code=400, detail="Block too large (max 8MB)")
+
+        # Generate block ID (same format as frontend)
+        block_id = base64.b64encode(
+            str(block_index).zfill(6).encode()
+        ).decode()
+
+        # Build Azure Blob stage block URL
+        separator = "&" if "?" in upload_url else "?"
+        stage_url = f"{upload_url}{separator}comp=block&blockid={block_id}"
+
+        # Forward to Azure Blob Storage (server-to-server)
+        t0 = _time.monotonic()
+        async with httpx.AsyncClient(timeout=120) as client:
+            resp = await client.put(
+                stage_url,
+                content=body,
+                headers={
+                    "Content-Type": "application/octet-stream",
+                    "x-ms-blob-type": "BlockBlob",
+                },
+            )
+            resp.raise_for_status()
+
+        elapsed_ms = int((_time.monotonic() - t0) * 1000)
+        logger.info(
+            f"[upload-proxy] block {block_index} for {video_id}: "
+            f"{block_size} bytes in {elapsed_ms}ms"
+        )
+
+        return {
+            "success": True,
+            "block_index": block_index,
+            "block_id": block_id,
+            "block_size": block_size,
+            "elapsed_ms": elapsed_ms,
+        }
+
+    except httpx.HTTPStatusError as e:
+        logger.error(
+            f"[upload-proxy] Azure rejected block {block_index} for {video_id}: "
+            f"{e.response.status_code} {e.response.text[:200]}"
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=f"Azure Blob rejected block: {e.response.status_code}",
+        )
+    except httpx.TimeoutException:
+        logger.error(f"[upload-proxy] Timeout uploading block {block_index} for {video_id}")
+        raise HTTPException(status_code=504, detail="Azure Blob upload timeout")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[upload-proxy] Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/upload-proxy/commit/{video_id}")
+async def upload_proxy_commit(
+    video_id: str,
+    request: Request,
+    upload_url: str = Header(..., alias="X-Upload-Url"),
+):
+    """Proxy the commit block list operation to Azure Blob Storage.
+
+    Request body JSON:
+        { "block_ids": ["base64_id_0", "base64_id_1", ...], "content_type": "video/mp4" }
+    """
+    try:
+        payload = await request.json()
+        block_ids = payload.get("block_ids", [])
+        content_type = payload.get("content_type", "video/mp4")
+
+        if not block_ids:
+            raise HTTPException(status_code=400, detail="No block IDs provided")
+
+        # Build the commit block list XML
+        block_list_xml = '<?xml version="1.0" encoding="utf-8"?>\n<BlockList>\n'
+        for bid in block_ids:
+            block_list_xml += f"  <Latest>{bid}</Latest>\n"
+        block_list_xml += "</BlockList>"
+
+        # Build commit URL
+        separator = "&" if "?" in upload_url else "?"
+        commit_url = f"{upload_url}{separator}comp=blocklist"
+
+        # Forward to Azure Blob Storage
+        async with httpx.AsyncClient(timeout=300) as client:
+            resp = await client.put(
+                commit_url,
+                content=block_list_xml.encode("utf-8"),
+                headers={
+                    "Content-Type": "application/xml",
+                    "x-ms-blob-content-type": content_type,
+                    "x-ms-blob-cache-control": "public, max-age=3600",
+                },
+            )
+            resp.raise_for_status()
+
+        logger.info(
+            f"[upload-proxy] Committed {len(block_ids)} blocks for {video_id}"
+        )
+
+        return {
+            "success": True,
+            "video_id": video_id,
+            "blocks_committed": len(block_ids),
+        }
+
+    except httpx.HTTPStatusError as e:
+        logger.error(
+            f"[upload-proxy] Azure rejected commit for {video_id}: "
+            f"{e.response.status_code} {e.response.text[:200]}"
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=f"Azure Blob rejected commit: {e.response.status_code}",
+        )
+    except httpx.TimeoutException:
+        logger.error(f"[upload-proxy] Timeout committing blocks for {video_id}")
+        raise HTTPException(status_code=504, detail="Azure Blob commit timeout")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[upload-proxy] Commit error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
