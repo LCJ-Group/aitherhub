@@ -346,7 +346,7 @@ async def fetch_phases(session, video_id=None, user_id=None):
             AND vc.phase_index = vp.phase_index
         LEFT JOIN clip_feedback cf
             ON cf.video_id = vp.video_id
-            AND cf.phase_index::int = vp.phase_index
+            AND cf.phase_index = vp.phase_index::text
         {where}
         ORDER BY vp.video_id, vp.phase_index
     """)
