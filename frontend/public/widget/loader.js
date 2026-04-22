@@ -1,5 +1,5 @@
 /**
- * AitherHub Widget Loader v2.11 — TikTok-Style Fullscreen Feed + Product Card + Subtitles
+ * AitherHub Widget Loader v3.0 — TikTok-Style Fullscreen Feed + Product Card + Subtitles
  *
  * GTM経由で配信される軽量エントリーポイント。
  * 先方のECサイトに1行のタグを追加するだけで、
@@ -61,7 +61,7 @@
  */
 (function () {
   "use strict";
-  console.log("[AitherHub] IIFE START v2.11");
+  console.log("[AitherHub] IIFE START v3.0");
 
   // ── Prevent double-loading ──
   if (window.__AITHERHUB_WIDGET_LOADED) { console.log("[AitherHub] SKIPPED: already loaded"); return; }
@@ -1181,6 +1181,16 @@
       } else {
         video.setAttribute("data-src", getClipUrl(clip));
       }
+      // Error handler for debugging video load failures
+      video.addEventListener("error", function() {
+        var err = video.error;
+        console.warn("[AitherHub] Video error idx=" + index + " code=" + (err ? err.code : "?") + " msg=" + (err ? err.message : "unknown"));
+      });
+      // Stalled handler: retry load if video stalls
+      video.addEventListener("stalled", function() {
+        console.warn("[AitherHub] Video stalled idx=" + index + ", retrying load");
+        setTimeout(function() { try { video.load(); } catch(e){} }, 1000);
+      });
       inner.appendChild(video);
       videoElements[index] = video;
 
@@ -1917,31 +1927,45 @@
       };
       video.addEventListener("canplay", hideSpinner);
       video.addEventListener("playing", hideSpinner);
-      // Safety timeout: hide spinner after 5s regardless
-      setTimeout(function () { if (spinner) spinner.style.display = "none"; }, 5000);
+      // Safety timeout: hide spinner after 8s regardless
+      setTimeout(function () { if (spinner) spinner.style.display = "none"; }, 8000);
 
-      // Always start muted to guarantee autoplay works on mobile
-      video.muted = true;
-      var playPromise = video.play();
-      if (playPromise !== undefined) {
-        playPromise.then(function () {
-          // Playback started; apply user's sound preference
-          if (!isMuted) {
-            video.muted = false;
-          }
-          // Preload adjacent videos after current starts playing
+      // ── Robust mobile playback with retry ──
+      var playAttempt = 0;
+      var MAX_PLAY_RETRIES = 3;
+      function attemptPlay() {
+        playAttempt++;
+        video.muted = true;
+        video.setAttribute("playsinline", "");
+        video.setAttribute("webkit-playsinline", "");
+        if (video.readyState < 2) { try { video.load(); } catch(e){} }
+        var playPromise = video.play();
+        if (playPromise !== undefined) {
+          playPromise.then(function () {
+            console.log("[AitherHub] Play OK attempt=" + playAttempt);
+            if (!isMuted) { video.muted = false; }
+            preloadAdjacent(currentIndex);
+          }).catch(function (err) {
+            console.warn("[AitherHub] Play fail attempt=" + playAttempt + ": " + err.message);
+            if (playAttempt < MAX_PLAY_RETRIES) {
+              setTimeout(function () {
+                try { video.load(); } catch(e){}
+                setTimeout(attemptPlay, 300);
+              }, 500 * playAttempt);
+            } else {
+              console.warn("[AitherHub] All play attempts failed, showing poster");
+              if (spinner) spinner.style.display = "none";
+              video.muted = true;
+              try { video.load(); } catch(e){}
+              preloadAdjacent(currentIndex);
+            }
+          });
+        } else {
+          if (!isMuted) video.muted = false;
           preloadAdjacent(currentIndex);
-        }).catch(function () {
-          // Fallback: ensure muted playback
-          video.muted = true;
-          video.play().catch(function () { });
-          preloadAdjacent(currentIndex);
-        });
-      } else {
-        // Old browsers without Promise: apply preference directly
-        if (!isMuted) video.muted = false;
-        preloadAdjacent(currentIndex);
+        }
       }
+      attemptPlay();
 
       // Update UI
       var clip = clips[currentIndex];
@@ -1979,6 +2003,10 @@
       currentIndex = ((newIndex % clips.length) + clips.length) % clips.length;
       updateSlidePositions(true);
       playCurrentVideo();
+      // Update URL bar with current clip for sharing
+      if (isOpen && clips[currentIndex]) {
+        updateUrlBar(clips[currentIndex].clip_id);
+      }
     }
 
     function goNext() { goToIndex(currentIndex + 1); }
@@ -2052,6 +2080,10 @@
       }
 
       playCurrentVideo();
+      // Update URL bar with first clip for sharing
+      if (clips[currentIndex]) {
+        updateUrlBar(clips[currentIndex].clip_id);
+      }
       trackEvent("widget_open");
 
       // Update UI after play started
@@ -2073,6 +2105,8 @@
       if (isDetailOpen) closeProductDetail();
       overlay.classList.remove("active");
       fab.style.display = "flex";
+      // Restore original URL (remove ?ath_clip= parameter)
+      restoreUrl();
       // Resume FAB video
       if (fabVideo) { try { fabVideo.play().catch(function () { }); } catch (e) { } }
       // Unlock body scroll
@@ -2234,22 +2268,48 @@
     });
 
     // ── Action: Share ──
+    // ── URL Share Link System ──
+    // Build a share URL on the current EC site with ?ath_clip= parameter
+    function buildShareUrl(clipId) {
+      var base = window.location.origin + window.location.pathname;
+      var params = new URLSearchParams(window.location.search);
+      params.set("ath_clip", clipId);
+      return base + "?" + params.toString();
+    }
+
+    // Update browser URL bar when navigating between clips (no page reload)
+    function updateUrlBar(clipId) {
+      if (!window.history || !window.history.replaceState) return;
+      try {
+        var newUrl = buildShareUrl(clipId);
+        window.history.replaceState({ ath_clip: clipId }, document.title, newUrl);
+      } catch(e) {}
+    }
+
+    // Restore original URL when widget is closed
+    var _originalUrl = window.location.href;
+    function restoreUrl() {
+      if (!window.history || !window.history.replaceState) return;
+      try {
+        window.history.replaceState({}, document.title, _originalUrl);
+      } catch(e) {}
+    }
+
     shareBtn.addEventListener("click", function (e) {
       e.stopPropagation();
       var clip = clips[currentIndex];
-      // Build share URL pointing to the dedicated video landing page
-      var shareUrl = "https://www.aitherhub.com/v/" + encodeURIComponent(clip.clip_id);
+      // Build share URL on the SAME EC site (not aitherhub.com)
+      var shareUrl = buildShareUrl(clip.clip_id);
       var shareTitle = clip.product_name || brandName;
-      // Include URL in text so iOS share sheet always shows the link
       var shareText = shareTitle + (clip.product_price ? " " + clip.product_price : "") + "\n" + shareUrl;
       if (navigator.share) {
         navigator.share({ title: shareTitle, text: shareText, url: shareUrl }).catch(function () { });
       } else if (navigator.clipboard) {
-        navigator.clipboard.writeText(shareUrl);
-        // Visual feedback
-        var label = shareBtn.querySelector(".ath-action-label");
-        label.textContent = "コピー!";
-        setTimeout(function () { label.textContent = "シェア"; }, 2000);
+        navigator.clipboard.writeText(shareUrl).then(function() {
+          var label = shareBtn.querySelector(".ath-action-label");
+          label.textContent = "\u30B3\u30D4\u30FC!";
+          setTimeout(function () { label.textContent = "\u30B7\u30A7\u30A2"; }, 2000);
+        }).catch(function() {});
       }
       trackEvent("share", { clip_id: clip.clip_id, share_url: shareUrl });
     });
@@ -2414,19 +2474,12 @@
           updateMuteButton();
           soundHintDismissed = false;
           showSoundHint();
+          // URL already has ?ath_clip= so no need to update
           trackEvent("share_open", { clip_id: sharedClipId });
         }, 500); // Small delay to ensure DOM is ready
 
-        // Clean up URL parameter without page reload
-        if (window.history && window.history.replaceState) {
-          var cleanUrl = window.location.href.split("?")[0];
-          var otherParams = [];
-          params.forEach(function (val, key) {
-            if (key !== "ath_clip") otherParams.push(key + "=" + encodeURIComponent(val));
-          });
-          if (otherParams.length > 0) cleanUrl += "?" + otherParams.join("&");
-          window.history.replaceState({}, document.title, cleanUrl);
-        }
+        // Keep the URL as-is so the user sees the same URL they can share
+        // URL will be restored when widget is closed via restoreUrl()
       } catch (e) { /* Silently fail if URLSearchParams not supported */ }
     })();
   }
