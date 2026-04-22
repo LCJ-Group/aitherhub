@@ -1,5 +1,5 @@
 /**
- * AitherHub Widget Loader v3.1 — TikTok-Style Fullscreen Feed + Product Card + Subtitles
+ * AitherHub Widget Loader v3.2 — TikTok-Style Fullscreen Feed + Product Card + Subtitles
  *
  * GTM経由で配信される軽量エントリーポイント。
  * 先方のECサイトに1行のタグを追加するだけで、
@@ -61,7 +61,7 @@
  */
 (function () {
   "use strict";
-  console.log("[AitherHub] IIFE START v3.1");
+  console.log("[AitherHub] IIFE START v3.2");
 
   // ── Prevent double-loading ──
   if (window.__AITHERHUB_WIDGET_LOADED) { console.log("[AitherHub] SKIPPED: already loaded"); return; }
@@ -959,6 +959,8 @@
     var isSpeedUp = false;
     var hintShown = false;
     var fabVideo = null;
+    var _consecutiveSkips = 0; // Track consecutive auto-skips to prevent chain reactions
+    var MAX_CONSECUTIVE_SKIPS = 2; // Stop auto-skipping after this many consecutive failures
 
     // ── Video Depth Tracking (AI Learning) ──
     var depthSent = {};          // { "clipId_25": true, ... }
@@ -1935,16 +1937,23 @@
       var MAX_PLAY_RETRIES = 3;
       var _skipChecked = false;
 
-      // Detect broken videos (videoWidth===0 after play) and auto-skip
+      // Detect broken videos (videoWidth===0 after play) — only auto-skip if under consecutive limit
       function checkVideoHealth() {
         if (_skipChecked) return;
         _skipChecked = true;
         setTimeout(function () {
           if (video.videoWidth === 0 && video.videoHeight === 0 && !video.paused && video.currentTime > 0) {
-            console.warn("[AitherHub] Broken video detected (videoWidth=0), skipping clip " + currentIndex);
-            if (clips.length > 1) {
+            console.warn("[AitherHub] Broken video detected (videoWidth=0) at clip " + currentIndex + " (consecutiveSkips=" + _consecutiveSkips + ")");
+            if (clips.length > 1 && _consecutiveSkips < MAX_CONSECUTIVE_SKIPS) {
+              _consecutiveSkips++;
               goToIndex(currentIndex + 1);
+            } else {
+              console.warn("[AitherHub] Stopping auto-skip: reached max consecutive skips");
+              if (spinner) spinner.style.display = "none";
             }
+          } else if (video.videoWidth > 0) {
+            // Video is playing correctly — reset consecutive skip counter
+            _consecutiveSkips = 0;
           }
         }, 3000); // Check 3 seconds after play starts
       }
@@ -1960,6 +1969,8 @@
           playPromise.then(function () {
             console.log("[AitherHub] Play OK attempt=" + playAttempt);
             if (!isMuted) { video.muted = false; }
+            // Reset consecutive skip counter on successful play start
+            // (checkVideoHealth will confirm actual video rendering)
             preloadAdjacent(currentIndex);
             checkVideoHealth();
           }).catch(function (err) {
@@ -1970,12 +1981,14 @@
                 setTimeout(attemptPlay, 300);
               }, 500 * playAttempt);
             } else {
-              console.warn("[AitherHub] All play attempts failed, skipping to next");
+              console.warn("[AitherHub] All play attempts failed at clip " + currentIndex + " (consecutiveSkips=" + _consecutiveSkips + ")");
               if (spinner) spinner.style.display = "none";
-              // Auto-skip to next video instead of showing black screen
-              if (clips.length > 1) {
+              // Only auto-skip if under consecutive limit to prevent chain reactions
+              if (clips.length > 1 && _consecutiveSkips < MAX_CONSECUTIVE_SKIPS) {
+                _consecutiveSkips++;
                 goToIndex(currentIndex + 1);
               } else {
+                console.warn("[AitherHub] Stopping auto-skip: reached max consecutive skips");
                 preloadAdjacent(currentIndex);
               }
             }
