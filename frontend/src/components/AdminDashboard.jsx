@@ -134,6 +134,18 @@ export default function AdminDashboard() {
     return () => { cancelled = true; };
   }, [authenticated, activeTab, feedbackIncludeUnrated, feedbackRefreshKey, feedbackPage, feedbackFilterRating]);
 
+  // Auto-refresh feedbacks when returning from editor tab (visibilitychange)
+  useEffect(() => {
+    if (!authenticated || activeTab !== "feedbacks") return;
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") {
+        setFeedbackRefreshKey(k => k + 1);
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => document.removeEventListener("visibilitychange", handleVisibility);
+  }, [authenticated, activeTab]);
+
   // Fetch upload health when tab switches
   useEffect(() => {
     if (!authenticated || activeTab !== "upload-health") return;
@@ -1123,7 +1135,8 @@ function FeedbackCard({ fb, onRated }) {
         { headers: { "X-Admin-Key": "aither:hub" }, timeout: 10000 }
       );
       setLocalRating(star);
-      // Don't refresh the whole list, just update locally for speed
+      // Also refresh the full list so summary stats update
+      if (onRated) onRated();
     } catch (err) {
       console.error("Failed to rate:", err);
       alert("採点に失敗しました: " + (err.response?.data?.detail || err.message));
