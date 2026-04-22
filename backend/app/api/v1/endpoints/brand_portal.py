@@ -688,11 +688,10 @@ async def brand_recommended_clips(
                        vc.duration_sec, vc.liver_name, vc.created_at, vc.video_id,
                        wca.sort_order
                 FROM widget_clip_assignments wca
-                JOIN video_clips vc ON vc.id = wca.clip_id
+                JOIN video_clips vc ON vc.id::text = wca.clip_id
                 WHERE wca.client_id = :cid
                   AND wca.is_active = TRUE
                   AND vc.clip_url IS NOT NULL
-                  AND vc.status != 'deleted'
                   {search_clause}
                 ORDER BY wca.sort_order ASC, vc.created_at DESC
                 LIMIT :lim OFFSET :off
@@ -729,11 +728,10 @@ async def brand_recommended_clips(
             text(f"""
                 SELECT COUNT(*)
                 FROM widget_clip_assignments wca
-                JOIN video_clips vc ON vc.id = wca.clip_id
+                JOIN video_clips vc ON vc.id::text = wca.clip_id
                 WHERE wca.client_id = :cid
                   AND wca.is_active = TRUE
                   AND vc.clip_url IS NOT NULL
-                  AND vc.status != 'deleted'
                   {count_search}
             """),
             count_params,
