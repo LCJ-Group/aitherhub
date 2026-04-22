@@ -66,6 +66,8 @@ export default function OBSOutputPage() {
   const pollCountRef = useRef(0);
   const speakCountRef = useRef(0);
   const processedIdsRef = useRef(new Set()); // Dedup: track processed item IDs
+  const isRenewingRef = useRef(false); // Whether session renewal is in progress
+  const renewalCountRef = useRef(0); // Number of session renewals
 
   const baseURL = import.meta.env.VITE_API_BASE_URL;
 
@@ -331,6 +333,10 @@ export default function OBSOutputPage() {
             case "avatar.speak_ended":
               setIsSpeaking(false);
               break;
+            case "session.stopped":
+              console.log("[OBS] Session stopped event — auto-renewing...");
+              if (!isRenewingRef.current) renewOwnSession();
+              break;
             default:
               break;
           }
@@ -341,9 +347,18 @@ export default function OBSOutputPage() {
 
       room.on(RoomEvent.Disconnected, () => {
         console.log("[OBS] ⚠️ Disconnected from LiveKit room");
+        // If renewal is in progress, don't reset state
+        if (isRenewingRef.current) {
+          console.log("[OBS] Disconnected during renewal — expected");
+          return;
+        }
         stopQueuePolling();
         disconnectObsWebSocket();
-        if (mountedRef.current) {
+        // Auto-renew session instead of showing error
+        if (mountedRef.current && sessionIdRef.current) {
+          console.log("[OBS] 🔄 Auto-renewing session after disconnect...");
+          renewOwnSession();
+        } else if (mountedRef.current) {
           setStatus("error");
           setError("Disconnected from LiveKit room");
         }
@@ -451,6 +466,87 @@ export default function OBSOutputPage() {
     pollCountRef.current = 0;
     speakCountRef.current = 0;
     processedIdsRef.current.clear();
+  }
+
+  // ── Renew session (auto-reconnect for continuous streaming) ──
+  async function renewOwnSession() {
+    if (isRenewingRef.current) return;
+    isRenewingRef.current = true;
+    renewalCountRef.current += 1;
+    const renewCount = renewalCountRef.current;
+    console.log(`[OBS] 🔄 Session renewal #${renewCount} starting...`);
+    setStatus("creating");
+    setError(null);
+
+    try {
+      // 1. Clean up old session
+      stopQueuePolling();
+      disconnectObsWebSocket();
+
+      audioElementsRef.current.forEach((el) => {
+        try { el.remove(); } catch (e) {}
+      });
+      audioElementsRef.current = [];
+
+      if (roomRef.current) {
+        try { roomRef.current.disconnect(); } catch (e) {}
+        roomRef.current = null;
+      }
+
+      // Don't call backend stop — session already expired
+      const oldSessionId = sessionIdRef.current;
+      sessionIdRef.current = null;
+
+      // 2. Create new session
+      console.log(`[OBS] Creating new session (renewal #${renewCount})...`);
+      const resp = await axios.post(
+        `${baseURL}/api/v1/digital-human/liveavatar/streaming/start`,
+        {
+          avatar_id: avatarIdParam || "",
+          language: language,
+          persona_prompt: "",
+          voice_id: null,
+          sandbox: false,
+        },
+        { headers: { "X-Admin-Key": ADMIN_KEY }, timeout: 60000 }
+      );
+
+      if (!resp.data?.success) {
+        throw new Error(resp.data?.error || "Failed to renew session");
+      }
+
+      const { session_id, livekit_url, livekit_client_token } = resp.data;
+      if (!livekit_url || !livekit_client_token) {
+        throw new Error("Backend did not return LiveKit credentials");
+      }
+
+      sessionIdRef.current = session_id;
+      setSessionDuration(0);
+      console.log(`[OBS] ✅ New session: ${session_id} (replacing ${oldSessionId}), renewal #${renewCount}`);
+
+      // 3. Connect to new LiveKit room
+      await connectToRoom(livekit_url, livekit_client_token);
+
+      console.log(`[OBS] 🎉 Session renewal #${renewCount} complete!`);
+    } catch (err) {
+      console.error(`[OBS] ❌ Session renewal #${renewCount} failed:`, err);
+      setError(`Renewal failed: ${err.message}`);
+      setStatus("error");
+
+      // Retry after 5 seconds
+      if (mountedRef.current) {
+        console.log(`[OBS] Retrying renewal in 5 seconds...`);
+        setTimeout(() => {
+          if (mountedRef.current) {
+            isRenewingRef.current = false;
+            renewOwnSession();
+          }
+        }, 5000);
+        return; // Don't clear isRenewingRef yet
+      }
+    } finally {
+      isRenewingRef.current = false;
+    }
   }
 
   // ── Auto-start session on mount ──

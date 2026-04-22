@@ -179,6 +179,26 @@ async def mark_consumed_endpoint(req: MarkConsumedRequest):
     return {"success": True, "consumed": req.count}
 
 
+class UpdateSessionRequest(BaseModel):
+    old_session_id: str
+    new_session_id: str
+
+
+@router.post("/update-session")
+async def update_session(req: UpdateSessionRequest):
+    """
+    セッションIDを更新（自動再接続時に使用）
+    
+    HeyGenセッションが期限切れで新セッションを作成した際、
+    Auto Liveの状態（商品・フロー・設定）を新セッションに引き継ぐ。
+    """
+    from app.services.auto_live_engine import update_session_id
+    result = await update_session_id(req.old_session_id, req.new_session_id)
+    if not result.get("success"):
+        raise HTTPException(status_code=404, detail=result.get("error", "Update failed"))
+    return result
+
+
 @router.get("/sessions")
 async def list_sessions():
     """アクティブな自動ライブセッション一覧"""

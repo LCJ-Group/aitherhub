@@ -657,3 +657,19 @@ def get_liveavatar_service() -> LiveAvatarService:
     if _liveavatar_service is None:
         _liveavatar_service = LiveAvatarService()
     return _liveavatar_service
+
+
+def rename_speak_queue_session(old_session_id: str, new_session_id: str):
+    """
+    セッションID更新時にspeak queueのセッション参照を更新。
+    
+    speak queueはシングルトンのLiveAvatarServiceに1つだけ存在するため、
+    実際にはキュー自体のリネームは不要（キューはセッションIDに紐づいていない）。
+    ただし、active_sessionの更新が必要な場合はここで行う。
+    """
+    service = get_liveavatar_service()
+    if service._active_session and service._active_session.get("session_id") == old_session_id:
+        service._active_session["session_id"] = new_session_id
+        logger.info(f"[LiveAvatar] Active session renamed: {old_session_id} → {new_session_id}")
+    else:
+        logger.info(f"[LiveAvatar] No active session to rename (current: {service._active_session})")

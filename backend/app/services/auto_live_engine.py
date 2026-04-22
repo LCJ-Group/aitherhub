@@ -888,3 +888,51 @@ def get_auto_live_status(session_id: str) -> Dict:
 def list_active_sessions() -> List[Dict]:
     """アクティブな自動ライブセッション一覧"""
     return [get_auto_live_status(sid) for sid in _sessions]
+
+
+async def update_session_id(old_session_id: str, new_session_id: str) -> Dict:
+    """
+    セッションIDを更新（自動再接続時に使用）
+    
+    古いセッションの商品・設定・フロー状態を新しいセッションIDに引き継ぐ。
+    Auto Liveのスピーチ生成ループは新しいセッションIDでキューにpushし続ける。
+    """
+    session = _sessions.get(old_session_id)
+    if not session:
+        logger.warning(f"[AutoLive] update_session_id: old session {old_session_id} not found")
+        return {"success": False, "error": "Old session not found"}
+
+    logger.info(f"[AutoLive] 🔄 Updating session ID: {old_session_id} → {new_session_id}")
+
+    # Update session ID
+    session.session_id = new_session_id
+
+    # Move session in registry
+    _sessions[new_session_id] = session
+    del _sessions[old_session_id]
+
+    # Update speak queue to use new session ID
+    from app.services.liveavatar_service import rename_speak_queue_session
+    try:
+        rename_speak_queue_session(old_session_id, new_session_id)
+    except Exception as e:
+        logger.warning(f"[AutoLive] Failed to rename speak queue: {e}")
+
+    # Reset consumed/push counts for clean queue tracking
+    session._consumed_count = 0
+    session._push_count = 0
+
+    logger.info(
+        f"[AutoLive] ✅ Session updated: {new_session_id}, "
+        f"products={len(session.products)}, phase={session.current_phase}, "
+        f"running={session.is_running}"
+    )
+
+    return {
+        "success": True,
+        "old_session_id": old_session_id,
+        "new_session_id": new_session_id,
+        "products_count": len(session.products),
+        "phase": session.current_phase,
+        "is_running": session.is_running,
+    }

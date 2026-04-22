@@ -73,6 +73,12 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
   const photoInputRef = useRef(null);
   const photoInputLiveRef = useRef(null);
   
+  // Batch photo analysis
+  const [batchAnalyzing, setBatchAnalyzing] = useState(false);
+  const [batchProgress, setBatchProgress] = useState({ total: 0, done: 0, failed: 0 });
+  const batchPhotoInputRef = useRef(null);
+  const batchPhotoInputLiveRef = useRef(null);
+  
   // Status polling
   const statusIntervalRef = useRef(null);
 
@@ -117,6 +123,7 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
           price: p.price || prev.price,
           brand: p.brand || prev.brand,
           notes: p.notes || prev.notes,
+          image_url: previewUrl, // Use photo preview as thumbnail
         }));
       } else {
         setError("写真から商品情報を読み取れませんでした。手動で入力してください。");
@@ -130,6 +137,92 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
       if (photoInputRef.current) photoInputRef.current.value = "";
       if (photoInputLiveRef.current) photoInputLiveRef.current.value = "";
     }
+  };
+
+  // ── Batch Photo Analysis (multiple photos at once) ──
+  const handleBatchPhotoSelect = async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+    
+    // Reset file inputs
+    if (batchPhotoInputRef.current) batchPhotoInputRef.current.value = "";
+    if (batchPhotoInputLiveRef.current) batchPhotoInputLiveRef.current.value = "";
+    
+    setBatchAnalyzing(true);
+    setBatchProgress({ total: files.length, done: 0, failed: 0 });
+    setError("");
+    
+    // Create preview URLs for each file
+    const previewUrls = files.map(file => URL.createObjectURL(file));
+    
+    // Process all photos in parallel
+    const results = await Promise.allSettled(
+      files.map(async (file, index) => {
+        const result = await aiLiveCreatorService.analyzeProductImage(file);
+        if (result?.success && result?.product) {
+          return { ...result.product, _previewUrl: previewUrls[index] };
+        }
+        throw new Error("Analysis failed");
+      })
+    );
+    
+    let doneCount = 0;
+    let failedCount = 0;
+    
+    for (const result of results) {
+      if (result.status === "fulfilled" && result.value) {
+        const p = result.value;
+        const product = {
+          item_id: Date.now() + Math.random(),
+          item_name: (p.name || "").trim(),
+          description: (p.description || "").trim(),
+          price: (p.price || "").trim(),
+          brand: (p.brand || "").trim(),
+          image_url: p._previewUrl || "", // Use photo preview as thumbnail
+          custom_notes: (p.notes || "").trim(),
+        };
+        
+        if (product.item_name) {
+          if (isAutoMode && sessionId) {
+            // During live: add directly to running session
+            try {
+              await aiLiveCreatorService.autoLiveAddProduct({
+                session_id: sessionId,
+                item_name: product.item_name,
+                description: product.description,
+                price: product.price,
+                brand: product.brand,
+                image_url: product.image_url,
+                custom_notes: product.custom_notes,
+              });
+              doneCount++;
+            } catch {
+              failedCount++;
+            }
+          } else {
+            // Before live: add to manual products list
+            setManualProducts(prev => [...prev, product]);
+            doneCount++;
+          }
+        } else {
+          failedCount++;
+        }
+      } else {
+        failedCount++;
+      }
+    }
+    
+    setBatchProgress({ total: files.length, done: doneCount, failed: failedCount });
+    
+    if (failedCount > 0) {
+      setError(`${files.length}枚中${failedCount}枚の解析に失敗しました`);
+    }
+    
+    // Auto-hide progress after 3 seconds
+    setTimeout(() => {
+      setBatchAnalyzing(false);
+      setBatchProgress({ total: 0, done: 0, failed: 0 });
+    }, 3000);
   };
 
   // ── Add Manual Product ──
@@ -508,26 +601,63 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
                   </div>
                 </div>
               ) : (
-                <div className="flex gap-1.5">
-                  <input
-                    ref={photoInputRef}
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    onChange={handlePhotoSelect}
-                  />
-                  <button
-                    onClick={() => photoInputRef.current?.click()}
-                    disabled={isAnalyzingPhoto}
-                    className="flex-1 py-2 border-2 border-dashed border-cyan-600/50 rounded-lg text-[9px] text-cyan-400 hover:border-cyan-400 hover:text-cyan-300 transition-colors flex items-center justify-center gap-1.5"
-                  >
-                    <Camera className="w-3.5 h-3.5" /> 写真から読み込み
-                  </button>
+                <div className="space-y-1.5">
+                  {/* Batch progress indicator */}
+                  {batchAnalyzing && (
+                    <div className="flex items-center gap-2 p-2 bg-cyan-900/20 border border-cyan-500/30 rounded-lg">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-cyan-400" />
+                      <div className="flex-1">
+                        <p className="text-[9px] text-cyan-300">
+                          {batchProgress.done + batchProgress.failed < batchProgress.total
+                            ? `${batchProgress.total}枚を解析中... (${batchProgress.done + batchProgress.failed}/${batchProgress.total})`
+                            : `完了！ ${batchProgress.done}枚追加${batchProgress.failed > 0 ? `、${batchProgress.failed}枚失敗` : ""}`
+                          }
+                        </p>
+                        <div className="mt-1 h-1 bg-gray-700 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-cyan-400 rounded-full transition-all duration-300"
+                            style={{ width: `${batchProgress.total > 0 ? ((batchProgress.done + batchProgress.failed) / batchProgress.total * 100) : 0}%` }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  <div className="flex gap-1.5">
+                    <input
+                      ref={photoInputRef}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={handlePhotoSelect}
+                    />
+                    <input
+                      ref={batchPhotoInputRef}
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      className="hidden"
+                      onChange={handleBatchPhotoSelect}
+                    />
+                    <button
+                      onClick={() => photoInputRef.current?.click()}
+                      disabled={isAnalyzingPhoto || batchAnalyzing}
+                      className="flex-1 py-2 border-2 border-dashed border-cyan-600/50 rounded-lg text-[9px] text-cyan-400 hover:border-cyan-400 hover:text-cyan-300 transition-colors flex items-center justify-center gap-1.5"
+                    >
+                      <Camera className="w-3.5 h-3.5" /> 1枚読み込み
+                    </button>
+                    <button
+                      onClick={() => batchPhotoInputRef.current?.click()}
+                      disabled={isAnalyzingPhoto || batchAnalyzing}
+                      className="flex-1 py-2 border-2 border-dashed border-amber-500/50 rounded-lg text-[9px] text-amber-300 hover:border-amber-400 hover:text-amber-200 transition-colors flex items-center justify-center gap-1.5"
+                    >
+                      <Upload className="w-3.5 h-3.5" /> 一括追加
+                    </button>
+                  </div>
                   <button
                     onClick={() => setShowAddProduct(true)}
-                    className="flex-1 py-2 border-2 border-dashed border-gray-600 rounded-lg text-[9px] text-gray-400 hover:border-amber-500/50 hover:text-amber-300 transition-colors flex items-center justify-center gap-1.5"
+                    className="w-full py-1.5 border border-dashed border-gray-600 rounded-lg text-[9px] text-gray-400 hover:border-gray-500 hover:text-gray-300 transition-colors flex items-center justify-center gap-1.5"
                   >
-                    <Plus className="w-3.5 h-3.5" /> 手動で追加
+                    <Plus className="w-3 h-3" /> 手動で追加
                   </button>
                 </div>
               )}
@@ -709,18 +839,33 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
                 className="hidden"
                 onChange={handlePhotoSelect}
               />
+              <input
+                ref={batchPhotoInputLiveRef}
+                type="file"
+                accept="image/*"
+                multiple
+                className="hidden"
+                onChange={handleBatchPhotoSelect}
+              />
               <button
                 onClick={() => photoInputLiveRef.current?.click()}
-                disabled={isAnalyzingPhoto}
+                disabled={isAnalyzingPhoto || batchAnalyzing}
                 className="flex-1 py-1.5 border border-dashed border-cyan-600/50 rounded-lg text-[9px] text-cyan-400 hover:border-cyan-400 hover:text-cyan-300 transition-colors flex items-center justify-center gap-1"
               >
-                <Camera className="w-3 h-3" /> 写真から読み込み
+                <Camera className="w-3 h-3" /> 1枚
+              </button>
+              <button
+                onClick={() => batchPhotoInputLiveRef.current?.click()}
+                disabled={isAnalyzingPhoto || batchAnalyzing}
+                className="flex-1 py-1.5 border border-dashed border-amber-500/50 rounded-lg text-[9px] text-amber-300 hover:border-amber-400 hover:text-amber-200 transition-colors flex items-center justify-center gap-1"
+              >
+                <Upload className="w-3 h-3" /> 一括
               </button>
               <button
                 onClick={() => setShowAddProduct(true)}
                 className="flex-1 py-1.5 border border-dashed border-gray-600 rounded-lg text-[9px] text-gray-400 hover:border-amber-500/50 hover:text-amber-300 transition-colors flex items-center justify-center gap-1"
               >
-                <Plus className="w-3 h-3" /> 手動で追加
+                <Plus className="w-3 h-3" /> 手動
               </button>
             </div>
           )}

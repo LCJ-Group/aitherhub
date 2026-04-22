@@ -85,6 +85,9 @@ export default function LiveAvatarStreaming({
   const speakStartTimeRef = useRef(null); // Track when speaking started for timeout
   const autoLiveModeRef = useRef(false); // Ref to track autoLiveMode for closures
   const pollAndSendQueueRef = useRef(null); // Ref to latest pollAndSendQueue for closures
+  const isRenewingRef = useRef(false); // Whether session renewal is in progress
+  const renewalCountRef = useRef(0); // Number of times session has been renewed
+  const [isRenewing, setIsRenewing] = useState(false); // UI state for renewal indicator
 
   // ── Sync autoLiveMode to ref for use in closures (handleDataReceived) ──
   useEffect(() => {
@@ -253,7 +256,10 @@ export default function LiveAvatarStreaming({
           break;
         case "session.stopped":
           console.log("[LiveAvatar] Session stopped:", event.end_reason);
-          stopSession();
+          // Auto-renew session instead of stopping (for continuous 2h+ streaming)
+          if (!isRenewingRef.current) {
+            renewSession();
+          }
           break;
         default:
           break;
@@ -368,6 +374,17 @@ export default function LiveAvatarStreaming({
 
       room.on(RoomEvent.Disconnected, () => {
         console.log("[LiveAvatar] Disconnected from room");
+        // If renewal is in progress, don't reset state (renewSession handles it)
+        if (isRenewingRef.current) {
+          console.log("[LiveAvatar] Disconnected during renewal — expected");
+          return;
+        }
+        // Auto-renew if we were connected (session expired)
+        if (sessionIdRef.current) {
+          console.log("[LiveAvatar] Unexpected disconnect — attempting auto-renewal");
+          renewSession();
+          return;
+        }
         setIsConnected(false);
         setConnectionStatus("disconnected");
         setSessionId(null);
@@ -425,7 +442,10 @@ export default function LiveAvatarStreaming({
                 }
               } else if (data.type === "session.stopped") {
                 console.log("[LiveAvatar] Session stopped via WebSocket");
-                stopSession();
+                // Auto-renew instead of stopping
+                if (!isRenewingRef.current) {
+                  renewSession();
+                }
               }
             } catch (e) {
               console.warn("[LiveAvatar] Failed to parse WebSocket message:", e);
@@ -512,6 +532,204 @@ export default function LiveAvatarStreaming({
     // Notify parent that stream is disconnected
     if (onDisconnect) onDisconnect();
   }, [sessionId, onDisconnect]);
+
+  // ── Renew Session (auto-reconnect for continuous streaming) ──
+  const renewSession = useCallback(async () => {
+    if (isRenewingRef.current) return; // Prevent double renewal
+    isRenewingRef.current = true;
+    setIsRenewing(true);
+    setConnectionStatus("reconnecting");
+    renewalCountRef.current += 1;
+    const renewCount = renewalCountRef.current;
+    console.log(`[LiveAvatar] 🔄 Session renewal #${renewCount} starting...`);
+
+    try {
+      // 1. Clean up old session (but don't notify parent of disconnect)
+      // Clean up audio elements
+      audioElementsRef.current.forEach((el) => {
+        try { el.remove(); } catch (e) {}
+      });
+      audioElementsRef.current = [];
+
+      // Clean up WebSocket
+      if (wsRef.current) {
+        try {
+          wsRef.current.onopen = null;
+          wsRef.current.onmessage = null;
+          wsRef.current.onerror = null;
+          wsRef.current.onclose = null;
+          if (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING) {
+            wsRef.current.close();
+          }
+        } catch (e) {}
+        wsRef.current = null;
+      }
+
+      // Disconnect old room
+      if (roomRef.current) {
+        try { roomRef.current.disconnect(); } catch (e) {}
+        roomRef.current = null;
+      }
+
+      // Don't call backend stop — session already expired
+      const oldSessionId = sessionIdRef.current;
+
+      // 2. Create new session
+      console.log(`[LiveAvatar] Creating new session (renewal #${renewCount})...`);
+      const result = await aiLiveCreatorService.liveAvatarStreamingStart({
+        avatar_id: avatarId || "",
+        language: language,
+        persona_prompt: personaPrompt,
+        voice_id: voiceId || null,
+        sandbox: sandbox,
+      });
+
+      if (!result.success) {
+        throw new Error(result.error || "Failed to renew session");
+      }
+
+      const { session_id, livekit_url, livekit_client_token, ws_url, max_session_duration } = result;
+      if (!livekit_url || !livekit_client_token) {
+        throw new Error("Backend did not return LiveKit credentials");
+      }
+
+      setSessionId(session_id);
+      sessionIdRef.current = session_id;
+      setMaxDuration(max_session_duration || 1200);
+      setSessionDuration(0);
+
+      console.log(`[LiveAvatar] ✅ New session: ${session_id} (replacing ${oldSessionId})`);
+
+      // Notify parent with new session credentials
+      if (onSessionCreated) {
+        onSessionCreated({ session_id, livekit_url, livekit_client_token, renewed: true, old_session_id: oldSessionId });
+      }
+
+      // 3. Connect to new LiveKit room
+      const room = new Room({
+        adaptiveStream: false,
+        dynacast: false,
+      });
+      roomRef.current = room;
+
+      room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
+        console.log("[LiveAvatar] Track subscribed (renewed):", track.kind);
+        if (track.kind === Track.Kind.Video) {
+          const element = track.attach();
+          element.style.width = "100%";
+          element.style.height = "100%";
+          element.style.objectFit = "cover";
+          element.style.borderRadius = "inherit";
+          element.autoplay = true;
+          element.playsInline = true;
+          if (videoRef.current) {
+            videoRef.current.innerHTML = "";
+            videoRef.current.appendChild(element);
+          }
+          if (onStreamReady) {
+            const stream = element.srcObject
+              || track.mediaStream
+              || (track.mediaStreamTrack ? new MediaStream([track.mediaStreamTrack]) : null);
+            if (stream) onStreamReady(stream);
+          }
+        }
+        if (track.kind === Track.Kind.Audio) {
+          const element = track.attach();
+          element.autoplay = true;
+          element.volume = 1.0;
+          document.body.appendChild(element);
+          audioElementsRef.current.push(element);
+        }
+      });
+
+      room.on(RoomEvent.TrackUnsubscribed, (track) => {
+        track.detach().forEach((el) => el.remove());
+      });
+
+      room.on(RoomEvent.DataReceived, handleDataReceived);
+
+      room.on(RoomEvent.Disconnected, () => {
+        console.log("[LiveAvatar] Disconnected from renewed room");
+        if (isRenewingRef.current) return;
+        if (sessionIdRef.current) {
+          renewSession();
+          return;
+        }
+        setIsConnected(false);
+        setConnectionStatus("disconnected");
+        setSessionId(null);
+        sessionIdRef.current = null;
+        if (onDisconnect) onDisconnect();
+      });
+
+      room.on(RoomEvent.Reconnecting, () => setConnectionStatus("reconnecting"));
+      room.on(RoomEvent.Reconnected, () => setConnectionStatus("connected"));
+
+      await room.connect(livekit_url, livekit_client_token);
+      console.log(`[LiveAvatar] ✅ Connected to renewed LiveKit room`);
+
+      // 4. Reconnect WebSocket
+      if (ws_url) {
+        try {
+          const ws = new WebSocket(ws_url);
+          wsRef.current = ws;
+          ws.onopen = () => console.log("[LiveAvatar] WebSocket reconnected (renewed)");
+          ws.onmessage = (event) => {
+            try {
+              const data = JSON.parse(event.data);
+              if (data.type === "agent.speak_started") setIsSpeaking(true);
+              else if (data.type === "agent.speak_ended") {
+                setIsSpeaking(false);
+                autoLiveSpeakingRef.current = false;
+                speakStartTimeRef.current = null;
+                if (autoLiveModeRef.current && pollAndSendQueueRef.current) {
+                  setTimeout(() => pollAndSendQueueRef.current(), 30);
+                }
+              } else if (data.type === "session.stopped") {
+                if (!isRenewingRef.current) renewSession();
+              }
+            } catch (e) {}
+          };
+          ws.onerror = () => {};
+          ws.onclose = () => { wsRef.current = null; };
+        } catch (e) {}
+      }
+
+      setIsConnected(true);
+      setConnectionStatus("connected");
+      setIsSpeaking(false);
+      autoLiveSpeakingRef.current = false;
+
+      // 5. Notify Auto Live engine about session change
+      if (autoLiveModeRef.current && oldSessionId) {
+        try {
+          const baseURL = import.meta.env.VITE_API_BASE_URL;
+          await axios.post(
+            `${baseURL}/api/v1/auto-live/update-session`,
+            { old_session_id: oldSessionId, new_session_id: session_id },
+            { headers: { "X-Admin-Key": "aither:hub" }, timeout: 10000 }
+          );
+          console.log(`[LiveAvatar] Auto Live session updated: ${oldSessionId} → ${session_id}`);
+        } catch (e) {
+          console.warn("[LiveAvatar] Failed to update Auto Live session (non-fatal):", e);
+        }
+      }
+
+      console.log(`[LiveAvatar] 🎉 Session renewal #${renewCount} complete!`);
+
+    } catch (err) {
+      console.error(`[LiveAvatar] ❌ Session renewal #${renewCount} failed:`, err);
+      setError(`Session renewal failed: ${err.message}`);
+      setIsConnected(false);
+      setConnectionStatus("disconnected");
+      setSessionId(null);
+      sessionIdRef.current = null;
+      if (onDisconnect) onDisconnect();
+    } finally {
+      isRenewingRef.current = false;
+      setIsRenewing(false);
+    }
+  }, [avatarId, language, personaPrompt, voiceId, sandbox, onStreamReady, onError, onDisconnect, onSessionCreated, handleDataReceived]);
 
   // ══════════════════════════════════════════════════════════
   // Auto Live: Speak Queue Polling + Auto Send
@@ -737,8 +955,20 @@ export default function LiveAvatarStreaming({
       <div className={`relative bg-gray-900 rounded-xl overflow-hidden ${hideVideo ? 'hidden' : ''}`} style={{ aspectRatio: "9/16", maxHeight: "500px" }}>
         <div ref={videoRef} className="w-full h-full" />
 
+        {/* Overlay: Session renewing */}
+        {isRenewing && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-900/60 z-10">
+            <Loader2 className="w-10 h-10 text-amber-400 animate-spin mb-3" />
+            <p className="text-sm text-amber-300">{window.__t('auto_renew', 'セッション更新中...')}</p>
+            <p className="text-xs text-gray-400 mt-1">数秒で自動再接続します</p>
+            {renewalCountRef.current > 0 && (
+              <p className="text-[10px] text-gray-500 mt-2">更新回数: {renewalCountRef.current}</p>
+            )}
+          </div>
+        )}
+
         {/* Overlay: Not connected */}
-        {!isConnected && !isConnecting && (
+        {!isConnected && !isConnecting && !isRenewing && (
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-900/80">
             <Radio className="w-12 h-12 text-gray-600 mb-3" />
             <p className="text-sm text-gray-400 mb-1">LiveAvatar Streaming</p>
@@ -768,6 +998,11 @@ export default function LiveAvatarStreaming({
               <span className="text-[10px] text-green-300 font-medium">{status.label}</span>
             </div>
             <div className="flex items-center gap-1.5 bg-black/40 backdrop-blur-sm px-2 py-1 rounded-full">
+              {renewalCountRef.current > 0 && (
+                <span className="text-[10px] font-mono text-amber-400">
+                  #{renewalCountRef.current + 1}
+                </span>
+              )}
               <span className={`text-[10px] font-mono ${isNearEnd ? 'text-red-400' : 'text-gray-300'}`}>
                 {formatTime(sessionDuration)} / {formatTime(maxDuration)}
               </span>
