@@ -957,6 +957,121 @@ async def retry_video(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/batch-cleanup-zombies")
+async def batch_cleanup_zombies(
+    max_age_hours: int = 6,
+    dry_run: bool = False,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Batch-reset zombie videos stuck at STEP_0 with 0% progress for >max_age_hours.
+    These videos clog the worker queue and prevent new videos from being processed.
+    
+    Args:
+        max_age_hours: Minimum hours since last update to consider zombie (default: 6)
+        dry_run: If True, only list zombies without resetting them
+    """
+    from datetime import datetime, timedelta
+    try:
+        zombie_threshold = datetime.utcnow() - timedelta(hours=max_age_hours)
+        
+        result = await db.execute(
+            text("""
+                SELECT v.id, v.original_filename, v.status, v.step_progress,
+                       v.updated_at, v.dequeue_count, v.worker_claimed_at,
+                       u.email as user_email
+                FROM videos v
+                LEFT JOIN users u ON v.user_id = u.id
+                WHERE v.status = 'STEP_0_EXTRACT_FRAMES'
+                  AND COALESCE(v.step_progress, 0) = 0
+                  AND v.updated_at < :threshold
+                ORDER BY v.updated_at ASC
+                LIMIT 100
+            """),
+            {"threshold": zombie_threshold},
+        )
+        zombies = result.fetchall()
+        
+        if dry_run:
+            return {
+                "dry_run": True,
+                "zombie_count": len(zombies),
+                "zombies": [
+                    {
+                        "id": str(z.id),
+                        "filename": z.original_filename,
+                        "progress": z.step_progress or 0,
+                        "updated_at": str(z.updated_at),
+                        "dequeue_count": z.dequeue_count or 0,
+                        "user_email": z.user_email,
+                    }
+                    for z in zombies
+                ],
+            }
+        
+        cleaned = 0
+        for z in zombies:
+            vid = str(z.id)
+            try:
+                await db.execute(
+                    text("""
+                        UPDATE videos
+                        SET status = 'ERROR',
+                            error_message = :err_msg,
+                            last_error_code = 'ZOMBIE_CLEANUP',
+                            last_error_message = :err_msg,
+                            updated_at = NOW()
+                        WHERE id = :vid
+                    """),
+                    {
+                        "vid": vid,
+                        "err_msg": f"Admin zombie cleanup: stuck at STEP_0 with 0% progress "
+                                   f"for >{max_age_hours}h. Use retry to re-process.",
+                    },
+                )
+                await db.commit()
+                cleaned += 1
+                
+                # Record error log
+                try:
+                    await db.execute(
+                        text("""
+                            INSERT INTO video_error_logs
+                                (video_id, error_code, error_step, error_message, source)
+                            VALUES
+                                (:vid, 'ZOMBIE_CLEANUP', 'STEP_0_EXTRACT_FRAMES',
+                                 :msg, 'admin')
+                        """),
+                        {
+                            "vid": vid,
+                            "msg": f"Admin zombie cleanup: {z.original_filename} "
+                                   f"stuck for >{max_age_hours}h",
+                        },
+                    )
+                    await db.commit()
+                except Exception:
+                    try:
+                        await db.rollback()
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.warning(f"Failed to cleanup zombie {vid}: {e}")
+                try:
+                    await db.rollback()
+                except Exception:
+                    pass
+        
+        return {
+            "dry_run": False,
+            "zombie_count": len(zombies),
+            "cleaned": cleaned,
+            "message": f"Cleaned {cleaned}/{len(zombies)} zombie videos",
+        }
+    except Exception as e:
+        logger.exception(f"Batch zombie cleanup failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 async def _retry_live_boost_admin(
     db: AsyncSession,
     video_id: str,

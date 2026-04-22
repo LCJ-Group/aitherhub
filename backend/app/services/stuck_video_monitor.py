@@ -37,14 +37,20 @@ STUCK_THRESHOLD_MINUTES = 60      # Minutes without update → considered stuck
                                    # during long video processing (9h+ videos have
                                    # slow FFmpeg steps that don't update DB frequently)
 MAX_AUTO_RETRIES = 5              # Max auto-requeue attempts per video (was 3)
-WORKER_GUARD_HOURS = 4            # Hours since worker_claimed_at to consider stale
-                                   # Reduced from 24 to 4 to detect deploy-interrupted
-                                   # videos faster. Even the longest videos (9h+) should
-                                   # complete within 4h on GPU-accelerated worker.
+WORKER_GUARD_HOURS = 2            # Hours since worker_claimed_at to consider stale
+                                   # Reduced from 4 to 2 to detect dead workers faster.
+                                   # Even the longest STEP_0 (frame extraction for 9h+
+                                   # videos) should complete within 2h on GPU worker.
+                                   # If a worker claimed a video >2h ago and no progress,
+                                   # the worker is almost certainly dead.
 NEVER_ENQUEUED_THRESHOLD_MINUTES = 10  # Minutes after creation to detect never-enqueued videos
 SAS_RETRY_COUNT = 3               # Number of retries for SAS URL generation
 SAS_RETRY_DELAY_SECONDS = 5       # Delay between SAS retries
 BATCH_LIMIT = 50                  # Max videos to process per cycle (was 10)
+ZOMBIE_HOURS = 6                  # Hours at STEP_0 with 0% progress → mark as ERROR
+                                   # These are videos that were never successfully
+                                   # processed and are clogging the queue.
+ZOMBIE_MAX_BATCH = 20             # Max zombie videos to clean up per cycle
 
 _monitor_task = None
 
@@ -438,26 +444,45 @@ async def _check_and_requeue_stuck_videos():
             from app.core.db import AsyncSessionLocal
 
             async with AsyncSessionLocal() as db:
-                # ── Part 1: Stuck processing videos ──────────────────────────
+                  # ── Part 1: Stuck processing videos ──────────────────────
                 # Use naive datetimes to avoid asyncpg offset-naive vs offset-aware mismatch.
                 # The DB columns (updated_at, worker_claimed_at) may be stored as
                 # timestamp without time zone, so we must pass naive UTC datetimes.
                 threshold = datetime.utcnow() - timedelta(minutes=STUCK_THRESHOLD_MINUTES)
                 worker_guard = datetime.utcnow() - timedelta(hours=WORKER_GUARD_HOURS)
 
+                # Improved stuck detection (2026-04-22):
+                # A video is stuck if ANY of these conditions are true:
+                #   Condition A (original): updated_at is old AND worker is stale
+                #   Condition B (new): step_progress=0 AND worker_claimed >2h ago
+                #     (catches videos where updated_at is refreshed by heartbeat
+                #      but no actual progress is being made)
                 sql = text("""
                     SELECT v.id, v.original_filename, v.status, v.user_id,
                            v.updated_at, v.dequeue_count,
-                           v.worker_claimed_at,
+                           v.worker_claimed_at, v.step_progress,
                            u.email as user_email
                     FROM videos v
                     LEFT JOIN users u ON v.user_id = u.id
                     WHERE (v.status IN ('uploaded', 'QUEUED')
                            OR v.status LIKE 'STEP_%%')
-                      AND v.updated_at < :threshold
-                      AND (v.worker_claimed_at IS NULL
-                           OR v.worker_claimed_at < :worker_guard)
                       AND COALESCE(v.dequeue_count, 0) < :max_retries
+                      AND (
+                          -- Condition A: updated_at is old AND worker is stale/absent
+                          (v.updated_at < :threshold
+                           AND (v.worker_claimed_at IS NULL
+                                OR v.worker_claimed_at < :worker_guard))
+                          OR
+                          -- Condition B: no progress for >2h (worker claimed but dead)
+                          (COALESCE(v.step_progress, 0) = 0
+                           AND v.worker_claimed_at IS NOT NULL
+                           AND v.worker_claimed_at < :worker_guard)
+                          OR
+                          -- Condition C: no worker ever claimed AND old enough
+                          (v.worker_claimed_at IS NULL
+                           AND v.updated_at < :threshold
+                           AND v.status LIKE 'STEP_%%')
+                      )
                     ORDER BY v.updated_at ASC
                     LIMIT :batch_limit
                 """)
@@ -575,6 +600,101 @@ async def _check_and_requeue_stuck_videos():
                     if success:
                         health["never_enqueued_retried"] += 1
 
+                # ── Part 3: Zombie cleanup ───────────────────────────────────
+                # Videos stuck at STEP_0 with 0% progress for >ZOMBIE_HOURS hours.
+                # These are "zombie" entries that were never successfully processed
+                # and are clogging the worker queue. They should be moved to ERROR
+                # so the worker can focus on newer, viable videos.
+                # Only targets videos that have exhausted retries OR been stuck too long.
+                zombie_threshold = datetime.utcnow() - timedelta(hours=ZOMBIE_HOURS)
+                health["zombie_cleaned"] = 0
+
+                try:
+                    sql_zombie = text("""
+                        SELECT v.id, v.original_filename, v.status, v.user_id,
+                               v.updated_at, v.dequeue_count,
+                               v.worker_claimed_at, v.step_progress,
+                               u.email as user_email
+                        FROM videos v
+                        LEFT JOIN users u ON v.user_id = u.id
+                        WHERE v.status = 'STEP_0_EXTRACT_FRAMES'
+                          AND COALESCE(v.step_progress, 0) = 0
+                          AND v.updated_at < :zombie_threshold
+                          AND COALESCE(v.dequeue_count, 0) >= :max_retries
+                        ORDER BY v.updated_at ASC
+                        LIMIT :zombie_batch
+                    """)
+                    result_zombie = await db.execute(sql_zombie, {
+                        "zombie_threshold": zombie_threshold,
+                        "max_retries": MAX_AUTO_RETRIES,
+                        "zombie_batch": ZOMBIE_MAX_BATCH,
+                    })
+                    zombie_videos = result_zombie.fetchall()
+
+                    if zombie_videos:
+                        logger.info(
+                            f"[stuck-monitor] Found {len(zombie_videos)} zombie video(s) "
+                            f"(STEP_0, 0% progress, >{ZOMBIE_HOURS}h old, retries exhausted)"
+                        )
+
+                    for row in zombie_videos:
+                        video_id = str(row.id)
+                        try:
+                            await db.execute(
+                                text("""
+                                    UPDATE videos
+                                    SET status = 'ERROR',
+                                        error_message = :err_msg,
+                                        last_error_code = 'ZOMBIE_CLEANUP',
+                                        last_error_message = :err_msg,
+                                        updated_at = NOW()
+                                    WHERE id = :vid
+                                """),
+                                {
+                                    "vid": video_id,
+                                    "err_msg": f"Zombie cleanup: stuck at STEP_0 with 0% progress "
+                                               f"for >{ZOMBIE_HOURS}h after {row.dequeue_count} retries. "
+                                               f"Use admin retry to re-process.",
+                                },
+                            )
+                            await db.commit()
+                            health["zombie_cleaned"] += 1
+                            logger.info(
+                                f"[stuck-monitor] Zombie cleanup: {video_id} "
+                                f"({row.original_filename}) → ERROR"
+                            )
+                            # Record error log
+                            try:
+                                await db.execute(
+                                    text("""
+                                        INSERT INTO video_error_logs
+                                            (video_id, error_code, error_step, error_message, source)
+                                        VALUES
+                                            (:vid, 'ZOMBIE_CLEANUP', 'STEP_0_EXTRACT_FRAMES',
+                                             :msg, 'monitor')
+                                    """),
+                                    {
+                                        "vid": video_id,
+                                        "msg": f"Zombie cleanup: stuck at STEP_0 with 0% progress "
+                                               f"for >{ZOMBIE_HOURS}h after {row.dequeue_count} retries.",
+                                    },
+                                )
+                                await db.commit()
+                            except Exception:
+                                try:
+                                    await db.rollback()
+                                except Exception:
+                                    pass
+                        except Exception as e:
+                            logger.warning(f"[stuck-monitor] Zombie cleanup failed for {video_id}: {e}")
+                            try:
+                                await db.rollback()
+                            except Exception:
+                                pass
+
+                except Exception as e:
+                    logger.warning(f"[stuck-monitor] Zombie cleanup query error: {e}")
+
                 # ── Record health ──────────────────────────────────────────
                 errors_str = "; ".join(health["errors"]) if health["errors"] else None
                 await _record_health(
@@ -588,8 +708,10 @@ async def _check_and_requeue_stuck_videos():
                 # Log summary
                 total_found = health["stuck_found"] + health["never_enqueued_found"] + health["deploy_interrupted_found"]
                 total_retried = health["stuck_retried"] + health["never_enqueued_retried"] + health["deploy_interrupted_retried"]
+                zombie_count = health.get("zombie_cleaned", 0)
                 logger.info(
                     f"[stuck-monitor] Cycle complete: found={total_found} retried={total_retried} "
+                    f"zombie_cleaned={zombie_count} "
                     f"(stuck={health['stuck_found']}/{health['stuck_retried']}, "
                     f"never_enqueued={health['never_enqueued_found']}/{health['never_enqueued_retried']}, "
                     f"deploy_interrupted={health['deploy_interrupted_found']}/{health['deploy_interrupted_retried']})"
