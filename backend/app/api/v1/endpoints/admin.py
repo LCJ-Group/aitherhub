@@ -264,18 +264,27 @@ async def get_all_feedbacks(
         sas_expiry = _dt.now(timezone.utc) + timedelta(hours=2)
 
         def _build_source_url(compressed_blob, email, video_id):
-            """Build SAS-signed source video URL from compressed_blob_url."""
-            if not compressed_blob or not account_key:
+            """Build SAS-signed source video URL.
+            Priority: compressed_blob_url → original video blob (email/video_id/video_id.mp4)
+            """
+            if not account_key:
                 return None
             try:
-                segments = compressed_blob.split("/")
-                if "@" in segments[0] or len(segments) >= 3:
-                    blob_name = compressed_blob
-                else:
-                    fname = segments[-1]
-                    uuid_match = re.search(r'([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})', fname)
-                    original_case_vid = uuid_match.group(1) if uuid_match else video_id
-                    blob_name = f"{email}/{original_case_vid}/{compressed_blob}"
+                blob_name = None
+                if compressed_blob:
+                    segments = compressed_blob.split("/")
+                    if "@" in segments[0] or len(segments) >= 3:
+                        blob_name = compressed_blob
+                    else:
+                        fname = segments[-1]
+                        uuid_match = re.search(r'([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})', fname)
+                        original_case_vid = uuid_match.group(1) if uuid_match else video_id
+                        blob_name = f"{email}/{original_case_vid}/{compressed_blob}"
+                if not blob_name and email and video_id:
+                    # Fallback: use original video blob path
+                    blob_name = f"{email}/{video_id}/{video_id}.mp4"
+                if not blob_name:
+                    return None
                 sas = generate_blob_sas(
                     account_name=account_name,
                     container_name=container_name,
