@@ -300,9 +300,15 @@ async def _call_shopee_api(
                 )
                 return data  # エラーでもレスポンスを返す（呼び出し元で判断）
             return data
+    except httpx.HTTPStatusError as e:
+        logger.error(f"[ShopeeAPI] {path} HTTP Error: {e.response.status_code} - {e.response.text}")
+        try:
+            return e.response.json()
+        except Exception:
+            return {"error": "http_error", "message": str(e), "status_code": e.response.status_code}
     except Exception as e:
         logger.error(f"[ShopeeAPI] {path} Exception: {e}")
-        return None
+        return {"error": "exception", "message": str(e)}
 
 
 # ============================================================
