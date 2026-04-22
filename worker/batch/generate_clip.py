@@ -2496,9 +2496,60 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
 
 
 # =========================
+# Language detection (inline, no external deps)
+# =========================
+import unicodedata as _ud_worker
+
+def _detect_language_from_text(text_str: str) -> str:
+    """Detect language from transcript text using Unicode character analysis."""
+    if not text_str or len(text_str.strip()) < 5:
+        return "unknown"
+    text_str = text_str.strip()
+    hiragana = katakana = cjk = hangul = thai = latin = 0
+    trad_only = set("這個們對會說請問還從點裡買賣價錢東關學與對應當經過區體發現問題認為開關實際點選單項導對話視窗確認選擇設計資訊連結頁面內容標題圖片檔案資料庫")
+    simp_only = set("这个们对会说请问还从点里买卖价钱东关学与对应当经过区体发现问题认为开关实际点选单项导对话视窗确认选择设计资讯连结页面内容标题图片档案资料库")
+    trad_count = simp_count = 0
+    for ch in text_str:
+        cp = ord(ch)
+        if 0x3040 <= cp <= 0x309F:
+            hiragana += 1
+        elif 0x30A0 <= cp <= 0x30FF:
+            katakana += 1
+        elif 0xAC00 <= cp <= 0xD7AF or 0x1100 <= cp <= 0x11FF:
+            hangul += 1
+        elif 0x0E00 <= cp <= 0x0E7F:
+            thai += 1
+        elif 0x4E00 <= cp <= 0x9FFF or 0x3400 <= cp <= 0x4DBF:
+            cjk += 1
+            if ch in trad_only:
+                trad_count += 1
+            if ch in simp_only:
+                simp_count += 1
+        elif ch.isalpha() and cp < 0x0250:
+            latin += 1
+    total = hiragana + katakana + cjk + hangul + thai + latin
+    if total < 3:
+        return "unknown"
+    if hiragana + katakana > 2:
+        return "ja"
+    if hangul > 3:
+        return "ko"
+    if thai > 3:
+        return "th"
+    if cjk > 5:
+        if trad_count > simp_count:
+            return "zh-TW"
+        elif simp_count > trad_count:
+            return "zh-CN"
+        return "zh-TW"
+    if latin > total * 0.5:
+        return "en"
+    return "unknown"
+
+
+# =========================
 # Clip DB auto-enrichment
 # =========================
-
 def _enrich_clip_after_generation(clip_id: str, video_id: str, phase_index, captions_data: list, segments: list):
     """
     Auto-enrich clip metadata after generation completes.
@@ -2518,8 +2569,12 @@ def _enrich_clip_after_generation(clip_id: str, video_id: str, phase_index, capt
 
             # 2. Get phase metadata (only for numeric phase_index)
             phase_idx_str = str(phase_index)
+            # Auto-detect language from transcript
+            detected_lang = _detect_language_from_text(transcript) if transcript else "unknown"
+
             updates = {
                 "transcript_text": transcript[:10000] if transcript else None,
+                "detected_language": detected_lang,
                 "enriched_at": "NOW()",
             }
             params = {"clip_id": clip_id}
