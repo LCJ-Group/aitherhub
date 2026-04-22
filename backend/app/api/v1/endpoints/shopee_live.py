@@ -61,6 +61,27 @@ async def health_check(test_api: bool = Query(default=False)):
 
 
 # ============================================================
+# Helpers
+# ============================================================
+def _normalize_product_list(raw: dict) -> dict:
+    """
+    Shopee APIの生レスポンスをフロントエンドが期待する形式に変換。
+    Shopee: { response: { item: [...] } }
+    Frontend expects: { items: [...] }
+    """
+    items = []
+    if isinstance(raw, dict):
+        resp = raw.get("response") or {}
+        items = resp.get("item") or []
+    return {
+        "items": items,
+        "total": len(items),
+        "has_next_page": bool((raw.get("response") or {}).get("has_next_page")),
+        "raw": raw,  # デバッグ用に生データも保持
+    }
+
+
+# ============================================================
 # Product Endpoints
 # ============================================================
 @router.get("/products")
@@ -74,8 +95,8 @@ async def list_products(
     result = await get_product_list(shop_id, offset, page_size)
     if result is None:
         raise HTTPException(status_code=500, detail="Failed to fetch products from Shopee API")
-    # Shopee APIエラーレスポンスもそのまま返す
-    return result
+    # フロントエンド互換: response.item → items に変換
+    return _normalize_product_list(result)
 
 
 @router.get("/products/detail")
@@ -105,7 +126,8 @@ async def list_products_by_path(
     result = await get_product_list(shop_id, offset, page_size)
     if result is None:
         raise HTTPException(status_code=500, detail="Failed to fetch products from Shopee API")
-    return result
+    # フロントエンド互換: response.item → items に変換
+    return _normalize_product_list(result)
 
 
 # ============================================================
