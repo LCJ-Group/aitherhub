@@ -158,8 +158,31 @@ jobs:
             --output none
           echo "Staging slot configured."
 
+          # Wait for SCM container to stabilize after settings change
+          # This prevents 'Deployment stopped due to SCM container restart' errors
+          echo "Waiting 60s for SCM container to stabilize..."
+          sleep 60
+          echo "SCM stabilization wait complete."
+
       # ── Step 3: Deploy to staging slot (production stays untouched) ──
+      # Uses retry logic to handle transient SCM restart failures
       - name: Deploy to staging slot
+        uses: azure/webapps-deploy@v3
+        id: deploy_attempt_1
+        continue-on-error: true
+        with:
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
+          slot-name: ${{ env.SLOT_NAME }}
+          package: deploy.zip
+
+      - name: Retry deploy to staging slot (if first attempt failed)
+        if: steps.deploy_attempt_1.outcome == 'failure'
+        run: |
+          echo "First deploy attempt failed. Waiting 90s for SCM to stabilize before retry..."
+          sleep 90
+
+      - name: Deploy to staging slot (retry)
+        if: steps.deploy_attempt_1.outcome == 'failure'
         uses: azure/webapps-deploy@v3
         with:
           app-name: ${{ env.AZURE_WEBAPP_NAME }}
