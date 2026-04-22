@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import VideoService from '../base/services/videoService';
+import axios from 'axios';
 import { useTranslation } from 'react-i18next';
 
 /**
@@ -10,6 +11,9 @@ import { useTranslation } from 'react-i18next';
  *   ② Reason Tags: hook_weak, too_long, cut_position, subtitle, etc.
  *   ③ Sales Confirmation: "Is this the selling moment?" YES / NO
  *   ④ Explicit SAVE button to persist all selections
+ *
+ * adminMode: When true, uses direct axios calls with X-Admin-Key header
+ *            instead of VideoService (which requires user auth token).
  */
 
 const REASON_TAGS = [
@@ -23,6 +27,30 @@ const REASON_TAGS = [
   { key: 'perfect', label: window.__t('auto_337', '完璧'), emoji: '✨' },
 ];
 
+// Admin API helper — bypasses user auth, uses X-Admin-Key
+const adminApi = (() => {
+  const baseURL = import.meta.env.VITE_API_BASE_URL;
+  const headers = { 'Content-Type': 'application/json', 'X-Admin-Key': 'aither:hub' };
+  return {
+    async submitClipRating(videoId, data) {
+      const res = await axios.post(`${baseURL}/api/v1/feedback/${videoId}/clip-rating`, data, { headers, timeout: 15000 });
+      return res.data;
+    },
+    async getClipRatings(videoId) {
+      const res = await axios.get(`${baseURL}/api/v1/feedback/${videoId}/clip-ratings`, { headers, timeout: 15000 });
+      return res.data;
+    },
+    async submitSalesConfirmation(videoId, data) {
+      const res = await axios.post(`${baseURL}/api/v1/feedback/${videoId}/sales-confirmation`, data, { headers, timeout: 15000 });
+      return res.data;
+    },
+    async getSalesConfirmations(videoId) {
+      const res = await axios.get(`${baseURL}/api/v1/feedback/${videoId}/sales-confirmations`, { headers, timeout: 15000 });
+      return res.data;
+    },
+  };
+})();
+
 const ClipFeedbackPanel = ({
   videoId,
   phaseIndex,
@@ -33,6 +61,7 @@ const ClipFeedbackPanel = ({
   scoreBreakdown = null,
   onFeedbackSubmitted = () => {},
   compact = false,
+  adminMode = false,
 }) => {
   useTranslation(); // triggers re-render on language change
   const [rating, setRating] = useState(null); // 'good' | 'bad' | null
@@ -49,12 +78,15 @@ const ClipFeedbackPanel = ({
   // Store initial loaded values to detect changes
   const loadedRef = useRef({ rating: null, salesConfirm: null, reasons: [] });
 
+  // Choose API layer based on adminMode
+  const api = adminMode ? adminApi : VideoService;
+
   // Load existing feedback on mount
   useEffect(() => {
     if (!videoId) return;
     const loadExisting = async () => {
       try {
-        const ratingsResp = await VideoService.getClipRatings(videoId);
+        const ratingsResp = await api.getClipRatings(videoId);
         if (ratingsResp?.ratings) {
           // Use String comparison to avoid type mismatch (API returns string, prop may be number)
           const existing = ratingsResp.ratings.find(r => String(r.phase_index) === String(phaseIndex));
@@ -70,7 +102,7 @@ const ClipFeedbackPanel = ({
         console.warn('[Feedback] Failed to load ratings from API:', e);
       }
       try {
-        const salesResp = await VideoService.getSalesConfirmations(videoId);
+        const salesResp = await api.getSalesConfirmations(videoId);
         if (salesResp?.confirmations) {
           const existing = salesResp.confirmations.find(c => String(c.phase_index) === String(phaseIndex));
           if (existing) {
@@ -152,7 +184,7 @@ const ClipFeedbackPanel = ({
     // Save rating if set
     if (rating) {
       try {
-        await VideoService.submitClipRating(videoId, {
+        await api.submitClipRating(videoId, {
           phase_index: phaseIndex,
           time_start: timeStart,
           time_end: timeEnd,
@@ -166,6 +198,7 @@ const ClipFeedbackPanel = ({
         loadedRef.current.rating = rating;
         loadedRef.current.reasons = [...selectedReasons];
       } catch (e) {
+        console.error('[Feedback] Failed to save clip rating:', e);
         ratingOk = false;
       }
     }
@@ -173,7 +206,7 @@ const ClipFeedbackPanel = ({
     // Save sales confirmation if set
     if (salesConfirm !== null) {
       try {
-        await VideoService.submitSalesConfirmation(videoId, {
+        await api.submitSalesConfirmation(videoId, {
           phase_index: phaseIndex,
           time_start: timeStart,
           time_end: timeEnd,
@@ -184,6 +217,7 @@ const ClipFeedbackPanel = ({
         setSalesSubmitted(true);
         loadedRef.current.salesConfirm = salesConfirm;
       } catch (e) {
+        console.error('[Feedback] Failed to save sales confirmation:', e);
         salesOk = false;
       }
     }
@@ -213,7 +247,7 @@ const ClipFeedbackPanel = ({
     } else {
       setError(window.__t('auto_326', '一部の保存に失敗しました。もう一度お試しください。'));
     }
-  }, [videoId, phaseIndex, timeStart, timeEnd, clipId, aiScore, scoreBreakdown, rating, selectedReasons, salesConfirm, salesNote, onFeedbackSubmitted]);
+  }, [videoId, phaseIndex, timeStart, timeEnd, clipId, aiScore, scoreBreakdown, rating, selectedReasons, salesConfirm, salesNote, onFeedbackSubmitted, api]);
 
   // Check if there's anything to save
   const canSave = rating !== null || salesConfirm !== null;

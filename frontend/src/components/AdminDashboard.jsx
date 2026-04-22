@@ -1377,9 +1377,12 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx }) {
                 timeStart={fb.time_start}
                 timeEnd={fb.time_end}
                 clipId={fb.clip_id}
+                adminMode={true}
                 onFeedbackSubmitted={() => {
-                  // After saving feedback, also refresh the list
+                  // After saving feedback, refresh the list and auto-advance to next
                   if (onRated) onRated();
+                  // Auto-advance to next card after successful save
+                  setTimeout(() => handleNext(), 500);
                 }}
               />
 
