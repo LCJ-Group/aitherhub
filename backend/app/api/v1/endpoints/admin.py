@@ -240,7 +240,7 @@ async def get_all_feedbacks(
                 GROUP BY video_id, phase_index
             ) dl ON CAST(vp.video_id AS VARCHAR) = CAST(dl.video_id AS VARCHAR)
                 AND CAST(vp.phase_index AS VARCHAR) = dl.phase_index
-            LEFT JOIN video_clips vc ON CAST(vp.video_id AS CHAR) = CAST(vc.video_id AS CHAR)
+            LEFT JOIN video_clips vc ON CAST(vp.video_id AS VARCHAR) = CAST(vc.video_id AS VARCHAR)
                 AND vp.phase_index = vc.phase_index
                 AND vc.clip_url IS NOT NULL
             {where_clause}
