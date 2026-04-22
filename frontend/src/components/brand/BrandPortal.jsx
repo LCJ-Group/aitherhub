@@ -935,6 +935,8 @@ function BrandDashboard({ brandInfo, onLogout }) {
                 {/* KPI Overview Cards */}
                 {overview?.kpi && (
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12 }}>
+                    <KpiCard label="ページビュー" value={(overview.kpi.page_views || 0).toLocaleString()} color={colors.textSecondary} />
+                    <KpiCard label="ウィジェット表示" value={(overview.kpi.widget_opens || 0).toLocaleString()} color={colors.textSecondary} />
                     <KpiCard label="動画再生" value={(overview.kpi.plays || 0).toLocaleString()} growth={overview.kpi.plays_growth} />
                     <KpiCard label="ユニーク視聴者" value={(overview.kpi.unique_viewers || 0).toLocaleString()} />
                     <KpiCard label="完了率" value={`${overview.kpi.completion_rate || 0}%`}

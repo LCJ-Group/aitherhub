@@ -5,12 +5,24 @@
   },
   "routes": [
     {
+      "route": "/widget/loader.js",
+      "headers": {
+        "Cache-Control": "no-cache, must-revalidate, max-age=0"
+      }
+    },
+    {
       "route": "/loader.js",
-      "rewrite": "/widget/loader.js"
+      "rewrite": "/widget/loader.js",
+      "headers": {
+        "Cache-Control": "no-cache, must-revalidate, max-age=0"
+      }
     },
     {
       "route": "/api/*",
       "backend": "aitherhubAPI"
     }
-  ]
+  ],
+  "globalHeaders": {
+    "X-Frame-Options": "SAMEORIGIN"
+  }
 }

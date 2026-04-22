@@ -894,6 +894,19 @@ async def brand_analytics_funnel(
     since = datetime.now(timezone.utc) - timedelta(days=days)
 
     # Count unique sessions that reached each funnel stage
+    # Also count total page_views and widget_opens (not session-based, raw counts)
+    pv_sql = text("""
+        SELECT
+            COUNT(*) FILTER (WHERE event_type = 'page_view') as page_views,
+            COUNT(*) FILTER (WHERE event_type = 'widget_open') as widget_opens
+        FROM widget_tracking_events
+        WHERE client_id = :cid AND created_at >= :since
+    """)
+    pv_result = await db.execute(pv_sql, {"cid": client_id, "since": since})
+    pv_row = pv_result.mappings().first()
+    page_views = pv_row["page_views"] or 0
+    widget_opens = pv_row["widget_opens"] or 0
+
     funnel_sql = text("""
         WITH session_events AS (
             SELECT session_id, event_type
@@ -926,19 +939,25 @@ async def brand_analytics_funnel(
     result = await db.execute(funnel_sql, {"cid": client_id, "since": since})
     row = result.mappings().first()
 
-    total = row["play_sessions"] or 1
+    # Use page_views as the top of funnel for rate calculation
+    top_of_funnel = page_views or 1
+    play_sessions = row["play_sessions"] or 0
     stages = [
-        {"stage": "動画再生", "stage_key": "play", "count": row["play_sessions"] or 0, "rate": 100.0},
+        {"stage": "ページビュー", "stage_key": "page_view", "count": page_views, "rate": 100.0},
+        {"stage": "ウィジェット表示", "stage_key": "widget_open", "count": widget_opens,
+         "rate": round((widget_opens / top_of_funnel) * 100, 1)},
+        {"stage": "動画再生", "stage_key": "play", "count": play_sessions,
+         "rate": round((play_sessions / top_of_funnel) * 100, 1)},
         {"stage": "深い視聴 (50%+)", "stage_key": "deep_watch", "count": row["deep_watch_sessions"] or 0,
-         "rate": round(((row["deep_watch_sessions"] or 0) / total) * 100, 1)},
+         "rate": round(((row["deep_watch_sessions"] or 0) / top_of_funnel) * 100, 1)},
         {"stage": "商品クリック", "stage_key": "click", "count": row["click_sessions"] or 0,
-         "rate": round(((row["click_sessions"] or 0) / total) * 100, 1)},
+         "rate": round(((row["click_sessions"] or 0) / top_of_funnel) * 100, 1)},
         {"stage": "カート追加", "stage_key": "cart", "count": row["cart_sessions"] or 0,
-         "rate": round(((row["cart_sessions"] or 0) / total) * 100, 1)},
+         "rate": round(((row["cart_sessions"] or 0) / top_of_funnel) * 100, 1)},
         {"stage": "購入クリック", "stage_key": "purchase", "count": row["purchase_sessions"] or 0,
-         "rate": round(((row["purchase_sessions"] or 0) / total) * 100, 1)},
+         "rate": round(((row["purchase_sessions"] or 0) / top_of_funnel) * 100, 1)},
         {"stage": "コンバージョン", "stage_key": "conversion", "count": row["conversion_sessions"] or 0,
-         "rate": round(((row["conversion_sessions"] or 0) / total) * 100, 1)},
+         "rate": round(((row["conversion_sessions"] or 0) / top_of_funnel) * 100, 1)},
     ]
 
     return {"period_days": days, "funnel": stages}
@@ -1254,6 +1273,8 @@ async def brand_analytics_overview(
     # Current period
     current_sql = text("""
         SELECT
+            COUNT(*) FILTER (WHERE event_type = 'page_view') as page_views,
+            COUNT(*) FILTER (WHERE event_type = 'widget_open') as widget_opens,
             COUNT(*) FILTER (WHERE event_type = 'video_play') as plays,
             COUNT(DISTINCT session_id) FILTER (WHERE event_type = 'video_play') as unique_viewers,
             COUNT(*) FILTER (WHERE event_type = 'video_progress'
@@ -1311,6 +1332,8 @@ async def brand_analytics_overview(
     return {
         "period_days": days,
         "kpi": {
+            "page_views": curr["page_views"] or 0,
+            "widget_opens": curr["widget_opens"] or 0,
             "plays": plays,
             "plays_growth": growth(plays, prev["plays"]),
             "unique_viewers": curr["unique_viewers"] or 0,
