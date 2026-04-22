@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import axios from "axios";
 import AdminVideoList from "./admin/AdminVideoList";
 import AdminVideoDetail from "./admin/AdminVideoDetail";
@@ -11,6 +11,8 @@ import AdminScriptGenerations from "./admin/AdminScriptGenerations";
 import AdminClipDB from "./admin/AdminClipDB";
 import AdminWidgetManager from "./admin/AdminWidgetManager";
 import { useTranslation } from 'react-i18next';
+import ClipFeedbackPanel from './ClipFeedbackPanel';
+import VideoService from '../base/services/videoService';
 
 const ADMIN_ID = "aither";
 const ADMIN_PASS = "hub";
@@ -1042,7 +1044,13 @@ function FeedbackSection({ data, loading, includeUnrated, setIncludeUnrated, onR
           </div>
         ) : (
           feedbacks.map((fb, idx) => (
-            <FeedbackCard key={`${fb.video_id}-${fb.phase_index}-${idx}`} fb={fb} onRated={onRefresh} />
+            <FeedbackCard
+              key={`${fb.video_id}-${fb.phase_index}-${idx}`}
+              fb={fb}
+              onRated={onRefresh}
+              feedbacks={feedbacks}
+              currentIdx={idx}
+            />
           ))
         )}
       </div>
@@ -1094,15 +1102,16 @@ function FeedbackSection({ data, loading, includeUnrated, setIncludeUnrated, onR
   );
 }
 
-// ── Feedback Card ──
-function FeedbackCard({ fb, onRated }) {
+// ── Feedback Card (Expandable with Video Preview + Full Rating Panel) ──
+function FeedbackCard({ fb, onRated, feedbacks, currentIdx }) {
   const isUnrated = fb.user_rating == null;
   const [hoverStar, setHoverStar] = useState(0);
   const [saving, setSaving] = useState(false);
   const [localRating, setLocalRating] = useState(fb.user_rating);
+  const [expanded, setExpanded] = useState(false);
+  const cardRef = useRef(null);
 
   const displayRating = localRating || 0;
-  const stars = "★".repeat(displayRating) + "☆".repeat(5 - displayRating);
   const ratingColor = isUnrated && localRating == null
     ? "text-gray-300"
     : displayRating >= 4
@@ -1135,7 +1144,6 @@ function FeedbackCard({ fb, onRated }) {
         { headers: { "X-Admin-Key": "aither:hub" }, timeout: 10000 }
       );
       setLocalRating(star);
-      // Also refresh the full list so summary stats update
       if (onRated) onRated();
     } catch (err) {
       console.error("Failed to rate:", err);
@@ -1145,15 +1153,60 @@ function FeedbackCard({ fb, onRated }) {
     }
   };
 
+  const handleToggleExpand = (e) => {
+    // Don't expand if clicking on star buttons or links
+    if (e.target.closest('button') && !e.target.closest('[data-expand-toggle]')) return;
+    if (e.target.closest('a')) return;
+    setExpanded(!expanded);
+  };
+
+  // Navigate to next feedback card
+  const handleNext = () => {
+    setExpanded(false);
+    if (feedbacks && currentIdx < feedbacks.length - 1) {
+      // Find next card and expand it
+      setTimeout(() => {
+        const nextCard = cardRef.current?.parentElement?.children[currentIdx + 1];
+        if (nextCard) {
+          nextCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          // Trigger click on next card to expand it
+          nextCard.querySelector('[data-expand-toggle]')?.click();
+        }
+      }, 100);
+    }
+  };
+
+  // Navigate to previous feedback card
+  const handlePrev = () => {
+    setExpanded(false);
+    if (feedbacks && currentIdx > 0) {
+      setTimeout(() => {
+        const prevCard = cardRef.current?.parentElement?.children[currentIdx - 1];
+        if (prevCard) {
+          prevCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          prevCard.querySelector('[data-expand-toggle]')?.click();
+        }
+      }, 100);
+    }
+  };
+
   return (
     <div
-      className={`rounded-xl border p-4 hover:shadow-md transition-all group ${
-        isUnrated && localRating == null
-          ? "bg-yellow-50 border-yellow-200 hover:border-yellow-400"
-          : "bg-white border-gray-200 hover:border-orange-300"
+      ref={cardRef}
+      className={`rounded-xl border transition-all ${
+        expanded
+          ? "bg-white border-orange-400 shadow-lg p-0"
+          : isUnrated && localRating == null
+          ? "bg-yellow-50 border-yellow-200 hover:border-yellow-400 hover:shadow-md p-4 cursor-pointer"
+          : "bg-white border-gray-200 hover:border-orange-300 hover:shadow-md p-4 cursor-pointer"
       }`}
     >
-      <div className="flex items-start justify-between gap-4">
+      {/* Collapsed header (always visible) */}
+      <div
+        className={`flex items-start justify-between gap-4 ${expanded ? 'p-4 pb-2' : ''}`}
+        onClick={handleToggleExpand}
+        data-expand-toggle
+      >
         {/* Left: Rating + Content */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-3 mb-2">
@@ -1193,6 +1246,11 @@ function FeedbackCard({ fb, onRated }) {
             <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded">
               {timeRange}
             </span>
+            {fb.clip_url && (
+              <span className="text-[10px] font-medium text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full">
+                ▶ 動画あり
+              </span>
+            )}
             {fb.download_count > 0 && (
               <span className="text-xs font-semibold text-blue-600 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-full">
                 ⬇️ {fb.download_count}回
@@ -1200,13 +1258,13 @@ function FeedbackCard({ fb, onRated }) {
             )}
           </div>
 
-          {fb.user_comment && (
+          {!expanded && fb.user_comment && (
             <div className="bg-orange-50 border-l-3 border-orange-400 pl-3 py-2 mb-2 rounded-r">
               <p className="text-sm text-gray-700">{fb.user_comment}</p>
             </div>
           )}
 
-          {fb.summary && (
+          {!expanded && fb.summary && (
             <p className="text-xs text-gray-500 line-clamp-2">{fb.summary}</p>
           )}
         </div>
@@ -1224,14 +1282,131 @@ function FeedbackCard({ fb, onRated }) {
               {formatDate(fb.rated_at)}
             </p>
           )}
-          <button
-            onClick={handleClick}
-            className="text-[10px] text-orange-500 hover:text-orange-700 mt-1 underline"
-          >
-            → エディタを開く
-          </button>
+          <div className="flex items-center gap-2 mt-1 justify-end">
+            <button
+              onClick={handleClick}
+              className="text-[10px] text-orange-500 hover:text-orange-700 underline"
+            >
+              → エディタを開く
+            </button>
+            <span
+              data-expand-toggle
+              className="text-[10px] text-gray-400 cursor-pointer hover:text-gray-600"
+            >
+              {expanded ? '▲ 閉じる' : '▼ 詳細'}
+            </span>
+          </div>
         </div>
       </div>
+
+      {/* Expanded: Video Preview + Full Rating Panel */}
+      {expanded && (
+        <div className="border-t border-gray-200 p-4 pt-3">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {/* Left: Video Preview */}
+            <div>
+              {fb.clip_url ? (
+                <div className="rounded-lg overflow-hidden bg-black aspect-[9/16] max-h-[400px] mx-auto" style={{ maxWidth: '225px' }}>
+                  <video
+                    src={fb.clip_url}
+                    controls
+                    playsInline
+                    className="w-full h-full object-contain"
+                    preload="metadata"
+                  />
+                </div>
+              ) : (
+                <div className="rounded-lg bg-gray-100 aspect-[9/16] max-h-[400px] mx-auto flex items-center justify-center" style={{ maxWidth: '225px' }}>
+                  <div className="text-center text-gray-400">
+                    <p className="text-2xl mb-2">🎬</p>
+                    <p className="text-xs">クリップ未生成</p>
+                    <button
+                      onClick={handleClick}
+                      className="mt-2 text-xs text-orange-500 hover:text-orange-700 underline"
+                    >
+                      エディタで確認
+                    </button>
+                  </div>
+                </div>
+              )}
+              {/* AI Summary */}
+              {fb.summary && (
+                <div className="mt-3 p-3 bg-gray-50 rounded-lg">
+                  <p className="text-[10px] font-semibold text-gray-500 mb-1">AI分析</p>
+                  <p className="text-xs text-gray-600 leading-relaxed">{fb.summary}</p>
+                </div>
+              )}
+            </div>
+
+            {/* Right: Full Rating Panel */}
+            <div>
+              {/* Star Rating (Admin Score) */}
+              <div className="mb-4 p-3 bg-orange-50 rounded-lg border border-orange-200">
+                <p className="text-xs font-bold text-gray-700 mb-2">⭐ 管理者採点（1〜5）</p>
+                <div className="flex items-center gap-1" onMouseLeave={() => setHoverStar(0)}>
+                  {[1, 2, 3, 4, 5].map((star) => {
+                    const filled = hoverStar > 0 ? star <= hoverStar : star <= displayRating;
+                    return (
+                      <button
+                        key={star}
+                        type="button"
+                        disabled={saving}
+                        className={`text-2xl font-bold transition-all cursor-pointer hover:scale-110 ${
+                          filled
+                            ? (hoverStar > 0 ? "text-orange-400" : ratingColor)
+                            : "text-gray-300"
+                        } ${saving ? "opacity-50" : ""}`}
+                        onMouseEnter={() => setHoverStar(star)}
+                        onClick={(e) => handleRate(e, star)}
+                        title={`${star}点をつける`}
+                      >
+                        ★
+                      </button>
+                    );
+                  })}
+                  {localRating != null && (
+                    <span className="ml-2 text-sm font-bold text-orange-600">{localRating}点</span>
+                  )}
+                </div>
+              </div>
+
+              {/* ClipFeedbackPanel (Good/Bad, Reason Tags, Sales DNA, Comment) */}
+              <ClipFeedbackPanel
+                videoId={fb.video_id}
+                phaseIndex={fb.phase_index}
+                timeStart={fb.time_start}
+                timeEnd={fb.time_end}
+                clipId={fb.clip_id}
+                onFeedbackSubmitted={() => {
+                  // After saving feedback, also refresh the list
+                  if (onRated) onRated();
+                }}
+              />
+
+              {/* Navigation: Prev / Next */}
+              <div className="flex items-center justify-between mt-4 pt-3 border-t border-gray-200">
+                <button
+                  onClick={handlePrev}
+                  disabled={!feedbacks || currentIdx <= 0}
+                  className="px-4 py-2 text-sm font-semibold rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+                >
+                  ‹ 前へ
+                </button>
+                <span className="text-xs text-gray-400">
+                  {currentIdx + 1} / {feedbacks?.length || 0}
+                </span>
+                <button
+                  onClick={handleNext}
+                  disabled={!feedbacks || currentIdx >= feedbacks.length - 1}
+                  className="px-4 py-2 text-sm font-semibold rounded-lg bg-orange-500 hover:bg-orange-600 text-white disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+                >
+                  次へ ›
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

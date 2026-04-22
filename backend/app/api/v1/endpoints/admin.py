@@ -228,7 +228,9 @@ async def get_all_feedbacks(
                 v.original_filename,
                 v.user_id,
                 u.email as user_email,
-                COALESCE(dl.download_count, 0) as download_count
+                COALESCE(dl.download_count, 0) as download_count,
+                vc.clip_url as clip_url,
+                vc.id as clip_id
             FROM video_phases vp
             JOIN videos v ON CAST(vp.video_id AS UUID) = v.id
             LEFT JOIN users u ON v.user_id = u.id
@@ -238,6 +240,9 @@ async def get_all_feedbacks(
                 GROUP BY video_id, phase_index
             ) dl ON CAST(vp.video_id AS VARCHAR) = CAST(dl.video_id AS VARCHAR)
                 AND CAST(vp.phase_index AS VARCHAR) = dl.phase_index
+            LEFT JOIN video_clips vc ON CAST(vp.video_id AS CHAR) = CAST(vc.video_id AS CHAR)
+                AND vp.phase_index = vc.phase_index
+                AND vc.clip_url IS NOT NULL
             {where_clause}
             ORDER BY vp.rated_at DESC NULLS LAST, vp.video_id, vp.phase_index
             LIMIT :limit OFFSET :offset
@@ -245,8 +250,17 @@ async def get_all_feedbacks(
         result = await db.execute(sql, {"limit": per_page, "offset": offset})
         rows = result.fetchall()
 
+        # Generate SAS URLs for clip playback
+        from app.services.storage_service import generate_read_sas_from_url
+
         feedbacks = []
         for r in rows:
+            clip_url = r.clip_url
+            if clip_url and "blob.core.windows.net" in (clip_url or ""):
+                try:
+                    clip_url = generate_read_sas_from_url(clip_url, expires_hours=2)
+                except Exception:
+                    pass  # keep original URL
             feedbacks.append({
                 "video_id": r.video_id,
                 "phase_index": r.phase_index,
@@ -261,6 +275,8 @@ async def get_all_feedbacks(
                 "user_id": r.user_id,
                 "user_email": r.user_email,
                 "download_count": r.download_count,
+                "clip_url": clip_url,
+                "clip_id": str(r.clip_id) if r.clip_id else None,
             })
 
         total_pages = max(1, -(-total_filtered // per_page))  # ceil division
