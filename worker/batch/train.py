@@ -1,6 +1,11 @@
 """
-train.py  –  LCJ AI 学習パイプライン v5
+train.py  –  LCJ AI 学習パイプライン v6
 ========================================
+変更点 (v6):
+  - NG feedback 特徴量追加 (is_ng, has_ng_feedback, ng_reason_tag_count)
+  - unusable_reason one-hot (6特徴量) 追加
+  - generate_dataset.py v6 との整合性確保
+
 変更点 (v5):
   - human_sales_tags one-hot (行動8 + 販売心理14 = 22特徴量) 追加
   - user_rating, has_human_review, human_tag_count 追加
@@ -92,12 +97,27 @@ COMMENT_KEYWORD_FEATURES = [
     "comment_kw_timing",
 ]
 
+# ── NG feedback features (v6) ──
+NG_NUMERIC_FEATURES = [
+    "is_ng",
+    "has_ng_feedback",
+    "ng_reason_tag_count",
+]
+UNUSABLE_REASON_FEATURES = [
+    "unusable_reason_irrelevant",
+    "unusable_reason_too_short",
+    "unusable_reason_too_long",
+    "unusable_reason_no_product",
+    "unusable_reason_audio_bad",
+    "unusable_reason_low_quality",
+]
+
 KNOWN_EVENT_TYPES = [
     "HOOK", "GREETING", "INTRO", "DEMONSTRATION", "PRICE",
     "CTA", "OBJECTION", "SOCIAL_PROOF", "URGENCY",
     "EMPATHY", "EDUCATION", "CHAT", "TRANSITION", "CLOSING", "UNKNOWN",
 ]
-MODEL_VERSION = 5
+MODEL_VERSION = 6
 DATE_TAG = datetime.now().strftime("%Y%m%d")
 
 # ── Label definition (for manifest traceability) ──
@@ -157,6 +177,8 @@ def extract_features(records, target="click"):
     feature_names.extend(PRODUCT_FEATURES)
     feature_names.extend(HUMAN_TAG_FEATURES)
     feature_names.extend(COMMENT_KEYWORD_FEATURES)
+    feature_names.extend(NG_NUMERIC_FEATURES)
+    feature_names.extend(UNUSABLE_REASON_FEATURES)
     feature_names.extend([f"event_{et}" for et in KNOWN_EVENT_TYPES])
 
     X = np.zeros((len(records), len(feature_names)), dtype=np.float32)
@@ -191,6 +213,17 @@ def extract_features(records, target="click"):
 
         # Comment keyword features (6)
         for feat in COMMENT_KEYWORD_FEATURES:
+            X[i, col] = 1.0 if rec.get(feat) else 0.0
+            col += 1
+
+        # NG feedback features (v6)
+        for feat in NG_NUMERIC_FEATURES:
+            val = rec.get(feat)
+            X[i, col] = float(val) if val is not None else 0.0
+            col += 1
+
+        # Unusable reason one-hot (v6)
+        for feat in UNUSABLE_REASON_FEATURES:
             X[i, col] = 1.0 if rec.get(feat) else 0.0
             col += 1
 
