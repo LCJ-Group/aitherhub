@@ -940,6 +940,32 @@ export default function VideoDetail({ videoData, editorParams }) {
     });
   }, [videoData?.reports_1, searchParams, previewData]);
 
+  // ── Open DockPlayer when navigating from feedback card (open_editor=1) ──
+  const editorAutoOpenedRef = useRef(false);
+  useEffect(() => {
+    if (!editorParams) return;
+    if (editorAutoOpenedRef.current) return;
+    if (!videoData?.id) return;
+    if (previewData) return; // already open
+
+    const timeStart = editorParams.time_start;
+    const timeEnd = editorParams.time_end;
+    if (timeStart == null || timeEnd == null) return;
+
+    // Try to find matching phase from reports_1
+    let phase = null;
+    if (editorParams.phase_index != null && videoData?.reports_1?.[editorParams.phase_index]) {
+      phase = videoData.reports_1[editorParams.phase_index];
+    }
+    if (!phase) {
+      // Construct a minimal phase object from editorParams
+      phase = { time_start: timeStart, time_end: timeEnd };
+    }
+
+    editorAutoOpenedRef.current = true;
+    handlePhasePreview(phase);
+  }, [editorParams, videoData?.id, videoData?.reports_1, previewData]);
+
   const reloadHistory = async () => {
     const vid = videoData?.id;
     if (!vid) return;
