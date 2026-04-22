@@ -241,7 +241,7 @@ async def get_all_feedbacks(
             ) dl ON CAST(vp.video_id AS VARCHAR) = CAST(dl.video_id AS VARCHAR)
                 AND CAST(vp.phase_index AS VARCHAR) = dl.phase_index
             LEFT JOIN video_clips vc ON CAST(vp.video_id AS VARCHAR) = CAST(vc.video_id AS VARCHAR)
-                AND vp.phase_index = vc.phase_index
+                AND vp.phase_index::text = vc.phase_index
                 AND vc.clip_url IS NOT NULL
             {where_clause}
             ORDER BY vp.rated_at DESC NULLS LAST, vp.video_id, vp.phase_index
