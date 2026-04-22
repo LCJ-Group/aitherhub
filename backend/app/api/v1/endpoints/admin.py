@@ -227,6 +227,7 @@ async def get_all_feedbacks(
                 vp.importance_score,
                 v.original_filename,
                 v.user_id,
+                v.compressed_blob_url,
                 u.email as user_email,
                 COALESCE(dl.download_count, 0) as download_count,
                 vc.clip_url as clip_url,
@@ -253,6 +254,40 @@ async def get_all_feedbacks(
         # Generate SAS URLs for clip playback
         from app.services.storage_service import generate_read_sas_from_url
 
+        # Generate source_url from compressed_blob_url for universal playback
+        import os, re
+        from azure.storage.blob import generate_blob_sas, BlobSasPermissions
+        from datetime import datetime as _dt, timedelta, timezone
+        account_name = os.getenv("AZURE_STORAGE_ACCOUNT_NAME", "")
+        account_key = os.getenv("AZURE_STORAGE_ACCOUNT_KEY", "")
+        container_name = os.getenv("AZURE_BLOB_CONTAINER", "videos")
+        sas_expiry = _dt.now(timezone.utc) + timedelta(hours=2)
+
+        def _build_source_url(compressed_blob, email, video_id):
+            """Build SAS-signed source video URL from compressed_blob_url."""
+            if not compressed_blob or not account_key:
+                return None
+            try:
+                segments = compressed_blob.split("/")
+                if "@" in segments[0] or len(segments) >= 3:
+                    blob_name = compressed_blob
+                else:
+                    fname = segments[-1]
+                    uuid_match = re.search(r'([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})', fname)
+                    original_case_vid = uuid_match.group(1) if uuid_match else video_id
+                    blob_name = f"{email}/{original_case_vid}/{compressed_blob}"
+                sas = generate_blob_sas(
+                    account_name=account_name,
+                    container_name=container_name,
+                    blob_name=blob_name,
+                    account_key=account_key,
+                    permission=BlobSasPermissions(read=True),
+                    expiry=sas_expiry,
+                )
+                return f"https://{account_name}.blob.core.windows.net/{container_name}/{blob_name}?{sas}"
+            except Exception:
+                return None
+
         feedbacks = []
         for r in rows:
             clip_url = r.clip_url
@@ -261,6 +296,14 @@ async def get_all_feedbacks(
                     clip_url = generate_read_sas_from_url(clip_url, expires_hours=2)
                 except Exception:
                     pass  # keep original URL
+            # Build source_url as fallback when clip_url is not available
+            source_url = None
+            if not clip_url:
+                source_url = _build_source_url(
+                    getattr(r, 'compressed_blob_url', None),
+                    r.user_email or '',
+                    r.video_id,
+                )
             feedbacks.append({
                 "video_id": r.video_id,
                 "phase_index": r.phase_index,
@@ -277,6 +320,7 @@ async def get_all_feedbacks(
                 "download_count": r.download_count,
                 "clip_url": clip_url,
                 "clip_id": str(r.clip_id) if r.clip_id else None,
+                "source_url": source_url,
             })
 
         total_pages = max(1, -(-total_filtered // per_page))  # ceil division

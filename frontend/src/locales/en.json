@@ -1366,5 +1366,13 @@
   "uploadCompleteToastDesc": "Analysis has started. Check progress in the analysis history.",
   "uploadCompleteToastDescWithName": "Analysis started for {name}.",
   "batchUploadCompleteToastDesc": "Analysis started for {count} videos.",
-  "maxConcurrentUploads": "Maximum {max} simultaneous uploads allowed. Please wait for a previous upload to complete."
+  "maxConcurrentUploads": "Maximum {max} simultaneous uploads allowed. Please wait for a previous upload to complete.",
+  "cfp_clip_rating": "Clip Rating",
+  "cfp_saved": "Saved",
+  "cfp_unsaved": "Unsaved",
+  "cfp_good_clip": "Good Clip",
+  "cfp_bad_clip": "Needs Improvement",
+  "cfp_sales_question": "Is this clip a sales-driving moment?",
+  "cfp_sales_yes": "\u2705 YES \u2014 Sales Moment",
+  "cfp_sales_no": "\u274c NO \u2014 Not a Sales Moment"
 }

@@ -11,6 +11,7 @@ import AdminScriptGenerations from "./admin/AdminScriptGenerations";
 import AdminClipDB from "./admin/AdminClipDB";
 import AdminWidgetManager from "./admin/AdminWidgetManager";
 import { useTranslation } from 'react-i18next';
+import { changeLanguage } from '../i18n';
 import ClipFeedbackPanel from './ClipFeedbackPanel';
 import VideoService from '../base/services/videoService';
 
@@ -886,6 +887,9 @@ function UploadHealthSection({ data, loading }) {
 
 // ── Feedback Section ──
 function FeedbackSection({ data, loading, includeUnrated, setIncludeUnrated, onRefresh, filterRating, setFilterRating, page, setPage }) {
+  const { i18n } = useTranslation();
+  const [expandedIdx, setExpandedIdx] = useState(-1);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-16">
@@ -920,12 +924,29 @@ function FeedbackSection({ data, loading, includeUnrated, setIncludeUnrated, onR
             <span className="text-lg">⭐</span>
             <h2 className="text-lg font-semibold text-gray-700">{window.__t('adminDashboard_446612', 'フィードバック概要')}</h2>
           </div>
-          <button
-            onClick={onRefresh}
-            className="px-3 py-1.5 text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg transition-all"
-          >
-            🔄 更新
-          </button>
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
+              {[{ code: 'ja', label: '🇯🇵 日本語' }, { code: 'zh-TW', label: '🇹🇼 中文' }, { code: 'en', label: '🇺🇸 EN' }].map(lang => (
+                <button
+                  key={lang.code}
+                  onClick={() => changeLanguage(lang.code)}
+                  className={`px-2 py-1 text-[10px] font-medium rounded-md transition-all ${
+                    i18n.language === lang.code
+                      ? 'bg-white text-orange-600 shadow-sm'
+                      : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  {lang.label}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={onRefresh}
+              className="px-3 py-1.5 text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg transition-all"
+            >
+              🔄 更新
+            </button>
+          </div>
         </div>
         <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
           <StatCard label="総フェーズ数" value={totalCount.toLocaleString()} unit={window.__t('errorLogCount', '件')} color="gray" />
@@ -1050,6 +1071,27 @@ function FeedbackSection({ data, loading, includeUnrated, setIncludeUnrated, onR
               onRated={onRefresh}
               feedbacks={feedbacks}
               currentIdx={idx}
+              expanded={expandedIdx === idx}
+              onToggle={() => setExpandedIdx(expandedIdx === idx ? -1 : idx)}
+              onNext={() => {
+                if (idx < feedbacks.length - 1) {
+                  setExpandedIdx(idx + 1);
+                  // Scroll to next card after state update
+                  setTimeout(() => {
+                    const cards = document.querySelectorAll('[data-feedback-card]');
+                    if (cards[idx + 1]) cards[idx + 1].scrollIntoView({ behavior: 'smooth', block: 'center' });
+                  }, 100);
+                }
+              }}
+              onPrev={() => {
+                if (idx > 0) {
+                  setExpandedIdx(idx - 1);
+                  setTimeout(() => {
+                    const cards = document.querySelectorAll('[data-feedback-card]');
+                    if (cards[idx - 1]) cards[idx - 1].scrollIntoView({ behavior: 'smooth', block: 'center' });
+                  }, 100);
+                }
+              }}
             />
           ))
         )}
@@ -1103,13 +1145,11 @@ function FeedbackSection({ data, loading, includeUnrated, setIncludeUnrated, onR
 }
 
 // ── Feedback Card (Expandable with Video Preview + Full Rating Panel) ──
-function FeedbackCard({ fb, onRated, feedbacks, currentIdx }) {
+function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, onNext, onPrev }) {
   const isUnrated = fb.user_rating == null;
   const [hoverStar, setHoverStar] = useState(0);
   const [saving, setSaving] = useState(false);
   const [localRating, setLocalRating] = useState(fb.user_rating);
-  const [expanded, setExpanded] = useState(false);
-  const cardRef = useRef(null);
 
   const displayRating = localRating || 0;
   const ratingColor = isUnrated && localRating == null
@@ -1157,42 +1197,12 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx }) {
     // Don't expand if clicking on star buttons or links
     if (e.target.closest('button') && !e.target.closest('[data-expand-toggle]')) return;
     if (e.target.closest('a')) return;
-    setExpanded(!expanded);
-  };
-
-  // Navigate to next feedback card
-  const handleNext = () => {
-    setExpanded(false);
-    if (feedbacks && currentIdx < feedbacks.length - 1) {
-      // Find next card and expand it
-      setTimeout(() => {
-        const nextCard = cardRef.current?.parentElement?.children[currentIdx + 1];
-        if (nextCard) {
-          nextCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          // Trigger click on next card to expand it
-          nextCard.querySelector('[data-expand-toggle]')?.click();
-        }
-      }, 100);
-    }
-  };
-
-  // Navigate to previous feedback card
-  const handlePrev = () => {
-    setExpanded(false);
-    if (feedbacks && currentIdx > 0) {
-      setTimeout(() => {
-        const prevCard = cardRef.current?.parentElement?.children[currentIdx - 1];
-        if (prevCard) {
-          prevCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          prevCard.querySelector('[data-expand-toggle]')?.click();
-        }
-      }, 100);
-    }
+    if (onToggle) onToggle();
   };
 
   return (
     <div
-      ref={cardRef}
+      data-feedback-card
       className={`rounded-xl border transition-all ${
         expanded
           ? "bg-white border-orange-400 shadow-lg p-0"
@@ -1246,9 +1256,9 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx }) {
             <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded">
               {timeRange}
             </span>
-            {fb.clip_url && (
-              <span className="text-[10px] font-medium text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full">
-                ▶ 動画あり
+            {(fb.clip_url || fb.source_url) && (
+              <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${fb.clip_url ? 'text-blue-600 bg-blue-50' : 'text-purple-600 bg-purple-50'}`}>
+                {fb.clip_url ? '▶ クリップあり' : '▶ 元動画'}
               </span>
             )}
             {fb.download_count > 0 && (
@@ -1305,21 +1315,26 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx }) {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {/* Left: Video Preview */}
             <div>
-              {fb.clip_url ? (
+              {(fb.clip_url || fb.source_url) ? (
                 <div className="rounded-lg overflow-hidden bg-black aspect-[9/16] max-h-[400px] mx-auto" style={{ maxWidth: '225px' }}>
                   <video
-                    src={fb.clip_url}
+                    src={fb.clip_url || (fb.source_url + `#t=${Math.floor(fb.time_start)},${Math.ceil(fb.time_end)}`)}
                     controls
                     playsInline
                     className="w-full h-full object-contain"
                     preload="metadata"
                   />
+                  {!fb.clip_url && (
+                    <div className="absolute bottom-1 left-1 bg-black/60 text-white text-[9px] px-1.5 py-0.5 rounded">
+                      元動画 ({formatSeconds(fb.time_start)}〜{formatSeconds(fb.time_end)})
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className="rounded-lg bg-gray-100 aspect-[9/16] max-h-[400px] mx-auto flex items-center justify-center" style={{ maxWidth: '225px' }}>
                   <div className="text-center text-gray-400">
                     <p className="text-2xl mb-2">🎬</p>
-                    <p className="text-xs">クリップ未生成</p>
+                    <p className="text-xs">動画なし</p>
                     <button
                       onClick={handleClick}
                       className="mt-2 text-xs text-orange-500 hover:text-orange-700 underline"
@@ -1381,14 +1396,14 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx }) {
                 onFeedbackSubmitted={() => {
                   // Do NOT call onRated() here — it triggers a full list refresh
                   // which resets expanded state. Just auto-advance to next card.
-                  setTimeout(() => handleNext(), 500);
+                  if (onNext) setTimeout(() => onNext(), 500);
                 }}
               />
 
               {/* Navigation: Prev / Next */}
               <div className="flex items-center justify-between mt-4 pt-3 border-t border-gray-200">
                 <button
-                  onClick={handlePrev}
+                  onClick={onPrev}
                   disabled={!feedbacks || currentIdx <= 0}
                   className="px-4 py-2 text-sm font-semibold rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
                 >
@@ -1398,7 +1413,7 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx }) {
                   {currentIdx + 1} / {feedbacks?.length || 0}
                 </span>
                 <button
-                  onClick={handleNext}
+                  onClick={onNext}
                   disabled={!feedbacks || currentIdx >= feedbacks.length - 1}
                   className="px-4 py-2 text-sm font-semibold rounded-lg bg-orange-500 hover:bg-orange-600 text-white disabled:opacity-30 disabled:cursor-not-allowed transition-all"
                 >

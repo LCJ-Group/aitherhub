@@ -1366,5 +1366,13 @@
   "uploadCompleteToastDesc": "已開始解析。可在側邊欄的解析歷史中查看進度。",
   "uploadCompleteToastDescWithName": "{name} 已開始解析。",
   "batchUploadCompleteToastDesc": "已開始解析 {count} 個影片。",
-  "maxConcurrentUploads": "最多可同時上傳 {max} 個檔案。請等待前一個上傳完成。"
+  "maxConcurrentUploads": "最多可同時上傳 {max} 個檔案。請等待前一個上傳完成。",
+  "cfp_clip_rating": "片段評價",
+  "cfp_saved": "已儲存",
+  "cfp_unsaved": "未儲存",
+  "cfp_good_clip": "好用的片段",
+  "cfp_bad_clip": "需改進的片段",
+  "cfp_sales_question": "這個片段是促成銷售的部分嗎？",
+  "cfp_sales_yes": "✅ YES — 銷售瞬間",
+  "cfp_sales_no": "❌ NO — 不是"
 }

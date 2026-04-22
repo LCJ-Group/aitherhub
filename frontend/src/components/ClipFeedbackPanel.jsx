@@ -313,13 +313,13 @@ const ClipFeedbackPanel = ({
         marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px',
       }}>
         <span style={{ fontSize: '16px' }}>{'\uD83D\uDD04'}</span>
-        クリップの評価
+        {window.__t('cfp_clip_rating', 'クリップの評価')}
         {submitted && !dirty && (
           <span style={{
             fontSize: '11px', background: '#d1fae5', color: '#065f46',
             padding: '2px 8px', borderRadius: '10px',
           }}>
-            保存済み
+            {window.__t('cfp_saved', '保存済み')}
           </span>
         )}
         {dirty && (
@@ -327,7 +327,7 @@ const ClipFeedbackPanel = ({
             fontSize: '11px', background: '#fef3c7', color: '#92400e',
             padding: '2px 8px', borderRadius: '10px',
           }}>
-            未保存
+            {window.__t('cfp_unsaved', '未保存')}
           </span>
         )}
       </div>
@@ -350,7 +350,7 @@ const ClipFeedbackPanel = ({
           }}
         >
           <span style={{ fontSize: '20px' }}>{'\uD83D\uDC4D'}</span>
-          使えるクリップ
+          {window.__t('cfp_good_clip', '使えるクリップ')}
         </button>
         <button
           onClick={() => handleRatingSelect('bad')}
@@ -366,7 +366,7 @@ const ClipFeedbackPanel = ({
           }}
         >
           <span style={{ fontSize: '20px' }}>{'\uD83D\uDC4E'}</span>
-          微妙なクリップ
+          {window.__t('cfp_bad_clip', '微妙なクリップ')}
         </button>
       </div>
 
@@ -416,7 +416,7 @@ const ClipFeedbackPanel = ({
           marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px',
         }}>
           <span style={{ fontSize: '16px' }}>{'\uD83D\uDCB0'}</span>
-          このクリップは売れた理由の部分ですか？
+          {window.__t('cfp_sales_question', 'このクリップは売れた理由の部分ですか？')}
           {salesSubmitted && !dirty && (
             <span style={{
               fontSize: '11px', background: '#fef3c7', color: '#92400e',
@@ -438,7 +438,7 @@ const ClipFeedbackPanel = ({
               transition: 'all 0.2s',
             }}
           >
-            ✅ YES — 売れた瞬間
+            {window.__t('cfp_sales_yes', '✅ YES — 売れた瞬間')}
           </button>
           <button
             onClick={() => handleSalesSelect(false)}
@@ -451,7 +451,7 @@ const ClipFeedbackPanel = ({
               transition: 'all 0.2s',
             }}
           >
-            ❌ NO — 違う部分
+            {window.__t('cfp_sales_no', '❌ NO — 違う部分')}
           </button>
         </div>
         {salesConfirm !== null && (
