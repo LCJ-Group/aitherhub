@@ -1,4 +1,4 @@
-"""generate_dataset.py  –  AI学習用データセット生成ジョブ v4
+"""generate_dataset.py  –  AI学習用データセット生成ジョブ v7
 =====================================================
 仕様:
   ① 目的変数: y_click (click_spike窓重複), y_order (order_spike窓重複), y_strong
@@ -6,8 +6,14 @@
   ③ event × sales_moment は window ±150s で結合、距離減衰 weight
   ④ 正例:負例 = 1:3 サンプリング
   ⑤ 情報リーク防止: GMV/注文数/クリック数は特徴量に入れない
-
-v6 変更点 (NGフィードバック統合):
+v7 変更点 (品質特徴量統合 - Level 2):
+  - frame_quality (JSONB) からフレーム品質特徴量5個を抽出:
+    fq_blur_score, fq_brightness_mean, fq_brightness_std, fq_color_saturation, fq_scene_change_count
+  - audio_features (JSONB) から音声品質特徴量7個を抽出:
+    af_energy_mean, af_energy_max, af_pitch_mean, af_pitch_std,
+    af_speech_rate, af_silence_ratio, af_energy_trend
+  - 合計 76 + 12 = 88 特徴量
+v6 変更点 (NGフィードバック統合)::
   - fetch_phases()にvideo_clips.is_unusable/unusable_reasonとclip_feedback.ratingをLEFT JOIN
   - NG特徴量追加:
     is_ng (is_unusable=TRUE OR feedback_rating='bad' → 1)
@@ -65,6 +71,10 @@ v3 変更点:
     ng_reason_tag_count (タグ数)
     unusable_reason_irrelevant, unusable_reason_too_short, unusable_reason_too_long,
     unusable_reason_no_product, unusable_reason_audio_bad, unusable_reason_low_quality (one-hot)
+  品質特徴量 (v7):
+    fq_blur_score, fq_brightness_mean, fq_brightness_std, fq_color_saturation, fq_scene_change_count
+    af_energy_mean, af_energy_max, af_pitch_mean, af_pitch_std,
+    af_speech_rate, af_silence_ratio, af_energy_trend
 
 使い方:
   python generate_dataset.py --output-dir /tmp/datasets
@@ -339,7 +349,10 @@ async def fetch_phases(session, video_id=None, user_id=None):
             COALESCE(vc.is_unusable, FALSE) as is_unusable,
             vc.unusable_reason,
             cf.rating as feedback_rating,
-            cf.reason_tags as feedback_reason_tags
+            cf.reason_tags as feedback_reason_tags,
+            -- Quality features (v7)
+            vp.frame_quality,
+            vp.audio_features
         FROM video_phases vp
         LEFT JOIN video_clips vc
             ON vc.video_id = vp.video_id
@@ -594,6 +607,52 @@ def parse_json_field(raw):
         return []
 
 
+# ── Quality Feature Extraction (v7) ──
+
+FRAME_QUALITY_KEYS = ["blur_score", "brightness_mean", "brightness_std", "color_saturation", "scene_change_count"]
+AUDIO_FEATURE_KEYS = ["energy_mean", "energy_max", "pitch_mean", "pitch_std", "speech_rate", "silence_ratio", "energy_trend"]
+
+
+def extract_quality_features(frame_quality_raw, audio_features_raw) -> dict:
+    """Extract quality features from JSONB columns.
+
+    frame_quality: {"blur_score": ..., "brightness_mean": ..., ...}
+    audio_features: {"energy_mean": ..., "energy_max": ..., ...}
+
+    Returns dict with fq_* and af_* prefixed feature names.
+    Missing values default to 0.0.
+    """
+    fq = {}
+    if frame_quality_raw:
+        if isinstance(frame_quality_raw, str):
+            try:
+                frame_quality_raw = json.loads(frame_quality_raw)
+            except (json.JSONDecodeError, TypeError):
+                frame_quality_raw = {}
+        for key in FRAME_QUALITY_KEYS:
+            val = frame_quality_raw.get(key)
+            fq[f"fq_{key}"] = float(val) if val is not None else 0.0
+    else:
+        for key in FRAME_QUALITY_KEYS:
+            fq[f"fq_{key}"] = 0.0
+
+    af = {}
+    if audio_features_raw:
+        if isinstance(audio_features_raw, str):
+            try:
+                audio_features_raw = json.loads(audio_features_raw)
+            except (json.JSONDecodeError, TypeError):
+                audio_features_raw = {}
+        for key in AUDIO_FEATURE_KEYS:
+            val = audio_features_raw.get(key)
+            af[f"af_{key}"] = float(val) if val is not None else 0.0
+    else:
+        for key in AUDIO_FEATURE_KEYS:
+            af[f"af_{key}"] = 0.0
+
+    return {**fq, **af}
+
+
 # ── Main Generation ──
 
 async def generate(output_dir: str, video_id=None, user_id=None):
@@ -762,6 +821,12 @@ async def generate(output_dir: str, video_id=None, user_id=None):
             # ── NG FEEDBACK FEATURES (v6) ──
             **ng_feats,
 
+            # ── QUALITY FEATURES (v7) ──
+            **extract_quality_features(
+                getattr(r, 'frame_quality', None),
+                getattr(r, 'audio_features', None),
+            ),
+
             # ── METADATA (not used as features in training) ──
             "tags": tags,
             "human_tags": human_tags,
@@ -884,6 +949,22 @@ async def generate(output_dir: str, video_id=None, user_id=None):
         "ng_by_source": dict(ng_source_counts),
         "unusable_reason_features": [f"unusable_reason_{r}" for r in UNUSABLE_REASONS],
     }
+    # Quality features stats (v7)
+    n_with_fq = sum(1 for r in all_records if r.get("fq_blur_score", 0) > 0)
+    n_with_af = sum(1 for r in all_records if r.get("af_energy_mean", 0) > 0)
+    stats["quality_features"] = {
+        "phases_with_frame_quality": n_with_fq,
+        "phases_with_audio_features": n_with_af,
+        "total_phases": len(all_records),
+        "frame_quality_coverage": round(n_with_fq / max(len(all_records), 1), 4),
+        "audio_features_coverage": round(n_with_af / max(len(all_records), 1), 4),
+        "frame_quality_features": [f"fq_{k}" for k in FRAME_QUALITY_KEYS],
+        "audio_feature_names": [f"af_{k}" for k in AUDIO_FEATURE_KEYS],
+    }
+    print(f"[dataset] Quality features: frame_quality={n_with_fq}/{len(all_records)} "
+          f"({n_with_fq / max(len(all_records), 1) * 100:.1f}%), "
+          f"audio_features={n_with_af}/{len(all_records)} "
+          f"({n_with_af / max(len(all_records), 1) * 100:.1f}%)")
     stats_path = os.path.join(output_dir, "dataset_stats.json")
     with open(stats_path, "w", encoding="utf-8") as f:
         json.dump(stats, f, indent=2, ensure_ascii=False)
@@ -893,7 +974,7 @@ async def generate(output_dir: str, video_id=None, user_id=None):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate AI training dataset v6")
+    parser = argparse.ArgumentParser(description="Generate AI training dataset v7")
     parser.add_argument("--output-dir", "-o", default="/tmp/datasets",
                         help="Output directory for JSONL files")
     parser.add_argument("--video-id", default=None,

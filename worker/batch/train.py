@@ -1,6 +1,14 @@
 """
-train.py  –  LCJ AI 学習パイプライン v6
+train.py  –  LCJ AI 学習パイプライン v7
 ========================================
+変更点 (v7 - Level 2 品質特徴量):
+  - フレーム品質特徴量5個追加 (fq_blur_score, fq_brightness_mean, fq_brightness_std,
+    fq_color_saturation, fq_scene_change_count)
+  - 音声品質特徴量7個追加 (af_energy_mean, af_energy_max, af_pitch_mean, af_pitch_std,
+    af_speech_rate, af_silence_ratio, af_energy_trend)
+  - 合計 76 + 12 = 88 特徴量
+  - generate_dataset.py v7 との整合性確保
+
 変更点 (v6):
   - NG feedback 特徴量追加 (is_ng, has_ng_feedback, ng_reason_tag_count)
   - unusable_reason one-hot (6特徴量) 追加
@@ -112,12 +120,30 @@ UNUSABLE_REASON_FEATURES = [
     "unusable_reason_low_quality",
 ]
 
+# ── Quality features (v7) ──
+FRAME_QUALITY_FEATURES = [
+    "fq_blur_score",
+    "fq_brightness_mean",
+    "fq_brightness_std",
+    "fq_color_saturation",
+    "fq_scene_change_count",
+]
+AUDIO_QUALITY_FEATURES = [
+    "af_energy_mean",
+    "af_energy_max",
+    "af_pitch_mean",
+    "af_pitch_std",
+    "af_speech_rate",
+    "af_silence_ratio",
+    "af_energy_trend",
+]
+
 KNOWN_EVENT_TYPES = [
     "HOOK", "GREETING", "INTRO", "DEMONSTRATION", "PRICE",
     "CTA", "OBJECTION", "SOCIAL_PROOF", "URGENCY",
     "EMPATHY", "EDUCATION", "CHAT", "TRANSITION", "CLOSING", "UNKNOWN",
 ]
-MODEL_VERSION = 6
+MODEL_VERSION = 7
 DATE_TAG = datetime.now().strftime("%Y%m%d")
 
 # ── Label definition (for manifest traceability) ──
@@ -179,6 +205,8 @@ def extract_features(records, target="click"):
     feature_names.extend(COMMENT_KEYWORD_FEATURES)
     feature_names.extend(NG_NUMERIC_FEATURES)
     feature_names.extend(UNUSABLE_REASON_FEATURES)
+    feature_names.extend(FRAME_QUALITY_FEATURES)
+    feature_names.extend(AUDIO_QUALITY_FEATURES)
     feature_names.extend([f"event_{et}" for et in KNOWN_EVENT_TYPES])
 
     X = np.zeros((len(records), len(feature_names)), dtype=np.float32)
@@ -225,6 +253,18 @@ def extract_features(records, target="click"):
         # Unusable reason one-hot (v6)
         for feat in UNUSABLE_REASON_FEATURES:
             X[i, col] = 1.0 if rec.get(feat) else 0.0
+            col += 1
+
+        # Frame quality features (v7)
+        for feat in FRAME_QUALITY_FEATURES:
+            val = rec.get(feat)
+            X[i, col] = float(val) if val is not None else 0.0
+            col += 1
+
+        # Audio quality features (v7)
+        for feat in AUDIO_QUALITY_FEATURES:
+            val = rec.get(feat)
+            X[i, col] = float(val) if val is not None else 0.0
             col += 1
 
         # Event type one-hot
