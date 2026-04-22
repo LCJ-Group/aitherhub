@@ -698,11 +698,23 @@ def _run_video_job(payload: dict) -> bool:
         "--blob-url", blob_url,
     ]
 
+    # ── Log file for capturing subprocess output ──
+    _log_dir = os.path.join(BATCH_DIR, ".logs")
+    os.makedirs(_log_dir, exist_ok=True)
+    _log_path = os.path.join(_log_dir, f"{video_id}.log")
+
+    try:
+        _log_file = open(_log_path, "w", buffering=1)  # line-buffered
+    except Exception:
+        _log_file = None
+
     try:
         proc = subprocess.Popen(
             cmd, cwd=BATCH_DIR,
             env={**os.environ, "PYTHONPATH": f"{str(PROJECT_ROOT)}:{BATCH_DIR}"},
             start_new_session=True,
+            stdout=_log_file or subprocess.DEVNULL,
+            stderr=subprocess.STDOUT,  # merge stderr into stdout log
         )
         # Track subprocess for graceful shutdown
         with _active_subprocesses_lock:
@@ -726,6 +738,18 @@ def _run_video_job(payload: dict) -> bool:
         if metrics:
             metrics.end_phase("processing")
 
+        # ── Read last N lines of subprocess log for error context ──
+        _tail_lines = ""
+        if _log_file:
+            _log_file.close()
+            _log_file = None
+            try:
+                with open(_log_path, "r", errors="replace") as _lf:
+                    _all_lines = _lf.readlines()
+                    _tail_lines = "".join(_all_lines[-30:])  # last 30 lines
+            except Exception:
+                pass
+
         if proc.returncode == 0:
             print(f"[worker] Video analysis completed: {video_id}")
             if metrics:
@@ -747,8 +771,6 @@ def _run_video_job(payload: dict) -> bool:
         else:
             _err_detail = f"exit={proc.returncode}"
             # Check if killed by SIGTERM (-15) or SIGINT (-2) during deployment.
-            # Our signal_handler sends SIGINT to subprocesses when the worker
-            # receives SIGTERM, so both signals indicate a deployment restart.
             _is_deploy_signal = (
                 proc.returncode == -signal.SIGTERM   # -15
                 or proc.returncode == -15
@@ -756,8 +778,6 @@ def _run_video_job(payload: dict) -> bool:
                 or proc.returncode == -2
             )
             if _is_deploy_signal:
-                # SIGTERM/SIGINT during deployment: do NOT mark as ERROR.
-                # Leave status as-is so stuck_video_monitor can requeue it.
                 _sig_name = "SIGINT" if proc.returncode in (-2, -signal.SIGINT) else "SIGTERM"
                 log_error_type(video_id, "video_analysis", "DEPLOY_SIGNAL", f"{_sig_name} {_err_detail}")
                 _record_video_error_log(video_id, "DEPLOY_SIGNAL",
@@ -766,12 +786,38 @@ def _run_video_job(payload: dict) -> bool:
                                         f"Will be auto-retried by stuck_video_monitor.")
                 print(f"[worker] Video {video_id} interrupted by {_sig_name} — will be auto-retried")
             else:
-                log_error_type(video_id, "video_analysis", "SUBPROCESS_FAIL", _err_detail)
-                _record_video_error_log(video_id, "SUBPROCESS_FAIL",
-                                        _current_step_name if '_current_step_name' in dir() else "UNKNOWN",
-                                        f"process_video.py exited with code {proc.returncode}")
-                # Mark as ERROR for non-signal failures so they don't loop forever
-                update_video_status_to_error(video_id, error_code="SUBPROCESS_FAIL")
+                # ── Extract structured error from subprocess log ──
+                _parsed_step = "UNKNOWN"
+                _parsed_code = "SUBPROCESS_FAIL"
+                _parsed_msg = f"process_video.py exited with code {proc.returncode}"
+                # Look for JSON error summary line from process_video.py
+                if _tail_lines:
+                    import json as _json
+                    for _line in reversed(_tail_lines.strip().split("\n")):
+                        if _line.strip().startswith('{"error_summary"'):
+                            try:
+                                _summary = _json.loads(_line.strip())
+                                _parsed_step = _summary.get("step", _parsed_step)
+                                _parsed_code = _summary.get("code", _parsed_code)
+                                _parsed_msg = _summary.get("message", _parsed_msg)
+                                break
+                            except Exception:
+                                pass
+                    # If no JSON found, use last few lines as context
+                    if _parsed_step == "UNKNOWN":
+                        _parsed_msg += f"\n--- Last output ---\n{_tail_lines[-500:]}"
+
+                log_error_type(video_id, "video_analysis", _parsed_code, f"{_parsed_step}: {_parsed_msg[:200]}")
+                _record_video_error_log(video_id, _parsed_code,
+                                        _parsed_step,
+                                        _parsed_msg[:2000])
+                print(f"[worker] Video {video_id} FAILED: step={_parsed_step} code={_parsed_code}")
+                if _tail_lines:
+                    # Print last 5 lines to worker stdout for quick debugging
+                    for _dbg_line in _tail_lines.strip().split("\n")[-5:]:
+                        print(f"  [subprocess] {_dbg_line}")
+                # Mark as ERROR for non-signal failures
+                update_video_status_to_error(video_id, error_code=_parsed_code)
             if metrics:
                 metrics.finish(status="interrupted" if _is_deploy_signal else "failed")
             return False
@@ -786,6 +832,18 @@ def _run_video_job(payload: dict) -> bool:
             metrics.finish(status="error")
         return False
     finally:
+        # Close log file if still open
+        if _log_file and not _log_file.closed:
+            try:
+                _log_file.close()
+            except Exception:
+                pass
+        # Clean up log file (keep only on error for debugging)
+        try:
+            if os.path.exists(_log_path) and proc and proc.returncode == 0:
+                os.remove(_log_path)
+        except Exception:
+            pass
         # Unregister subprocess tracking
         with _active_subprocesses_lock:
             _active_subprocesses.pop(video_id, None)

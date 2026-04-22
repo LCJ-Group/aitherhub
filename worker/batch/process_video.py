@@ -2127,10 +2127,10 @@ def main():
         logger.exception("Video processing failed: %s", _err_msg)
 
         # Record error log to DB
+        _current_step = getattr(exc, '_error_step', None) or _current_step_name or 'UNKNOWN'
+        _error_code = getattr(exc, '_error_code', None) or type(exc).__name__
         try:
             import traceback as _tb
-            _current_step = getattr(exc, '_error_step', None) or _current_step_name or 'UNKNOWN'
-            _error_code = getattr(exc, '_error_code', None) or type(exc).__name__
             insert_video_error_log_sync(
                 video_id=video_id,
                 error_code=_error_code,
@@ -2142,6 +2142,23 @@ def main():
             )
         except Exception as log_err:
             logger.warning("[ERROR_LOG] Failed to record error log: %s", log_err)
+
+        # ── Emit structured JSON error summary to stdout/stderr ──
+        # queue_worker.py reads this to record detailed error info
+        # even when process_video.py exits with code 1 or -6 (SIGABRT)
+        try:
+            import json as _json
+            _summary = _json.dumps({
+                "error_summary": True,
+                "step": _current_step,
+                "code": _error_code,
+                "message": str(exc)[:500],
+                "type": type(exc).__name__,
+            }, ensure_ascii=False)
+            # Print to stdout (which is captured by queue_worker's log file)
+            print(_summary, flush=True)
+        except Exception:
+            pass
 
         # Still cleanup on error to prevent disk accumulation
         try:
