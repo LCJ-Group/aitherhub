@@ -46,7 +46,7 @@ class LivePersonaConfig(BaseModel):
     speaking_style: Optional[str] = Field(None, description="Speaking style description")
     expertise: Optional[str] = Field(None, description="Expertise / career background")
     brand_story: Optional[str] = Field(None, description="Brand story")
-    opening_intro: Optional[str] = Field(None, description="Opening self-introduction")
+    self_introduction: Optional[str] = Field(None, description="Opening self-introduction")
     flow_preset: Optional[str] = Field(None, description="Flow preset: short/standard/long")
     language: Optional[str] = Field(None, description="Language code")
     style: Optional[str] = Field(None, description="Style: professional/casual/energetic")
