@@ -70,14 +70,18 @@ def _normalize_product_list(raw: dict) -> dict:
     Frontend expects: { items: [...] }
     """
     items = []
+    error = None
     if isinstance(raw, dict):
+        # Shopee APIエラーチェック
+        if raw.get("error") and raw["error"] not in ("", "-"):
+            error = raw.get("error")
         resp = raw.get("response") or {}
         items = resp.get("item") or []
     return {
         "items": items,
         "total": len(items),
         "has_next_page": bool((raw.get("response") or {}).get("has_next_page")),
-        "raw": raw,  # デバッグ用に生データも保持
+        "error": error,
     }
 
 

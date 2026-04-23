@@ -211,22 +211,31 @@ async def get_shopee_token(shop_id: int = DEFAULT_SHOP_ID) -> Optional[Dict]:
         if cached:
             return cached
 
+        # 2. refresh_tokenで新しいトークンを取得（初期トークンが期限切れの可能性があるため、常にリフレッシュ優先）
+        if _INITIAL_REFRESH_TOKEN:
+            # リフレッシュ用に一時的にストアに入れる
+            _token_store.set(
+                shop_id,
+                _INITIAL_ACCESS_TOKEN or "dummy",
+                _INITIAL_REFRESH_TOKEN,
+                0,  # 即座に期限切れとしてリフレッシュを強制
+                DEFAULT_USER_ID,
+            )
+        result = await _refresh_access_token(shop_id)
+        if result:
+            return result
+
+        # 3. リフレッシュ失敗時、初期トークンをフォールバックとして使用
         if _INITIAL_ACCESS_TOKEN:
-            # 初期トークンをストアに入れて、まずこれを使う
             _token_store.set(
                 shop_id,
                 _INITIAL_ACCESS_TOKEN,
                 _INITIAL_REFRESH_TOKEN,
-                3600,  # 1時間と仮定（すぐリフレッシュされる）
+                3600,
                 DEFAULT_USER_ID,
             )
-            logger.info(f"[ShopeeToken] Loaded initial token for shop {shop_id}")
+            logger.warning(f"[ShopeeToken] Refresh failed, using initial token for shop {shop_id}")
             return _token_store.get(shop_id)
-
-        # 3. refresh_tokenでリフレッシュ
-        result = await _refresh_access_token(shop_id)
-        if result:
-            return result
 
         logger.error(f"[ShopeeToken] All token acquisition methods failed for shop {shop_id}")
         return None
@@ -241,6 +250,7 @@ async def _call_shopee_api(
     params: Dict = None,
     method: str = "GET",
     body: Dict = None,
+    _retry: bool = False,
 ) -> Optional[Dict]:
     """Shopee APIを直接呼び出す（署名付き）"""
     partner_id = token_data["partner_id"]
@@ -285,16 +295,19 @@ async def _call_shopee_api(
 
             if data.get("error") and data["error"] not in ("", "-"):
                 error_msg = data.get("error", "")
-                # トークン期限切れの場合、自動リフレッシュして再試行
-                if error_msg in ("error_auth", "error_token_expired"):
+                # トークン期限切れ/無効の場合、自動リフレッシュして再試行
+                if error_msg in ("error_auth", "error_token_expired", "invalid_acceess_token", "invalid_access_token"):
                     logger.warning(
                         f"[ShopeeAPI] Token expired for shop {shop_id}, refreshing..."
                     )
-                    new_token = await _refresh_access_token(shop_id)
-                    if new_token:
-                        return await _call_shopee_api(
-                            path, new_token, params, method, body
-                        )
+                    if not _retry:
+                        # キャッシュを無効化してリフレッシュを強制
+                        _token_store._tokens.pop(shop_id, None)
+                        new_token = await _refresh_access_token(shop_id)
+                        if new_token:
+                            return await _call_shopee_api(
+                                path, new_token, params, method, body, _retry=True
+                            )
                 logger.error(
                     f"[ShopeeAPI] {path} Error: {error_msg} - {data.get('message')}"
                 )
