@@ -528,7 +528,7 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
   // ── Save persona config to backend ──
   const savePersonaConfig = async () => {
     if (!selectedPersonaId) {
-      setPersonaSaveMsg("\u26a0 \u30da\u30eb\u30bd\u30ca\u3092\u9078\u629e\u3057\u3066\u304f\u3060\u3055\u3044");
+      setPersonaSaveMsg("⚠ ペルソナを選択してください");
       return;
     }
     setIsSavingPersona(true);
@@ -544,11 +544,11 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
           self_introduction: selfIntroduction,
         },
       });
-      setPersonaSaveMsg("\u2705 \u4fdd\u5b58\u3057\u307e\u3057\u305f");
+      setPersonaSaveMsg("✅ 保存しました");
       setTimeout(() => setPersonaSaveMsg(""), 3000);
     } catch (err) {
       console.error("[AutoLive] Failed to save persona config:", err);
-      setPersonaSaveMsg("\u274c \u4fdd\u5b58\u306b\u5931\u6557\u3057\u307e\u3057\u305f");
+      setPersonaSaveMsg("❌ 保存に失敗しました");
     } finally {
       setIsSavingPersona(false);
     }
@@ -689,7 +689,7 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
               {/* Persona Selector */}
               {personas.length > 0 && (
                 <div>
-                  <label className="text-[9px] text-gray-500 block mb-1">\u30da\u30eb\u30bd\u30ca\u9078\u629e</label>
+                  <label className="text-[9px] text-gray-500 block mb-1">ペルソナ選択</label>
                   <select
                     value={selectedPersonaId || ""}
                     onChange={e => {
@@ -816,9 +816,9 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
                 className="w-full flex items-center justify-center gap-1 px-2 py-1.5 rounded text-[9px] font-medium border transition-colors bg-amber-500/20 border-amber-500/50 text-amber-300 hover:bg-amber-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isSavingPersona ? (
-                  <><Loader2 className="w-3 h-3 animate-spin" /> \u4fdd\u5b58\u4e2d...</>
+                  <><Loader2 className="w-3 h-3 animate-spin" /> 保存中...</>
                 ) : (
-                  <>\ud83d\udcbe \u30da\u30eb\u30bd\u30ca\u8a2d\u5b9a\u3092\u4fdd\u5b58</>
+                  <>💾 ペルソナ設定を保存</>
                 )}
               </button>
               {personaSaveMsg && (
