@@ -1039,14 +1039,22 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
                               : "text-gray-400 hover:bg-gray-800"
                           }`}
                         >
-                          <span className={`w-3 h-3 rounded border flex items-center justify-center flex-shrink-0 ${
+                          <span className={`w-3.5 h-3.5 rounded border flex items-center justify-center flex-shrink-0 ${
                             selectedProductIds.includes(p.item_id)
                               ? "bg-amber-500 border-amber-500"
                               : "border-gray-600"
                           }`}>
-                            {selectedProductIds.includes(p.item_id) && <CheckCircle className="w-2 h-2 text-white" />}
+                            {selectedProductIds.includes(p.item_id) && <CheckCircle className="w-2.5 h-2.5 text-white" />}
                           </span>
-                          <span className="truncate flex-1">{p.item_name || p.name}</span>
+                          {p.image_url && (
+                            <img src={p.image_url} alt="" className="w-7 h-7 rounded object-cover flex-shrink-0" />
+                          )}
+                          <div className="flex-1 min-w-0">
+                            <span className="truncate block">{p.item_name || p.name || `Item ${p.item_id}`}</span>
+                            {p.price && (
+                              <span className="text-[8px] text-amber-400/70">{p.currency || ''} {p.price}</span>
+                            )}
+                          </div>
                         </button>
                       ))}
                     </>

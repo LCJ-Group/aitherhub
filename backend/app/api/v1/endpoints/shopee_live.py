@@ -63,12 +63,18 @@ async def health_check(test_api: bool = Query(default=False)):
 # ============================================================
 # Helpers
 # ============================================================
-def _normalize_product_list(raw: dict) -> dict:
+async def _normalize_product_list(raw: dict, shop_id: int = 1542634108) -> dict:
     """
     Shopee APIの生レスポンスをフロントエンドが期待する形式に変換。
-    Shopee: { response: { item: [...] } }
-    Frontend expects: { items: [...] }
+    商品一覧(item_id のみ)を取得後、get_item_base_info で詳細(名前・画像・価格)を
+    自動取得して結合する。
+
+    Shopee get_item_list: { response: { item: [{item_id, item_status, ...}] } }
+    Shopee get_item_base_info: { response: { item_list: [{item_id, item_name, image, price_info, ...}] } }
+    Frontend expects: { items: [{item_id, item_name, image_url, price, ...}] }
     """
+    from app.services.shopee_live_service import get_product_detail
+
     items = []
     error = None
     if isinstance(raw, dict):
@@ -77,9 +83,66 @@ def _normalize_product_list(raw: dict) -> dict:
             error = raw.get("error")
         resp = raw.get("response") or {}
         items = resp.get("item") or []
+
+    if not items or error:
+        return {
+            "items": items,
+            "total": len(items),
+            "has_next_page": bool((raw.get("response") or {}).get("has_next_page")),
+            "error": error,
+        }
+
+    # ── 商品詳細を取得して結合 ──
+    item_ids = [it["item_id"] for it in items if "item_id" in it]
+    enriched_items = []
+
+    # Shopee APIは1回50件まで → バッチ処理
+    BATCH = 50
+    detail_map: dict = {}
+    for i in range(0, len(item_ids), BATCH):
+        batch_ids = item_ids[i:i + BATCH]
+        try:
+            detail_raw = await get_product_detail(batch_ids, shop_id)
+            if detail_raw and isinstance(detail_raw, dict):
+                detail_resp = detail_raw.get("response") or {}
+                for d in detail_resp.get("item_list") or []:
+                    detail_map[d["item_id"]] = d
+        except Exception as e:
+            logger.warning(f"Failed to fetch product details for batch: {e}")
+
+    for it in items:
+        iid = it.get("item_id")
+        detail = detail_map.get(iid, {})
+        # 画像URL: 最初の画像を使用
+        image_urls = (detail.get("image") or {}).get("image_url_list") or []
+        image_url = image_urls[0] if image_urls else ""
+        # 価格情報
+        price_info = detail.get("price_info") or []
+        price = ""
+        original_price = ""
+        currency = ""
+        if price_info:
+            p = price_info[0] if isinstance(price_info, list) else price_info
+            price = p.get("current_price") or p.get("original_price") or ""
+            original_price = p.get("original_price") or ""
+            currency = p.get("currency") or ""
+
+        enriched_items.append({
+            "item_id": iid,
+            "item_name": detail.get("item_name") or "",
+            "item_status": it.get("item_status") or detail.get("item_status") or "",
+            "image_url": image_url,
+            "price": price,
+            "original_price": original_price,
+            "currency": currency,
+            "description": (detail.get("description") or "")[:200],
+            "has_model": detail.get("has_model", False),
+            "category_id": detail.get("category_id", 0),
+        })
+
     return {
-        "items": items,
-        "total": len(items),
+        "items": enriched_items,
+        "total": len(enriched_items),
         "has_next_page": bool((raw.get("response") or {}).get("has_next_page")),
         "error": error,
     }
@@ -99,8 +162,8 @@ async def list_products(
     result = await get_product_list(shop_id, offset, page_size)
     if result is None:
         raise HTTPException(status_code=500, detail="Failed to fetch products from Shopee API")
-    # フロントエンド互換: response.item → items に変換
-    return _normalize_product_list(result)
+    # フロントエンド互換: response.item → items に変換（詳細情報も自動取得）
+    return await _normalize_product_list(result, shop_id)
 
 
 @router.get("/products/detail")
@@ -130,8 +193,8 @@ async def list_products_by_path(
     result = await get_product_list(shop_id, offset, page_size)
     if result is None:
         raise HTTPException(status_code=500, detail="Failed to fetch products from Shopee API")
-    # フロントエンド互換: response.item → items に変換
-    return _normalize_product_list(result)
+    # フロントエンド互換: response.item → items に変換（詳細情報も自動取得）
+    return await _normalize_product_list(result, shop_id)
 
 
 # ============================================================
