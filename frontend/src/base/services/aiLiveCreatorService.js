@@ -637,6 +637,43 @@ class AiLiveCreatorService {
     );
     return res.data;
   }
+  // ══════════════════════════════════════════════════════════
+  // Persona Management
+  // ══════════════════════════════════════════════════════════
+
+  /**
+   * Get all personas (for persona selector)
+   */
+  async getPersonas() {
+    const res = await axios.get(
+      `${this.baseURL}/api/v1/personas`,
+      { headers: this._headers(), timeout: 10000 }
+    );
+    return res.data;
+  }
+
+  /**
+   * Get single persona details (including live_persona_config)
+   */
+  async getPersona(personaId) {
+    const res = await axios.get(
+      `${this.baseURL}/api/v1/personas/${personaId}`,
+      { headers: this._headers(), timeout: 10000 }
+    );
+    return res.data;
+  }
+
+  /**
+   * Update persona (including live_persona_config)
+   */
+  async updatePersona(personaId, data) {
+    const res = await axios.put(
+      `${this.baseURL}/api/v1/personas/${personaId}`,
+      data,
+      { headers: this._headers(), timeout: 10000 }
+    );
+    return res.data;
+  }
 }
 
 const aiLiveCreatorService = new AiLiveCreatorService();

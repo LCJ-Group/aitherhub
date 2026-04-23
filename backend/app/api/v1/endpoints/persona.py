@@ -39,6 +39,19 @@ class PersonaCreate(BaseModel):
     style_prompt: Optional[str] = Field(None, description="Speaking style description")
 
 
+class LivePersonaConfig(BaseModel):
+    """Enhanced persona settings for AI Auto Live v3."""
+    host_name: Optional[str] = Field(None, description="Streamer display name")
+    catchphrases: Optional[List[str]] = Field(None, description="Catchphrases / signature phrases")
+    speaking_style: Optional[str] = Field(None, description="Speaking style description")
+    expertise: Optional[str] = Field(None, description="Expertise / career background")
+    brand_story: Optional[str] = Field(None, description="Brand story")
+    opening_intro: Optional[str] = Field(None, description="Opening self-introduction")
+    flow_preset: Optional[str] = Field(None, description="Flow preset: short/standard/long")
+    language: Optional[str] = Field(None, description="Language code")
+    style: Optional[str] = Field(None, description="Style: professional/casual/energetic")
+
+
 class PersonaUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
@@ -47,6 +60,7 @@ class PersonaUpdate(BaseModel):
     voice_name: Optional[str] = None
     style_prompt: Optional[str] = None
     finetune_model_id: Optional[str] = None
+    live_persona_config: Optional[LivePersonaConfig] = None
 
 
 class VideoTagRequest(BaseModel):
@@ -104,6 +118,7 @@ async def list_personas(
             "training_duration_hours": r.training_duration_hours,
             "tagged_video_count": r.tagged_video_count,
             "tagged_video_ids": list(r.tagged_video_ids) if r.tagged_video_ids else [],
+            "live_persona_config": r.live_persona_config if hasattr(r, 'live_persona_config') else None,
             "created_at": str(r.created_at) if r.created_at else None,
             "updated_at": str(r.updated_at) if r.updated_at else None,
         })
@@ -210,6 +225,7 @@ async def get_persona(
             "training_video_count": persona.training_video_count,
             "training_segment_count": persona.training_segment_count,
             "training_duration_hours": persona.training_duration_hours,
+            "live_persona_config": persona.live_persona_config if hasattr(persona, 'live_persona_config') else None,
             "created_at": str(persona.created_at) if persona.created_at else None,
         },
         "tagged_videos": [
@@ -261,6 +277,12 @@ async def update_persona(
         if val is not None:
             updates.append(f"{field} = :{field}")
             params[field] = val
+
+    # Handle JSON live_persona_config
+    if body.live_persona_config is not None:
+        import json
+        updates.append("live_persona_config = :live_persona_config")
+        params["live_persona_config"] = json.dumps(body.live_persona_config.model_dump(exclude_none=True))
 
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")

@@ -1,6 +1,6 @@
 # app/models/orm/persona.py
 from datetime import datetime
-from sqlalchemy import ForeignKey, Text, Integer, String, DateTime, Boolean, Float
+from sqlalchemy import ForeignKey, Text, Integer, String, DateTime, Boolean, Float, JSON
 from sqlalchemy.orm import Mapped, mapped_column
 from app.models.orm.base import Base, UUIDMixin, TimestampMixin
 
@@ -31,6 +31,11 @@ class Persona(Base, UUIDMixin, TimestampMixin):
 
     # Persona style prompt (manual override / supplement)
     style_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # v3: Enhanced live persona config (JSON)
+    # Stores: host_name, catchphrases, speaking_style, expertise,
+    #         brand_story, opening_intro, flow_preset, language, style
+    live_persona_config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

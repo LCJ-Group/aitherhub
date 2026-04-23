@@ -360,6 +360,10 @@ async def run_all_ddl_migrations():
                     await conn.run_sync(Persona.__table__.create, checkfirst=True)
                     await conn.run_sync(PersonaVideoTag.__table__.create, checkfirst=True)
                     await conn.run_sync(PersonaTrainingLog.__table__.create, checkfirst=True)
+                    # v3: Add live_persona_config JSON column
+                    await conn.execute(_text(
+                        "ALTER TABLE personas ADD COLUMN IF NOT EXISTS live_persona_config JSONB"
+                    ))
                     logger.info("[DDL ORM] persona tables ✓")
         except Exception as e:
             logger.warning(f"[DDL ORM] ORM tables: {e}")

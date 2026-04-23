@@ -88,6 +88,10 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
   const [brandStory, setBrandStory] = useState("");
   const [selfIntroduction, setSelfIntroduction] = useState("");
   const [showPersona, setShowPersona] = useState(false);
+  const [personas, setPersonas] = useState([]);
+  const [selectedPersonaId, setSelectedPersonaId] = useState(null);
+  const [isSavingPersona, setIsSavingPersona] = useState(false);
+  const [personaSaveMsg, setPersonaSaveMsg] = useState("");
   
   // v3: Flow settings
   const [flowPreset, setFlowPreset] = useState("standard");
@@ -477,6 +481,79 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
     return () => stopStatusPolling();
   }, []);
 
+  // ── Load Personas on mount ──
+  useEffect(() => {
+    (async () => {
+      try {
+        const data = await aiLiveCreatorService.getPersonas();
+        if (data?.personas) {
+          setPersonas(data.personas);
+          // Auto-select first persona and load its config
+          if (data.personas.length > 0) {
+            const first = data.personas[0];
+            setSelectedPersonaId(first.id);
+            loadPersonaConfig(first.id);
+          }
+        }
+      } catch (err) {
+        console.error("[AutoLive] Failed to load personas:", err);
+      }
+    })();
+  }, []);
+
+  // ── Load persona config from backend ──
+  const loadPersonaConfig = async (personaId) => {
+    try {
+      const data = await aiLiveCreatorService.getPersona(personaId);
+      const config = data?.persona?.live_persona_config;
+      if (config) {
+        if (typeof config === "string") {
+          try { var parsed = JSON.parse(config); } catch { return; }
+        } else {
+          var parsed = config;
+        }
+        setHostName(parsed.host_name || "");
+        setCatchphrases(parsed.catchphrases || []);
+        setSpeakingStyle(parsed.speaking_style || "");
+        setExpertise(parsed.expertise || "");
+        setBrandStory(parsed.brand_story || "");
+        setSelfIntroduction(parsed.self_introduction || "");
+        setPersonaSaveMsg("");
+      }
+    } catch (err) {
+      console.error("[AutoLive] Failed to load persona config:", err);
+    }
+  };
+
+  // ── Save persona config to backend ──
+  const savePersonaConfig = async () => {
+    if (!selectedPersonaId) {
+      setPersonaSaveMsg("\u26a0 \u30da\u30eb\u30bd\u30ca\u3092\u9078\u629e\u3057\u3066\u304f\u3060\u3055\u3044");
+      return;
+    }
+    setIsSavingPersona(true);
+    setPersonaSaveMsg("");
+    try {
+      await aiLiveCreatorService.updatePersona(selectedPersonaId, {
+        live_persona_config: {
+          host_name: hostName,
+          catchphrases,
+          speaking_style: speakingStyle,
+          expertise,
+          brand_story: brandStory,
+          self_introduction: selfIntroduction,
+        },
+      });
+      setPersonaSaveMsg("\u2705 \u4fdd\u5b58\u3057\u307e\u3057\u305f");
+      setTimeout(() => setPersonaSaveMsg(""), 3000);
+    } catch (err) {
+      console.error("[AutoLive] Failed to save persona config:", err);
+      setPersonaSaveMsg("\u274c \u4fdd\u5b58\u306b\u5931\u6557\u3057\u307e\u3057\u305f");
+    } finally {
+      setIsSavingPersona(false);
+    }
+  };
+
   // ── Product Selection Toggle ──
   const toggleProduct = (itemId) => {
     setSelectedProductIds(prev => 
@@ -609,6 +686,26 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
           {/* Persona Settings (collapsible) */}
           {showPersona && (
             <div className="space-y-2 p-2 bg-gray-800/50 rounded-lg border border-gray-700/30">
+              {/* Persona Selector */}
+              {personas.length > 0 && (
+                <div>
+                  <label className="text-[9px] text-gray-500 block mb-1">\u30da\u30eb\u30bd\u30ca\u9078\u629e</label>
+                  <select
+                    value={selectedPersonaId || ""}
+                    onChange={e => {
+                      const id = parseInt(e.target.value);
+                      setSelectedPersonaId(id);
+                      loadPersonaConfig(id);
+                    }}
+                    className="w-full px-2 py-1 bg-gray-900 border border-gray-700 rounded text-[9px] text-gray-200 focus:border-amber-500/50 focus:outline-none"
+                  >
+                    {personas.map(p => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               {/* Host Name */}
               <div>
                 <label className="text-[9px] text-gray-500 block mb-1">ライバー名</label>
@@ -711,6 +808,22 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
                   className="w-full px-2 py-1 bg-gray-900 border border-gray-700 rounded text-[9px] text-gray-200 placeholder-gray-600 focus:border-amber-500/50 focus:outline-none resize-none"
                 />
               </div>
+
+              {/* Save Button */}
+              <button
+                onClick={savePersonaConfig}
+                disabled={isSavingPersona || !selectedPersonaId}
+                className="w-full flex items-center justify-center gap-1 px-2 py-1.5 rounded text-[9px] font-medium border transition-colors bg-amber-500/20 border-amber-500/50 text-amber-300 hover:bg-amber-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isSavingPersona ? (
+                  <><Loader2 className="w-3 h-3 animate-spin" /> \u4fdd\u5b58\u4e2d...</>
+                ) : (
+                  <>\ud83d\udcbe \u30da\u30eb\u30bd\u30ca\u8a2d\u5b9a\u3092\u4fdd\u5b58</>
+                )}
+              </button>
+              {personaSaveMsg && (
+                <p className="text-[9px] text-center">{personaSaveMsg}</p>
+              )}
             </div>
           )}
         </div>
