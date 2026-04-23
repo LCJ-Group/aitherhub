@@ -1185,7 +1185,9 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
         { headers: { "X-Admin-Key": "aither:hub" }, timeout: 10000 }
       );
       setLocalRating(star);
-      if (onRated) onRated();
+      // Do NOT call onRated() here — it triggers a full list refresh
+      // which removes the rated card from the "unrated" filter, making it look
+      // like the page auto-advanced. Refresh happens on page change or manual refresh.
     } catch (err) {
       console.error("Failed to rate:", err);
       alert("採点に失敗しました: " + (err.response?.data?.detail || err.message));
