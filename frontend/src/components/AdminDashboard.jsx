@@ -1150,6 +1150,7 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
   const [hoverStar, setHoverStar] = useState(0);
   const [saving, setSaving] = useState(false);
   const [localRating, setLocalRating] = useState(fb.user_rating);
+  const [nextBlockedMsg, setNextBlockedMsg] = useState(null);
 
   const displayRating = localRating || 0;
   const ratingColor = isUnrated && localRating == null
@@ -1413,13 +1414,30 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
                   {currentIdx + 1} / {feedbacks?.length || 0}
                 </span>
                 <button
-                  onClick={onNext}
+                  onClick={() => {
+                    if (localRating == null) {
+                      setNextBlockedMsg('⚠️ 星の採点をしてから次へ進んでください');
+                      setTimeout(() => setNextBlockedMsg(null), 3000);
+                      return;
+                    }
+                    setNextBlockedMsg(null);
+                    onNext();
+                  }}
                   disabled={!feedbacks || currentIdx >= feedbacks.length - 1}
-                  className="px-4 py-2 text-sm font-semibold rounded-lg bg-orange-500 hover:bg-orange-600 text-white disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+                  className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all disabled:opacity-30 disabled:cursor-not-allowed ${
+                    localRating == null
+                      ? 'bg-gray-300 hover:bg-gray-400 text-gray-600'
+                      : 'bg-orange-500 hover:bg-orange-600 text-white'
+                  }`}
                 >
                   次へ ›
                 </button>
               </div>
+              {nextBlockedMsg && (
+                <div className="mt-2 text-center text-sm font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg py-2 px-3 animate-pulse">
+                  {nextBlockedMsg}
+                </div>
+              )}
             </div>
           </div>
         </div>
