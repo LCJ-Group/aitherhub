@@ -64,6 +64,59 @@ FLOW_CHAT_ONLY = [
     # Repeats
 ]
 
+# v3: Flow presets for different livestream durations
+FLOW_PRESETS = {
+    "short": {  # ~30 min: quick intro, fewer chat segments
+        "with_products": [
+            (FlowPhase.OPENING, 1),
+            (FlowPhase.PRODUCT_INTRO, 2),
+            (FlowPhase.PRODUCT_DEEP, 2),
+            (FlowPhase.TRANSITION, 1),
+        ],
+        "repeat": [
+            (FlowPhase.PRODUCT_INTRO, 2),
+            (FlowPhase.PRODUCT_DEEP, 2),
+            (FlowPhase.TRANSITION, 1),
+        ],
+        "chat_only": [
+            (FlowPhase.OPENING, 1),
+            (FlowPhase.CHAT, 3),
+        ],
+    },
+    "standard": {  # ~1 hour: balanced chat and products
+        "with_products": FLOW_WITH_PRODUCTS,
+        "repeat": [
+            (FlowPhase.CHAT, 1),
+            (FlowPhase.PRODUCT_INTRO, 3),
+            (FlowPhase.PRODUCT_DEEP, 4),
+            (FlowPhase.CHAT, 2),
+            (FlowPhase.TRANSITION, 1),
+        ],
+        "chat_only": FLOW_CHAT_ONLY,
+    },
+    "long": {  # ~2 hours: more chat, deeper product dives, storytelling
+        "with_products": [
+            (FlowPhase.OPENING, 3),
+            (FlowPhase.CHAT, 4),
+            (FlowPhase.PRODUCT_INTRO, 3),
+            (FlowPhase.PRODUCT_DEEP, 5),
+            (FlowPhase.CHAT, 3),
+            (FlowPhase.TRANSITION, 2),
+        ],
+        "repeat": [
+            (FlowPhase.CHAT, 3),
+            (FlowPhase.PRODUCT_INTRO, 3),
+            (FlowPhase.PRODUCT_DEEP, 5),
+            (FlowPhase.CHAT, 2),
+            (FlowPhase.TRANSITION, 2),
+        ],
+        "chat_only": [
+            (FlowPhase.OPENING, 3),
+            (FlowPhase.CHAT, 6),
+        ],
+    },
+}
+
 
 @dataclass
 class LiveProduct:
@@ -134,9 +187,18 @@ class AutoLiveSession:
     conversation_history: List[str] = field(default_factory=list)
     # Exact texts generated (for dedup)
     generated_texts: List[str] = field(default_factory=list)
-    # Custom host persona
+    # Custom host persona (basic)
     host_name: str = ""
     host_persona: str = ""
+    # v3: Enhanced persona
+    catchphrases: List[str] = field(default_factory=list)
+    speaking_style: str = ""
+    expertise: str = ""
+    brand_story: str = ""
+    self_introduction: str = ""
+    # v3: Flow customization
+    flow_preset: str = "standard"
+    custom_flow: Optional[List[Dict[str, Any]]] = None
     # Chat topics for variety
     chat_topics_used: List[str] = field(default_factory=list)
     # Track push count for queue length estimation
@@ -209,6 +271,86 @@ CHAT_TOPICS = {
 # ============================================================
 # AI Generation Functions
 # ============================================================
+def _build_persona_prompt(session: 'AutoLiveSession') -> str:
+    """v3: ライバーの個性を反映した詳細なペルソナプロンプトを構築"""
+    parts = []
+
+    # 基本情報
+    if session.host_name:
+        parts.append(f"Your name is {session.host_name}.")
+    if session.host_persona:
+        parts.append(f"Your character: {session.host_persona}")
+
+    # 専門分野
+    if session.expertise:
+        parts.append(f"Your expertise and background: {session.expertise}. Use this knowledge naturally in your speech — reference your experience when discussing products or giving tips.")
+
+    # 話し方の特徴
+    if session.speaking_style:
+        parts.append(f"Your speaking style: {session.speaking_style}. ALWAYS maintain this speaking style throughout the entire livestream. This is how you naturally talk.")
+
+    # 口癖（最も重要）
+    if session.catchphrases:
+        phrases = ', '.join([f'"{p}"' for p in session.catchphrases])
+        parts.append(
+            f"Your catchphrases / favorite expressions: {phrases}. "
+            f"You MUST naturally weave these into your speech. Use at least one catchphrase per speech segment. "
+            f"Don't force them — use them where they fit naturally, like a real person who has these verbal habits."
+        )
+
+    # ブランドストーリー
+    if session.brand_story:
+        parts.append(
+            f"Brand story you can reference: {session.brand_story}. "
+            f"Weave this into conversations naturally — especially during product introductions and chat segments. "
+            f"Don't repeat the full story every time, but reference parts of it to build brand connection."
+        )
+
+    if not parts:
+        return ""
+
+    return "\n\n=== YOUR PERSONA (stay in character at ALL times) ===\n" + "\n".join(parts) + "\n=== END PERSONA ==="
+
+
+def _get_flow_template(session: 'AutoLiveSession', has_products: bool) -> list:
+    """v3: フロープリセットまたはカスタムフローからテンプレートを取得"""
+    # カスタムフローが指定されている場合はそれを使用
+    if session.custom_flow:
+        try:
+            return [
+                (FlowPhase(item["phase"]), item.get("segments", 2))
+                for item in session.custom_flow
+            ]
+        except (KeyError, ValueError) as e:
+            logger.warning(f"[AutoLive v3] Invalid custom_flow, falling back to preset: {e}")
+
+    # プリセットから取得
+    preset = FLOW_PRESETS.get(session.flow_preset, FLOW_PRESETS["standard"])
+    if has_products:
+        return list(preset["with_products"])
+    else:
+        return list(preset["chat_only"])
+
+
+def _get_repeat_template(session: 'AutoLiveSession', has_products: bool) -> list:
+    """v3: リピート用フローテンプレートを取得"""
+    if session.custom_flow:
+        try:
+            return [
+                (FlowPhase(item["phase"]), item.get("segments", 2))
+                for item in session.custom_flow
+                if item["phase"] != "opening"  # リピート時はopeningをスキップ
+            ]
+        except (KeyError, ValueError):
+            pass
+
+    preset = FLOW_PRESETS.get(session.flow_preset, FLOW_PRESETS["standard"])
+    if has_products:
+        return list(preset.get("repeat", preset["with_products"]))
+    else:
+        return list(preset["chat_only"])
+
+
 async def _generate_speech(
     session: AutoLiveSession,
     phase: FlowPhase,
@@ -298,19 +440,23 @@ async def _generate_speech(
     if product:
         product_context = f"\nCurrent product:\n{product.to_context()}"
 
-    # Host persona
-    persona = ""
-    if session.host_persona:
-        persona = f"\nYour persona: {session.host_persona}"
-    if session.host_name:
-        persona += f"\nYour name: {session.host_name}"
+    # ── v3: Enhanced persona prompt ──
+    persona_block = _build_persona_prompt(session)
+
+    # Self-introduction override for OPENING phase
+    opening_override = ""
+    if phase == FlowPhase.OPENING and session.self_introduction and session.speak_count == 0:
+        opening_override = f"""\n\nIMPORTANT: For this opening, use the following self-introduction as a base and expand on it naturally:
+\"{session.self_introduction}\"
+"""
 
     system_prompt = f"""You are an AI live commerce host on a live shopping stream.
 {lang_instructions.get(lang, lang_instructions['en'])}
 {style_instructions.get(session.style, style_instructions['professional'])}
-{persona}
+{persona_block}
 
 {phase_instructions.get(phase, '')}
+{opening_override}
 
 CRITICAL RULES:
 - Generate a speech segment of {max_length}-{max_length + 150} characters (this will be read by TTS, keep it concise)
@@ -532,11 +678,9 @@ async def _flow_speech_loop(session: AutoLiveSession):
     # Track whether we had products at last check (for dynamic switching)
     had_products = len(session.products) > 0
 
-    # Define the flow based on whether we have products
-    if had_products:
-        flow_template = list(FLOW_WITH_PRODUCTS)
-    else:
-        flow_template = list(FLOW_CHAT_ONLY)
+    # v3: Use preset/custom flow templates
+    flow_template = _get_flow_template(session, had_products)
+    logger.info(f"[AutoLive v3] Flow preset={session.flow_preset}, template phases={[p.value for p, _ in flow_template]}")
 
     flow_index = 0
     phase_segments_done = 0
@@ -573,18 +717,9 @@ async def _flow_speech_loop(session: AutoLiveSession):
             await asyncio.sleep(0.3)  # Short wait, check again quickly
             continue
 
-        # ── Flow template cycling ──
+        # ── Flow template cycling (v3: use repeat template) ──
         if flow_index >= len(flow_template):
-            if has_products_now:
-                flow_template = [
-                    (FlowPhase.CHAT, 1),
-                    (FlowPhase.PRODUCT_INTRO, 2),
-                    (FlowPhase.PRODUCT_DEEP, 3),
-                    (FlowPhase.CHAT, 1),
-                    (FlowPhase.TRANSITION, 1),
-                ]
-            else:
-                flow_template = [(FlowPhase.CHAT, 3)]
+            flow_template = _get_repeat_template(session, has_products_now)
             flow_index = 0
             phase_segments_done = 0
 
@@ -724,8 +859,17 @@ async def start_auto_live(
     shopee_session_id: Optional[int] = None,
     host_name: str = "",
     host_persona: str = "",
+    # v3: Enhanced persona
+    catchphrases: Optional[List[str]] = None,
+    speaking_style: str = "",
+    expertise: str = "",
+    brand_story: str = "",
+    self_introduction: str = "",
+    # v3: Flow customization
+    flow_preset: str = "standard",
+    custom_flow: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict:
-    """自動ライブ配信を開始（商品なしでもOK）"""
+    """自動ライブ配信を開始（商品なしでもOK）v3: ペルソナ・フロー設定対応"""
     # 既存セッションがあれば停止
     if session_id in _sessions:
         await stop_auto_live(session_id)
@@ -757,6 +901,15 @@ async def start_auto_live(
         is_running=True,
         host_name=host_name,
         host_persona=host_persona,
+        # v3: Enhanced persona
+        catchphrases=catchphrases or [],
+        speaking_style=speaking_style,
+        expertise=expertise,
+        brand_story=brand_story,
+        self_introduction=self_introduction,
+        # v3: Flow customization
+        flow_preset=flow_preset,
+        custom_flow=custom_flow,
     )
 
     # v2フローエンジンを開始
@@ -769,7 +922,8 @@ async def start_auto_live(
     _sessions[session_id] = session
 
     mode = "products" if live_products else "chat-only"
-    logger.info(f"[AutoLive v2] Started auto live for session {session_id}: mode={mode}, products={len(live_products)}, lang={language}")
+    persona_info = f"name={host_name}, catchphrases={len(catchphrases or [])}, style={speaking_style[:30]}" if (host_name or catchphrases) else "none"
+    logger.info(f"[AutoLive v3] Started: session={session_id}, mode={mode}, products={len(live_products)}, lang={language}, flow={flow_preset}, persona=[{persona_info}]")
 
     return {
         "status": "started",
@@ -779,6 +933,14 @@ async def start_auto_live(
         "language": language,
         "style": style,
         "shopee_session_id": shopee_session_id,
+        "flow_preset": flow_preset,
+        "persona": {
+            "host_name": host_name,
+            "catchphrases_count": len(catchphrases or []),
+            "has_speaking_style": bool(speaking_style),
+            "has_expertise": bool(expertise),
+            "has_brand_story": bool(brand_story),
+        },
     }
 
 

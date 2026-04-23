@@ -15,6 +15,7 @@ import {
   ShoppingBag, Zap, Sparkles, Plus, X, Image as ImageIcon,
   CheckCircle, AlertCircle, ChevronDown, ChevronUp,
   Settings, MessageCircle, Package, Upload, Camera,
+  User, Clock,
 } from "lucide-react";
 import aiLiveCreatorService from "../base/services/aiLiveCreatorService";
 
@@ -30,6 +31,12 @@ const STYLES = [
   { id: "professional", label: "Professional", icon: "👔" },
   { id: "casual", label: "Casual", icon: "😊" },
   { id: "energetic", label: "Energetic", icon: "🔥" },
+];
+
+const FLOW_PRESETS = [
+  { id: "short", label: "Short (30分)", icon: "⚡" },
+  { id: "standard", label: "Standard (1時間)", icon: "⏱️" },
+  { id: "long", label: "Long (2時間)", icon: "🕐" },
 ];
 
 const PHASE_LABELS = {
@@ -71,6 +78,19 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
   
   // Settings panel
   const [showSettings, setShowSettings] = useState(false);
+  
+  // v3: Persona settings
+  const [hostName, setHostName] = useState("");
+  const [catchphrases, setCatchphrases] = useState([]);
+  const [newCatchphrase, setNewCatchphrase] = useState("");
+  const [speakingStyle, setSpeakingStyle] = useState("");
+  const [expertise, setExpertise] = useState("");
+  const [brandStory, setBrandStory] = useState("");
+  const [selfIntroduction, setSelfIntroduction] = useState("");
+  const [showPersona, setShowPersona] = useState(false);
+  
+  // v3: Flow settings
+  const [flowPreset, setFlowPreset] = useState("standard");
   
   // Photo analysis
   const [isAnalyzingPhoto, setIsAnalyzingPhoto] = useState(false);
@@ -332,6 +352,15 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
         session_id: sessionId,
         language,
         style,
+        // v3: Persona settings
+        host_name: hostName,
+        catchphrases: catchphrases.length > 0 ? catchphrases : undefined,
+        speaking_style: speakingStyle,
+        expertise,
+        brand_story: brandStory,
+        self_introduction: selfIntroduction,
+        // v3: Flow preset
+        flow_preset: flowPreset,
       };
 
       if (productSource === "shopee" && selectedProductIds.length > 0) {
@@ -540,6 +569,150 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
               ))}
             </div>
           </div>
+
+          {/* Flow Preset */}
+          <div>
+            <label className="text-[9px] text-gray-500 block mb-1">
+              <Clock className="w-3 h-3 inline mr-1" />Flow Preset
+            </label>
+            <div className="flex gap-1">
+              {FLOW_PRESETS.map(f => (
+                <button
+                  key={f.id}
+                  onClick={() => setFlowPreset(f.id)}
+                  className={`flex-1 px-2 py-1.5 rounded text-[9px] border transition-colors text-center ${
+                    flowPreset === f.id
+                      ? "bg-violet-500/20 border-violet-500/50 text-violet-300"
+                      : "bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-600"
+                  }`}
+                >
+                  {f.icon} {f.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Persona Toggle */}
+          <button
+            onClick={() => setShowPersona(!showPersona)}
+            className="w-full flex items-center justify-between px-2 py-1.5 rounded text-[9px] border border-gray-700 bg-gray-800 text-gray-300 hover:border-gray-600 transition-colors"
+          >
+            <span className="flex items-center gap-1">
+              <User className="w-3 h-3" />
+              ライバーペルソナ設定
+              {hostName && <span className="text-amber-400 ml-1">• {hostName}</span>}
+              {catchphrases.length > 0 && <span className="text-violet-400 ml-1">• 口癖{catchphrases.length}件</span>}
+            </span>
+            {showPersona ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+          </button>
+
+          {/* Persona Settings (collapsible) */}
+          {showPersona && (
+            <div className="space-y-2 p-2 bg-gray-800/50 rounded-lg border border-gray-700/30">
+              {/* Host Name */}
+              <div>
+                <label className="text-[9px] text-gray-500 block mb-1">ライバー名</label>
+                <input
+                  type="text"
+                  value={hostName}
+                  onChange={e => setHostName(e.target.value)}
+                  placeholder="例: 京極 琉"
+                  className="w-full px-2 py-1 bg-gray-900 border border-gray-700 rounded text-[9px] text-gray-200 placeholder-gray-600 focus:border-amber-500/50 focus:outline-none"
+                />
+              </div>
+
+              {/* Catchphrases */}
+              <div>
+                <label className="text-[9px] text-gray-500 block mb-1">口癖・決まり文句</label>
+                <div className="flex gap-1 mb-1">
+                  <input
+                    type="text"
+                    value={newCatchphrase}
+                    onChange={e => setNewCatchphrase(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === "Enter" && newCatchphrase.trim()) {
+                        setCatchphrases(prev => [...prev, newCatchphrase.trim()]);
+                        setNewCatchphrase("");
+                      }
+                    }}
+                    placeholder="例: めっちゃいいよね"
+                    className="flex-1 px-2 py-1 bg-gray-900 border border-gray-700 rounded text-[9px] text-gray-200 placeholder-gray-600 focus:border-amber-500/50 focus:outline-none"
+                  />
+                  <button
+                    onClick={() => {
+                      if (newCatchphrase.trim()) {
+                        setCatchphrases(prev => [...prev, newCatchphrase.trim()]);
+                        setNewCatchphrase("");
+                      }
+                    }}
+                    className="px-2 py-1 bg-amber-500/20 border border-amber-500/50 rounded text-[9px] text-amber-300 hover:bg-amber-500/30"
+                  >
+                    <Plus className="w-3 h-3" />
+                  </button>
+                </div>
+                {catchphrases.length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {catchphrases.map((phrase, i) => (
+                      <span key={i} className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-violet-500/20 border border-violet-500/30 rounded text-[8px] text-violet-300">
+                        「{phrase}」
+                        <button onClick={() => setCatchphrases(prev => prev.filter((_, j) => j !== i))}>
+                          <X className="w-2.5 h-2.5" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Speaking Style */}
+              <div>
+                <label className="text-[9px] text-gray-500 block mb-1">話し方の特徴</label>
+                <input
+                  type="text"
+                  value={speakingStyle}
+                  onChange={e => setSpeakingStyle(e.target.value)}
+                  placeholder="例: 語尾に〜よねを多用、テンション高め"
+                  className="w-full px-2 py-1 bg-gray-900 border border-gray-700 rounded text-[9px] text-gray-200 placeholder-gray-600 focus:border-amber-500/50 focus:outline-none"
+                />
+              </div>
+
+              {/* Expertise */}
+              <div>
+                <label className="text-[9px] text-gray-500 block mb-1">専門分野・経歴</label>
+                <input
+                  type="text"
+                  value={expertise}
+                  onChange={e => setExpertise(e.target.value)}
+                  placeholder="例: 美容師歴15年、ヘアケア専門"
+                  className="w-full px-2 py-1 bg-gray-900 border border-gray-700 rounded text-[9px] text-gray-200 placeholder-gray-600 focus:border-amber-500/50 focus:outline-none"
+                />
+              </div>
+
+              {/* Brand Story */}
+              <div>
+                <label className="text-[9px] text-gray-500 block mb-1">ブランドストーリー</label>
+                <textarea
+                  value={brandStory}
+                  onChange={e => setBrandStory(e.target.value)}
+                  placeholder="例: KYOGOKUは京極琉が創設したプロ仕様のヘアケアブランドで..."
+                  rows={2}
+                  className="w-full px-2 py-1 bg-gray-900 border border-gray-700 rounded text-[9px] text-gray-200 placeholder-gray-600 focus:border-amber-500/50 focus:outline-none resize-none"
+                />
+              </div>
+
+              {/* Self Introduction */}
+              <div>
+                <label className="text-[9px] text-gray-500 block mb-1">オープニング自己紹介</label>
+                <textarea
+                  value={selfIntroduction}
+                  onChange={e => setSelfIntroduction(e.target.value)}
+                  placeholder="例: 皆さんこんにちは！京極琉です。今日も素敵な商品を..."
+                  rows={2}
+                  className="w-full px-2 py-1 bg-gray-900 border border-gray-700 rounded text-[9px] text-gray-200 placeholder-gray-600 focus:border-amber-500/50 focus:outline-none resize-none"
+                />
+              </div>
+            </div>
+          )}
         </div>
       )}
 

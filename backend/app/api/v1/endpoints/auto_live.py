@@ -32,9 +32,18 @@ class StartAutoLiveRequest(BaseModel):
     products_manual: Optional[List[Dict[str, Any]]] = None
     # v2: Allow starting without products (chat-only mode)
     skip_shopee: bool = False  # If true, don't try to fetch from Shopee
-    # v2: Host persona
+    # v2: Host persona (basic)
     host_name: str = ""
     host_persona: str = ""
+    # v3: Enhanced persona settings
+    catchphrases: Optional[List[str]] = None  # 口癖リスト（例: ["めっちゃいい", "これやばい"]）
+    speaking_style: str = ""  # 話し方の特徴（例: "語尾に〜よねを多用、関西弁"）
+    expertise: str = ""  # 専門分野（例: "美容師歴15年、ヘアケア専門"）
+    brand_story: str = ""  # ブランドの背景ストーリー
+    self_introduction: str = ""  # オープニング用の自己紹介テンプレート
+    # v3: Flow customization
+    flow_preset: str = "standard"  # "short" (30min) / "standard" (1h) / "long" (2h)
+    custom_flow: Optional[List[Dict[str, Any]]] = None  # [{"phase": "opening", "segments": 2}, ...]
 
 
 class AddProductRequest(BaseModel):
@@ -101,6 +110,13 @@ async def start_auto_live(req: StartAutoLiveRequest):
         shopee_session_id=req.shopee_session_id,
         host_name=req.host_name,
         host_persona=req.host_persona,
+        catchphrases=req.catchphrases or [],
+        speaking_style=req.speaking_style,
+        expertise=req.expertise,
+        brand_story=req.brand_story,
+        self_introduction=req.self_introduction,
+        flow_preset=req.flow_preset,
+        custom_flow=req.custom_flow,
     )
 
     return result
