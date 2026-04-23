@@ -104,6 +104,14 @@ class TrackEventPayload(BaseModel):
     extra_data: Optional[dict] = None
 
 
+class CommentPostPayload(BaseModel):
+    client_id: str
+    session_id: str
+    clip_id: str = Field(..., description="Clip UUID")
+    nickname: str = Field(..., min_length=1, max_length=30, description="Display name")
+    comment_text: str = Field(..., min_length=1, max_length=500, description="Comment body")
+
+
 # ─── Public Endpoints (called from widget JS on client sites) ───
 
 
@@ -318,6 +326,182 @@ async def receive_tracking_event(
         await db.rollback()
 
     return {"status": "ok"}
+
+
+# ─── Comment Endpoints (public, called from widget) ───
+
+
+async def _ensure_comments_table(db: AsyncSession):
+    """Create widget_clip_comments table if not exists."""
+    await db.execute(text("""
+        CREATE TABLE IF NOT EXISTS widget_clip_comments (
+            id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+            clip_id VARCHAR(36) NOT NULL,
+            client_id VARCHAR(20) NOT NULL,
+            session_id VARCHAR(100),
+            nickname VARCHAR(30) NOT NULL,
+            comment_text TEXT NOT NULL,
+            visitor_ip VARCHAR(45),
+            is_visible BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    """))
+    await db.execute(text("""
+        CREATE INDEX IF NOT EXISTS idx_wcc_clip_id
+        ON widget_clip_comments (clip_id, created_at DESC)
+    """))
+    await db.commit()
+
+
+@router.get("/widget/comments/{clip_id}")
+async def get_clip_comments(
+    clip_id: str,
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Get comments for a specific clip.
+    Returns newest first, limited to 50 by default.
+    """
+    await _ensure_comments_table(db)
+    try:
+        result = await db.execute(
+            text("""
+                SELECT id, nickname, comment_text, created_at
+                FROM widget_clip_comments
+                WHERE clip_id = :clip_id AND is_visible = TRUE
+                ORDER BY created_at DESC
+                LIMIT :limit OFFSET :offset
+            """),
+            {"clip_id": clip_id, "limit": limit, "offset": offset},
+        )
+        rows = result.mappings().all()
+
+        count_result = await db.execute(
+            text("SELECT COUNT(*) as cnt FROM widget_clip_comments WHERE clip_id = :clip_id AND is_visible = TRUE"),
+            {"clip_id": clip_id},
+        )
+        total = count_result.scalar() or 0
+
+        comments = []
+        for r in rows:
+            comments.append({
+                "id": str(r["id"]),
+                "nickname": r["nickname"],
+                "comment_text": r["comment_text"],
+                "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+            })
+
+        resp = {"comments": comments, "total": total}
+        response = Response(
+            content=json.dumps(resp, ensure_ascii=False),
+            media_type="application/json",
+        )
+        return _add_cors_headers(response, request)
+    except Exception as e:
+        logger.warning(f"Failed to get comments: {e}")
+        resp = {"comments": [], "total": 0}
+        response = Response(
+            content=json.dumps(resp),
+            media_type="application/json",
+        )
+        return _add_cors_headers(response, request)
+
+
+@router.post("/widget/comments")
+async def post_clip_comment(
+    payload: CommentPostPayload,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Post a comment on a clip. Public endpoint (no auth required).
+    Rate limited by session_id: max 5 comments per minute.
+    """
+    await _ensure_comments_table(db)
+
+    # Simple rate limiting: max 5 comments per session per minute
+    try:
+        rate_result = await db.execute(
+            text("""
+                SELECT COUNT(*) as cnt FROM widget_clip_comments
+                WHERE session_id = :sid AND created_at > NOW() - INTERVAL '1 minute'
+            """),
+            {"sid": payload.session_id},
+        )
+        recent_count = rate_result.scalar() or 0
+        if recent_count >= 5:
+            resp = {"status": "error", "message": "コメントの投稿が多すぎます。少し待ってからお試しください。"}
+            response = Response(
+                content=json.dumps(resp, ensure_ascii=False),
+                media_type="application/json",
+                status_code=429,
+            )
+            return _add_cors_headers(response, request)
+    except Exception:
+        pass  # Don't block comment on rate-limit check failure
+
+    # Sanitize: strip HTML tags from nickname and comment
+    import re as _re
+    clean_nickname = _re.sub(r'<[^>]+>', '', payload.nickname).strip()[:30]
+    clean_text = _re.sub(r'<[^>]+>', '', payload.comment_text).strip()[:500]
+
+    if not clean_nickname or not clean_text:
+        resp = {"status": "error", "message": "ニックネームとコメントを入力してください。"}
+        response = Response(
+            content=json.dumps(resp, ensure_ascii=False),
+            media_type="application/json",
+            status_code=400,
+        )
+        return _add_cors_headers(response, request)
+
+    comment_id = str(uuid.uuid4())
+    try:
+        await db.execute(
+            text("""
+                INSERT INTO widget_clip_comments
+                    (id, clip_id, client_id, session_id, nickname, comment_text, visitor_ip, created_at)
+                VALUES
+                    (:id, :clip_id, :client_id, :session_id, :nickname, :comment_text, :visitor_ip, NOW())
+            """),
+            {
+                "id": comment_id,
+                "clip_id": payload.clip_id,
+                "client_id": payload.client_id,
+                "session_id": payload.session_id,
+                "nickname": clean_nickname,
+                "comment_text": clean_text,
+                "visitor_ip": request.client.host if request.client else None,
+            },
+        )
+        await db.commit()
+
+        resp = {
+            "status": "ok",
+            "comment": {
+                "id": comment_id,
+                "nickname": clean_nickname,
+                "comment_text": clean_text,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+        }
+        response = Response(
+            content=json.dumps(resp, ensure_ascii=False),
+            media_type="application/json",
+        )
+        return _add_cors_headers(response, request)
+    except Exception as e:
+        logger.warning(f"Failed to save comment: {e}")
+        await db.rollback()
+        resp = {"status": "error", "message": "コメントの保存に失敗しました。"}
+        response = Response(
+            content=json.dumps(resp, ensure_ascii=False),
+            media_type="application/json",
+            status_code=500,
+        )
+        return _add_cors_headers(response, request)
 
 
 # ─── Admin Endpoints ───

@@ -270,6 +270,8 @@
     bag: '<svg viewBox="0 0 24 24" fill="white"><path d="M18 6h-2c0-2.21-1.79-4-4-4S8 3.79 8 6H6c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-6-2c1.1 0 2 .9 2 2h-4c0-1.1.9-2 2-2zm6 16H6V8h2v2c0 .55.45 1 1 1s1-.45 1-1V8h4v2c0 .55.45 1 1 1s1-.45 1-1V8h2v12z"/></svg>',
     chevronUp: '<svg viewBox="0 0 24 24" fill="white"><path d="M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z"/></svg>',
     chevronDown: '<svg viewBox="0 0 24 24" fill="white"><path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6z"/></svg>',
+    comment: '<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+    send: '<svg viewBox="0 0 24 24" fill="white"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>',
   };
 
   // ── Build TikTok-Style Feed Widget ──
@@ -961,6 +963,120 @@
       }\
       .ath-detail-btn-secondary:hover { background: rgba(255,255,255,0.25); }\
       \
+      /* ── Comment panel ── */\
+      .ath-comment-panel {\
+        position: absolute;\
+        bottom: 0; left: 0; right: 0;\
+        height: 65vh;\
+        background: rgba(22,22,22,0.97);\
+        backdrop-filter: blur(16px);\
+        -webkit-backdrop-filter: blur(16px);\
+        border-radius: 16px 16px 0 0;\
+        z-index: 70;\
+        display: flex;\
+        flex-direction: column;\
+        transform: translateY(100%);\
+        transition: transform 0.35s cubic-bezier(0.32, 0.72, 0, 1);\
+        pointer-events: auto;\
+      }\
+      .ath-comment-panel.open { transform: translateY(0); }\
+      .ath-comment-header {\
+        display: flex; align-items: center; justify-content: space-between;\
+        padding: 14px 16px 10px;\
+        border-bottom: 1px solid rgba(255,255,255,0.1);\
+        flex-shrink: 0;\
+      }\
+      .ath-comment-title {\
+        font-size: 15px; font-weight: 700; color: white;\
+      }\
+      .ath-comment-close {\
+        background: none; border: none; cursor: pointer;\
+        width: 28px; height: 28px; display: flex; align-items: center; justify-content: center;\
+        color: rgba(255,255,255,0.6);\
+      }\
+      .ath-comment-close svg { width: 20px; height: 20px; }\
+      .ath-comment-list {\
+        flex: 1; overflow-y: auto; padding: 12px 16px;\
+        -webkit-overflow-scrolling: touch;\
+      }\
+      .ath-comment-item {\
+        display: flex; gap: 10px; margin-bottom: 16px;\
+      }\
+      .ath-comment-avatar {\
+        width: 32px; height: 32px; border-radius: 50%;\
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);\
+        display: flex; align-items: center; justify-content: center;\
+        font-size: 13px; font-weight: 700; color: white;\
+        flex-shrink: 0;\
+      }\
+      .ath-comment-body { flex: 1; min-width: 0; }\
+      .ath-comment-nick {\
+        font-size: 12px; font-weight: 600; color: rgba(255,255,255,0.6);\
+        margin-bottom: 2px;\
+      }\
+      .ath-comment-text {\
+        font-size: 14px; color: rgba(255,255,255,0.9);\
+        line-height: 1.4; word-break: break-word;\
+      }\
+      .ath-comment-time {\
+        font-size: 11px; color: rgba(255,255,255,0.3);\
+        margin-top: 4px;\
+      }\
+      .ath-comment-empty {\
+        text-align: center; color: rgba(255,255,255,0.4);\
+        font-size: 13px; padding: 40px 0;\
+      }\
+      .ath-comment-form {\
+        display: flex; flex-direction: column; gap: 8px;\
+        padding: 10px 16px 16px;\
+        border-top: 1px solid rgba(255,255,255,0.1);\
+        flex-shrink: 0;\
+        background: rgba(22,22,22,0.97);\
+      }\
+      .ath-comment-form-row {\
+        display: flex; gap: 8px; align-items: center;\
+      }\
+      .ath-comment-nick-input {\
+        width: 90px; flex-shrink: 0;\
+        padding: 8px 10px;\
+        border-radius: 20px;\
+        border: 1px solid rgba(255,255,255,0.15);\
+        background: rgba(255,255,255,0.08);\
+        color: white; font-size: 13px;\
+        outline: none;\
+      }\
+      .ath-comment-nick-input::placeholder { color: rgba(255,255,255,0.3); }\
+      .ath-comment-nick-input:focus { border-color: rgba(255,255,255,0.3); }\
+      .ath-comment-text-input {\
+        flex: 1;\
+        padding: 8px 12px;\
+        border-radius: 20px;\
+        border: 1px solid rgba(255,255,255,0.15);\
+        background: rgba(255,255,255,0.08);\
+        color: white; font-size: 13px;\
+        outline: none; min-width: 0;\
+      }\
+      .ath-comment-text-input::placeholder { color: rgba(255,255,255,0.3); }\
+      .ath-comment-text-input:focus { border-color: rgba(255,255,255,0.3); }\
+      .ath-comment-send {\
+        width: 36px; height: 36px; flex-shrink: 0;\
+        border-radius: 50%;\
+        border: none; cursor: pointer;\
+        background: ' + themeColor + ';\
+        display: flex; align-items: center; justify-content: center;\
+        transition: opacity 0.2s;\
+      }\
+      .ath-comment-send:disabled { opacity: 0.4; cursor: default; }\
+      .ath-comment-send svg { width: 18px; height: 18px; }\
+      .ath-comment-count {\
+        position: absolute; top: -6px; right: -6px;\
+        background: ' + themeColor + '; color: white;\
+        font-size: 10px; font-weight: 700;\
+        min-width: 16px; height: 16px; border-radius: 8px;\
+        display: flex; align-items: center; justify-content: center;\
+        padding: 0 4px;\
+      }\
+      \
       /* ── Powered by ── */\
       .ath-powered {\
         position: absolute;\
@@ -1357,6 +1473,13 @@
     muteBtn.innerHTML = '<div class="ath-action-icon">' + ICONS.volumeOff + '</div><span class="ath-action-label">音声</span>';
     actions.appendChild(muteBtn);
 
+    // Comment button
+    var commentBtn = document.createElement("button");
+    commentBtn.className = "ath-action-btn";
+    commentBtn.style.position = "relative";
+    commentBtn.innerHTML = '<div class="ath-action-icon">' + ICONS.comment + '</div><span class="ath-action-label">コメント</span>';
+    actions.appendChild(commentBtn);
+
     overlay.appendChild(actions);
 
     // Video counter
@@ -1551,6 +1674,219 @@
     detailPanel.appendChild(detailBody);
     detailOverlay.appendChild(detailPanel);
     overlay.appendChild(detailOverlay);
+
+    // ── Comment Panel ──
+    var commentPanel = document.createElement("div");
+    commentPanel.className = "ath-comment-panel";
+
+    var commentHeader = document.createElement("div");
+    commentHeader.className = "ath-comment-header";
+    var commentTitle = document.createElement("div");
+    commentTitle.className = "ath-comment-title";
+    commentTitle.textContent = "\u30B3\u30E1\u30F3\u30C8";
+    var commentCloseBtn = document.createElement("button");
+    commentCloseBtn.className = "ath-comment-close";
+    commentCloseBtn.innerHTML = ICONS.close;
+    commentHeader.appendChild(commentTitle);
+    commentHeader.appendChild(commentCloseBtn);
+    commentPanel.appendChild(commentHeader);
+
+    var commentList = document.createElement("div");
+    commentList.className = "ath-comment-list";
+    commentPanel.appendChild(commentList);
+
+    var commentForm = document.createElement("div");
+    commentForm.className = "ath-comment-form";
+    var commentFormRow = document.createElement("div");
+    commentFormRow.className = "ath-comment-form-row";
+    var commentNickInput = document.createElement("input");
+    commentNickInput.className = "ath-comment-nick-input";
+    commentNickInput.type = "text";
+    commentNickInput.placeholder = "\u540D\u524D";
+    commentNickInput.maxLength = 30;
+    // Restore saved nickname
+    var NICK_KEY = "ath_comment_nick";
+    try { commentNickInput.value = localStorage.getItem(NICK_KEY) || ""; } catch(e) {}
+    var commentTextInput = document.createElement("input");
+    commentTextInput.className = "ath-comment-text-input";
+    commentTextInput.type = "text";
+    commentTextInput.placeholder = "\u30B3\u30E1\u30F3\u30C8\u3092\u5165\u529B...";
+    commentTextInput.maxLength = 500;
+    var commentSendBtn = document.createElement("button");
+    commentSendBtn.className = "ath-comment-send";
+    commentSendBtn.innerHTML = ICONS.send;
+    commentSendBtn.disabled = true;
+    commentFormRow.appendChild(commentNickInput);
+    commentFormRow.appendChild(commentTextInput);
+    commentFormRow.appendChild(commentSendBtn);
+    commentForm.appendChild(commentFormRow);
+    commentPanel.appendChild(commentForm);
+
+    overlay.appendChild(commentPanel);
+
+    var isCommentOpen = false;
+    var commentCache = {}; // clip_id -> {comments, total}
+
+    function formatTimeAgo(isoStr) {
+      if (!isoStr) return "";
+      var diff = (Date.now() - new Date(isoStr).getTime()) / 1000;
+      if (diff < 60) return "\u305F\u3063\u305F\u4ECA";
+      if (diff < 3600) return Math.floor(diff / 60) + "\u5206\u524D";
+      if (diff < 86400) return Math.floor(diff / 3600) + "\u6642\u9593\u524D";
+      if (diff < 604800) return Math.floor(diff / 86400) + "\u65E5\u524D";
+      return new Date(isoStr).toLocaleDateString("ja-JP");
+    }
+
+    function renderComments(comments) {
+      commentList.innerHTML = "";
+      if (!comments || comments.length === 0) {
+        commentList.innerHTML = '<div class="ath-comment-empty">\u307E\u3060\u30B3\u30E1\u30F3\u30C8\u304C\u3042\u308A\u307E\u305B\u3093\u3002\u6700\u521D\u306E\u30B3\u30E1\u30F3\u30C8\u3092\u6295\u7A3F\u3057\u3088\u3046\uFF01</div>';
+        return;
+      }
+      for (var i = 0; i < comments.length; i++) {
+        var c = comments[i];
+        var item = document.createElement("div");
+        item.className = "ath-comment-item";
+        var avatar = document.createElement("div");
+        avatar.className = "ath-comment-avatar";
+        avatar.textContent = (c.nickname || "?").charAt(0).toUpperCase();
+        // Assign color based on nickname hash
+        var colors = ["#667eea", "#764ba2", "#f093fb", "#4facfe", "#43e97b", "#fa709a", "#fee140", "#a18cd1"];
+        var hash = 0;
+        for (var j = 0; j < (c.nickname || "").length; j++) hash = (c.nickname || "").charCodeAt(j) + ((hash << 5) - hash);
+        avatar.style.background = colors[Math.abs(hash) % colors.length];
+        var body = document.createElement("div");
+        body.className = "ath-comment-body";
+        body.innerHTML = '<div class="ath-comment-nick">' + _escHtml(c.nickname) + '</div>' +
+          '<div class="ath-comment-text">' + _escHtml(c.comment_text) + '</div>' +
+          '<div class="ath-comment-time">' + formatTimeAgo(c.created_at) + '</div>';
+        item.appendChild(avatar);
+        item.appendChild(body);
+        commentList.appendChild(item);
+      }
+    }
+
+    function _escHtml(s) {
+      if (!s) return "";
+      return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    }
+
+    function loadComments(clipId, force) {
+      if (!force && commentCache[clipId]) {
+        renderComments(commentCache[clipId].comments);
+        updateCommentCount(commentCache[clipId].total);
+        return;
+      }
+      commentList.innerHTML = '<div class="ath-comment-empty">\u8AAD\u307F\u8FBC\u307F\u4E2D...</div>';
+      fetch(API_BASE + "/widget/comments/" + clipId + "?limit=50")
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          commentCache[clipId] = data;
+          renderComments(data.comments);
+          updateCommentCount(data.total);
+        })
+        .catch(function() {
+          commentList.innerHTML = '<div class="ath-comment-empty">\u30B3\u30E1\u30F3\u30C8\u3092\u53D6\u5F97\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F</div>';
+        });
+    }
+
+    function updateCommentCount(count) {
+      var existing = commentBtn.querySelector(".ath-comment-count");
+      if (count > 0) {
+        if (!existing) {
+          existing = document.createElement("span");
+          existing.className = "ath-comment-count";
+          commentBtn.appendChild(existing);
+        }
+        existing.textContent = count > 99 ? "99+" : count;
+      } else if (existing) {
+        existing.remove();
+      }
+    }
+
+    function openCommentPanel() {
+      var clipId = clips[currentIndex].clip_id;
+      isCommentOpen = true;
+      commentPanel.classList.add("open");
+      loadComments(clipId);
+      commentTextInput.value = "";
+      commentSendBtn.disabled = true;
+      trackEvent("comment_open", { clip_id: clipId });
+    }
+
+    function closeCommentPanel() {
+      isCommentOpen = false;
+      commentPanel.classList.remove("open");
+    }
+
+    function submitComment() {
+      var nick = commentNickInput.value.trim();
+      var text = commentTextInput.value.trim();
+      if (!nick || !text) return;
+      var clipId = clips[currentIndex].clip_id;
+      commentSendBtn.disabled = true;
+      // Save nickname
+      try { localStorage.setItem(NICK_KEY, nick); } catch(e) {}
+      fetch(API_BASE + "/widget/comments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          client_id: CLIENT_ID,
+          session_id: SESSION_ID,
+          clip_id: clipId,
+          nickname: nick,
+          comment_text: text,
+        }),
+      })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          if (data.status === "ok" && data.comment) {
+            // Prepend to cache
+            if (!commentCache[clipId]) commentCache[clipId] = { comments: [], total: 0 };
+            commentCache[clipId].comments.unshift(data.comment);
+            commentCache[clipId].total++;
+            renderComments(commentCache[clipId].comments);
+            updateCommentCount(commentCache[clipId].total);
+            commentTextInput.value = "";
+            trackEvent("comment_post", { clip_id: clipId });
+          } else {
+            alert(data.message || "\u30B3\u30E1\u30F3\u30C8\u306E\u6295\u7A3F\u306B\u5931\u6557\u3057\u307E\u3057\u305F");
+          }
+          commentSendBtn.disabled = false;
+        })
+        .catch(function() {
+          alert("\u30B3\u30E1\u30F3\u30C8\u306E\u6295\u7A3F\u306B\u5931\u6557\u3057\u307E\u3057\u305F");
+          commentSendBtn.disabled = false;
+        });
+    }
+
+    // Comment button event
+    commentBtn.addEventListener("click", function(e) {
+      e.stopPropagation();
+      if (isCommentOpen) closeCommentPanel();
+      else openCommentPanel();
+    });
+    commentCloseBtn.addEventListener("click", function(e) {
+      e.stopPropagation();
+      closeCommentPanel();
+    });
+    commentSendBtn.addEventListener("click", function(e) {
+      e.stopPropagation();
+      submitComment();
+    });
+    commentTextInput.addEventListener("input", function() {
+      commentSendBtn.disabled = !commentTextInput.value.trim() || !commentNickInput.value.trim();
+    });
+    commentNickInput.addEventListener("input", function() {
+      commentSendBtn.disabled = !commentTextInput.value.trim() || !commentNickInput.value.trim();
+    });
+    commentTextInput.addEventListener("keydown", function(e) {
+      if (e.key === "Enter") { e.preventDefault(); submitComment(); }
+    });
+    // Prevent swipe events from propagating through comment panel
+    commentPanel.addEventListener("touchstart", function(e) { e.stopPropagation(); });
+    commentPanel.addEventListener("touchmove", function(e) { e.stopPropagation(); });
+    commentPanel.addEventListener("touchend", function(e) { e.stopPropagation(); });
 
     var isDetailOpen = false;
 
@@ -2178,12 +2514,26 @@
     function goToIndex(newIndex) {
       if (clips.length <= 1) return;
       if (isDetailOpen) closeProductDetail();
+      if (isCommentOpen) closeCommentPanel();
       currentIndex = ((newIndex % clips.length) + clips.length) % clips.length;
       updateSlidePositions(true);
       playCurrentVideo();
       // Update URL bar with current clip for sharing
       if (isOpen && clips[currentIndex]) {
         updateUrlBar(clips[currentIndex].clip_id);
+      }
+      // Prefetch comment count for current clip
+      var _ccid = clips[currentIndex] && clips[currentIndex].clip_id;
+      if (_ccid && !commentCache[_ccid]) {
+        fetch(API_BASE + "/widget/comments/" + _ccid + "?limit=1")
+          .then(function(r) { return r.json(); })
+          .then(function(data) {
+            if (!commentCache[_ccid]) commentCache[_ccid] = data;
+            updateCommentCount(data.total);
+          })
+          .catch(function() {});
+      } else if (_ccid && commentCache[_ccid]) {
+        updateCommentCount(commentCache[_ccid].total);
       }
     }
 
@@ -2254,6 +2604,18 @@
       trackEvent("widget_open", { source: "fab_click" });
       _widgetOpenTime = Date.now();
 
+      // Prefetch comment count for first clip
+      var _firstClipId = clips[currentIndex] && clips[currentIndex].clip_id;
+      if (_firstClipId) {
+        fetch(API_BASE + "/widget/comments/" + _firstClipId + "?limit=1")
+          .then(function(r) { return r.json(); })
+          .then(function(data) {
+            if (!commentCache[_firstClipId]) commentCache[_firstClipId] = data;
+            updateCommentCount(data.total);
+          })
+          .catch(function() {});
+      }
+
       // Update UI after play started
       updateMuteButton();
       if (!userPreferSound) {
@@ -2280,6 +2642,7 @@
       });
       _widgetOpenTime = 0;
       if (isDetailOpen) closeProductDetail();
+      if (isCommentOpen) closeCommentPanel();
       overlay.classList.remove("active");
       fab.style.display = "flex";
       // Restore original URL (remove ?ath_clip= parameter)
@@ -2346,7 +2709,7 @@
       if (isSpeedUp) return;
       if (isDetailOpen) return;
       // Ignore if clicking on buttons
-      if (e.target.closest && (e.target.closest(".ath-action-btn") || e.target.closest(".ath-cta") || e.target.closest(".ath-close-btn") || e.target.closest(".ath-product-card") || e.target.closest(".ath-detail-overlay"))) return;
+      if (e.target.closest && (e.target.closest(".ath-action-btn") || e.target.closest(".ath-cta") || e.target.closest(".ath-close-btn") || e.target.closest(".ath-product-card") || e.target.closest(".ath-detail-overlay") || e.target.closest(".ath-comment-panel"))) return;
 
       var video = videoElements[currentIndex];
       if (!video) return;
@@ -2656,6 +3019,16 @@
           trackEvent("share_open", { clip_id: sharedClipId });
           trackEvent("widget_open", { source: "share_link", clip_id: sharedClipId });
           _widgetOpenTime = Date.now();
+          // Prefetch comment count for shared clip
+          if (sharedClipId) {
+            fetch(API_BASE + "/widget/comments/" + sharedClipId + "?limit=1")
+              .then(function(r) { return r.json(); })
+              .then(function(data) {
+                if (!commentCache[sharedClipId]) commentCache[sharedClipId] = data;
+                updateCommentCount(data.total);
+              })
+              .catch(function() {});
+          }
           // Reset share link flag after first manual swipe
           // (auto-skip will be re-enabled when user swipes)
         }, 500); // Small delay to ensure DOM is ready
