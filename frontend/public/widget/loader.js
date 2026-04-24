@@ -1036,17 +1036,7 @@
       .ath-comment-form-row {\
         display: flex; gap: 8px; align-items: center;\
       }\
-      .ath-comment-nick-input {\
-        width: 90px; flex-shrink: 0;\
-        padding: 8px 10px;\
-        border-radius: 20px;\
-        border: 1px solid rgba(255,255,255,0.15);\
-        background: rgba(255,255,255,0.08);\
-        color: white; font-size: 13px;\
-        outline: none;\
-      }\
-      .ath-comment-nick-input::placeholder { color: rgba(255,255,255,0.3); }\
-      .ath-comment-nick-input:focus { border-color: rgba(255,255,255,0.3); }\
+\
       .ath-comment-text-input {\
         flex: 1;\
         padding: 8px 12px;\
@@ -1699,14 +1689,19 @@
     commentForm.className = "ath-comment-form";
     var commentFormRow = document.createElement("div");
     commentFormRow.className = "ath-comment-form-row";
-    var commentNickInput = document.createElement("input");
-    commentNickInput.className = "ath-comment-nick-input";
-    commentNickInput.type = "text";
-    commentNickInput.placeholder = "\u540D\u524D";
-    commentNickInput.maxLength = 30;
-    // Restore saved nickname
+    // Auto-generate guest nickname (stored in localStorage)
     var NICK_KEY = "ath_comment_nick";
-    try { commentNickInput.value = localStorage.getItem(NICK_KEY) || ""; } catch(e) {}
+    function _generateGuestNick() {
+      var animals = ["\u30CD\u30B3","\u30A4\u30CC","\u30A6\u30B5\u30AE","\u30D1\u30F3\u30C0","\u30AD\u30C4\u30CD","\u30BF\u30CC\u30AD","\u30DA\u30F3\u30AE\u30F3","\u30B3\u30A2\u30E9","\u30A4\u30EB\u30AB","\u30AF\u30DE","\u30E9\u30A4\u30AA\u30F3","\u30D2\u30E8\u30B3","\u30AB\u30EF\u30A6\u30BD","\u30CF\u30EA\u30CD\u30BA\u30DF","\u30EA\u30B9"];
+      var adj = ["\u3075\u308F\u3075\u308F","\u304D\u3089\u304D\u3089","\u306E\u3093\u3073\u308A","\u3059\u3084\u3059\u3084","\u3082\u3075\u3082\u3075","\u3066\u304F\u3066\u304F","\u3074\u304B\u3074\u304B","\u3086\u3081\u3086\u3081"];
+      return adj[Math.floor(Math.random()*adj.length)] + animals[Math.floor(Math.random()*animals.length)];
+    }
+    var _guestNick;
+    try { _guestNick = localStorage.getItem(NICK_KEY); } catch(e) {}
+    if (!_guestNick) {
+      _guestNick = _generateGuestNick();
+      try { localStorage.setItem(NICK_KEY, _guestNick); } catch(e) {}
+    }
     var commentTextInput = document.createElement("input");
     commentTextInput.className = "ath-comment-text-input";
     commentTextInput.type = "text";
@@ -1716,7 +1711,6 @@
     commentSendBtn.className = "ath-comment-send";
     commentSendBtn.innerHTML = ICONS.send;
     commentSendBtn.disabled = true;
-    commentFormRow.appendChild(commentNickInput);
     commentFormRow.appendChild(commentTextInput);
     commentFormRow.appendChild(commentSendBtn);
     commentForm.appendChild(commentFormRow);
@@ -1820,13 +1814,11 @@
     }
 
     function submitComment() {
-      var nick = commentNickInput.value.trim();
+      var nick = _guestNick;
       var text = commentTextInput.value.trim();
-      if (!nick || !text) return;
+      if (!text) return;
       var clipId = clips[currentIndex].clip_id;
       commentSendBtn.disabled = true;
-      // Save nickname
-      try { localStorage.setItem(NICK_KEY, nick); } catch(e) {}
       fetch(API_BASE + "/widget/comments", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1875,10 +1867,7 @@
       submitComment();
     });
     commentTextInput.addEventListener("input", function() {
-      commentSendBtn.disabled = !commentTextInput.value.trim() || !commentNickInput.value.trim();
-    });
-    commentNickInput.addEventListener("input", function() {
-      commentSendBtn.disabled = !commentTextInput.value.trim() || !commentNickInput.value.trim();
+      commentSendBtn.disabled = !commentTextInput.value.trim();
     });
     commentTextInput.addEventListener("keydown", function(e) {
       if (e.key === "Enter") { e.preventDefault(); submitComment(); }

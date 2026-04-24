@@ -108,7 +108,7 @@ class CommentPostPayload(BaseModel):
     client_id: str
     session_id: str
     clip_id: str = Field(..., description="Clip UUID")
-    nickname: str = Field(..., min_length=1, max_length=30, description="Display name")
+    nickname: str = Field(default="ゲスト", max_length=30, description="Display name (auto-generated if empty)")
     comment_text: str = Field(..., min_length=1, max_length=500, description="Comment body")
 
 
@@ -446,10 +446,12 @@ async def post_clip_comment(
     # Sanitize: strip HTML tags from nickname and comment
     import re as _re
     clean_nickname = _re.sub(r'<[^>]+>', '', payload.nickname).strip()[:30]
+    if not clean_nickname:
+        clean_nickname = "ゲスト"
     clean_text = _re.sub(r'<[^>]+>', '', payload.comment_text).strip()[:500]
 
-    if not clean_nickname or not clean_text:
-        resp = {"status": "error", "message": "ニックネームとコメントを入力してください。"}
+    if not clean_text:
+        resp = {"status": "error", "message": "コメントを入力してください。"}
         response = Response(
             content=json.dumps(resp, ensure_ascii=False),
             media_type="application/json",
