@@ -1207,30 +1207,31 @@ async def transcribe_clip(
 _ASS_STYLES = {
     'simple': {
         # CSS: white text, text-shadow for depth
-        'fontsize': 48, 'bold': 1, 'primary_color': '&H00FFFFFF',
-        'outline_color': '&H00000000', 'outline': 3, 'shadow': 2,
+        # fontsize 80 ≈ 7.4% of 1080p width — matches TikTok standard subtitle size
+        'fontsize': 80, 'bold': 1, 'primary_color': '&H00FFFFFF',
+        'outline_color': '&H00000000', 'outline': 5, 'shadow': 3,
         'border_style': 1, 'back_color': '&H80000000',
     },
     'box': {
         # CSS: white text, rgba(0,0,0,0.80) background box
         # ASS alpha = (1-0.80)*255 = 51 = 0x33
         # Outline acts as padding when BorderStyle=3
-        'fontsize': 48, 'bold': 1, 'primary_color': '&H00FFFFFF',
-        'outline_color': '&H00000000', 'outline': 14, 'shadow': 0,
+        'fontsize': 80, 'bold': 1, 'primary_color': '&H00FFFFFF',
+        'outline_color': '&H00000000', 'outline': 22, 'shadow': 0,
         'border_style': 3, 'back_color': '&H33000000',
     },
     'outline': {
         # CSS: white text, thick black stroke
-        'fontsize': 50, 'bold': 1, 'primary_color': '&H00FFFFFF',
-        'outline_color': '&H00000000', 'outline': 5, 'shadow': 0,
+        'fontsize': 84, 'bold': 1, 'primary_color': '&H00FFFFFF',
+        'outline_color': '&H00000000', 'outline': 8, 'shadow': 0,
         'border_style': 1, 'back_color': '&H00000000',
     },
     'pop': {
         # CSS: #FFE135 text (yellow), #FF6B35 stroke (orange)
         # ASS BGR: FFE135 -> R=FF,G=E1,B=35 -> &H0035E1FF
         # ASS BGR: FF6B35 -> R=FF,G=6B,B=35 -> &H00356BFF
-        'fontsize': 54, 'bold': 1, 'primary_color': '&H0035E1FF',
-        'outline_color': '&H00356BFF', 'outline': 4, 'shadow': 3,
+        'fontsize': 90, 'bold': 1, 'primary_color': '&H0035E1FF',
+        'outline_color': '&H00356BFF', 'outline': 7, 'shadow': 4,
         'border_style': 1, 'back_color': '&H70000000',
     },
     'gradient': {
@@ -1238,8 +1239,8 @@ _ASS_STYLES = {
         # Use purple midpoint: rgba(187,82,200,0.85) -> ASS alpha=(1-0.85)*255=38=0x26
         # ASS BGR: BB52C8 -> R=BB,G=52,B=C8 -> &H26C852BB
         # Outline acts as padding when BorderStyle=3
-        'fontsize': 48, 'bold': 1, 'primary_color': '&H00FFFFFF',
-        'outline_color': '&H00000000', 'outline': 14, 'shadow': 0,
+        'fontsize': 80, 'bold': 1, 'primary_color': '&H00FFFFFF',
+        'outline_color': '&H00000000', 'outline': 22, 'shadow': 0,
         'border_style': 3, 'back_color': '&H26C852BB',
     },
     'karaoke': {
@@ -1247,8 +1248,8 @@ _ASS_STYLES = {
         # Primary alpha = (1-0.5)*255 = 127 = 0x7F
         # Back alpha = (1-0.70)*255 = 76 = 0x4C
         # Outline acts as padding when BorderStyle=3
-        'fontsize': 50, 'bold': 1, 'primary_color': '&H7FFFFFFF',
-        'outline_color': '&H00000000', 'outline': 14, 'shadow': 0,
+        'fontsize': 84, 'bold': 1, 'primary_color': '&H7FFFFFFF',
+        'outline_color': '&H00000000', 'outline': 22, 'shadow': 0,
         'border_style': 3, 'back_color': '&H4C000000',
         'secondary_color': '&H0035E1FF',  # karaoke highlight color (yellow in BGR)
     },
@@ -1341,9 +1342,15 @@ def _generate_ass_content(captions: list, style: str, position_x: float, positio
         margin_v = max(20, int(video_height * (100 - position_y) / 100))
 
     # ── Scale font size to video resolution ──
-    # Frontend uses CSS px on a ~360px-wide preview; video is 1080px wide
-    # Scale factor ≈ 3x, but ASS fontsize is already set for 1080p in _ASS_STYLES
-    fontsize = s['fontsize']
+    # Base fontsize in _ASS_STYLES is calibrated for 1080px width (vertical video)
+    # Scale proportionally for other resolutions
+    base_width = 1080
+    scale_factor = min(video_width, video_height) / base_width  # use shorter dimension
+    fontsize = max(40, int(s['fontsize'] * scale_factor))
+    outline_val = max(2, int(s['outline'] * scale_factor))
+    shadow_val = max(0, int(s['shadow'] * scale_factor))
+    logger.info(f"[ass] Resolution {video_width}x{video_height}, scale={scale_factor:.2f}, "
+                f"fontsize={s['fontsize']}->{fontsize}, outline={s['outline']}->{outline_val}")
 
     ass = "[Script Info]\n"
     ass += "ScriptType: v4.00+\n"
@@ -1356,7 +1363,7 @@ def _generate_ass_content(captions: list, style: str, position_x: float, positio
     secondary = s.get('secondary_color', '&H0000FFFF')
     ass += (f"Style: Default,Noto Sans CJK JP,{fontsize},{s['primary_color']},{secondary},"
             f"{s['outline_color']},{s['back_color']},{s['bold']},0,0,0,100,100,2,0,"
-            f"{s['border_style']},{s['outline']},{s['shadow']},{alignment},"
+            f"{s['border_style']},{outline_val},{shadow_val},{alignment},"
             f"40,40,{margin_v},1\n\n")
 
     ass += "[Events]\n"
@@ -1480,37 +1487,37 @@ def _find_cjk_font() -> str:
 # ─── Drawtext filter styles (matching frontend SUBTITLE_PRESETS) ─────────────
 _DRAWTEXT_STYLES = {
     'simple': {
-        'fontsize': 48, 'fontcolor': 'white', 'borderw': 3,
-        'bordercolor': 'black', 'shadowx': 2, 'shadowy': 2,
+        'fontsize': 80, 'fontcolor': 'white', 'borderw': 5,
+        'bordercolor': 'black', 'shadowx': 3, 'shadowy': 3,
         'shadowcolor': 'black@0.5', 'box': 0,
     },
     'box': {
-        'fontsize': 48, 'fontcolor': 'white', 'borderw': 0,
+        'fontsize': 80, 'fontcolor': 'white', 'borderw': 0,
         'bordercolor': 'black', 'shadowx': 0, 'shadowy': 0,
         'shadowcolor': 'black@0.0', 'box': 1,
-        'boxcolor': 'black@0.8', 'boxborderw': 12,
+        'boxcolor': 'black@0.8', 'boxborderw': 18,
     },
     'outline': {
-        'fontsize': 50, 'fontcolor': 'white', 'borderw': 4,
+        'fontsize': 84, 'fontcolor': 'white', 'borderw': 7,
         'bordercolor': 'black', 'shadowx': 0, 'shadowy': 0,
         'shadowcolor': 'black@0.0', 'box': 0,
     },
     'pop': {
-        'fontsize': 54, 'fontcolor': '#FFE135', 'borderw': 3,
-        'bordercolor': '#FF6B35', 'shadowx': 3, 'shadowy': 3,
+        'fontsize': 90, 'fontcolor': '#FFE135', 'borderw': 5,
+        'bordercolor': '#FF6B35', 'shadowx': 4, 'shadowy': 4,
         'shadowcolor': 'black@0.5', 'box': 0,
     },
     'gradient': {
-        'fontsize': 48, 'fontcolor': 'white', 'borderw': 0,
+        'fontsize': 80, 'fontcolor': 'white', 'borderw': 0,
         'bordercolor': 'black', 'shadowx': 0, 'shadowy': 0,
         'shadowcolor': 'black@0.0', 'box': 1,
-        'boxcolor': '#6B5CF8@0.67', 'boxborderw': 12,
+        'boxcolor': '#6B5CF8@0.67', 'boxborderw': 18,
     },
     'karaoke': {
-        'fontsize': 50, 'fontcolor': 'white@0.55', 'borderw': 0,
+        'fontsize': 84, 'fontcolor': 'white@0.55', 'borderw': 0,
         'bordercolor': 'black', 'shadowx': 0, 'shadowy': 0,
         'shadowcolor': 'black@0.0', 'box': 1,
-        'boxcolor': 'black@0.7', 'boxborderw': 12,
+        'boxcolor': 'black@0.7', 'boxborderw': 18,
     },
 }
 
