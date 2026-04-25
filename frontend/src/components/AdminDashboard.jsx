@@ -33,6 +33,7 @@ export default function AdminDashboard() {
   const [feedbackRefreshKey, setFeedbackRefreshKey] = useState(0);
   const [feedbackPage, setFeedbackPage] = useState(1);
   const [feedbackFilterRating, setFeedbackFilterRating] = useState(0);
+  const [feedbackClipFilter, setFeedbackClipFilter] = useState(null); // null=all, 'yes'=clip only, 'no'=no clip
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   // Support ?tab= URL parameter for shareable links
@@ -124,6 +125,7 @@ export default function AdminDashboard() {
             page: feedbackPage,
             per_page: 50,
             filter_rating: feedbackFilterRating,
+            ...(feedbackClipFilter ? { has_clip: feedbackClipFilter } : {}),
           },
           timeout: 30000,
         });
@@ -135,7 +137,7 @@ export default function AdminDashboard() {
       }
     })();
     return () => { cancelled = true; };
-  }, [authenticated, activeTab, feedbackIncludeUnrated, feedbackRefreshKey, feedbackPage, feedbackFilterRating]);
+  }, [authenticated, activeTab, feedbackIncludeUnrated, feedbackRefreshKey, feedbackPage, feedbackFilterRating, feedbackClipFilter]);
 
   // Auto-refresh feedbacks when returning from editor tab (visibilitychange)
   useEffect(() => {
@@ -471,6 +473,8 @@ export default function AdminDashboard() {
             onRefresh={() => { setFeedbackData(null); setFeedbackRefreshKey(k => k + 1); }}
             filterRating={feedbackFilterRating}
             setFilterRating={(v) => { setFeedbackFilterRating(v); setFeedbackPage(1); setFeedbackData(null); }}
+            clipFilter={feedbackClipFilter}
+            setClipFilter={(v) => { setFeedbackClipFilter(v); setFeedbackPage(1); setFeedbackData(null); }}
             page={feedbackPage}
             setPage={(p) => { setFeedbackPage(p); setFeedbackData(null); }}
           />
@@ -886,7 +890,7 @@ function UploadHealthSection({ data, loading }) {
 }
 
 // ── Feedback Section ──
-function FeedbackSection({ data, loading, includeUnrated, setIncludeUnrated, onRefresh, filterRating, setFilterRating, page, setPage }) {
+function FeedbackSection({ data, loading, includeUnrated, setIncludeUnrated, onRefresh, filterRating, setFilterRating, clipFilter, setClipFilter, page, setPage }) {
   const { i18n } = useTranslation();
   const [expandedIdx, setExpandedIdx] = useState(-1);
 
@@ -948,11 +952,12 @@ function FeedbackSection({ data, loading, includeUnrated, setIncludeUnrated, onR
             </button>
           </div>
         </div>
-        <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-7 gap-4">
           <StatCard label="総フェーズ数" value={totalCount.toLocaleString()} unit={window.__t('errorLogCount', '件')} color="gray" />
           <StatCard label={window.__t('adminDashboard_18ecb6', '総採点数')} value={ratedCount.toLocaleString()} unit={window.__t('errorLogCount', '件')} color="orange" />
           <StatCard label="未採点" value={unratedCount.toLocaleString()} unit={window.__t('errorLogCount', '件')} color="red" />
           <StatCard label={window.__t('adminDashboard_15e370', '平均スコア')} value={summary.average_rating} unit="/ 5" color="blue" />
+          <StatCard label="クリップあり" value={(summary.with_clip_count || 0).toLocaleString()} unit={window.__t('errorLogCount', '件')} color="teal" />
           <StatCard label={window.__t('adminDashboard_424176', 'コメント付き')} value={summary.with_comments} unit={window.__t('errorLogCount', '件')} color="green" />
           <div className="rounded-xl border p-4 border-purple-300 bg-purple-50 transition-all duration-200 hover:shadow-md">
             <p className="text-xs text-gray-500 mb-2">{window.__t('adminDashboard_804dd5', 'スコア分布')}</p>
@@ -1013,6 +1018,39 @@ function FeedbackSection({ data, loading, includeUnrated, setIncludeUnrated, onR
             {"★".repeat(star)} ({summary.rating_distribution[star] || 0})
           </button>
         ))}
+
+        {/* Clip Filter separator */}
+        <span className="text-gray-300 mx-1">|</span>
+        <button
+          onClick={() => setClipFilter(null)}
+          className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${
+            clipFilter === null
+              ? "bg-teal-500 text-white"
+              : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+          }`}
+        >
+          全クリップ
+        </button>
+        <button
+          onClick={() => setClipFilter('yes')}
+          className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${
+            clipFilter === 'yes'
+              ? "bg-teal-500 text-white"
+              : "bg-teal-50 text-teal-600 hover:bg-teal-100 border border-teal-200"
+          }`}
+        >
+          クリップあり ({(summary.with_clip_count || 0).toLocaleString()})
+        </button>
+        <button
+          onClick={() => setClipFilter('no')}
+          className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${
+            clipFilter === 'no'
+              ? "bg-teal-500 text-white"
+              : "bg-gray-50 text-gray-600 hover:bg-gray-100 border border-gray-200"
+          }`}
+        >
+          クリップなし ({(summary.without_clip_count || 0).toLocaleString()})
+        </button>
       </div>
 
       {/* Pagination Info */}

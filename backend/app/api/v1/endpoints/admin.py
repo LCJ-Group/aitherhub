@@ -133,6 +133,7 @@ async def get_all_feedbacks(
     page: int = 1,
     per_page: int = 50,
     filter_rating: int = 0,
+    has_clip: Optional[str] = None,
     x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
     db: AsyncSession = Depends(get_db),
 ):
@@ -142,6 +143,7 @@ async def get_all_feedbacks(
     - page: page number (1-indexed)
     - per_page: items per page (default 50)
     - filter_rating: 0=all, 1-5=specific star, -1=unrated only
+    - has_clip: 'yes' = only phases with clips, 'no' = only without clips, None = all
     """
     expected_key = f"{ADMIN_ID}:{ADMIN_PASS}"
     if x_admin_key != expected_key:
@@ -175,9 +177,13 @@ async def get_all_feedbacks(
                 COUNT(CASE WHEN vp.user_rating = 3 THEN 1 END) as r3,
                 COUNT(CASE WHEN vp.user_rating = 4 THEN 1 END) as r4,
                 COUNT(CASE WHEN vp.user_rating = 5 THEN 1 END) as r5,
-                COUNT(CASE WHEN vp.user_comment IS NOT NULL AND vp.user_comment != '' THEN 1 END) as with_comments
+                COUNT(CASE WHEN vp.user_comment IS NOT NULL AND vp.user_comment != '' THEN 1 END) as with_comments,
+                COUNT(CASE WHEN vc_s.id IS NOT NULL THEN 1 END) as with_clip_count
             FROM video_phases vp
             JOIN videos v ON CAST(vp.video_id AS UUID) = v.id
+            LEFT JOIN video_clips vc_s ON CAST(vp.video_id AS VARCHAR) = CAST(vc_s.video_id AS VARCHAR)
+                AND vp.phase_index::text = vc_s.phase_index
+                AND vc_s.clip_url IS NOT NULL
             {summary_where}
         """)
         summary_result = await db.execute(summary_sql)
@@ -201,12 +207,25 @@ async def get_all_feedbacks(
         elif filter_rating == -1:
             conditions.append("vp.user_rating IS NULL")
 
+        # has_clip filter: requires LEFT JOIN on video_clips
+        clip_join_sql = ""
+        if has_clip in ("yes", "no"):
+            clip_join_sql = """LEFT JOIN video_clips vc_filter
+                ON CAST(vp.video_id AS VARCHAR) = CAST(vc_filter.video_id AS VARCHAR)
+                AND vp.phase_index::text = vc_filter.phase_index
+                AND vc_filter.clip_url IS NOT NULL"""
+            if has_clip == "yes":
+                conditions.append("vc_filter.id IS NOT NULL")
+            else:
+                conditions.append("vc_filter.id IS NULL")
+
         where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
         # Count for pagination
         count_sql = text(f"""
             SELECT COUNT(*) FROM video_phases vp
             JOIN videos v ON CAST(vp.video_id AS UUID) = v.id
+            {clip_join_sql}
             {where_clause}
         """)
         count_result = await db.execute(count_sql)
@@ -244,6 +263,7 @@ async def get_all_feedbacks(
             LEFT JOIN video_clips vc ON CAST(vp.video_id AS VARCHAR) = CAST(vc.video_id AS VARCHAR)
                 AND vp.phase_index::text = vc.phase_index
                 AND vc.clip_url IS NOT NULL
+            {clip_join_sql}
             {where_clause}
             ORDER BY vp.rated_at DESC NULLS LAST, vp.video_id, vp.phase_index
             LIMIT :limit OFFSET :offset
@@ -352,6 +372,8 @@ async def get_all_feedbacks(
                     1: sr.r1, 2: sr.r2, 3: sr.r3, 4: sr.r4, 5: sr.r5,
                 },
                 "with_comments": sr.with_comments,
+                "with_clip_count": sr.with_clip_count,
+                "without_clip_count": sr.total - sr.with_clip_count,
                 "downloaded_clips": dl.downloaded_clips if dl else 0,
                 "total_downloads": dl.total_downloads if dl else 0,
             },
