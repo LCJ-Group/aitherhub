@@ -250,7 +250,9 @@ async def get_all_feedbacks(
                 u.email as user_email,
                 COALESCE(dl.download_count, 0) as download_count,
                 vc.clip_url as clip_url,
-                vc.id as clip_id
+                vc.id as clip_id,
+                vc.generation_source as generation_source,
+                vc.duration_sec as clip_duration_sec
             FROM video_phases vp
             JOIN videos v ON CAST(vp.video_id AS UUID) = v.id
             LEFT JOIN users u ON v.user_id = u.id
@@ -358,6 +360,8 @@ async def get_all_feedbacks(
                 "clip_url": clip_url,
                 "clip_id": str(r.clip_id) if r.clip_id else None,
                 "source_url": source_url,
+                "generation_source": r.generation_source,
+                "clip_duration_sec": r.clip_duration_sec,
             })
 
         total_pages = max(1, -(-total_filtered // per_page))  # ceil division

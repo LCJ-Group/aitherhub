@@ -1191,6 +1191,7 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
   const [nextBlockedMsg, setNextBlockedMsg] = useState(null);
   const videoRef = useRef(null);
   const isSourceVideo = !fb.clip_url && !!fb.source_url;
+  const [videoTime, setVideoTime] = useState({ current: 0, total: 0 });
 
   const displayRating = localRating || 0;
   const ratingColor = isUnrated && localRating == null
@@ -1304,6 +1305,16 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
                 {fb.clip_url ? '▶ クリップあり' : '▶ 元動画'}
               </span>
             )}
+            {fb.generation_source && fb.generation_source !== 'pipeline' && (
+              <span className="text-[10px] font-medium px-2 py-0.5 rounded-full text-orange-600 bg-orange-50 border border-orange-200">
+                🔄 {fb.generation_source}
+              </span>
+            )}
+            {fb.clip_duration_sec != null && fb.clip_duration_sec > 0 && (
+              <span className="text-[10px] font-medium px-2 py-0.5 rounded-full text-teal-600 bg-teal-50">
+                ✂️ {Math.floor(fb.clip_duration_sec / 60)}:{String(Math.floor(fb.clip_duration_sec % 60)).padStart(2, '0')}
+              </span>
+            )}
             {fb.download_count > 0 && (
               <span className="text-xs font-semibold text-blue-600 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-full">
                 ⬇️ {fb.download_count}回
@@ -1374,8 +1385,9 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
                       }
                     }}
                     onTimeUpdate={(e) => {
+                      const vid = e.target;
+                      setVideoTime({ current: vid.currentTime, total: vid.duration || 0 });
                       if (isSourceVideo) {
-                        const vid = e.target;
                         if (vid.currentTime < fb.time_start - 0.5) {
                           vid.currentTime = fb.time_start;
                         }
@@ -1394,11 +1406,13 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
                       }
                     }}
                   />
-                  {isSourceVideo && (
-                    <div className="absolute bottom-1 left-1 bg-black/60 text-white text-[9px] px-1.5 py-0.5 rounded">
-                      元動画 ({formatSeconds(fb.time_start)}〜{formatSeconds(fb.time_end)})
-                    </div>
-                  )}
+                  <div className="absolute bottom-1 left-1 bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded flex gap-2">
+                    {isSourceVideo ? (
+                      <span>元動画 ({formatSeconds(fb.time_start)}〜{formatSeconds(fb.time_end)})</span>
+                    ) : videoTime.total > 0 ? (
+                      <span>{formatSeconds(videoTime.current)} / {formatSeconds(videoTime.total)}</span>
+                    ) : null}
+                  </div>
                 </div>
               ) : (
                 <div className="rounded-lg bg-gray-100 aspect-[9/16] max-h-[400px] mx-auto flex items-center justify-center" style={{ maxWidth: '225px' }}>
