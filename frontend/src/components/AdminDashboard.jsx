@@ -1306,8 +1306,16 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
               </span>
             )}
             {fb.generation_source && fb.generation_source !== 'pipeline' && (
-              <span className="text-[10px] font-medium px-2 py-0.5 rounded-full text-orange-600 bg-orange-50 border border-orange-200">
-                🔄 {fb.generation_source}
+              <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full border ${
+                fb.generation_source === 'batch_raw_v2' ? 'text-green-700 bg-green-50 border-green-300' :
+                fb.generation_source === 'batch_raw' ? 'text-amber-700 bg-amber-50 border-amber-300' :
+                fb.generation_source === 'batch_no_subtitle' ? 'text-purple-700 bg-purple-50 border-purple-300' :
+                'text-orange-600 bg-orange-50 border-orange-200'
+              }`}>
+                {fb.generation_source === 'batch_raw_v2' ? '✅ batch v2' :
+                 fb.generation_source === 'batch_raw' ? '⚠️ batch v1' :
+                 fb.generation_source === 'batch_no_subtitle' ? '🔇 no-sub' :
+                 `🔄 ${fb.generation_source}`}
               </span>
             )}
             {fb.clip_duration_sec != null && fb.clip_duration_sec > 0 && (
