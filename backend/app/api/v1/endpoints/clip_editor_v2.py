@@ -63,7 +63,7 @@ class TranscribeRequest(BaseModel):
     time_start: float = Field(..., description="Clip start time in seconds (absolute)")
     time_end: float = Field(..., description="Clip end time in seconds (absolute)")
     phase_index: Optional[int] = Field(None, description="Phase index of the clip")
-    target_language: Optional[str] = Field("ja", description="Target language for transcription: 'ja' (Japanese), 'zh-TW' (Traditional Chinese), 'zh' (Simplified Chinese), 'auto' (original language auto-detect)")
+    target_language: Optional[str] = Field("auto", description="Target language for transcription: 'auto' (Whisper auto-detect, default), 'ja' (Japanese), 'zh-TW' (Traditional Chinese), 'zh' (Simplified Chinese)")
 
 
 class SubtitleCaption(BaseModel):
@@ -684,7 +684,7 @@ async def transcribe_clip(
         raise HTTPException(status_code=422, detail="Invalid video_id UUID")
 
     # Determine Whisper language based on target_language
-    target_lang = (req.target_language or "ja").strip().lower()
+    target_lang = (req.target_language or "auto").strip().lower()
     
     # 'auto' mode: let Whisper auto-detect the original language (no translation)
     is_auto_detect = target_lang == "auto"

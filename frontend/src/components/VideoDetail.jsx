@@ -666,13 +666,12 @@ export default function VideoDetail({ videoData, editorParams }) {
         // Await subtitle generation before marking as completed
         try {
           console.log(`[AutoTranscribe] Clip immediately completed for phase ${phaseIndex}, triggering transcription`);
-          const analysisLang = i18n.language === 'zh-TW' ? 'zh-TW' : undefined;
+          // target_language omitted: backend defaults to 'auto' (Whisper auto-detect)
           const transcribeRes = await VideoService.transcribeClip(videoData.id, {
             clip_url: res.clip_url,
             time_start: timeStart,
             time_end: timeEnd,
             phase_index: phaseIndex,
-            ...(analysisLang ? { target_language: analysisLang } : {}),
           });
           if (transcribeRes?.segments?.length > 0) {
             console.log(`[AutoTranscribe] Generated ${transcribeRes.segments.length} subtitles for phase ${phaseIndex}`);
@@ -718,13 +717,12 @@ export default function VideoDetail({ videoData, editorParams }) {
             // Await subtitle generation before marking as completed
             try {
               console.log(`[AutoTranscribe] Clip completed for phase ${phaseIndex}, triggering transcription`);
-              const analysisLang2 = i18n.language === 'zh-TW' ? 'zh-TW' : undefined;
+              // target_language omitted: backend defaults to 'auto' (Whisper auto-detect)
               const transcribeRes = await VideoService.transcribeClip(videoData.id, {
                 clip_url: statusRes.clip_url,
                 time_start: timeStart,
                 time_end: timeEnd,
                 phase_index: phaseIndex,
-                ...(analysisLang2 ? { target_language: analysisLang2 } : {}),
               });
               if (transcribeRes?.segments?.length > 0) {
                 console.log(`[AutoTranscribe] Generated ${transcribeRes.segments.length} subtitles for phase ${phaseIndex}`);

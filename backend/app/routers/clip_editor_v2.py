@@ -63,7 +63,7 @@ class TranscribeRequest(BaseModel):
     time_start: float = Field(..., description="Clip start time in seconds (absolute)")
     time_end: float = Field(..., description="Clip end time in seconds (absolute)")
     phase_index: Optional[int] = Field(None, description="Phase index of the clip")
-    target_language: Optional[str] = Field("ja", description="Target language for Whisper transcription: 'ja' or 'zh'")
+    target_language: Optional[str] = Field("auto", description="Target language for transcription: 'auto' (Whisper auto-detect, default), 'ja' (Japanese), 'zh-TW' (Traditional Chinese), 'zh' (Simplified Chinese)")
 
 
 
@@ -684,11 +684,17 @@ async def transcribe_clip(
     except ValueError:
         raise HTTPException(status_code=422, detail="Invalid video_id UUID")
 
-    # Map frontend language codes to Whisper language codes
-    whisper_lang_map = {"ja": "ja", "zh-TW": "zh", "zh": "zh", "en": "en"}
-    whisper_lang = whisper_lang_map.get(req.target_language, "ja")
+    # Determine Whisper language based on target_language
+    target_lang = (req.target_language or "auto").strip().lower()
+    is_auto_detect = target_lang == "auto"
+    whisper_lang_map = {"ja": "ja", "zh-tw": "zh", "zh": "zh", "en": "en"}
+    if is_auto_detect:
+        whisper_lang = None  # None = Whisper auto-detects the language
+    else:
+        whisper_lang = whisper_lang_map.get(target_lang, "ja")
     logger.info(f"[transcribe] Starting transcription for video={video_id}, "
-                f"time={req.time_start}-{req.time_end}, target_language={req.target_language}, whisper_lang={whisper_lang}")
+                f"time={req.time_start}-{req.time_end}, target_lang={target_lang}, "
+                f"whisper_lang={whisper_lang}, auto_detect={is_auto_detect}")
 
     # Step 1: Download the clip video to a temp file
     import httpx
@@ -753,13 +759,16 @@ async def transcribe_clip(
             fsize = os.path.getsize(file_path)
             logger.info(f"[transcribe] Sending to Whisper: {file_path} ({fsize/1024/1024:.1f} MB)")
             with open(file_path, "rb") as f:
-                response = await openai_client.audio.transcriptions.create(
+                whisper_kwargs = dict(
                     model="whisper",
                     file=f,
                     response_format="verbose_json",
-                    language=whisper_lang,
                     timestamp_granularities=["segment", "word"],
                 )
+                # For auto-detect mode, omit language param so Whisper detects it
+                if whisper_lang is not None:
+                    whisper_kwargs["language"] = whisper_lang
+                response = await openai_client.audio.transcriptions.create(**whisper_kwargs)
 
             segs = []
             # Extract word-level timestamps if available (for karaoke-style highlighting)
