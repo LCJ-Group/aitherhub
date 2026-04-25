@@ -1289,6 +1289,24 @@
         clips_count: clips.length,
         has_thumbnail: !!(clips[0] && clips[0].thumbnail_url)
       });
+      // Eagerly prefetch first 2 clips when FAB becomes visible
+      prefetchFirstClips();
+    }
+    var _prefetched = false;
+    function prefetchFirstClips() {
+      if (_prefetched) return;
+      _prefetched = true;
+      for (var i = 0; i < Math.min(3, clips.length); i++) {
+        var url = getClipUrl(clips[i]);
+        if (url) {
+          var link = document.createElement("link");
+          link.rel = "prefetch";
+          link.as = "video";
+          link.href = url;
+          link.crossOrigin = "anonymous";
+          document.head.appendChild(link);
+        }
+      }
     }
     // Use IntersectionObserver if available, otherwise fire immediately
     if (window.IntersectionObserver) {
@@ -1355,7 +1373,7 @@
       video.className = "ath-video";
       video.setAttribute("playsinline", "");
       video.setAttribute("webkit-playsinline", "");
-      video.setAttribute("preload", index === currentIndex ? "auto" : "none");
+      video.setAttribute("preload", index === currentIndex ? "auto" : (Math.abs(index - currentIndex) <= 1 ? "metadata" : "none"));
       video.setAttribute("loop", "");
       video.muted = true;
       if (clip.thumbnail_url) {
@@ -1802,6 +1820,10 @@
       var clipId = clips[currentIndex].clip_id;
       isCommentOpen = true;
       commentPanel.classList.add("open");
+      // Hide actions to prevent mobile keyboard viewport issues
+      actions.style.display = "none";
+      bottom.style.display = "none";
+      info.style.display = "none";
       loadComments(clipId);
       commentTextInput.value = "";
       commentSendBtn.disabled = true;
@@ -1811,6 +1833,16 @@
     function closeCommentPanel() {
       isCommentOpen = false;
       commentPanel.classList.remove("open");
+      // Blur input to dismiss mobile keyboard
+      commentTextInput.blur();
+      // Restore actions after a short delay to let keyboard fully dismiss
+      setTimeout(function() {
+        actions.style.display = "";
+        bottom.style.display = "";
+        info.style.display = "";
+        // Force layout recalculation on mobile
+        actions.offsetHeight;
+      }, 150);
     }
 
     function submitComment() {
@@ -1840,6 +1872,7 @@
             renderComments(commentCache[clipId].comments);
             updateCommentCount(commentCache[clipId].total);
             commentTextInput.value = "";
+            commentTextInput.blur(); // Dismiss mobile keyboard after post
             trackEvent("comment_post", { clip_id: clipId });
           } else {
             alert(data.message || "\u30B3\u30E1\u30F3\u30C8\u306E\u6295\u7A3F\u306B\u5931\u6557\u3057\u307E\u3057\u305F");
@@ -2343,18 +2376,23 @@
     function preloadAdjacent(idx) {
       var next = (idx + 1) % clips.length;
       var next2 = (idx + 2) % clips.length;
+      var next3 = (idx + 3) % clips.length;
       var prev = ((idx - 1) + clips.length) % clips.length;
-      // Load src for next 2 and previous
+      // Load src for next 3 and previous
       ensureVideoSrc(next);
       ensureVideoSrc(next2);
+      ensureVideoSrc(next3);
       ensureVideoSrc(prev);
       // Set preload to auto for next 2 videos so they buffer ahead
       var nextV = videoElements[next];
       if (nextV) { nextV.setAttribute("preload", "auto"); nextV.load(); }
       var next2V = videoElements[next2];
       if (next2V) { next2V.setAttribute("preload", "auto"); next2V.load(); }
+      // 3rd next: metadata only (lighter preload)
+      var next3V = videoElements[next3];
+      if (next3V && !next3V.src) { next3V.setAttribute("preload", "metadata"); next3V.load(); }
       var prevV = videoElements[prev];
-      if (prevV) { prevV.setAttribute("preload", "metadata"); prevV.load(); }
+      if (prevV) { prevV.setAttribute("preload", "auto"); prevV.load(); }
     }
 
     function playCurrentVideo() {
@@ -2393,8 +2431,8 @@
       };
       video.addEventListener("canplay", hideSpinner);
       video.addEventListener("playing", hideSpinner);
-      // Safety timeout: hide spinner after 8s regardless
-      setTimeout(function () { if (spinner) spinner.style.display = "none"; }, 8000);
+      // Safety timeout: hide spinner after 5s regardless
+      setTimeout(function () { if (spinner) spinner.style.display = "none"; }, 5000);
 
       // ── Robust mobile playback with retry + broken video detection ──
       var playAttempt = 0;
@@ -2444,8 +2482,8 @@
             if (playAttempt < MAX_PLAY_RETRIES) {
               setTimeout(function () {
                 try { video.load(); } catch(e){}
-                setTimeout(attemptPlay, 300);
-              }, 500 * playAttempt);
+                setTimeout(attemptPlay, 150);
+              }, 200 * playAttempt);
             } else {
               console.warn("[AitherHub] All play attempts failed at clip " + currentIndex + " (consecutiveSkips=" + _consecutiveSkips + ")");
               if (spinner) spinner.style.display = "none";
@@ -2576,6 +2614,13 @@
       document.body.style.overflow = "hidden";
       document.documentElement.style.overflow = "hidden";
       currentIndex = 0;
+      // Immediately set first video to auto-preload for fastest start
+      var firstV = videoElements[0];
+      if (firstV) {
+        ensureVideoSrc(0);
+        firstV.setAttribute("preload", "auto");
+        if (firstV.readyState < 2) { try { firstV.load(); } catch(e){} }
+      }
       updateSlidePositions(false);
 
       // Sound UX: set isMuted BEFORE playCurrentVideo so it uses correct state
