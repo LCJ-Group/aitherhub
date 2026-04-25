@@ -2175,7 +2175,7 @@ def _ensure_fresh_sas_url(blob_url: str) -> str:
         return blob_url  # Return original as fallback
 
 
-def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float, time_end: float, phase_index = -1, speed_factor: float = 1.0, subtitle_language: str = "ja"):
+def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float, time_end: float, phase_index = -1, speed_factor: float = 1.0, subtitle_language: str = "ja", skip_person_detection: bool = False, skip_silence_removal: bool = False, force_reencode_cut: bool = False):
     """Main clip generation pipeline."""
     logger.info(f"=== Starting clip generation ===")
     logger.info(f"clip_id={clip_id}, video_id={video_id}, speed={speed_factor}x, subtitle_language={subtitle_language}")
@@ -2218,7 +2218,7 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
             "-ss", f"{safe_start:.3f}",
             "-i", blob_url,
             "-t", f"{safe_duration:.3f}",
-            "-c", "copy",
+            *(["-c:v", "libx264", "-preset", "ultrafast", "-crf", "18", "-c:a", "copy"] if force_reencode_cut else ["-c", "copy"]),
             "-movflags", "+faststart",
             "-avoid_negative_ts", "make_zero",
             wider_segment_path,
@@ -2286,7 +2286,11 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
         update_clip_progress(clip_id, 30, "person_detection")
 
         # 2.5. Person detection: remove scenes without people
-        person_intervals = detect_person_intervals(segment_path)
+        if skip_person_detection:
+            logger.info("[SKIP] Person detection skipped (--skip-person-detection)")
+            person_intervals = None
+        else:
+            person_intervals = detect_person_intervals(segment_path)
         if person_intervals is not None:  # None means detection unavailable
             if len(person_intervals) == 0:
                 logger.warning("No person detected in entire segment, using original")
@@ -2304,8 +2308,12 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
         update_clip_progress(clip_id, 45, "silence_removal")
 
         # 2.7. Silence detection: remove silent intervals (coughing, dead air, etc.)
-        logger.info("Running silence detection...")
-        silence_intervals = detect_silence_intervals(segment_path, noise_threshold="-35dB", min_silence_duration=0.8)
+        if skip_silence_removal:
+            logger.info("[SKIP] Silence removal skipped (--skip-silence-removal)")
+            silence_intervals = []
+        else:
+            logger.info("Running silence detection...")
+            silence_intervals = detect_silence_intervals(segment_path, noise_threshold="-35dB", min_silence_duration=0.8)
         if silence_intervals:
             desilenced_path = os.path.join(work_dir, "segment_desilenced.mp4")
             if remove_silence_from_video(segment_path, desilenced_path, silence_intervals):
@@ -2665,6 +2673,9 @@ def main():
     parser.add_argument("--phase-index", default="-1", help="Phase index for context-aware subtitles (int or string identifier)")
     parser.add_argument("--speed-factor", type=float, default=1.0, help="Playback speed (1.0=normal, 1.2=20%% faster)")
     parser.add_argument("--subtitle-language", default="ja", help="Subtitle language: ja, zh-TW, or auto")
+    parser.add_argument("--skip-person-detection", action="store_true", help="Skip YOLOv8 person detection (batch mode)")
+    parser.add_argument("--skip-silence-removal", action="store_true", help="Skip silence removal (batch mode)")
+    parser.add_argument("--force-reencode-cut", action="store_true", help="Use re-encode instead of stream copy for DIRECT_CUT")
 
     args = parser.parse_args()
 
@@ -2677,6 +2688,9 @@ def main():
         phase_index=args.phase_index,
         speed_factor=args.speed_factor,
         subtitle_language=args.subtitle_language,
+        skip_person_detection=args.skip_person_detection,
+        skip_silence_removal=args.skip_silence_removal,
+        force_reencode_cut=args.force_reencode_cut,
     )
 
 
