@@ -1151,6 +1151,8 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
   const [saving, setSaving] = useState(false);
   const [localRating, setLocalRating] = useState(fb.user_rating);
   const [nextBlockedMsg, setNextBlockedMsg] = useState(null);
+  const videoRef = useRef(null);
+  const isSourceVideo = !fb.clip_url && !!fb.source_url;
 
   const displayRating = localRating || 0;
   const ratingColor = isUnrated && localRating == null
@@ -1319,15 +1321,42 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
             {/* Left: Video Preview */}
             <div>
               {(fb.clip_url || fb.source_url) ? (
-                <div className="rounded-lg overflow-hidden bg-black aspect-[9/16] max-h-[400px] mx-auto" style={{ maxWidth: '225px' }}>
+                <div className="rounded-lg overflow-hidden bg-black aspect-[9/16] max-h-[400px] mx-auto relative" style={{ maxWidth: '225px' }}>
                   <video
-                    src={fb.clip_url || (fb.source_url + `#t=${Math.floor(fb.time_start)},${Math.ceil(fb.time_end)}`)}
+                    ref={videoRef}
+                    src={fb.clip_url || fb.source_url}
                     controls
                     playsInline
                     className="w-full h-full object-contain"
-                    preload="metadata"
+                    preload={isSourceVideo ? 'auto' : 'metadata'}
+                    onLoadedMetadata={(e) => {
+                      if (isSourceVideo) {
+                        const vid = e.target;
+                        vid.currentTime = fb.time_start;
+                      }
+                    }}
+                    onTimeUpdate={(e) => {
+                      if (isSourceVideo) {
+                        const vid = e.target;
+                        if (vid.currentTime < fb.time_start - 0.5) {
+                          vid.currentTime = fb.time_start;
+                        }
+                        if (vid.currentTime >= fb.time_end) {
+                          vid.pause();
+                          vid.currentTime = fb.time_start;
+                        }
+                      }
+                    }}
+                    onSeeked={(e) => {
+                      if (isSourceVideo) {
+                        const vid = e.target;
+                        if (vid.currentTime < fb.time_start - 1 || vid.currentTime > fb.time_end + 1) {
+                          vid.currentTime = fb.time_start;
+                        }
+                      }
+                    }}
                   />
-                  {!fb.clip_url && (
+                  {isSourceVideo && (
                     <div className="absolute bottom-1 left-1 bg-black/60 text-white text-[9px] px-1.5 py-0.5 rounded">
                       元動画 ({formatSeconds(fb.time_start)}〜{formatSeconds(fb.time_end)})
                     </div>
