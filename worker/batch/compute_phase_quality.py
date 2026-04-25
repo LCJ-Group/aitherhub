@@ -451,7 +451,7 @@ async def fetch_phases_for_video(session, video_id: str):
     """Fetch all phases for a video."""
     sql = text("""
         SELECT phase_index, time_start, time_end, audio_features, audio_text,
-               cta_score, importance_score
+               cta_score, importance_score, frame_quality
         FROM video_phases
         WHERE video_id = :video_id
         ORDER BY phase_index
