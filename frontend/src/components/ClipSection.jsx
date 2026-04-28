@@ -108,6 +108,8 @@ export default function ClipSection({ videoData, clipStates, reports1, editorPar
   const [autoGenerating, setAutoGenerating] = useState(false);
   const [autoGenerateStatus, setAutoGenerateStatus] = useState('');
   const autoGenPollingRef = useRef(null);
+  // Review filter: 'all' | 'unreviewed' | 'reviewed'
+  const [reviewFilter, setReviewFilter] = useState('all');
 
   // Fetch clip ratings for badge display
   const fetchClipRatings = useCallback(async () => {
@@ -414,8 +416,36 @@ export default function ClipSection({ videoData, clipStates, reports1, editorPar
         {/* Content */}
         {!collapsed && (
           <div className="px-5 pb-5">
+            {/* Review filter tabs */}
+            {Object.keys(clipRatings).length > 0 && (
+              <div className="flex items-center gap-2 mb-4">
+                {[
+                  { key: 'all', label: `すべて (${visibleClips.length})`, color: 'gray' },
+                  { key: 'unreviewed', label: `未レビュー (${visibleClips.filter(c => !clipRatings[String(c.phaseIndex)]).length})`, color: 'amber' },
+                  { key: 'reviewed', label: `レビュー済 (${visibleClips.filter(c => !!clipRatings[String(c.phaseIndex)]).length})`, color: 'emerald' },
+                ].map(tab => (
+                  <button
+                    key={tab.key}
+                    onClick={() => setReviewFilter(tab.key)}
+                    className={`px-3 py-1.5 rounded-full text-xs font-medium transition-all ${
+                      reviewFilter === tab.key
+                        ? tab.color === 'amber' ? 'bg-amber-100 text-amber-700 border border-amber-300 shadow-sm'
+                          : tab.color === 'emerald' ? 'bg-emerald-100 text-emerald-700 border border-emerald-300 shadow-sm'
+                          : 'bg-purple-100 text-purple-700 border border-purple-300 shadow-sm'
+                        : 'bg-white text-gray-500 border border-gray-200 hover:bg-gray-50'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {visibleClips.map((clip) => {
+              {visibleClips.filter(clip => {
+                if (reviewFilter === 'unreviewed') return !clipRatings[String(clip.phaseIndex)];
+                if (reviewFilter === 'reviewed') return !!clipRatings[String(clip.phaseIndex)];
+                return true;
+              }).map((clip) => {
                 const gradient = sourceGradients[clip.source.label] || "from-indigo-500 to-purple-500";
                 return (
                   <div

@@ -2232,8 +2232,10 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                     cursor: isDraggingSub ? "grabbing" : "grab",
                     maxWidth: "85%",
                     userSelect: "none",
-                    overflow: "hidden",
+                    overflow: "visible",
                     wordBreak: "keep-all",
+                    overflowWrap: "break-word",
+                    lineHeight: 1.4,
                     transition: isDraggingSub ? 'none' : 'left 0.1s ease, top 0.1s ease',
                   }}
                 >
