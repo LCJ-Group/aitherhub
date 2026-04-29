@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import axios from "axios";
 import AdminVideoList from "./admin/AdminVideoList";
 import AdminVideoDetail from "./admin/AdminVideoDetail";
@@ -1223,8 +1223,17 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
   const videoRef = useRef(null);
   const isSourceVideo = !fb.clip_url && !!fb.source_url;
   const [videoTime, setVideoTime] = useState({ current: 0, total: 0 });
-  const [playbackSpeed, setPlaybackSpeed] = useState(1);
+  const [playbackSpeed, setPlaybackSpeed] = useState(2);
   const speedOptions = [1, 1.5, 2, 3];
+
+  // Build optimized video URL: clip_url directly, source_url with Media Fragment #t=start,end
+  const videoSrc = useMemo(() => {
+    if (fb.clip_url) return fb.clip_url;
+    if (fb.source_url && fb.time_start != null && fb.time_end != null) {
+      return `${fb.source_url}#t=${fb.time_start},${fb.time_end}`;
+    }
+    return fb.source_url || null;
+  }, [fb.clip_url, fb.source_url, fb.time_start, fb.time_end]);
 
   const displayRating = localRating || 0;
   const ratingColor = isUnrated && localRating == null
@@ -1410,41 +1419,29 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {/* Left: Video Preview */}
             <div>
-              {(fb.clip_url || fb.source_url) ? (
+              {videoSrc ? (
                 <div className="rounded-lg overflow-hidden bg-black aspect-[9/16] max-h-[400px] mx-auto relative" style={{ maxWidth: '225px' }}>
                   <video
                     ref={videoRef}
-                    src={fb.clip_url || fb.source_url}
+                    src={videoSrc}
                     controls
-                    loop={!isSourceVideo}
+                    loop
                     playsInline
+                    autoPlay
+                    muted
                     className="w-full h-full object-contain"
-                    preload={isSourceVideo ? 'auto' : 'metadata'}
+                    preload={isSourceVideo ? 'none' : 'auto'}
                     onLoadedMetadata={(e) => {
                       const vid = e.target;
                       vid.playbackRate = playbackSpeed;
-                      if (isSourceVideo) {
-                        vid.currentTime = fb.time_start;
-                      }
                     }}
                     onTimeUpdate={(e) => {
                       const vid = e.target;
                       setVideoTime({ current: vid.currentTime, total: vid.duration || 0 });
-                      if (isSourceVideo) {
-                        if (vid.currentTime < fb.time_start - 0.5) {
-                          vid.currentTime = fb.time_start;
-                        }
-                        if (vid.currentTime >= fb.time_end) {
-                          vid.currentTime = fb.time_start;
-                          vid.play();
-                        }
-                      }
-                    }}
-                    onSeeked={(e) => {
-                      if (isSourceVideo) {
-                        const vid = e.target;
-                        if (vid.currentTime < fb.time_start - 1 || vid.currentTime > fb.time_end + 1) {
-                          vid.currentTime = fb.time_start;
+                      // For source video with Media Fragment, enforce time bounds
+                      if (isSourceVideo && fb.time_end != null) {
+                        if (vid.currentTime >= fb.time_end + 0.5) {
+                          vid.currentTime = fb.time_start || 0;
                         }
                       }
                     }}

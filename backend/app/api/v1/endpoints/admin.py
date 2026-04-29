@@ -327,12 +327,23 @@ async def get_all_feedbacks(
             except Exception:
                 return None
 
+        # CDN host for faster delivery
+        _cdn_host = os.getenv("CDN_HOST", "https://cdn.aitherhub.com")
+        _blob_host = f"https://{account_name}.blob.core.windows.net"
+
+        def _to_cdn(url):
+            """Replace blob host with CDN host for faster delivery."""
+            if url and _blob_host and _cdn_host and _blob_host in url:
+                return url.replace(_blob_host, _cdn_host)
+            return url
+
         feedbacks = []
         for r in rows:
             clip_url = r.clip_url
             if clip_url and "blob.core.windows.net" in (clip_url or ""):
                 try:
                     clip_url = generate_read_sas_from_url(clip_url, expires_hours=2)
+                    clip_url = _to_cdn(clip_url)
                 except Exception:
                     pass  # keep original URL
             # Build source_url as fallback when clip_url is not available
@@ -343,6 +354,7 @@ async def get_all_feedbacks(
                     r.user_email or '',
                     r.video_id,
                 )
+                source_url = _to_cdn(source_url)
             feedbacks.append({
                 "video_id": r.video_id,
                 "phase_index": r.phase_index,
