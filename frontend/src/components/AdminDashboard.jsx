@@ -29,6 +29,7 @@ export default function AdminDashboard() {
   const [stats, setStats] = useState(null);
   const [feedbackData, setFeedbackData] = useState(null);
   const [feedbackLoading, setFeedbackLoading] = useState(false);
+  const [feedbackError, setFeedbackError] = useState(null);
   const [feedbackIncludeUnrated, setFeedbackIncludeUnrated] = useState(true);
   const [feedbackRefreshKey, setFeedbackRefreshKey] = useState(0);
   const [feedbackPage, setFeedbackPage] = useState(1);
@@ -117,20 +118,41 @@ export default function AdminDashboard() {
     (async () => {
       try {
         setFeedbackLoading(true);
+        setFeedbackError(null);
         const baseURL = import.meta.env.VITE_API_BASE_URL;
-        const res = await axios.get(`${baseURL}/api/v1/admin/feedbacks`, {
-          headers: { "X-Admin-Key": `${ADMIN_ID}:${ADMIN_PASS}` },
-          params: {
-            include_unrated: feedbackIncludeUnrated,
-            page: feedbackPage,
-            per_page: 50,
-            filter_rating: feedbackFilterRating,
-            ...(feedbackClipFilter ? { has_clip: feedbackClipFilter } : {}),
-          },
-          timeout: 30000,
-        });
-        if (!cancelled) setFeedbackData(res.data);
+        const params = {
+          include_unrated: feedbackIncludeUnrated,
+          page: feedbackPage,
+          per_page: 50,
+          filter_rating: feedbackFilterRating,
+          ...(feedbackClipFilter ? { has_clip: feedbackClipFilter } : {}),
+        };
+        // Retry up to 2 times on failure (cold start / timeout)
+        let lastErr = null;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            const res = await axios.get(`${baseURL}/api/v1/admin/feedbacks`, {
+              headers: { "X-Admin-Key": `${ADMIN_ID}:${ADMIN_PASS}` },
+              params,
+              timeout: 45000,
+            });
+            if (!cancelled) setFeedbackData(res.data);
+            lastErr = null;
+            break;
+          } catch (err) {
+            lastErr = err;
+            if (attempt < 2) {
+              // Wait before retry (exponential backoff: 2s, 4s)
+              await new Promise(r => setTimeout(r, (attempt + 1) * 2000));
+            }
+          }
+        }
+        if (lastErr && !cancelled) {
+          console.error("Failed to fetch feedbacks after retries:", lastErr);
+          setFeedbackError(lastErr.message || "Unknown error");
+        }
       } catch (err) {
+        if (!cancelled) setFeedbackError(err.message || "Unknown error");
         console.error("Failed to fetch feedbacks:", err);
       } finally {
         if (!cancelled) setFeedbackLoading(false);
@@ -468,9 +490,10 @@ export default function AdminDashboard() {
           <FeedbackSection
             data={feedbackData}
             loading={feedbackLoading}
+            error={feedbackError}
             includeUnrated={feedbackIncludeUnrated}
             setIncludeUnrated={(v) => { setFeedbackIncludeUnrated(v); setFeedbackPage(1); setFeedbackData(null); }}
-            onRefresh={() => { setFeedbackData(null); setFeedbackRefreshKey(k => k + 1); }}
+            onRefresh={() => { setFeedbackData(null); setFeedbackError(null); setFeedbackRefreshKey(k => k + 1); }}
             filterRating={feedbackFilterRating}
             setFilterRating={(v) => { setFeedbackFilterRating(v); setFeedbackPage(1); setFeedbackData(null); }}
             clipFilter={feedbackClipFilter}
@@ -890,7 +913,7 @@ function UploadHealthSection({ data, loading }) {
 }
 
 // ── Feedback Section ──
-function FeedbackSection({ data, loading, includeUnrated, setIncludeUnrated, onRefresh, filterRating, setFilterRating, clipFilter, setClipFilter, page, setPage }) {
+function FeedbackSection({ data, loading, error, includeUnrated, setIncludeUnrated, onRefresh, filterRating, setFilterRating, clipFilter, setClipFilter, page, setPage }) {
   const { i18n } = useTranslation();
   const [expandedIdx, setExpandedIdx] = useState(-1);
 
@@ -903,10 +926,18 @@ function FeedbackSection({ data, loading, includeUnrated, setIncludeUnrated, onR
     );
   }
 
-  if (!data) {
+  if (!data || error) {
     return (
-      <div className="text-center py-16 text-gray-400">
-        フィードバックデータの取得に失敗しました
+      <div className="text-center py-16">
+        <p className="text-gray-400 mb-4">
+          {error ? `フィードバックデータの取得に失敗しました (${error})` : 'フィードバックデータの取得に失敗しました'}
+        </p>
+        <button
+          onClick={onRefresh}
+          className="px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors"
+        >
+          再読み込み
+        </button>
       </div>
     );
   }
@@ -1192,6 +1223,8 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
   const videoRef = useRef(null);
   const isSourceVideo = !fb.clip_url && !!fb.source_url;
   const [videoTime, setVideoTime] = useState({ current: 0, total: 0 });
+  const [playbackSpeed, setPlaybackSpeed] = useState(1);
+  const speedOptions = [1, 1.5, 2, 3];
 
   const displayRating = localRating || 0;
   const ratingColor = isUnrated && localRating == null
@@ -1383,12 +1416,14 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
                     ref={videoRef}
                     src={fb.clip_url || fb.source_url}
                     controls
+                    loop={!isSourceVideo}
                     playsInline
                     className="w-full h-full object-contain"
                     preload={isSourceVideo ? 'auto' : 'metadata'}
                     onLoadedMetadata={(e) => {
+                      const vid = e.target;
+                      vid.playbackRate = playbackSpeed;
                       if (isSourceVideo) {
-                        const vid = e.target;
                         vid.currentTime = fb.time_start;
                       }
                     }}
@@ -1400,8 +1435,8 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
                           vid.currentTime = fb.time_start;
                         }
                         if (vid.currentTime >= fb.time_end) {
-                          vid.pause();
                           vid.currentTime = fb.time_start;
+                          vid.play();
                         }
                       }
                     }}
@@ -1414,12 +1449,33 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
                       }
                     }}
                   />
-                  <div className="absolute bottom-1 left-1 bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded flex gap-2">
-                    {isSourceVideo ? (
-                      <span>元動画 ({formatSeconds(fb.time_start)}〜{formatSeconds(fb.time_end)})</span>
-                    ) : videoTime.total > 0 ? (
-                      <span>{formatSeconds(videoTime.current)} / {formatSeconds(videoTime.total)}</span>
-                    ) : null}
+                  <div className="absolute bottom-1 left-1 right-1 flex items-center justify-between">
+                    <div className="bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded flex gap-2">
+                      {isSourceVideo ? (
+                        <span>元動画 ({formatSeconds(fb.time_start)}〜{formatSeconds(fb.time_end)})</span>
+                      ) : videoTime.total > 0 ? (
+                        <span>{formatSeconds(videoTime.current)} / {formatSeconds(videoTime.total)}</span>
+                      ) : null}
+                    </div>
+                    <div className="flex gap-0.5">
+                      {speedOptions.map(s => (
+                        <button
+                          key={s}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setPlaybackSpeed(s);
+                            if (videoRef.current) videoRef.current.playbackRate = s;
+                          }}
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${
+                            playbackSpeed === s
+                              ? 'bg-orange-500 text-white'
+                              : 'bg-black/60 text-white/80 hover:bg-black/80'
+                          }`}
+                        >
+                          {s}x
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </div>
               ) : (
