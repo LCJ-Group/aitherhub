@@ -335,11 +335,17 @@ const ClipFeedbackPanel = ({
 
       {/* ① Quick Rating */}
       <div style={{
+        fontSize: '10px', color: '#9ca3af', marginBottom: '4px', lineHeight: '1.4',
+      }}>
+        👍 使える = SNSにそのまま投稿できる品質　/　👎 微妙 = 内容はOKだが始まり・終わりが中途半端または冗長
+      </div>
+      <div style={{
         display: 'flex', gap: '8px', marginBottom: '12px',
       }}>
         <button
           onClick={() => handleRatingSelect('good')}
           disabled={submitting}
+          title="このまま切り出してSNSに投稿しても違和感がないクオリティ"
           style={{
             flex: 1, padding: '10px 16px', borderRadius: '10px',
             border: rating === 'good' ? '2px solid #10b981' : '2px solid #e5e7eb',
@@ -356,6 +362,7 @@ const ClipFeedbackPanel = ({
         <button
           onClick={() => handleRatingSelect('bad')}
           disabled={submitting}
+          title="内容は悪くないが、始まり/終わりが中途半端、または冗長"
           style={{
             flex: 1, padding: '10px 16px', borderRadius: '10px',
             border: rating === 'bad' ? '2px solid #ef4444' : '2px solid #e5e7eb',
@@ -367,7 +374,7 @@ const ClipFeedbackPanel = ({
           }}
         >
           <span style={{ fontSize: '20px' }}>{'\uD83D\uDC4E'}</span>
-          {window.__t('cfp_bad_clip', '微妙なクリップ')}
+          {window.__t('cfp_bad_clip', '微妙なクリップ')}  
         </button>
       </div>
 
@@ -427,9 +434,15 @@ const ClipFeedbackPanel = ({
             </span>
           )}
         </div>
+        <div style={{
+          fontSize: '10px', color: '#9ca3af', marginBottom: '6px', lineHeight: '1.4',
+        }}>
+          YES = 配信者が商品を積極的に売ろうとしているシーン（デモ、効果説明、購入促進） / NO = 雑談・挨拶・別の話題・休憩中
+        </div>
         <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
           <button
             onClick={() => handleSalesSelect(true)}
+            title="商品デモ・効果説明・購入促進など、配信者が積極的に売ろうとしているシーン"
             style={{
               flex: 1, padding: '8px 12px', borderRadius: '8px',
               border: salesConfirm === true ? '2px solid #f59e0b' : '2px solid #e5e7eb',
@@ -443,6 +456,7 @@ const ClipFeedbackPanel = ({
           </button>
           <button
             onClick={() => handleSalesSelect(false)}
+            title="雑談・挨拶・別の話題・休憩中など、商品販売とは無関係のシーン"
             style={{
               flex: 1, padding: '8px 12px', borderRadius: '8px',
               border: salesConfirm === false ? '2px solid #6b7280' : '2px solid #e5e7eb',

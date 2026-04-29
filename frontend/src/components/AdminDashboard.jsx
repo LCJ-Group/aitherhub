@@ -1225,6 +1225,16 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
   const [videoTime, setVideoTime] = useState({ current: 0, total: 0 });
   const [playbackSpeed, setPlaybackSpeed] = useState(2);
   const speedOptions = [1, 1.5, 2, 3];
+  const [guideOpen, setGuideOpen] = useState(false);
+
+  // Scoring guideline: "売上貢献度" axis
+  const STAR_GUIDELINES = {
+    1: { short: '買いたくならない', detail: '商品と無関係 / 雑談 / 技術トラブル / 無言' },
+    2: { short: 'ほぼ買いたくならない', detail: '商品名は出るが具体的な説明なし' },
+    3: { short: '少し興味は持つかも', detail: '商品の説明あり、ただしデモなし' },
+    4: { short: '買いたくなる', detail: '商品デモあり / 使用感共有 / ビフォーアフター / 視聴者との対話' },
+    5: { short: '今すぐ買いたい', detail: '★4の要素 + 限定感・緊急性 / 実際に注文が入っている瞬間' },
+  };
 
   // Build optimized video URL: clip_url directly, source_url with Media Fragment #t=start,end
   const videoSrc = useMemo(() => {
@@ -1502,7 +1512,34 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
             <div>
               {/* Star Rating (Admin Score) */}
               <div className="mb-4 p-3 bg-orange-50 rounded-lg border border-orange-200">
-                <p className="text-xs font-bold text-gray-700 mb-2">⭐ 管理者採点（1〜5）</p>
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-xs font-bold text-gray-700">⭐ 管理者採点（1〜5）— 売上貢献度</p>
+                  <button
+                    type="button"
+                    onClick={() => setGuideOpen(!guideOpen)}
+                    className="text-[10px] font-semibold text-orange-600 hover:text-orange-800 bg-orange-100 hover:bg-orange-200 px-2 py-0.5 rounded-full transition-all"
+                  >
+                    {guideOpen ? '採点ガイド ▲' : '採点ガイド ▼'}
+                  </button>
+                </div>
+
+                {/* Collapsible Scoring Guideline Panel */}
+                {guideOpen && (
+                  <div className="mb-3 p-2 bg-white rounded-md border border-orange-100 text-[10px] leading-relaxed">
+                    <table className="w-full">
+                      <tbody>
+                        {[1, 2, 3, 4, 5].map((s) => (
+                          <tr key={s} className={s < 5 ? 'border-b border-orange-50' : ''}>
+                            <td className="py-1 pr-2 font-bold text-orange-600 whitespace-nowrap align-top">★{s}</td>
+                            <td className="py-1 pr-1 font-semibold text-gray-700 whitespace-nowrap align-top">{STAR_GUIDELINES[s].short}</td>
+                            <td className="py-1 text-gray-500">{STAR_GUIDELINES[s].detail}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
                 <div className="flex items-center gap-1" onMouseLeave={() => setHoverStar(0)}>
                   {[1, 2, 3, 4, 5].map((star) => {
                     const filled = hoverStar > 0 ? star <= hoverStar : star <= displayRating;
@@ -1518,7 +1555,7 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
                         } ${saving ? "opacity-50" : ""}`}
                         onMouseEnter={() => setHoverStar(star)}
                         onClick={(e) => handleRate(e, star)}
-                        title={`${star}点をつける`}
+                        title={`${star}点 — ${STAR_GUIDELINES[star].short}（${STAR_GUIDELINES[star].detail}）`}
                       >
                         ★
                       </button>
@@ -1528,6 +1565,13 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
                     <span className="ml-2 text-sm font-bold text-orange-600">{localRating}点</span>
                   )}
                 </div>
+
+                {/* Hover label: show guideline text when hovering a star */}
+                {hoverStar > 0 && (
+                  <div className="mt-1.5 text-[11px] font-semibold text-orange-700 bg-orange-100 rounded px-2 py-1 transition-all">
+                    ★{hoverStar} {STAR_GUIDELINES[hoverStar].short} — <span className="font-normal text-gray-600">{STAR_GUIDELINES[hoverStar].detail}</span>
+                  </div>
+                )}
               </div>
 
               {/* ClipFeedbackPanel (Good/Bad, Reason Tags, Sales DNA, Comment) */}
