@@ -568,3 +568,64 @@ async def get_item_metrics(
     if result and result.get("response"):
         return result["response"].get("item_metric_list", [])
     return None
+
+
+# ============================================================
+# OAuth Token Exchange
+# ============================================================
+async def exchange_auth_code(
+    code: str,
+    shop_id: int = DEFAULT_SHOP_ID,
+) -> Optional[Dict]:
+    """
+    OAuth認証コードを使ってaccess_token/refresh_tokenを取得。
+    Shopee Partner Centerでの再認証後に使用。
+    """
+    path = "/api/v2/auth/token/get"
+    timestamp = int(time.time())
+    sign = _generate_public_sign(SHOPEE_PARTNER_ID, SHOPEE_PARTNER_KEY, path, timestamp)
+
+    url = f"{SHOPEE_BASE_URL}{path}"
+    params = {
+        "partner_id": str(SHOPEE_PARTNER_ID),
+        "timestamp": str(timestamp),
+        "sign": sign,
+    }
+    body = {
+        "code": code,
+        "partner_id": SHOPEE_PARTNER_ID,
+        "shop_id": shop_id,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(url, params=params, json=body)
+            resp.raise_for_status()
+            data = resp.json()
+
+            if data.get("error") and data["error"] != "":
+                logger.error(
+                    f"[ShopeeToken] Code exchange failed: {data.get('error')} - "
+                    f"{data.get('message')}"
+                )
+                return None
+
+            new_access = data.get("access_token", "")
+            new_refresh = data.get("refresh_token", "")
+            expire_in = data.get("expire_in", 14400)
+            user_id = data.get("user_id", DEFAULT_USER_ID)
+
+            if new_access and new_refresh:
+                _token_store.set(shop_id, new_access, new_refresh, expire_in, user_id)
+                logger.info(
+                    f"[ShopeeToken] Auth code exchanged successfully for shop {shop_id}, "
+                    f"expires in {expire_in}s"
+                )
+                return _token_store.get(shop_id)
+            else:
+                logger.error("[ShopeeToken] Empty tokens in code exchange response")
+                return None
+
+    except Exception as e:
+        logger.error(f"[ShopeeToken] Code exchange exception: {e}")
+        return None

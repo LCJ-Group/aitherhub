@@ -37,6 +37,54 @@ class SessionActionRequest(BaseModel):
 
 
 # ============================================================
+# OAuth Token Exchange
+# ============================================================
+class TokenExchangeRequest(BaseModel):
+    code: str
+    shop_id: int = 1542634108
+
+
+@router.get("/auth/callback")
+async def auth_callback(code: str = Query(...), shop_id: int = Query(default=1542634108)):
+    """
+    Shopee OAuth callbackエンドポイント。
+    認証後のリダイレクトを受けて、codeでトークンを取得。
+    """
+    from app.services.shopee_live_service import exchange_auth_code
+    result = await exchange_auth_code(code, shop_id)
+    if result is None:
+        return {"status": "error", "message": "Failed to exchange auth code for tokens"}
+    return {
+        "status": "ok",
+        "message": "Shopee tokens refreshed successfully",
+        "shop_id": shop_id,
+        "has_access_token": bool(result.get("access_token")),
+        "has_refresh_token": bool(result.get("refresh_token")),
+        "expire_in": result.get("expire_in"),
+    }
+
+
+@router.post("/auth/exchange")
+async def exchange_token(req: TokenExchangeRequest):
+    """
+    手動トークン交換エンドポイント。
+    OAuth codeを使ってaccess_token/refresh_tokenを取得。
+    """
+    from app.services.shopee_live_service import exchange_auth_code
+    result = await exchange_auth_code(req.code, req.shop_id)
+    if result is None:
+        raise HTTPException(status_code=500, detail="Failed to exchange auth code for tokens")
+    return {
+        "status": "ok",
+        "message": "Shopee tokens refreshed successfully",
+        "shop_id": req.shop_id,
+        "has_access_token": bool(result.get("access_token")),
+        "has_refresh_token": bool(result.get("refresh_token")),
+        "expire_in": result.get("expire_in"),
+    }
+
+
+# ============================================================
 # Health Check
 # ============================================================
 @router.get("/health")
