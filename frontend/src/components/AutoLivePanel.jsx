@@ -111,19 +111,63 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
   // Status polling
   const statusIntervalRef = useRef(null);
 
-  // ── Load Shopee Products ──
+  // ── Load Shopee Products (with localStorage cache) ──
+  const SHOPEE_PRODUCTS_CACHE_KEY = "aitherhub_shopee_products";
+
   const loadShopeeProducts = useCallback(async () => {
     setIsLoadingProducts(true);
     setError("");
     try {
       const data = await aiLiveCreatorService.shopeeGetProducts();
-      if (data?.items) {
+      // Check for Shopee API token errors
+      if (data?.error && data.error.includes("token")) {
+        console.warn("[AutoLive] Shopee token error:", data.error);
+        // Try to load from cache
+        const cached = localStorage.getItem(SHOPEE_PRODUCTS_CACHE_KEY);
+        if (cached) {
+          try {
+            const cachedData = JSON.parse(cached);
+            if (cachedData.items?.length > 0) {
+              setShopeeProducts(cachedData.items);
+              setSelectedProductIds(cachedData.items.map(p => p.item_id));
+              setError("Shopeeトークン期限切れ（キャッシュデータを表示中）。Shopee Partner Centerで再認証が必要です。");
+              return;
+            }
+          } catch (e) { /* ignore parse error */ }
+        }
+        setError("Shopeeトークンが期限切れです。Shopee Partner Centerで再認証してください。");
+        return;
+      }
+      if (data?.items?.length > 0) {
         setShopeeProducts(data.items);
         setSelectedProductIds(data.items.map(p => p.item_id));
+        // Cache to localStorage for offline/token-expired fallback
+        try {
+          localStorage.setItem(SHOPEE_PRODUCTS_CACHE_KEY, JSON.stringify({
+            items: data.items,
+            cached_at: new Date().toISOString(),
+          }));
+          console.log(`[AutoLive] Cached ${data.items.length} Shopee products to localStorage`);
+        } catch (e) { /* ignore storage quota errors */ }
+      } else if (data?.items?.length === 0 && !data?.error) {
+        setError("Shopeeに商品が登録されていません。");
       }
     } catch (err) {
       console.error("[AutoLive] Failed to load products:", err);
-      setError("Failed to fetch products from Shopee. Check Sales Dash bridge connection.");
+      // Try to load from cache on network error
+      const cached = localStorage.getItem(SHOPEE_PRODUCTS_CACHE_KEY);
+      if (cached) {
+        try {
+          const cachedData = JSON.parse(cached);
+          if (cachedData.items?.length > 0) {
+            setShopeeProducts(cachedData.items);
+            setSelectedProductIds(cachedData.items.map(p => p.item_id));
+            setError(`Shopee API接続エラー（キャッシュデータを表示中: ${cachedData.cached_at || "不明"}）`);
+            return;
+          }
+        } catch (e) { /* ignore parse error */ }
+      }
+      setError("Shopee APIへの接続に失敗しました。ネットワークを確認してください。");
     } finally {
       setIsLoadingProducts(false);
     }
@@ -480,6 +524,23 @@ export default function AutoLivePanel({ sessionId, isConnected, onStatusChange }
   useEffect(() => {
     return () => stopStatusPolling();
   }, []);
+
+  // ── Restore Shopee products from localStorage cache on mount ──
+  useEffect(() => {
+    if (productSource === "shopee" && shopeeProducts.length === 0) {
+      const cached = localStorage.getItem(SHOPEE_PRODUCTS_CACHE_KEY);
+      if (cached) {
+        try {
+          const cachedData = JSON.parse(cached);
+          if (cachedData.items?.length > 0) {
+            setShopeeProducts(cachedData.items);
+            setSelectedProductIds(cachedData.items.map(p => p.item_id));
+            console.log(`[AutoLive] Restored ${cachedData.items.length} Shopee products from cache (${cachedData.cached_at || "unknown"})`);
+          }
+        } catch (e) { /* ignore parse error */ }
+      }
+    }
+  }, [productSource]);
 
   // ── Load Personas on mount ──
   useEffect(() => {
