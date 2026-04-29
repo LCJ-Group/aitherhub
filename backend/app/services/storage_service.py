@@ -128,12 +128,20 @@ def generate_read_sas_from_url(
     blob_url: str,
     container: str = CONTAINER_NAME,
     expires_hours: int = 24,
+    content_disposition: str | None = None,
 ) -> str | None:
     """Generate a read-only SAS URL from an existing blob URL.
 
     This is the **single place** to create SAS tokens for arbitrary blob URLs
     (e.g. clip URLs, report URLs).  All endpoints should call this instead of
     inlining the connection-string parsing + generate_blob_sas logic.
+
+    Args:
+        blob_url: The blob URL to generate a SAS token for.
+        container: The container name.
+        expires_hours: How many hours until the SAS token expires.
+        content_disposition: Optional Content-Disposition header override.
+            Set to 'attachment; filename="xxx.mp4"' to force browser download.
 
     Returns the full SAS URL, or *None* if credentials are unavailable.
     """
@@ -154,7 +162,7 @@ def generate_read_sas_from_url(
         blob_name = unquote(blob_name)
         account_key = _parse_account_key(CONNECTION_STRING)
         expiry = datetime.now(timezone.utc) + timedelta(hours=expires_hours)
-        sas = generate_blob_sas(
+        sas_kwargs = dict(
             account_name=ACCOUNT_NAME,
             container_name=container,
             blob_name=blob_name,
@@ -162,6 +170,9 @@ def generate_read_sas_from_url(
             permission=BlobSasPermissions(read=True),
             expiry=expiry,
         )
+        if content_disposition:
+            sas_kwargs["content_disposition"] = content_disposition
+        sas = generate_blob_sas(**sas_kwargs)
         base_url = blob_url.split("?", 1)[0]  # strip old query
         base_url = unquote(base_url)  # decode %40 etc. to match SAS signature
         return f"{base_url}?{sas}"

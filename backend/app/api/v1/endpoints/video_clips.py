@@ -359,6 +359,22 @@ async def get_clip_status(
 
             response["clip_url"] = clip_download_url or _replace_blob_url_to_cdn(row.clip_url)
 
+            # Generate a separate download URL with Content-Disposition: attachment
+            # This forces the browser to download instead of playing inline
+            try:
+                from app.services.storage_service import generate_read_sas_from_url as _gen_sas
+                # Extract a clean filename from the blob path
+                blob_path = row.clip_url.split("?")[0] if row.clip_url else ""
+                blob_filename = blob_path.split("/")[-1] if blob_path else f"clip_phase{row.id}.mp4"
+                if not blob_filename.endswith(".mp4"):
+                    blob_filename = f"clip_phase{row.id}.mp4"
+                disposition = f'attachment; filename="{blob_filename}"'
+                dl_sas_url = _gen_sas(row.clip_url, content_disposition=disposition)
+                if dl_sas_url:
+                    response["download_url"] = _replace_blob_url_to_cdn(dl_sas_url)
+            except Exception as dl_err:
+                logger.warning(f"Failed to generate download SAS: {dl_err}")
+
         elif clip_status == "failed":
             response["error_message"] = row.error_message or "Job failed. Please try again."
         elif clip_status == "dead":
@@ -465,6 +481,21 @@ async def list_clips(
                         logger.warning(f"Failed to generate clip SAS in list: {e}")
 
                 clip["clip_url"] = clip_download_url or _replace_blob_url_to_cdn(row.clip_url)
+
+                # Generate download URL with Content-Disposition: attachment
+                try:
+                    from app.services.storage_service import generate_read_sas_from_url as _gen_sas
+                    blob_path = row.clip_url.split("?")[0] if row.clip_url else ""
+                    blob_filename = blob_path.split("/")[-1] if blob_path else f"clip_phase{row.id}.mp4"
+                    if not blob_filename.endswith(".mp4"):
+                        blob_filename = f"clip_phase{row.id}.mp4"
+                    disposition = f'attachment; filename="{blob_filename}"'
+                    dl_sas_url = _gen_sas(row.clip_url, content_disposition=disposition)
+                    if dl_sas_url:
+                        clip["download_url"] = _replace_blob_url_to_cdn(dl_sas_url)
+                except Exception:
+                    pass  # Non-critical: fallback to clip_url
+
             # Include captions if available
             if hasattr(row, 'captions') and row.captions:
                 clip["captions"] = row.captions

@@ -2240,7 +2240,10 @@ async def _run_export_job_inner(job_id: str, video_id: str, clip_url: str, capti
         logger.info(f"[export-job {job_id}] Uploaded: {upload_blob_name}")
 
         blob_url = f"https://{ACCOUNT_NAME}.blob.core.windows.net/{CONTAINER_NAME}/{upload_blob_name}"
-        download_url = generate_read_sas_from_url(blob_url, expires_hours=72)
+        # Generate SAS with Content-Disposition: attachment to force browser download
+        export_filename = f"clip_subtitled_{job_id[:8]}.mp4"
+        disposition = f'attachment; filename="{export_filename}"'
+        download_url = generate_read_sas_from_url(blob_url, expires_hours=72, content_disposition=disposition)
         if not download_url:
             download_url = blob_url
         if _BLOB_HOST and _CDN_HOST:

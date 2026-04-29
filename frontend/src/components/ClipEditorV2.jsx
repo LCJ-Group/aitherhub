@@ -1937,27 +1937,15 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                   }
                   if (lastErr) throw lastErr;
                   if (res?.download_url) {
-                    // Force download via fetch→blob to avoid opening in new tab
-                    try {
-                      const dlResp = await fetch(res.download_url);
-                      const blob = await dlResp.blob();
-                      const blobUrl = URL.createObjectURL(blob);
-                      const a = document.createElement('a');
-                      a.href = blobUrl;
-                      a.download = `clip_phase${clip.phase_index || ''}_subtitled.mp4`;
-                      document.body.appendChild(a);
-                      a.click();
-                      document.body.removeChild(a);
-                      URL.revokeObjectURL(blobUrl);
-                    } catch (dlErr) {
-                      console.warn('[ClipEditor] Blob download failed, falling back to direct link:', dlErr);
-                      const a = document.createElement('a');
-                      a.href = res.download_url;
-                      a.download = `clip_phase${clip.phase_index || ''}_subtitled.mp4`;
-                      document.body.appendChild(a);
-                      a.click();
-                      document.body.removeChild(a);
-                    }
+                    // Direct link download (no fetch→blob) to avoid memory issues with large files
+                    // Server sets Content-Disposition: attachment so browser downloads instead of playing
+                    const a = document.createElement('a');
+                    a.href = res.download_url;
+                    a.download = `clip_phase${clip.phase_index || ''}_subtitled.mp4`;
+                    a.style.display = 'none';
+                    document.body.appendChild(a);
+                    a.click();
+                    setTimeout(() => document.body.removeChild(a), 1000);
                     // Record download for ML training (non-blocking)
                     VideoService.recordClipDownload(videoId, {
                       phase_index: clip.phase_index,
@@ -2019,39 +2007,27 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
           {clip.clip_url && (
             <button
               onClick={async () => {
-                // Fetch fresh SAS URL before downloading to avoid expired token errors
+                // Fetch fresh download URL (with Content-Disposition: attachment) from API
                 try {
                   const freshRes = await VideoService.getClipStatus(videoId, clip.phase_index);
-                  const freshUrl = freshRes?.clip_url || clip.clip_url;
-                  // Force download via fetch→blob to avoid opening in new tab
-                  try {
-                    const dlResp = await fetch(freshUrl);
-                    const blob = await dlResp.blob();
-                    const blobUrl = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = blobUrl;
-                    a.download = `clip_phase${clip.phase_index || ''}.mp4`;
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                    URL.revokeObjectURL(blobUrl);
-                  } catch (dlErr) {
-                    console.warn('[ClipEditor] Blob download failed, falling back to direct link:', dlErr);
-                    const a = document.createElement('a');
-                    a.href = freshUrl;
-                    a.download = `clip_phase${clip.phase_index || ''}.mp4`;
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                  }
+                  // Prefer download_url (Content-Disposition: attachment) over clip_url
+                  const downloadUrl = freshRes?.download_url || freshRes?.clip_url || clip.clip_url;
+                  const a = document.createElement('a');
+                  a.href = downloadUrl;
+                  a.download = `clip_phase${clip.phase_index || ''}.mp4`;
+                  a.style.display = 'none';
+                  document.body.appendChild(a);
+                  a.click();
+                  setTimeout(() => document.body.removeChild(a), 1000);
                 } catch (e) {
                   console.warn('[ClipEditor] Failed to fetch fresh URL, using cached:', e);
                   const a = document.createElement('a');
                   a.href = clip.clip_url;
                   a.download = `clip_phase${clip.phase_index || ''}.mp4`;
+                  a.style.display = 'none';
                   document.body.appendChild(a);
                   a.click();
-                  document.body.removeChild(a);
+                  setTimeout(() => document.body.removeChild(a), 1000);
                 }
                 // Record raw download for ML training (non-blocking)
                 VideoService.recordClipDownload(videoId, {
