@@ -707,6 +707,22 @@ export default function LiveAvatarStreaming({
       setIsSpeaking(false);
       autoLiveSpeakingRef.current = false;
 
+      // 4.5. Reset Auto Live queue state so renewed session picks up new items
+      // Without this, processedIdsRef still contains old IDs and all queue
+      // items are skipped as "already processed" after renewal.
+      processedIdsRef.current = new Set();
+      processedTextsRef.current = new Set();
+      autoLiveQueueRef.current = [];
+      speakStartTimeRef.current = null;
+      // DO NOT reset lastQueueIdRef — we want to continue from where we left off
+      // to avoid re-processing items that were already spoken before renewal.
+      // Actually, we MUST reset it because the queue items from before renewal
+      // were never spoken (they were skipped due to processedIdsRef).
+      // After clearing processedIdsRef, old items would be re-fetched and spoken.
+      // This is the correct behavior — better to re-speak than to be silent.
+      lastQueueIdRef.current = "0";
+      console.log("[LiveAvatar] Reset Auto Live queue state for renewed session");
+
       // 5. Notify Auto Live engine about session change
       if (autoLiveModeRef.current && oldSessionId) {
         try {
