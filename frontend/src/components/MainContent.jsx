@@ -352,10 +352,27 @@ export default function MainContent({
   useEffect(() => {
     if (isLoggedIn && user?.id) {
       checkForResumableUpload();
+      // Restore interrupted uploads from IndexedDB into backgroundUploadManager
+      backgroundUploadManager.restoreFromIndexedDB(() => UploadService.getAllUploads());
     } else {
       setResumeUploadId(null);
     }
   }, [isLoggedIn, user?.id]);
+
+  // beforeunload warning — prevent accidental navigation during active uploads
+  useEffect(() => {
+    // The backgroundUploadManager handles beforeunload internally now,
+    // but we also add a React-level guard for the MainContent upload state
+    const handleBeforeUnload = (e) => {
+      if (uploading) {
+        e.preventDefault();
+        e.returnValue = 'アップロード中です。ページを離れるとアップロードが中断されます。';
+        return e.returnValue;
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [uploading]);
 
   const checkDuplicateVideo = async (filename) => {
     try {

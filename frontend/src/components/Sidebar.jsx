@@ -10,10 +10,11 @@ import "../assets/css/sidebar.css";
 import ForgotPasswordModal from "./modals/ForgotPasswordModal";
 import AuthService from "../base/services/userService";
 import backgroundUploadManager from "../base/services/backgroundUploadManager";
+import UploadService from "../base/services/uploadService";
 import VideoService from "../base/services/videoService";
 import personaService from "../base/services/personaService";
 
-import { ChevronDown, LogOut, Settings, User, Users, X, MoreHorizontal, Pencil, Trash2, Scissors, MessageSquareText, Radio, Video, Eye, Calendar, Sparkles, UserCircle, Clapperboard, Wand2, Brain, Check, FileText, Globe, Upload, AlertCircle, CheckCircle2 } from "lucide-react";
+import { ChevronDown, LogOut, Settings, User, Users, X, MoreHorizontal, Pencil, Trash2, Scissors, MessageSquareText, Radio, Video, Eye, Calendar, Sparkles, UserCircle, Clapperboard, Wand2, Brain, Check, FileText, Globe, Upload, AlertCircle, CheckCircle2, RotateCcw, FileUp } from "lucide-react";
 import { useTranslation } from 'react-i18next';
 import { changeLanguage } from '../i18n';
 import {
@@ -48,6 +49,9 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
 
   // Background upload tasks state
   const [bgUploadTasks, setBgUploadTasks] = useState([]);
+  const resumeFileInputRef = useRef(null);
+  const [resumingTaskId, setResumingTaskId] = useState(null);
+
   useEffect(() => {
     const unsub = backgroundUploadManager.subscribe((tasks) => {
       setBgUploadTasks(tasks);
@@ -395,8 +399,133 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
     }
   }, [isOpen]);
 
+  // ── Resume file selection handler for pending_resume tasks ──
+  const handleResumeFileClick = (taskId) => {
+    setResumingTaskId(taskId);
+    if (resumeFileInputRef.current) {
+      resumeFileInputRef.current.value = '';
+      resumeFileInputRef.current.click();
+    }
+  };
+
+  const handleResumeFileChange = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !resumingTaskId) {
+      setResumingTaskId(null);
+      return;
+    }
+
+    const task = bgUploadTasks.find(t => t.id === resumingTaskId);
+    if (!task || task.status !== 'pending_resume') {
+      setResumingTaskId(null);
+      return;
+    }
+
+    // Get metadata from IndexedDB
+    const metadata = await UploadService.getUploadMetadata(task.uploadId);
+    if (!metadata) {
+      console.error('[Sidebar] No metadata found for upload:', task.uploadId);
+      setResumingTaskId(null);
+      return;
+    }
+
+    // Validate file matches
+    if (file.name !== metadata.fileName || file.size !== metadata.fileSize) {
+      alert(
+        (window.__t('fileMismatch') || 'ファイルが一致しません') +
+        `\n期待: ${metadata.fileName} (${formatSize(metadata.fileSize)})` +
+        `\n選択: ${file.name} (${formatSize(file.size)})`
+      );
+      setResumingTaskId(null);
+      return;
+    }
+
+    // Cache file handle for uploadService
+    UploadService.cacheFileHandle(task.uploadId, file);
+
+    const userEmail = user?.email;
+    const analysisLang = i18n.language === 'zh-TW' ? 'zh-TW' : i18n.language === 'en' ? 'en' : 'ja';
+
+    // Calculate startFrom based on uploaded blocks
+    const uploadedBlockIds = metadata.uploadedBlocks || [];
+    const maxUploadedIndex = uploadedBlockIds.length > 0
+      ? Math.max(...uploadedBlockIds.map(id => {
+        try { return parseInt(atob(id), 10); } catch { return -1; }
+      }))
+      : -1;
+    const startFrom = maxUploadedIndex + 1;
+
+    backgroundUploadManager.resumePendingTask(
+      resumingTaskId,
+      file,
+      async ({ onProgress, onVideoId }) => {
+        await UploadService.uploadToAzure(
+          file,
+          metadata.uploadUrl,
+          task.uploadId,
+          (percentage) => onProgress(percentage),
+          startFrom
+        );
+
+        const video_id = metadata.videoId;
+        if (!video_id) throw new Error('Video ID not found in metadata.');
+        onVideoId(video_id);
+
+        const uploadMode = metadata.uploadMode || 'screen_recording';
+        if (uploadMode === 'clean_video') {
+          await UploadService.uploadCompleteWithType(
+            userEmail, video_id, file.name, task.uploadId,
+            'clean_video',
+            metadata.excelProductBlobUrl || null,
+            metadata.excelTrendBlobUrl || null,
+            analysisLang
+          );
+        } else {
+          await UploadService.uploadComplete(
+            userEmail, video_id, file.name, task.uploadId, analysisLang
+          );
+        }
+
+        await UploadService.clearUploadMetadata(task.uploadId);
+        return video_id;
+      },
+      (videoId) => {
+        console.log(`[Sidebar] Resume upload completed: ${videoId}`);
+      },
+      (err) => {
+        console.error('[Sidebar] Resume upload failed:', err);
+      }
+    );
+
+    setResumingTaskId(null);
+  };
+
+  const handleDismissPendingTask = async (taskId) => {
+    const task = bgUploadTasks.find(t => t.id === taskId);
+    if (!task) return;
+    // Clear from backend too if user is logged in
+    if (user?.id) {
+      try { await UploadService.clearUserUploads(user.id); } catch (e) { console.warn(e); }
+    }
+    await backgroundUploadManager.dismissPendingTask(taskId, (uploadId) => UploadService.clearUploadMetadata(uploadId));
+  };
+
+  const formatSize = (bytes) => {
+    if (!bytes) return '';
+    if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)}GB`;
+    return `${(bytes / (1024 * 1024)).toFixed(0)}MB`;
+  };
+
   return (
     <>
+      {/* Hidden file input for resume */}
+      <input
+        ref={resumeFileInputRef}
+        type="file"
+        accept="video/*"
+        className="hidden"
+        onChange={handleResumeFileChange}
+      />
       {/* OVERLAY – mobile */}
       <div
         onClick={onClose}
@@ -763,21 +892,60 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
                       <>
                         <div className="flex items-center gap-2 w-full px-1 pt-2 pb-1 shrink-0">
                           <Upload className="w-3.5 h-3.5 text-blue-400" />
-                          <span className="text-xs font-semibold text-blue-500">{window.__t('sidebar_uploading') || 'アップロード中'}</span>
+                          <span className="text-xs font-semibold text-blue-500">{window.__t('sidebar_uploading') || 'アップロード'}</span>
                           <span className="text-[10px] text-blue-400 bg-blue-50 px-1.5 py-0.5 rounded-full font-medium">{bgUploadTasks.length}</span>
                         </div>
                         {bgUploadTasks.map((task) => (
-                          <div key={task.id} className="w-full px-2.5 py-2.5 rounded-lg border border-blue-100 bg-blue-50/50 mb-1">
+                          <div key={task.id} className={`w-full px-2.5 py-2.5 rounded-lg mb-1 ${
+                            task.status === 'pending_resume'
+                              ? 'border border-amber-200 bg-amber-50/50'
+                              : 'border border-blue-100 bg-blue-50/50'
+                          }`}>
                             <div className="flex items-center gap-2 min-w-0">
                               {(task.status === 'uploading' || task.status === 'retrying') && (
                                 <svg className="w-3.5 h-3.5 flex-shrink-0 animate-spin text-blue-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
                               )}
                               {task.status === 'done' && <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0 text-green-500" />}
                               {task.status === 'error' && <AlertCircle className="w-3.5 h-3.5 flex-shrink-0 text-red-500" />}
+                              {task.status === 'pending_resume' && <FileUp className="w-3.5 h-3.5 flex-shrink-0 text-amber-500" />}
                               <span className="text-[12px] font-medium text-gray-700 truncate flex-1" title={task.fileName}>
                                 {task.fileName}
                               </span>
                             </div>
+                            {task.status === 'pending_resume' && (
+                              <div className="mt-1.5">
+                                <div className="w-full h-1.5 bg-amber-100 rounded-full overflow-hidden">
+                                  <div
+                                    className="h-full bg-gradient-to-r from-amber-300 to-amber-500 rounded-full"
+                                    style={{ width: `${task.progress}%` }}
+                                  />
+                                </div>
+                                <div className="flex justify-between items-center mt-1">
+                                  <span className="text-[10px] text-amber-600 font-medium">
+                                    {window.__t('sidebar_interrupted') || '中断されました'} ({Math.round(task.progress)}%)
+                                  </span>
+                                  <span className="text-[10px] text-gray-400">
+                                    {task.fileSize ? (task.fileSize / (1024*1024) >= 1024 ? `${(task.fileSize / (1024*1024*1024)).toFixed(1)}GB` : `${(task.fileSize / (1024*1024)).toFixed(0)}MB`) : ''}
+                                  </span>
+                                </div>
+                                <div className="mt-1.5 flex items-center gap-1.5">
+                                  <button
+                                    className="text-[10px] px-2 py-1 rounded bg-amber-500 text-white hover:bg-amber-600 transition-colors flex items-center gap-1"
+                                    onClick={(e) => { e.stopPropagation(); handleResumeFileClick(task.id); }}
+                                    title={window.__t('sidebar_resumeUpload') || 'ファイルを再選択して再開'}
+                                  >
+                                    <RotateCcw className="w-3 h-3" />
+                                    {window.__t('sidebar_resume') || '再開'}
+                                  </button>
+                                  <button
+                                    className="text-[10px] px-2 py-1 rounded bg-gray-200 text-gray-600 hover:bg-gray-300 transition-colors"
+                                    onClick={(e) => { e.stopPropagation(); handleDismissPendingTask(task.id); }}
+                                  >
+                                    {window.__t('sidebar_dismiss') || '破棄'}
+                                  </button>
+                                </div>
+                              </div>
+                            )}
                             {task.status === 'retrying' && (
                               <div className="mt-1 flex items-center gap-1.5">
                                 <span className="text-[10px] text-amber-600 truncate flex-1">
