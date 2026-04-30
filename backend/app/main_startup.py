@@ -514,6 +514,32 @@ async def run_all_ddl_migrations():
         except Exception as e:
             logger.warning(f"[DDL] subtitle_dictionary: {e}")
 
+        # ── review_sessions (reviewer session tracking) ──
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(_text("""
+                    CREATE TABLE IF NOT EXISTS review_sessions (
+                        id VARCHAR(36) PRIMARY KEY,
+                        reviewer_id INTEGER NOT NULL,
+                        started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        ended_at TIMESTAMPTZ,
+                        clips_reviewed INTEGER DEFAULT 0,
+                        duration_minutes DOUBLE PRECISION,
+                        last_heartbeat TIMESTAMPTZ,
+                        created_at TIMESTAMPTZ DEFAULT NOW()
+                    )
+                """))
+                await conn.execute(_text("CREATE INDEX IF NOT EXISTS idx_review_sessions_reviewer ON review_sessions(reviewer_id)"))
+                await conn.execute(_text("CREATE INDEX IF NOT EXISTS idx_review_sessions_started ON review_sessions(started_at DESC)"))
+                # Add rated_by_reviewer_id column to video_phases
+                await conn.execute(_text("""
+                    ALTER TABLE video_phases ADD COLUMN IF NOT EXISTS rated_by_reviewer_id INTEGER
+                """))
+                await conn.execute(_text("CREATE INDEX IF NOT EXISTS idx_vp_reviewer ON video_phases(rated_by_reviewer_id) WHERE rated_by_reviewer_id IS NOT NULL"))
+                logger.info("[DDL] review_sessions + video_phases.rated_by_reviewer_id ✓")
+        except Exception as e:
+            logger.warning(f"[DDL] review_sessions: {e}")
+
         elapsed = time.time() - ddl_start
         logger.info(f"[DDL] All migrations completed in {elapsed:.1f}s")
 

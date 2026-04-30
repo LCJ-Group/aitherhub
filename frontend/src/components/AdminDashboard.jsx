@@ -11,6 +11,7 @@ import AdminScriptGenerations from "./admin/AdminScriptGenerations";
 import AdminClipDB from "./admin/AdminClipDB";
 import AdminWidgetManager from "./admin/AdminWidgetManager";
 import SubtitleDictionary from "./SubtitleDictionary";
+import AdminReviewerManager from "./AdminReviewerManager";
 import { useTranslation } from 'react-i18next';
 import { changeLanguage } from '../i18n';
 import ClipFeedbackPanel from './ClipFeedbackPanel';
@@ -445,6 +446,16 @@ export default function AdminDashboard() {
           >
             📖 字幕辞書
           </button>
+          <button
+            onClick={() => setActiveTab("reviewers")}
+            className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+              activeTab === "reviewers"
+                ? "bg-white text-pink-600 shadow-sm"
+                : "text-gray-500 hover:text-gray-700"
+            }`}
+          >
+            👥 採点者
+          </button>
         </div>
 
         {activeTab === "dashboard" && (
@@ -557,6 +568,9 @@ export default function AdminDashboard() {
         )}
         {activeTab === "subtitle-dict" && (
           <SubtitleDictionary adminKey={`${ADMIN_ID}:${ADMIN_PASS}`} />
+        )}
+        {activeTab === "reviewers" && (
+          <AdminReviewerManager adminKey={`${ADMIN_ID}:${ADMIN_PASS}`} />
         )}
       </div>
     </div>
@@ -1418,6 +1432,11 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
           {fb.rated_at && localRating === fb.user_rating && (
             <p className="text-[10px] text-gray-400 mt-0.5">
               {formatDate(fb.rated_at)}
+            </p>
+          )}
+          {fb.reviewer_name && (
+            <p className="text-[10px] text-blue-500 mt-0.5 font-medium">
+              👤 {fb.reviewer_name}
             </p>
           )}
           <div className="flex items-center gap-2 mt-1 justify-end">

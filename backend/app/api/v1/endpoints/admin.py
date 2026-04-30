@@ -134,6 +134,7 @@ async def get_all_feedbacks(
     per_page: int = 50,
     filter_rating: int = 0,
     has_clip: Optional[str] = None,
+    reviewer_id: Optional[int] = None,
     x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
     db: AsyncSession = Depends(get_db),
 ):
@@ -211,6 +212,9 @@ async def get_all_feedbacks(
         elif filter_rating == -1:
             conditions.append("vp.user_rating IS NULL")
 
+        # reviewer filter
+        if reviewer_id is not None:
+            conditions.append(f"vp.rated_by_reviewer_id = {int(reviewer_id)}")
         # has_clip filter: requires LEFT JOIN on video_clips
         clip_join_sql = ""
         if has_clip in ("yes", "no"):
@@ -252,10 +256,12 @@ async def get_all_feedbacks(
                 vp.user_comment,
                 vp.rated_at,
                 vp.importance_score,
+                vp.rated_by_reviewer_id,
                 v.original_filename,
                 v.user_id,
                 v.compressed_blob_url,
                 u.email as user_email,
+                rv.display_name as reviewer_name,
                 COALESCE(dl.download_count, 0) as download_count,
                 vc.clip_url as clip_url,
                 vc.id as clip_id,
@@ -264,6 +270,7 @@ async def get_all_feedbacks(
             FROM video_phases vp
             JOIN videos v ON CAST(vp.video_id AS UUID) = v.id
             LEFT JOIN users u ON v.user_id = u.id
+            LEFT JOIN users rv ON vp.rated_by_reviewer_id = rv.id
             LEFT JOIN (
                 SELECT video_id, phase_index, COUNT(*) AS download_count
                 FROM clip_download_log
@@ -388,6 +395,8 @@ async def get_all_feedbacks(
                 "source_url": source_url,
                 "generation_source": r.generation_source,
                 "clip_duration_sec": r.clip_duration_sec,
+                "rated_by_reviewer_id": r.rated_by_reviewer_id,
+                "reviewer_name": r.reviewer_name,
             })
 
         total_pages = max(1, -(-total_filtered // per_page))  # ceil division

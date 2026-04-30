@@ -31,6 +31,7 @@ from app.api.v1.endpoints.brand_sync import router as brand_sync_router
 from app.api.v1.endpoints.shopee_live import router as shopee_live_router
 from app.api.v1.endpoints.auto_live import router as auto_live_router
 from app.api.v1.endpoints.subtitle_dictionary import router as subtitle_dict_router
+from app.api.v1.endpoints.reviewer_auth import router as reviewer_auth_router
 
 routers = APIRouter()
 routers.include_router(auth_router, prefix="/auth", tags=["Auth"])
@@ -64,3 +65,4 @@ routers.include_router(brand_sync_router, tags=["Brand Sync"])
 routers.include_router(shopee_live_router, tags=["Shopee Live"])
 routers.include_router(auto_live_router, tags=["Auto Live"])
 routers.include_router(subtitle_dict_router, tags=["Subtitle Dictionary"])
+routers.include_router(reviewer_auth_router, tags=["Reviewer Auth"])
