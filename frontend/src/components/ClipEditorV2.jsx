@@ -218,6 +218,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
   const [transcribing, setTranscribing] = useState(false);
   const [transcribeProgress, setTranscribeProgress] = useState(0); // 0-100
   const [captionsLoaded, setCaptionsLoaded] = useState(false);
+  const [subtitleDictionary, setSubtitleDictionary] = useState([]); // User's subtitle dictionary entries
   // Default subtitle language: always auto-detect via Whisper (not tied to UI language)
   const defaultSubLang = 'auto';
   const [targetLanguage, setTargetLanguage] = useState(defaultSubLang); // 'ja' | 'zh-TW' | 'auto' (original language)
@@ -260,6 +261,25 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
   // Save/restore editing state so user doesn't lose work when navigating away
   const storageKey = useMemo(() => videoId && clip?.phase_index != null
     ? `clipEditor_${videoId}_${clip.phase_index}` : null, [videoId, clip?.phase_index]);
+
+  // Fetch user's subtitle dictionary on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const baseURL = import.meta.env.VITE_API_BASE_URL;
+        const res = await fetch(`${baseURL}/api/v1/subtitle-dictionary?active_only=true`, {
+          headers: { "X-Admin-Key": "aither:hub" },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setSubtitleDictionary(data);
+          console.log(`[Subtitles] Loaded ${data.length} dictionary entries`);
+        }
+      } catch (e) {
+        console.warn('[Subtitles] Failed to load dictionary:', e);
+      }
+    })();
+  }, []);
 
   // Restore editor state from localStorage on mount
   useEffect(() => {
@@ -488,6 +508,29 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
     })();
   }, [videoId]);
 
+  // Helper: apply subtitle dictionary replacements to text
+  const applyDictionary = useCallback((text) => {
+    if (!subtitleDictionary.length) return text;
+    let result = text;
+    for (const entry of subtitleDictionary) {
+      if (entry.to_text) {
+        // Replace all occurrences (case-insensitive for from_text)
+        const escaped = entry.from_text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        result = result.replace(new RegExp(escaped, 'gi'), entry.to_text);
+      }
+    }
+    return result;
+  }, [subtitleDictionary]);
+
+  // Get list of no-break words from dictionary
+  const noBreakWords = useMemo(() => {
+    return subtitleDictionary
+      .filter(e => e.no_break)
+      .map(e => e.to_text || e.from_text)
+      .filter(Boolean)
+      .sort((a, b) => b.length - a.length); // Longest first for greedy matching
+  }, [subtitleDictionary]);
+
   // Helper: build captions from real speech transcripts (Whisper segments)
   const buildCaptionsFromTranscripts = useCallback((transcripts, clipData) => {
     if (!transcripts?.length || !clipData) return [];
@@ -544,6 +587,35 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
           breakPoints.push({ pos: i + 1, priority: 1 });
         }
       }
+      // Filter out break points that would split no-break words
+      const filteredBreakPoints = breakPoints.filter(bp => {
+        for (const word of noBreakWords) {
+          const wordChars = [...word];
+          // Check if this break point falls inside a no-break word
+          for (let wStart = Math.max(0, bp.pos - wordChars.length); wStart <= bp.pos; wStart++) {
+            if (wStart + wordChars.length > chars.length) continue;
+            const slice = chars.slice(wStart, wStart + wordChars.length).join('');
+            if (slice === word && bp.pos > wStart && bp.pos < wStart + wordChars.length) {
+              return false; // This break point would split the no-break word
+            }
+          }
+        }
+        return true;
+      });
+
+      // Japanese kinsoku (禁則処理): filter out break points that leave orphan chars
+      // Don't break if it would leave 1 char (like ー, っ, ん) at the start of next line
+      const KINSOKU_NO_START = new Set('ー）」』】〉》〕｝)>、。！？.,;:・ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮ');
+      const KINSOKU_NO_END = new Set('（「『【〈《〔｛(<');
+      const finalBreakPoints = filteredBreakPoints.filter(bp => {
+        if (bp.pos >= chars.length) return true;
+        // Don't break if next char is a kinsoku-no-start character
+        if (KINSOKU_NO_START.has(chars[bp.pos])) return false;
+        // Don't break if previous char is a kinsoku-no-end character
+        if (bp.pos > 0 && KINSOKU_NO_END.has(chars[bp.pos - 1])) return false;
+        return true;
+      });
+
       // Select break points that create chunks close to MAX_CHARS
       const numChunks = Math.max(1, Math.ceil(chars.length / MAX_CHARS));
       const idealChunkSize = Math.ceil(chars.length / numChunks);
@@ -554,7 +626,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
         let bestBp = null;
         let bestDist = Infinity;
         const searchRange = Math.floor(idealChunkSize * 0.4); // Search within 40% of ideal size
-        for (const bp of breakPoints) {
+        for (const bp of finalBreakPoints) {
           if (bp.pos <= lastBreak) continue;
           if (bp.pos >= chars.length - 2) continue; // Don't break too close to end
           const dist = Math.abs(bp.pos - target);
@@ -632,8 +704,9 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
         result.push(...splitTextChunks(text, segStart, segEnd));
       }
     }
-    return result;
-  }, []);
+    // Apply dictionary replacements to all captions
+    return result.map(c => ({ ...c, text: applyDictionary(c.text) }));
+  }, [applyDictionary]);
 
   // Fallback: build subtitle-like captions from phase audio_text (raw speech text per phase)
   const buildCaptionsFromAudioText = useCallback((phases, clipData) => {
@@ -709,9 +782,9 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
         });
       }
     }
-    return result;
-  }, []);
-
+     // Apply dictionary replacements to all captions
+    return result.map(c => ({ ...c, text: applyDictionary(c.text) }));
+  }, [applyDictionary]);
   useEffect(() => {
     if (!videoId || clip?.phase_index == null) return;
 
@@ -1574,7 +1647,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
         const newCaps = res.segments.map((s) => ({
           start: Math.max(0, (s.start || 0) - offset),
           end: Math.max(0, (s.end || 0) - offset),
-          text: s.text,
+          text: applyDictionary(s.text),
           source: s.source || "whisper",
           // Include word-level timestamps for karaoke-style highlighting
           ...(s.words && s.words.length > 0 ? {

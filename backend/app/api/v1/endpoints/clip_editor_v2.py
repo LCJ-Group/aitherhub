@@ -25,6 +25,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import get_db
+from app.core.db import async_engine
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -784,6 +785,34 @@ async def transcribe_clip(
         }
         whisper_prompt = whisper_prompts.get(whisper_language, "") if whisper_language else ""
 
+        # ─── Append user's custom dictionary terms to Whisper prompt ───
+        # This significantly improves recognition of brand names, product names, etc.
+        try:
+            async with async_engine.connect() as dict_conn:
+                dict_result = await dict_conn.execute(
+                    text("""
+                        SELECT from_text, to_text FROM subtitle_dictionary
+                        WHERE user_id = 'default' AND is_active = TRUE
+                    """)
+                )
+                dict_rows = dict_result.fetchall()
+            if dict_rows:
+                # Use correct forms (to_text) as Whisper hints
+                dict_terms = []
+                for dr in dict_rows:
+                    term = (dr.to_text.strip() if dr.to_text and dr.to_text.strip() else dr.from_text.strip())
+                    if term and term not in dict_terms:
+                        dict_terms.append(term)
+                if dict_terms:
+                    dict_prompt = "、".join(dict_terms)
+                    if whisper_prompt:
+                        whisper_prompt = f"{whisper_prompt}、{dict_prompt}"
+                    else:
+                        whisper_prompt = dict_prompt
+                    logger.info(f"[transcribe] Added {len(dict_terms)} user dictionary terms to Whisper prompt")
+        except Exception as dict_err:
+            logger.warning(f"[transcribe] Failed to load user dictionary for Whisper prompt: {dict_err}")
+
         async def _call_whisper(file_path: str) -> list:
             """Call Azure OpenAI Whisper and return segments."""
             fsize = os.path.getsize(file_path)
@@ -996,6 +1025,35 @@ async def transcribe_clip(
         if len(split_segments) != len(segments):
             logger.info(f"[transcribe] Split long segments: {len(segments)} -> {len(split_segments)} segments")
         segments = split_segments
+
+        # ─── Apply user dictionary replacements (post-processing) ───
+        # Replace misrecognized words with correct forms from user's dictionary
+        try:
+            async with async_engine.connect() as dict_conn:
+                repl_result = await dict_conn.execute(
+                    text("""
+                        SELECT from_text, to_text FROM subtitle_dictionary
+                        WHERE user_id = 'default' AND is_active = TRUE
+                          AND to_text != '' AND to_text != from_text
+                        ORDER BY LENGTH(from_text) DESC
+                    """)
+                )
+                repl_rows = repl_result.fetchall()
+            if repl_rows:
+                replacement_count = 0
+                for seg in segments:
+                    original_text = seg.get("text", "")
+                    new_text = original_text
+                    for rr in repl_rows:
+                        if rr.from_text in new_text:
+                            new_text = new_text.replace(rr.from_text, rr.to_text)
+                    if new_text != original_text:
+                        seg["text"] = new_text
+                        replacement_count += 1
+                if replacement_count > 0:
+                    logger.info(f"[transcribe] Applied dictionary replacements to {replacement_count} segments")
+        except Exception as repl_err:
+            logger.warning(f"[transcribe] Failed to apply dictionary replacements: {repl_err}")
 
         # ─── Traditional Chinese conversion + post-processing ────────────
         # If target language is zh-TW:

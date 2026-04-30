@@ -491,6 +491,29 @@ async def run_all_ddl_migrations():
         except Exception as e:
             logger.warning(f"[DDL] Widget tables: {e}")
 
+        # ── subtitle_dictionary (per-account custom dictionary for subtitle correction) ──
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(_text("""
+                    CREATE TABLE IF NOT EXISTS subtitle_dictionary (
+                        id SERIAL PRIMARY KEY,
+                        user_id TEXT NOT NULL DEFAULT 'default',
+                        from_text TEXT NOT NULL,
+                        to_text TEXT NOT NULL DEFAULT '',
+                        no_break BOOLEAN DEFAULT TRUE,
+                        is_active BOOLEAN DEFAULT TRUE,
+                        category TEXT DEFAULT 'brand',
+                        notes TEXT,
+                        created_at TIMESTAMPTZ DEFAULT NOW(),
+                        updated_at TIMESTAMPTZ DEFAULT NOW()
+                    )
+                """))
+                await conn.execute(_text("CREATE INDEX IF NOT EXISTS idx_subtitle_dict_user ON subtitle_dictionary(user_id)"))
+                await conn.execute(_text("CREATE INDEX IF NOT EXISTS idx_subtitle_dict_active ON subtitle_dictionary(user_id, is_active) WHERE is_active = TRUE"))
+                logger.info("[DDL] subtitle_dictionary ✓")
+        except Exception as e:
+            logger.warning(f"[DDL] subtitle_dictionary: {e}")
+
         elapsed = time.time() - ddl_start
         logger.info(f"[DDL] All migrations completed in {elapsed:.1f}s")
 
