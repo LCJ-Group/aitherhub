@@ -31,6 +31,7 @@ export default function AdminDashboard() {
   const [loginMode, setLoginMode] = useState("admin"); // "admin" or "reviewer"
   const [reviewerInfo, setReviewerInfo] = useState(null); // { id, name, email, token, session_id }
   const [reviewerSessionTimer, setReviewerSessionTimer] = useState(0);
+  const [reviewerStats, setReviewerStats] = useState({ today: 0, total: 0, avgToday: 0 });
 
   const [stats, setStats] = useState(null);
   const [feedbackData, setFeedbackData] = useState(null);
@@ -100,6 +101,27 @@ export default function AdminDashboard() {
     const interval = setInterval(hb, 60000);
     return () => clearInterval(interval);
   }, [reviewerInfo?.token]);
+
+  // Fetch reviewer stats (today/total/avg)
+  const fetchReviewerStats = useCallback(async () => {
+    if (!reviewerInfo?.token) return;
+    try {
+      const baseURL = import.meta.env.VITE_API_BASE_URL;
+      const res = await axios.get(`${baseURL}/api/v1/reviewer/me`, {
+        headers: { Authorization: `Bearer ${reviewerInfo.token}` }, timeout: 10000
+      });
+      const d = res.data;
+      setReviewerStats({
+        today: d.today?.rated_count || 0,
+        total: d.all_time?.total_rated || 0,
+        avgToday: d.today?.avg_rating ? Number(d.today.avg_rating).toFixed(1) : '—',
+      });
+    } catch (e) { /* ignore */ }
+  }, [reviewerInfo?.token]);
+
+  useEffect(() => {
+    fetchReviewerStats();
+  }, [fetchReviewerStats]);
 
   // Fetch dashboard data after authentication
   const fetchDashboard = useCallback(async () => {
@@ -250,10 +272,11 @@ export default function AdminDashboard() {
         const res = await axios.post(`${baseURL}/api/v1/reviewer/login`, {
           email: loginId, password: loginPass
         }, { timeout: 15000 });
+        const reviewer = res.data.reviewer || {};
         const info = {
-          id: res.data.reviewer_id,
-          name: res.data.name,
-          email: res.data.email,
+          id: reviewer.id,
+          name: reviewer.display_name || reviewer.name,
+          email: reviewer.email,
           token: res.data.access_token,
           session_id: res.data.session_id,
         };
@@ -414,8 +437,19 @@ export default function AdminDashboard() {
           </div>
           <div className="flex items-center gap-4">
             {isReviewer && (
-              <div className="text-sm text-gray-500 bg-gray-100 px-3 py-1.5 rounded-lg">
-                セッション: <span className="font-mono font-medium text-gray-700">{formatSessionTime(reviewerSessionTimer)}</span>
+              <div className="flex items-center gap-3">
+                <div className="text-sm bg-blue-50 text-blue-700 px-3 py-1.5 rounded-lg">
+                  今日: <span className="font-bold">{reviewerStats.today}件</span>
+                </div>
+                <div className="text-sm bg-green-50 text-green-700 px-3 py-1.5 rounded-lg">
+                  累計: <span className="font-bold">{reviewerStats.total}件</span>
+                </div>
+                <div className="text-sm bg-amber-50 text-amber-700 px-3 py-1.5 rounded-lg">
+                  平均: <span className="font-bold">{reviewerStats.avgToday}</span>
+                </div>
+                <div className="text-sm text-gray-500 bg-gray-100 px-3 py-1.5 rounded-lg">
+                  セッション: <span className="font-mono font-medium text-gray-700">{formatSessionTime(reviewerSessionTimer)}</span>
+                </div>
               </div>
             )}
             <button
@@ -646,6 +680,7 @@ export default function AdminDashboard() {
             page={feedbackPage}
             setPage={(p) => { setFeedbackPage(p); setFeedbackData(null); }}
             reviewerInfo={reviewerInfo}
+            onReviewerStatsUpdate={fetchReviewerStats}
           />
         )}
 
@@ -1065,7 +1100,7 @@ function UploadHealthSection({ data, loading }) {
 }
 
 // ── Feedback Section ──
-function FeedbackSection({ data, loading, error, includeUnrated, setIncludeUnrated, onRefresh, filterRating, setFilterRating, clipFilter, setClipFilter, page, setPage, reviewerInfo }) {
+function FeedbackSection({ data, loading, error, includeUnrated, setIncludeUnrated, onRefresh, filterRating, setFilterRating, clipFilter, setClipFilter, page, setPage, reviewerInfo, onReviewerStatsUpdate }) {
   const { i18n } = useTranslation();
   const [expandedIdx, setExpandedIdx] = useState(-1);
 
@@ -1293,6 +1328,7 @@ function FeedbackSection({ data, loading, error, includeUnrated, setIncludeUnrat
               feedbacks={feedbacks}
               currentIdx={idx}
               reviewerInfo={reviewerInfo}
+              onReviewerStatsUpdate={onReviewerStatsUpdate}
               expanded={expandedIdx === idx}
               onToggle={() => setExpandedIdx(expandedIdx === idx ? -1 : idx)}
               onNext={() => {
@@ -1367,7 +1403,7 @@ function FeedbackSection({ data, loading, error, includeUnrated, setIncludeUnrat
 }
 
 // ── Feedback Card (Expandable with Video Preview + Full Rating Panel) ──
-function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, onNext, onPrev, reviewerInfo }) {
+function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, onNext, onPrev, reviewerInfo, onReviewerStatsUpdate }) {
   const isUnrated = fb.user_rating == null;
   const [hoverStar, setHoverStar] = useState(0);
   const [saving, setSaving] = useState(false);
@@ -1434,6 +1470,10 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
       // Do NOT call onRated() here — it triggers a full list refresh
       // which removes the rated card from the "unrated" filter, making it look
       // like the page auto-advanced. Refresh happens on page change or manual refresh.
+      // Update reviewer stats after successful rating
+      if (reviewerInfo?.id && typeof onReviewerStatsUpdate === 'function') {
+        onReviewerStatsUpdate();
+      }
     } catch (err) {
       console.error("Failed to rate:", err);
       alert("採点に失敗しました: " + (err.response?.data?.detail || err.message));
