@@ -20,6 +20,7 @@ import VideoService from '../base/services/videoService';
 const ADMIN_ID = "aither";
 const ADMIN_PASS = "hub";
 const SESSION_KEY = "aitherhub_admin_auth";
+const REVIEWER_KEY = "aitherhub_reviewer";
 
 export default function AdminDashboard() {
   useTranslation(); // triggers re-render on language change
@@ -27,6 +28,9 @@ export default function AdminDashboard() {
   const [loginId, setLoginId] = useState("");
   const [loginPass, setLoginPass] = useState("");
   const [loginError, setLoginError] = useState("");
+  const [loginMode, setLoginMode] = useState("admin"); // "admin" or "reviewer"
+  const [reviewerInfo, setReviewerInfo] = useState(null); // { id, name, email, token, session_id }
+  const [reviewerSessionTimer, setReviewerSessionTimer] = useState(0);
 
   const [stats, setStats] = useState(null);
   const [feedbackData, setFeedbackData] = useState(null);
@@ -64,7 +68,38 @@ export default function AdminDashboard() {
     if (sessionStorage.getItem(SESSION_KEY) === "true") {
       setAuthenticated(true);
     }
+    // Restore reviewer session if exists
+    const savedReviewer = sessionStorage.getItem(REVIEWER_KEY);
+    if (savedReviewer) {
+      try {
+        const info = JSON.parse(savedReviewer);
+        setReviewerInfo(info);
+        setAuthenticated(true);
+        // Default to feedbacks tab for reviewer
+        if (!urlParams.get("tab") || !['feedbacks', 'clip-db'].includes(urlParams.get("tab"))) {
+          setActiveTabRaw("feedbacks");
+        }
+      } catch (e) { sessionStorage.removeItem(REVIEWER_KEY); }
+    }
   }, []);
+
+  // Reviewer session timer
+  useEffect(() => {
+    if (!reviewerInfo) return;
+    const interval = setInterval(() => setReviewerSessionTimer(t => t + 1), 1000);
+    return () => clearInterval(interval);
+  }, [reviewerInfo]);
+
+  // Reviewer heartbeat every 60s
+  useEffect(() => {
+    if (!reviewerInfo?.token) return;
+    const baseURL = import.meta.env.VITE_API_BASE_URL;
+    const hb = () => axios.post(`${baseURL}/api/v1/reviewer/heartbeat`, {}, {
+      headers: { Authorization: `Bearer ${reviewerInfo.token}` }, timeout: 5000
+    }).catch(() => {});
+    const interval = setInterval(hb, 60000);
+    return () => clearInterval(interval);
+  }, [reviewerInfo?.token]);
 
   // Fetch dashboard data after authentication
   const fetchDashboard = useCallback(async () => {
@@ -197,16 +232,69 @@ export default function AdminDashboard() {
     return () => { cancelled = true; };
   }, [authenticated, activeTab]);
 
-  const handleLogin = (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault();
-    if (loginId === ADMIN_ID && loginPass === ADMIN_PASS) {
-      sessionStorage.setItem(SESSION_KEY, "true");
-      setAuthenticated(true);
-      setLoginError("");
+    if (loginMode === "admin") {
+      if (loginId === ADMIN_ID && loginPass === ADMIN_PASS) {
+        sessionStorage.setItem(SESSION_KEY, "true");
+        setAuthenticated(true);
+        setLoginError("");
+      } else {
+        setLoginError(window.__t('adminDashboard_bcc470', 'IDまたはパスワードが正しくありません'));
+      }
     } else {
-      setLoginError(window.__t('adminDashboard_bcc470', 'IDまたはパスワードが正しくありません'));
+      // Reviewer login via API
+      try {
+        setLoginError("");
+        const baseURL = import.meta.env.VITE_API_BASE_URL;
+        const res = await axios.post(`${baseURL}/api/v1/reviewer/login`, {
+          email: loginId, password: loginPass
+        }, { timeout: 15000 });
+        const info = {
+          id: res.data.reviewer_id,
+          name: res.data.name,
+          email: res.data.email,
+          token: res.data.access_token,
+          session_id: res.data.session_id,
+        };
+        sessionStorage.setItem(REVIEWER_KEY, JSON.stringify(info));
+        setReviewerInfo(info);
+        setReviewerSessionTimer(0);
+        setActiveTabRaw("feedbacks");
+        setAuthenticated(true);
+      } catch (err) {
+        const detail = err.response?.data?.detail || err.message;
+        setLoginError(`ログイン失敗: ${detail}`);
+      }
     }
   };
+
+  const handleLogout = async () => {
+    if (reviewerInfo?.token) {
+      const baseURL = import.meta.env.VITE_API_BASE_URL;
+      await axios.post(`${baseURL}/api/v1/reviewer/logout`, {}, {
+        headers: { Authorization: `Bearer ${reviewerInfo.token}` }, timeout: 5000
+      }).catch(() => {});
+    }
+    sessionStorage.removeItem(SESSION_KEY);
+    sessionStorage.removeItem(REVIEWER_KEY);
+    setAuthenticated(false);
+    setReviewerInfo(null);
+    setStats(null);
+    setFeedbackData(null);
+    setReviewerSessionTimer(0);
+  };
+
+  const isReviewer = !!reviewerInfo;
+  const formatSessionTime = (seconds) => {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = seconds % 60;
+    return h > 0 ? `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}` : `${m}:${String(s).padStart(2,'0')}`;
+  };
+
+  // Reviewer-allowed tabs
+  const REVIEWER_TABS = ["feedbacks", "clip-db"];
 
   // ── Login Screen ──
   if (!authenticated) {
@@ -214,14 +302,33 @@ export default function AdminDashboard() {
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="bg-white rounded-2xl shadow-lg p-8 w-full max-w-sm">
           <div className="text-center mb-6">
-            <h1 className="text-xl font-bold text-gray-800">Aitherhub Admin</h1>
-            <p className="text-sm text-gray-400 mt-1">{window.__t('adminDashboard_bdb529', '管理者ログイン')}</p>
+            <h1 className="text-xl font-bold text-gray-800">AitherHub</h1>
+            <p className="text-sm text-gray-400 mt-1">
+              {loginMode === "admin" ? window.__t('adminDashboard_bdb529', '管理者ログイン') : '採点者ログイン'}
+            </p>
+          </div>
+          {/* Login mode toggle */}
+          <div className="flex gap-1 mb-5 bg-gray-100 rounded-lg p-1">
+            <button
+              type="button"
+              onClick={() => { setLoginMode("admin"); setLoginError(""); setLoginId(""); setLoginPass(""); }}
+              className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all ${
+                loginMode === "admin" ? "bg-white text-gray-800 shadow-sm" : "text-gray-500"
+              }`}
+            >管理者</button>
+            <button
+              type="button"
+              onClick={() => { setLoginMode("reviewer"); setLoginError(""); setLoginId(""); setLoginPass(""); }}
+              className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all ${
+                loginMode === "reviewer" ? "bg-white text-blue-600 shadow-sm" : "text-gray-500"
+              }`}
+            >採点者</button>
           </div>
           <form onSubmit={handleLogin}>
             <div className="mb-4">
-              <label className="block text-sm text-gray-600 mb-1">ID</label>
+              <label className="block text-sm text-gray-600 mb-1">{loginMode === "admin" ? "ID" : "メールアドレス"}</label>
               <input
-                type="text"
+                type={loginMode === "reviewer" ? "email" : "text"}
                 value={loginId}
                 onChange={(e) => setLoginId(e.target.value)}
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent"
@@ -242,7 +349,9 @@ export default function AdminDashboard() {
             )}
             <button
               type="submit"
-              className="w-full bg-orange-500 hover:bg-orange-600 text-white font-medium py-2 rounded-lg transition-colors"
+              className={`w-full font-medium py-2 rounded-lg transition-colors text-white ${
+                loginMode === "admin" ? "bg-orange-500 hover:bg-orange-600" : "bg-blue-500 hover:bg-blue-600"
+              }`}
             >
               ログイン
             </button>
@@ -252,8 +361,8 @@ export default function AdminDashboard() {
     );
   }
 
-  // ── Loading ──
-  if (loading) {
+  // ── Loading ── (skip for reviewer — they don't need dashboard stats)
+  if (loading && !isReviewer) {
     return (
       <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center gap-4">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-orange-500"></div>
@@ -262,8 +371,8 @@ export default function AdminDashboard() {
     );
   }
 
-  // ── Error ──
-  if (error) {
+  // ── Error ── (skip for reviewer)
+  if (error && !isReviewer) {
     return (
       <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center gap-4">
         <p className="text-red-500 text-lg">{error}</p>
@@ -274,12 +383,7 @@ export default function AdminDashboard() {
           リトライ
         </button>
         <button
-          onClick={() => {
-            sessionStorage.removeItem(SESSION_KEY);
-            setAuthenticated(false);
-            setStats(null);
-            setError(null);
-          }}
+          onClick={handleLogout}
           className="text-sm text-gray-400 hover:text-gray-600 transition-colors"
         >
           ログイン画面に戻る
@@ -288,9 +392,9 @@ export default function AdminDashboard() {
     );
   }
 
-  if (!stats) return null;
+  if (!stats && !isReviewer) return null;
 
-  const { data_volume, video_types, user_scale } = stats;
+  const { data_volume, video_types, user_scale } = stats || {};
 
   // ── Dashboard ──
   return (
@@ -298,34 +402,45 @@ export default function AdminDashboard() {
       <div className="w-full max-w-5xl mx-auto px-4 py-8">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
-          <h1 className="text-2xl font-bold text-gray-800">
-            Aitherhub マスターダッシュボード
-          </h1>
-          <button
-            onClick={() => {
-              sessionStorage.removeItem(SESSION_KEY);
-              setAuthenticated(false);
-              setStats(null);
-              setFeedbackData(null);
-            }}
-            className="text-sm text-gray-400 hover:text-gray-600 transition-colors"
-          >
-            ログアウト
-          </button>
+          <div>
+            <h1 className="text-2xl font-bold text-gray-800">
+              {isReviewer ? 'AitherHub 採点' : 'Aitherhub マスターダッシュボード'}
+            </h1>
+            {isReviewer && (
+              <p className="text-sm text-gray-500 mt-1">
+                {reviewerInfo.name} ({reviewerInfo.email})
+              </p>
+            )}
+          </div>
+          <div className="flex items-center gap-4">
+            {isReviewer && (
+              <div className="text-sm text-gray-500 bg-gray-100 px-3 py-1.5 rounded-lg">
+                セッション: <span className="font-mono font-medium text-gray-700">{formatSessionTime(reviewerSessionTimer)}</span>
+              </div>
+            )}
+            <button
+              onClick={handleLogout}
+              className="text-sm text-gray-400 hover:text-gray-600 transition-colors"
+            >
+              ログアウト
+            </button>
+          </div>
         </div>
 
         {/* Tab Navigation */}
-        <div className="flex gap-1 mb-8 bg-gray-100 rounded-lg p-1 w-fit">
-          <button
-            onClick={() => setActiveTab("dashboard")}
-            className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
-              activeTab === "dashboard"
-                ? "bg-white text-gray-800 shadow-sm"
-                : "text-gray-500 hover:text-gray-700"
-            }`}
-          >
-            ダッシュボード
-          </button>
+        <div className="flex gap-1 mb-8 bg-gray-100 rounded-lg p-1 w-fit flex-wrap">
+          {!isReviewer && (
+            <button
+              onClick={() => setActiveTab("dashboard")}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                activeTab === "dashboard"
+                  ? "bg-white text-gray-800 shadow-sm"
+                  : "text-gray-500 hover:text-gray-700"
+              }`}
+            >
+              ダッシュボード
+            </button>
+          )}
           <button
             onClick={() => setActiveTab("feedbacks")}
             className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
@@ -336,86 +451,90 @@ export default function AdminDashboard() {
           >
             フィードバック
           </button>
-          <button
-            onClick={() => { setActiveTab("videos"); setSelectedVideoId(null); }}
-            className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
-              activeTab === "videos"
-                ? "bg-white text-gray-800 shadow-sm"
-                : "text-gray-500 hover:text-gray-700"
-            }`}
-          >
-            動画ログ
-          </button>
-          <button
-            onClick={() => setActiveTab("upload-health")}
-            className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
-              activeTab === "upload-health"
-                ? "bg-white text-gray-800 shadow-sm"
-                : "text-gray-500 hover:text-gray-700"
-            }`}
-          >
-            Upload Health
-          </button>
-          <button
-            onClick={() => setActiveTab("diagnostics")}
-            className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
-              activeTab === "diagnostics"
-                ? "bg-white text-red-600 shadow-sm"
-                : "text-gray-500 hover:text-gray-700"
-            }`}
-          >
-            Diagnostics
-          </button>
-          <button
-            onClick={() => setActiveTab("system-errors")}
-            className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
-              activeTab === "system-errors"
-                ? "bg-white text-red-600 shadow-sm"
-                : "text-gray-500 hover:text-gray-700"
-            }`}
-          >
-            System Errors
-          </button>
-          <button
-            onClick={() => setActiveTab("bug-reports")}
-            className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
-              activeTab === "bug-reports"
-                ? "bg-white text-orange-600 shadow-sm"
-                : "text-gray-500 hover:text-gray-700"
-            }`}
-          >
-            Bug Reports
-          </button>
-          <button
-            onClick={() => setActiveTab("work-logs")}
-            className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
-              activeTab === "work-logs"
-                ? "bg-white text-blue-600 shadow-sm"
-                : "text-gray-500 hover:text-gray-700"
-            }`}
-          >
-            Work Logs
-          </button>
-          <button
-            onClick={() => setActiveTab("lessons")}
-            className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
-              activeTab === "lessons"
-                ? "bg-white text-blue-600 shadow-sm"
-                : "text-gray-500 hover:text-gray-700"
-            }`}
-          >
-            🧠 Lessons
-          </button>
-          <button
-            onClick={() => setActiveTab("script-generations")}
-            className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
-              activeTab === "script-generations"
-                ? "bg-white text-orange-600 shadow-sm"
-                : "text-gray-500 hover:text-gray-700"
-            }`}
-          >
-            📝 台本学習
-          </button>
+          {!isReviewer && (
+            <>
+              <button
+                onClick={() => { setActiveTab("videos"); setSelectedVideoId(null); }}
+                className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                  activeTab === "videos"
+                    ? "bg-white text-gray-800 shadow-sm"
+                    : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                動画ログ
+              </button>
+              <button
+                onClick={() => setActiveTab("upload-health")}
+                className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                  activeTab === "upload-health"
+                    ? "bg-white text-gray-800 shadow-sm"
+                    : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                Upload Health
+              </button>
+              <button
+                onClick={() => setActiveTab("diagnostics")}
+                className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                  activeTab === "diagnostics"
+                    ? "bg-white text-red-600 shadow-sm"
+                    : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                Diagnostics
+              </button>
+              <button
+                onClick={() => setActiveTab("system-errors")}
+                className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                  activeTab === "system-errors"
+                    ? "bg-white text-red-600 shadow-sm"
+                    : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                System Errors
+              </button>
+              <button
+                onClick={() => setActiveTab("bug-reports")}
+                className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                  activeTab === "bug-reports"
+                    ? "bg-white text-orange-600 shadow-sm"
+                    : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                Bug Reports
+              </button>
+              <button
+                onClick={() => setActiveTab("work-logs")}
+                className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                  activeTab === "work-logs"
+                    ? "bg-white text-blue-600 shadow-sm"
+                    : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                Work Logs
+              </button>
+              <button
+                onClick={() => setActiveTab("lessons")}
+                className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                  activeTab === "lessons"
+                    ? "bg-white text-blue-600 shadow-sm"
+                    : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                🧠 Lessons
+              </button>
+              <button
+                onClick={() => setActiveTab("script-generations")}
+                className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                  activeTab === "script-generations"
+                    ? "bg-white text-orange-600 shadow-sm"
+                    : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                📝 台本学習
+              </button>
+            </>
+          )}
           <button
             onClick={() => setActiveTab("clip-db")}
             className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
@@ -426,36 +545,40 @@ export default function AdminDashboard() {
           >
             🎬 クリップDB
           </button>
-          <button
-            onClick={() => setActiveTab("widget")}
-            className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
-              activeTab === "widget"
-                ? "bg-white text-pink-600 shadow-sm"
-                : "text-gray-500 hover:text-gray-700"
-            }`}
-          >
-            🎯 ウィジェット
-          </button>
-          <button
-            onClick={() => setActiveTab("subtitle-dict")}
-            className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
-              activeTab === "subtitle-dict"
-                ? "bg-white text-pink-600 shadow-sm"
-                : "text-gray-500 hover:text-gray-700"
-            }`}
-          >
-            📖 字幕辞書
-          </button>
-          <button
-            onClick={() => setActiveTab("reviewers")}
-            className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
-              activeTab === "reviewers"
-                ? "bg-white text-pink-600 shadow-sm"
-                : "text-gray-500 hover:text-gray-700"
-            }`}
-          >
-            👥 採点者
-          </button>
+          {!isReviewer && (
+            <>
+              <button
+                onClick={() => setActiveTab("widget")}
+                className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                  activeTab === "widget"
+                    ? "bg-white text-pink-600 shadow-sm"
+                    : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                🎯 ウィジェット
+              </button>
+              <button
+                onClick={() => setActiveTab("subtitle-dict")}
+                className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                  activeTab === "subtitle-dict"
+                    ? "bg-white text-pink-600 shadow-sm"
+                    : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                📖 字幕辞書
+              </button>
+              <button
+                onClick={() => setActiveTab("reviewers")}
+                className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                  activeTab === "reviewers"
+                    ? "bg-white text-pink-600 shadow-sm"
+                    : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                👥 採点者
+              </button>
+            </>
+          )}
         </div>
 
         {activeTab === "dashboard" && (
@@ -522,6 +645,7 @@ export default function AdminDashboard() {
             setClipFilter={(v) => { setFeedbackClipFilter(v); setFeedbackPage(1); setFeedbackData(null); }}
             page={feedbackPage}
             setPage={(p) => { setFeedbackPage(p); setFeedbackData(null); }}
+            reviewerInfo={reviewerInfo}
           />
         )}
 
@@ -941,7 +1065,7 @@ function UploadHealthSection({ data, loading }) {
 }
 
 // ── Feedback Section ──
-function FeedbackSection({ data, loading, error, includeUnrated, setIncludeUnrated, onRefresh, filterRating, setFilterRating, clipFilter, setClipFilter, page, setPage }) {
+function FeedbackSection({ data, loading, error, includeUnrated, setIncludeUnrated, onRefresh, filterRating, setFilterRating, clipFilter, setClipFilter, page, setPage, reviewerInfo }) {
   const { i18n } = useTranslation();
   const [expandedIdx, setExpandedIdx] = useState(-1);
 
@@ -1168,6 +1292,7 @@ function FeedbackSection({ data, loading, error, includeUnrated, setIncludeUnrat
               onRated={onRefresh}
               feedbacks={feedbacks}
               currentIdx={idx}
+              reviewerInfo={reviewerInfo}
               expanded={expandedIdx === idx}
               onToggle={() => setExpandedIdx(expandedIdx === idx ? -1 : idx)}
               onNext={() => {
@@ -1242,7 +1367,7 @@ function FeedbackSection({ data, loading, error, includeUnrated, setIncludeUnrat
 }
 
 // ── Feedback Card (Expandable with Video Preview + Full Rating Panel) ──
-function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, onNext, onPrev }) {
+function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, onNext, onPrev, reviewerInfo }) {
   const isUnrated = fb.user_rating == null;
   const [hoverStar, setHoverStar] = useState(0);
   const [saving, setSaving] = useState(false);
@@ -1302,7 +1427,7 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
       const baseURL = import.meta.env.VITE_API_BASE_URL;
       await axios.put(
         `${baseURL}/api/v1/admin/feedbacks/${fb.video_id}/phases/${fb.phase_index}/rating`,
-        { rating: star },
+        { rating: star, ...(reviewerInfo?.id ? { reviewer_id: reviewerInfo.id } : {}) },
         { headers: { "X-Admin-Key": "aither:hub" }, timeout: 10000 }
       );
       setLocalRating(star);

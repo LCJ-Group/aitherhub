@@ -448,6 +448,7 @@ async def admin_rate_phase(
     try:
         rating = request_body.get("rating")
         comment = request_body.get("comment", "")
+        reviewer_id = request_body.get("reviewer_id")  # optional: set by frontend when reviewer is logged in
 
         if rating is None or not isinstance(rating, int) or rating < 1 or rating > 5:
             raise HTTPException(status_code=400, detail="rating must be an integer between 1 and 5")
@@ -460,7 +461,8 @@ async def admin_rate_phase(
                 user_comment = :comment,
                 importance_score = :importance_score,
                 rated_at = NOW(),
-                updated_at = NOW()
+                updated_at = NOW(),
+                rated_by_reviewer_id = COALESCE(:reviewer_id, rated_by_reviewer_id)
             WHERE video_id = :video_id AND phase_index = :phase_index
         """)
         result = await db.execute(sql_update, {
@@ -469,13 +471,24 @@ async def admin_rate_phase(
             "importance_score": importance_score,
             "video_id": video_id,
             "phase_index": phase_index,
+            "reviewer_id": reviewer_id,
         })
         await db.commit()
 
         if result.rowcount == 0:
             raise HTTPException(status_code=404, detail="Phase not found")
 
-        logger.info(f"[Admin] Phase rated: video={video_id}, phase={phase_index}, rating={rating}")
+        # If reviewer_id provided, update their session clips_reviewed count
+        if reviewer_id:
+            await db.execute(text("""
+                UPDATE review_sessions
+                SET clips_reviewed = clips_reviewed + 1,
+                    last_heartbeat = NOW()
+                WHERE reviewer_id = :reviewer_id AND ended_at IS NULL
+            """), {"reviewer_id": reviewer_id})
+            await db.commit()
+
+        logger.info(f"[Admin] Phase rated: video={video_id}, phase={phase_index}, rating={rating}, reviewer_id={reviewer_id}")
 
         return {
             "success": True,
@@ -484,6 +497,7 @@ async def admin_rate_phase(
             "rating": rating,
             "comment": comment,
             "importance_score": importance_score,
+            "reviewer_id": reviewer_id,
         }
     except HTTPException:
         raise

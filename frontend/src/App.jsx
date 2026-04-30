@@ -13,7 +13,6 @@ import PrivacyPolicy from './components/PrivacyPolicy'
 import AuthPage from './pages/authPages/AuthPage'
 import BrandPortal from './components/brand/BrandPortal'
 import ShareVideoPage from './components/ShareVideoPage'
-import ReviewerPage from './components/ReviewerPage'
 import { Toaster } from "./components/ui/toaster";
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { LanguageProvider } from './contexts/LanguageContext';
@@ -41,7 +40,6 @@ function App() {
           <Route path="/forgot-password" element={<AuthPage mode="forgot-password" />} />
           <Route path="/brand" element={<BrandPortal />} />
           <Route path="/v/:clipId" element={<ShareVideoPage />} />
-          <Route path="/reviewer" element={<ReviewerPage />} />
         </Routes>
         <Toaster />
       </BrowserRouter>
