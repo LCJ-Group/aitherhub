@@ -25,7 +25,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import get_db
-from app.core.db import async_engine
+from app.core.db import engine as async_engine
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -2311,7 +2311,7 @@ async def _run_export_job_inner(job_id: str, video_id: str, clip_url: str, capti
         logger.info(f"[export-job {job_id}] Complete! URL: {download_url[:80]}...")
         # ── Save exported_url to video_clips for widget delivery ──
         try:
-            from app.core.db import async_engine
+            from app.core.db import engine as async_engine
             from sqlalchemy import text as _text
             async with async_engine.begin() as conn:
                 # blob_url is the permanent URL (without SAS token)

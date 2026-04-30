@@ -15,7 +15,7 @@ from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
-from app.core.db import async_engine
+from app.core.db import engine as async_engine
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/subtitle-dictionary", tags=["Subtitle Dictionary"])
