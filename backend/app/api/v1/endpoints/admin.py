@@ -181,9 +181,13 @@ async def get_all_feedbacks(
                 COUNT(CASE WHEN vc_s.id IS NOT NULL THEN 1 END) as with_clip_count
             FROM video_phases vp
             JOIN videos v ON CAST(vp.video_id AS UUID) = v.id
-            LEFT JOIN video_clips vc_s ON CAST(vp.video_id AS VARCHAR) = CAST(vc_s.video_id AS VARCHAR)
+            LEFT JOIN (
+                SELECT DISTINCT ON (video_id, phase_index) id, video_id, phase_index
+                FROM video_clips
+                WHERE clip_url IS NOT NULL
+                ORDER BY video_id, phase_index, created_at DESC
+            ) vc_s ON CAST(vp.video_id AS VARCHAR) = CAST(vc_s.video_id AS VARCHAR)
                 AND vp.phase_index::text = vc_s.phase_index
-                AND vc_s.clip_url IS NOT NULL
             {summary_where}
         """)
         summary_result = await db.execute(summary_sql)
@@ -210,10 +214,14 @@ async def get_all_feedbacks(
         # has_clip filter: requires LEFT JOIN on video_clips
         clip_join_sql = ""
         if has_clip in ("yes", "no"):
-            clip_join_sql = """LEFT JOIN video_clips vc_filter
+            clip_join_sql = """LEFT JOIN (
+                SELECT DISTINCT ON (video_id, phase_index) id, video_id, phase_index
+                FROM video_clips
+                WHERE clip_url IS NOT NULL
+                ORDER BY video_id, phase_index, created_at DESC
+            ) vc_filter
                 ON CAST(vp.video_id AS VARCHAR) = CAST(vc_filter.video_id AS VARCHAR)
-                AND vp.phase_index::text = vc_filter.phase_index
-                AND vc_filter.clip_url IS NOT NULL"""
+                AND vp.phase_index::text = vc_filter.phase_index"""
             if has_clip == "yes":
                 conditions.append("vc_filter.id IS NOT NULL")
             else:
@@ -262,9 +270,15 @@ async def get_all_feedbacks(
                 GROUP BY video_id, phase_index
             ) dl ON CAST(vp.video_id AS VARCHAR) = CAST(dl.video_id AS VARCHAR)
                 AND CAST(vp.phase_index AS VARCHAR) = dl.phase_index
-            LEFT JOIN video_clips vc ON CAST(vp.video_id AS VARCHAR) = CAST(vc.video_id AS VARCHAR)
-                AND vp.phase_index::text = vc.phase_index
-                AND vc.clip_url IS NOT NULL
+            LEFT JOIN LATERAL (
+                SELECT id, clip_url, generation_source, duration_sec
+                FROM video_clips
+                WHERE CAST(vp.video_id AS VARCHAR) = CAST(video_id AS VARCHAR)
+                    AND vp.phase_index::text = phase_index
+                    AND clip_url IS NOT NULL
+                ORDER BY created_at DESC
+                LIMIT 1
+            ) vc ON true
             {clip_join_sql}
             {where_clause}
             ORDER BY vp.rated_at DESC NULLS LAST, vp.video_id, vp.phase_index

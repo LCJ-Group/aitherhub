@@ -67,15 +67,20 @@ async def request_clip_generation(
         if time_end <= time_start:
             raise HTTPException(status_code=400, detail="time_end must be greater than time_start")
 
-        # Check if clip already exists for this phase
+        # Check if clip already exists for this phase OR same time range
         existing_sql = text("""
-            SELECT id, status, clip_url
+            SELECT id, status, clip_url, time_start, time_end
             FROM video_clips
-            WHERE video_id = :video_id AND phase_index = CAST(:phase_index AS text)
+            WHERE video_id = :video_id
+              AND (phase_index = CAST(:phase_index AS text)
+                   OR (ABS(time_start - :time_start) < 1.0 AND ABS(time_end - :time_end) < 1.0))
             ORDER BY created_at DESC
             LIMIT 1
         """)
-        existing = await db.execute(existing_sql, {"video_id": video_id, "phase_index": phase_index})
+        existing = await db.execute(existing_sql, {
+            "video_id": video_id, "phase_index": phase_index,
+            "time_start": time_start, "time_end": time_end,
+        })
         existing_row = existing.fetchone()
 
         if existing_row:
