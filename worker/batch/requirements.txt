@@ -37,3 +37,6 @@ paddleocr
 # ---- Excel / CSV parsing ----
 openpyxl>=3.1.0
 pandas>=2.0.0
+# ---- ML Model Scoring ----
+lightgbm>=4.0.0
+scikit-learn>=1.3.0
