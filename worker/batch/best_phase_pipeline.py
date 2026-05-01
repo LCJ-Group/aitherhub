@@ -1,5 +1,27 @@
 import os
 import json
+import logging
+
+logger = logging.getLogger(__name__)
+
+# ML Scorer (lazy-loaded)
+_ml_scorer = None
+_ml_scorer_attempted = False
+
+def _get_ml_scorer():
+    """Lazy-load ML scorer. Returns None if models not available."""
+    global _ml_scorer, _ml_scorer_attempted
+    if _ml_scorer_attempted:
+        return _ml_scorer
+    _ml_scorer_attempted = True
+    try:
+        from ml_scorer import get_ml_scorer, extract_phase_features_for_ml
+        _ml_scorer = get_ml_scorer()
+        if _ml_scorer:
+            logger.info(f"[best_phase] ML scorer loaded (version: {_ml_scorer.get_model_version()})")
+    except Exception as e:
+        logger.warning(f"[best_phase] ML scorer not available: {e}")
+    return _ml_scorer
 
 
 def get_group_root(art_root: str, video_id: str):
@@ -110,6 +132,39 @@ def compute_attention_score(m):
     return score
 
 
+def compute_combined_score(phase, attention_metrics):
+    """
+    Compute combined score: attention_score + ML model prediction.
+    If ML model is not available, falls back to attention_score only.
+    
+    Weighting:
+      - attention_score: 40% (real-time engagement signals)
+      - ml_score: 60% (learned quality prediction from historical data)
+    """
+    attention_score = compute_attention_score(attention_metrics)
+    
+    scorer = _get_ml_scorer()
+    if scorer is None:
+        return attention_score
+    
+    try:
+        from ml_scorer import extract_phase_features_for_ml
+        features = extract_phase_features_for_ml(phase)
+        ml_score = scorer.predict_combined(features)
+        
+        if ml_score is not None:
+            # Normalize attention_score to [0, 1] range for fair weighting
+            # attention_score can be negative/large, so we use sigmoid-like normalization
+            import math
+            norm_attention = 1 / (1 + math.exp(-attention_score * 0.1))
+            combined = 0.4 * norm_attention + 0.6 * ml_score
+            return combined
+    except Exception as e:
+        logger.debug(f"[best_phase] ML scoring failed for phase: {e}")
+    
+    return attention_score
+
+
 # =========================
 # LOAD / SAVE
 # =========================
@@ -158,7 +213,7 @@ def update_group_best_phases(phase_units, best_data, video_id):
         group_id = str(group_id)
 
         metrics = extract_attention_metrics(p)
-        score = compute_attention_score(metrics)
+        score = compute_combined_score(p, metrics)
 
         # Prefer DB-generated phase_id if available, otherwise keep legacy string
         phase_id_val = p.get("phase_id") or f"{video_id}_phase_{p['phase_index']}"

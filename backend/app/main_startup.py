@@ -540,6 +540,39 @@ async def run_all_ddl_migrations():
         except Exception as e:
             logger.warning(f"[DDL] review_sessions: {e}")
 
+        # ── ML Training Runs table ──
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(_text("""
+                    CREATE TABLE IF NOT EXISTS ml_training_runs (
+                        id SERIAL PRIMARY KEY,
+                        run_id VARCHAR(64) UNIQUE NOT NULL,
+                        target VARCHAR(20) NOT NULL,
+                        model_version VARCHAR(20),
+                        started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        completed_at TIMESTAMPTZ,
+                        status VARCHAR(20) DEFAULT 'running',
+                        dataset_size INTEGER,
+                        positive_count INTEGER,
+                        negative_count INTEGER,
+                        auc_score DOUBLE PRECISION,
+                        precision_at_5 DOUBLE PRECISION,
+                        recall_at_5 DOUBLE PRECISION,
+                        f1_score DOUBLE PRECISION,
+                        feature_importance JSONB,
+                        config JSONB,
+                        model_path VARCHAR(500),
+                        error_message TEXT,
+                        created_at TIMESTAMPTZ DEFAULT NOW()
+                    )
+                """))
+                await conn.execute(_text("CREATE INDEX IF NOT EXISTS idx_ml_runs_target ON ml_training_runs(target)"))
+                await conn.execute(_text("CREATE INDEX IF NOT EXISTS idx_ml_runs_status ON ml_training_runs(status)"))
+                await conn.execute(_text("CREATE INDEX IF NOT EXISTS idx_ml_runs_started ON ml_training_runs(started_at DESC)"))
+                logger.info("[DDL] ml_training_runs ✓")
+        except Exception as e:
+            logger.warning(f"[DDL] ml_training_runs: {e}")
+
         elapsed = time.time() - ddl_start
         logger.info(f"[DDL] All migrations completed in {elapsed:.1f}s")
 
