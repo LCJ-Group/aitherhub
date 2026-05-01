@@ -234,6 +234,8 @@ def extract_phase_features_for_ml(phase: dict) -> Dict[str, Any]:
 
     # Product features
     features["product_match"] = 1 if phase.get("product_names") else 0
+    features["product_match_top3"] = phase.get("product_match_top3", 0) or 0
+    features["matched_product_count"] = phase.get("matched_product_count", 0) or 0
 
     # Human review features (may not be available at prediction time)
     features["user_rating"] = phase.get("user_rating", 0) or 0
@@ -241,10 +243,28 @@ def extract_phase_features_for_ml(phase: dict) -> Dict[str, Any]:
     features["human_tag_count"] = 0
     features["comment_length"] = 0
 
+    # Comment keyword features
+    comment = (phase.get("comment", "") or "").lower()
+    features["comment_kw_price"] = 1 if any(w in comment for w in ["円", "¥", "値段", "安い"]) else 0
+    features["comment_kw_cta"] = 1 if any(w in comment for w in ["買", "購入", "注文"]) else 0
+    features["comment_kw_positive"] = 1 if any(w in comment for w in ["良い", "いい", "最高", "素晴"]) else 0
+    features["comment_kw_negative"] = 1 if any(w in comment for w in ["悪い", "微妙", "ダメ"]) else 0
+    features["comment_kw_emotion"] = 1 if any(w in comment for w in ["嬉し", "楽し", "感動"]) else 0
+    features["comment_kw_timing"] = 1 if any(w in comment for w in ["今", "急", "早"]) else 0
+
     # NG features
     features["is_ng"] = 1 if phase.get("is_unusable") else 0
     features["has_ng_feedback"] = 0
     features["ng_reason_tag_count"] = 0
+
+    # Unusable reason features
+    unusable_reasons = phase.get("unusable_reasons", []) or []
+    features["unusable_reason_irrelevant"] = 1 if "irrelevant" in unusable_reasons else 0
+    features["unusable_reason_too_short"] = 1 if "too_short" in unusable_reasons else 0
+    features["unusable_reason_too_long"] = 1 if "too_long" in unusable_reasons else 0
+    features["unusable_reason_no_product"] = 1 if "no_product" in unusable_reasons else 0
+    features["unusable_reason_audio_bad"] = 1 if "audio_bad" in unusable_reasons else 0
+    features["unusable_reason_low_quality"] = 1 if "low_quality" in unusable_reasons else 0
 
     # Quality features (if available from DB)
     for qf in ["fq_blur_score", "fq_brightness_mean", "fq_brightness_std",
@@ -261,5 +281,30 @@ def extract_phase_features_for_ml(phase: dict) -> Dict[str, Any]:
         features["af_energy_trend"] = -1
     else:
         features["af_energy_trend"] = 0
+
+    # Human tag features (htag_*)
+    htag_list = [
+        "HOOK", "CHAT", "PREP", "PHONE_OP", "LONG_GREET", "COMMENT_READ",
+        "SILENCE", "PRICE_SHOW", "EMPATHY", "PROBLEM", "EDUCATION", "SOLUTION",
+        "DEMONSTRATION", "COMPARISON", "PROOF", "TRUST", "SOCIAL_PROOF",
+        "OBJECTION_HANDLING", "URGENCY", "LIMITED_OFFER", "BONUS", "CTA"
+    ]
+    phase_tags = phase.get("tags", []) or []
+    if isinstance(phase_tags, list):
+        tag_set = set(t.upper() if isinstance(t, str) else "" for t in phase_tags)
+    else:
+        tag_set = set()
+    for htag in htag_list:
+        features[f"htag_{htag}"] = 1 if htag in tag_set else 0
+
+    # Event type features (event_*)
+    event_types = [
+        "HOOK", "GREETING", "INTRO", "DEMONSTRATION", "PRICE", "CTA",
+        "OBJECTION", "SOCIAL_PROOF", "URGENCY", "EMPATHY", "EDUCATION",
+        "CHAT", "TRANSITION", "CLOSING", "UNKNOWN"
+    ]
+    phase_type = (phase.get("event_type", "") or phase.get("phase_type", "") or "").upper()
+    for etype in event_types:
+        features[f"event_{etype}"] = 1 if phase_type == etype else 0
 
     return features
