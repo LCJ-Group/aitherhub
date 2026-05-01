@@ -645,7 +645,16 @@ def extract_quality_features(frame_quality_raw, audio_features_raw) -> dict:
                 audio_features_raw = {}
         for key in AUDIO_FEATURE_KEYS:
             val = audio_features_raw.get(key)
-            af[f"af_{key}"] = float(val) if val is not None else 0.0
+            if val is None:
+                af[f"af_{key}"] = 0.0
+            elif isinstance(val, (int, float)):
+                af[f"af_{key}"] = float(val)
+            elif isinstance(val, str):
+                # energy_trend can be 'rising', 'falling', 'stable' etc.
+                trend_map = {'rising': 1.0, 'stable': 0.0, 'falling': -1.0}
+                af[f"af_{key}"] = trend_map.get(val.lower(), 0.0)
+            else:
+                af[f"af_{key}"] = 0.0
     else:
         for key in AUDIO_FEATURE_KEYS:
             af[f"af_{key}"] = 0.0
