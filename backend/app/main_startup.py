@@ -573,18 +573,19 @@ async def run_all_ddl_migrations():
         except Exception as e:
             logger.warning(f"[DDL] ml_training_runs: {e}")
 
-        # \u2500\u2500 ML Model Version tracking on clips \u2500\u2500
+        # ── ML Model Version tracking on clips ──
         try:
-            await conn.execute(_text("""
-                ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS ml_model_version VARCHAR(30)
-            """))
-            await conn.execute(_text("""
-                ALTER TABLE group_best_phases ADD COLUMN IF NOT EXISTS ml_model_version VARCHAR(30)
-            """))
-            await conn.execute(_text("""
-                CREATE INDEX IF NOT EXISTS idx_vc_ml_version ON video_clips(ml_model_version) WHERE ml_model_version IS NOT NULL
-            """))
-            logger.info("[DDL] ml_model_version columns \u2713")
+            async with engine.begin() as conn:
+                await conn.execute(_text("""
+                    ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS ml_model_version VARCHAR(30)
+                """))
+                await conn.execute(_text("""
+                    ALTER TABLE group_best_phases ADD COLUMN IF NOT EXISTS ml_model_version VARCHAR(30)
+                """))
+                await conn.execute(_text("""
+                    CREATE INDEX IF NOT EXISTS idx_vc_ml_version ON video_clips(ml_model_version) WHERE ml_model_version IS NOT NULL
+                """))
+                logger.info("[DDL] ml_model_version columns \u2713")
         except Exception as e:
             logger.warning(f"[DDL] ml_model_version: {e}")
 
