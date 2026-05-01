@@ -16,7 +16,14 @@ from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import text
 
-from app.services.db import get_session
+from app.core.db import AsyncSessionLocal
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def get_session():
+    async with AsyncSessionLocal() as session:
+        yield session
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/ml-training", tags=["ML Training"])
