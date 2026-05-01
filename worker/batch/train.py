@@ -547,7 +547,7 @@ def train_and_evaluate(X, y, w, group_ids, feature_names, unique_vids, video_ids
         "min_child_samples": max(3, n_positive // 5),
         "scale_pos_weight": n_neg / max(n_positive, 1),
         "random_state": 42,
-        "n_jobs": -1,
+        "n_jobs": 1,
     }
 
     # ── CV config ──

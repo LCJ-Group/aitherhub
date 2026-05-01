@@ -4,14 +4,13 @@
 #
 # 処理フロー:
 #   1. generate_dataset.py → /tmp/datasets/ にデータセット生成
-#   2. train.py → /tmp/models/ にモデル学習
+#   2. train.py --input-dir → click + order 両方を1回で学習
 #   3. save_metrics_to_db.py → DBにメトリクス保存
 #   4. モデルファイルを worker/batch/models/latest/ にコピー
 #   5. git commit & push → 自動デプロイ
 
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 AITHERHUB_DIR="/opt/aitherhub"
 VENV_PYTHON="${AITHERHUB_DIR}/.venv/bin/python"
 DATASET_DIR="/tmp/datasets"
@@ -20,7 +19,8 @@ MODELS_DEPLOY_DIR="${AITHERHUB_DIR}/worker/batch/models/latest"
 LOG_PREFIX="[cron_retrain $(date '+%Y-%m-%d %H:%M:%S')]"
 
 # Load environment
-export $(grep -v '^#' ${AITHERHUB_DIR}/.env | xargs)
+cd ${AITHERHUB_DIR}
+export $(grep -v '^#' ${AITHERHUB_DIR}/.env | xargs 2>/dev/null)
 
 echo "${LOG_PREFIX} === Starting daily retrain ==="
 
@@ -28,18 +28,18 @@ echo "${LOG_PREFIX} === Starting daily retrain ==="
 echo "${LOG_PREFIX} Step 1: Generating dataset..."
 rm -rf ${DATASET_DIR}
 mkdir -p ${DATASET_DIR}
-${VENV_PYTHON} ${AITHERHUB_DIR}/worker/batch/generate_dataset.py --output-dir ${DATASET_DIR}
+${VENV_PYTHON} -u ${AITHERHUB_DIR}/worker/batch/generate_dataset.py --output-dir ${DATASET_DIR}
 if [ $? -ne 0 ]; then
     echo "${LOG_PREFIX} ERROR: Dataset generation failed"
     exit 1
 fi
 echo "${LOG_PREFIX} Step 1: Dataset generated"
 
-# Step 2: Train models
-echo "${LOG_PREFIX} Step 2: Training models..."
+# Step 2: Train models (--input-dir processes both click and order internally)
+echo "${LOG_PREFIX} Step 2: Training models (click + order)..."
 rm -rf ${MODELS_DIR}
 mkdir -p ${MODELS_DIR}
-${VENV_PYTHON} ${AITHERHUB_DIR}/worker/batch/train.py --input-dir ${DATASET_DIR} --output-dir ${MODELS_DIR}
+${VENV_PYTHON} -u ${AITHERHUB_DIR}/worker/batch/train.py --input-dir ${DATASET_DIR} --output-dir ${MODELS_DIR}
 if [ $? -ne 0 ]; then
     echo "${LOG_PREFIX} ERROR: Training failed"
     exit 1
@@ -48,10 +48,9 @@ echo "${LOG_PREFIX} Step 2: Training complete"
 
 # Step 3: Save metrics to DB
 echo "${LOG_PREFIX} Step 3: Saving metrics to DB..."
-${VENV_PYTHON} ${AITHERHUB_DIR}/worker/batch/save_metrics_to_db.py --models-dir ${MODELS_DIR}
-if [ $? -ne 0 ]; then
+${VENV_PYTHON} -u ${AITHERHUB_DIR}/worker/batch/save_metrics_to_db.py --model-dir ${MODELS_DIR} || {
     echo "${LOG_PREFIX} WARNING: Metrics save failed (non-fatal)"
-fi
+}
 echo "${LOG_PREFIX} Step 3: Metrics saved"
 
 # Step 4: Deploy model files
