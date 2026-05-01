@@ -37,12 +37,35 @@ def get_db_url():
     return None
 
 
+def _normalize_db_url(url: str) -> str:
+    """Convert SQLAlchemy async URL to psycopg2-compatible URL."""
+    # Remove async driver prefix
+    url = url.replace("postgresql+asyncpg://", "postgresql://")
+    url = url.replace("postgres+asyncpg://", "postgresql://")
+    url = url.replace("postgres://", "postgresql://")
+    # Handle sslmode in query params vs connection string
+    if "?" in url:
+        base, params = url.split("?", 1)
+        # Parse params properly
+        param_pairs = params.split("&")
+        clean_params = []
+        for p in param_pairs:
+            if "=" in p:
+                clean_params.append(p)
+            else:
+                # bare param like 'sslmode' without value → sslmode=require
+                clean_params.append(f"{p}=require")
+        url = base + "?" + "&".join(clean_params)
+    return url
+
+
 def save_to_db(models_dir: str, run_id_prefix: str = None):
     """Read manifest.json and eval_metrics, save to ml_training_runs."""
     db_url = get_db_url()
     if not db_url:
         print("[save_metrics] ERROR: DATABASE_URL not found")
         sys.exit(1)
+    db_url = _normalize_db_url(db_url)
 
     manifest_path = os.path.join(models_dir, "manifest.json")
     if not os.path.exists(manifest_path):
