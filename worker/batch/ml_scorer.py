@@ -146,16 +146,18 @@ class MLScorer:
                 logger.warning("[ml_scorer] No feature names available")
                 return None
 
-            # Build feature vector
-            X = np.zeros((1, len(feat_names)))
-            for i, fname in enumerate(feat_names):
+            # Build feature vector as DataFrame to preserve feature names
+            import pandas as pd
+            row = {}
+            for fname in feat_names:
                 val = features.get(fname, 0)
                 if val is None:
                     val = 0
                 try:
-                    X[0, i] = float(val)
+                    row[fname] = float(val)
                 except (ValueError, TypeError):
-                    X[0, i] = 0
+                    row[fname] = 0.0
+            X = pd.DataFrame([row], columns=feat_names)
 
             # Apply scaler if available
             if scaler is not None:
