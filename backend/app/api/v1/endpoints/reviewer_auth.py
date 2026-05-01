@@ -496,7 +496,7 @@ async def admin_list_reviewers(
             COALESCE(stats.avg_rating, 0) as avg_rating,
             COALESCE(stats.today_rated, 0) as today_rated,
             COALESCE(sess.total_sessions, 0) as total_sessions,
-            COALESCE(sess.total_minutes, 0) as total_minutes,
+            COALESCE(work.total_minutes, 0) as total_minutes,
             sess.last_session_at,
             COALESCE(stats.r1, 0) as r1,
             COALESCE(stats.r2, 0) as r2,
@@ -523,11 +523,30 @@ async def admin_list_reviewers(
             SELECT
                 reviewer_id as rid,
                 COUNT(*) as total_sessions,
-                COALESCE(SUM(duration_minutes), 0) as total_minutes,
                 MAX(started_at) as last_session_at
             FROM review_sessions
             GROUP BY reviewer_id
         ) sess ON u.id = sess.rid
+        LEFT JOIN (
+            SELECT
+                rated_by_reviewer_id as rid,
+                COALESCE(
+                    SUM(EXTRACT(EPOCH FROM (last_rated - first_rated)) / 60.0 + 5),
+                    0
+                ) as total_minutes
+            FROM (
+                SELECT
+                    rated_by_reviewer_id,
+                    DATE_TRUNC('day', rated_at) as work_day,
+                    MIN(rated_at) as first_rated,
+                    MAX(rated_at) as last_rated
+                FROM video_phases
+                WHERE rated_by_reviewer_id IS NOT NULL
+                  AND rated_at IS NOT NULL
+                GROUP BY rated_by_reviewer_id, DATE_TRUNC('day', rated_at)
+            ) daily
+            GROUP BY rated_by_reviewer_id
+        ) work ON u.id = work.rid
         WHERE u.role = 'reviewer'
         ORDER BY COALESCE(stats.total_rated, 0) DESC
     """))
@@ -635,6 +654,7 @@ async def admin_list_review_sessions(
         SELECT
             rs.id, rs.reviewer_id, rs.started_at, rs.ended_at,
             rs.clips_reviewed, rs.duration_minutes, rs.last_heartbeat,
+            EXTRACT(EPOCH FROM (NOW() - rs.started_at)) / 60.0 as calc_duration,
             u.display_name, u.email
         FROM review_sessions rs
         JOIN users u ON rs.reviewer_id = u.id
@@ -654,7 +674,7 @@ async def admin_list_review_sessions(
             "started_at": str(r["started_at"]) if r["started_at"] else None,
             "ended_at": str(r["ended_at"]) if r["ended_at"] else None,
             "clips_reviewed": r["clips_reviewed"] or 0,
-            "duration_minutes": round(float(r["duration_minutes"]), 1) if r["duration_minutes"] else None,
+            "duration_minutes": round(float(r["duration_minutes"]), 1) if r["duration_minutes"] else (round(float(r["calc_duration"]), 1) if r.get("calc_duration") else None),
             "last_heartbeat": str(r["last_heartbeat"]) if r["last_heartbeat"] else None,
         })
 
