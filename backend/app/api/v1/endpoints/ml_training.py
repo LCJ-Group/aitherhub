@@ -359,11 +359,40 @@ async def get_effectiveness_by_version(
     """
 
     async with get_session() as session:
+        # Check if ml_model_version column exists
+        col_check = await session.execute(text("""
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'video_clips' AND column_name = 'ml_model_version'
+            )
+        """))
+        has_ml_version_col = col_check.scalar()
+
+        if not has_ml_version_col:
+            # Column doesn't exist yet - return empty data with explanation
+            return {
+                "version_clip_stats": [{"version": "pre-AI", "total_clips": 0, "ng_count": 0, "ng_rate": 0, "adopt_count": 0, "reject_count": 0, "reviewed_count": 0, "adopt_rate": 0, "avg_ai_score": None, "first_clip_at": None, "last_clip_at": None}],
+                "version_best_phase_stats": [],
+                "auc_history": [],
+                "note": "ml_model_version column not yet created. Will be available after next app restart."
+            }
+
         clip_result = await session.execute(text(clip_stats_query))
         clip_rows = clip_result.fetchall()
 
-        best_result = await session.execute(text(best_phase_stats_query))
-        best_rows = best_result.fetchall()
+        # Check group_best_phases column too
+        gbp_col_check = await session.execute(text("""
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'group_best_phases' AND column_name = 'ml_model_version'
+            )
+        """))
+        has_gbp_ml_col = gbp_col_check.scalar()
+
+        best_rows = []
+        if has_gbp_ml_col:
+            best_result = await session.execute(text(best_phase_stats_query))
+            best_rows = best_result.fetchall()
 
         auc_result = await session.execute(text(auc_history_query))
         auc_rows = auc_result.fetchall()
