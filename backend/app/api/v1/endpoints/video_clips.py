@@ -181,9 +181,20 @@ async def request_clip_generation(
             "subtitle_language": subtitle_language,
         }
         import json as _json
+        # Get current ML model version for tracking
+        _ml_version = None
+        try:
+            gbp_row = await db.execute(text(
+                "SELECT ml_model_version FROM group_best_phases WHERE video_id = :vid LIMIT 1"
+            ), {"vid": video_id})
+            _ml_ver_row = gbp_row.fetchone()
+            if _ml_ver_row and _ml_ver_row.ml_model_version:
+                _ml_version = _ml_ver_row.ml_model_version
+        except Exception:
+            pass
         insert_sql = text("""
-            INSERT INTO video_clips (id, video_id, user_id, phase_index, time_start, time_end, status, job_payload)
-            VALUES (:id, :video_id, :user_id, :phase_index, :time_start, :time_end, 'pending', CAST(:job_payload AS jsonb))
+            INSERT INTO video_clips (id, video_id, user_id, phase_index, time_start, time_end, status, job_payload, ml_model_version)
+            VALUES (:id, :video_id, :user_id, :phase_index, :time_start, :time_end, 'pending', CAST(:job_payload AS jsonb), :ml_version)
         """)
         await db.execute(insert_sql, {
             "id": clip_id,
@@ -193,6 +204,7 @@ async def request_clip_generation(
             "time_start": time_start,
             "time_end": time_end,
             "job_payload": _json.dumps(job_payload, ensure_ascii=False),
+            "ml_version": _ml_version,
         })
         await db.commit()
 

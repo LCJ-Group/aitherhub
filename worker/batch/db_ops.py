@@ -520,7 +520,8 @@ async def bulk_upsert_group_best_phases(
             score,
             view_velocity,
             like_velocity,
-            like_per_viewer
+            like_per_viewer,
+            ml_model_version
         )
         SELECT
             gen_random_uuid(),
@@ -531,7 +532,8 @@ async def bulk_upsert_group_best_phases(
             x.score,
             x.view_velocity,
             x.like_velocity,
-            x.like_per_viewer
+            x.like_per_viewer,
+            x.ml_model_version
         FROM jsonb_to_recordset(CAST(:rows AS jsonb)) AS x(
             group_id int,
             video_id uuid,
@@ -539,7 +541,8 @@ async def bulk_upsert_group_best_phases(
             score float8,
             view_velocity float8,
             like_velocity float8,
-            like_per_viewer float8
+            like_per_viewer float8,
+            ml_model_version text
         )
     """)
 

@@ -198,8 +198,17 @@ def save_group_best_phases(best_data, art_root: str, video_id: str):
 # STEP 8 – UPDATE BEST PHASES
 # =========================
 
+def get_current_ml_version():
+    """Get current ML model version from loaded scorer."""
+    scorer = _get_ml_scorer()
+    if scorer:
+        return scorer.get_model_version()
+    return None
+
+
 def update_group_best_phases(phase_units, best_data, video_id):
     n_skipped_ng = 0
+    ml_version = get_current_ml_version()
     for p in phase_units:
         group_id = p.get("group_id")
         if not group_id:
@@ -223,7 +232,8 @@ def update_group_best_phases(phase_units, best_data, video_id):
             "video_id": video_id,
             "phase_index": p["phase_index"],
             "score": score,
-            "metrics": metrics
+            "metrics": metrics,
+            "ml_model_version": ml_version,
         }
 
         group = best_data["groups"].setdefault(

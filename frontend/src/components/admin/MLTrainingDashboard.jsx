@@ -11,22 +11,25 @@ export default function MLTrainingDashboard({ adminKey }) {
   const [loading, setLoading] = useState(true);
   const [triggerLoading, setTriggerLoading] = useState(false);
   const [activeModel, setActiveModel] = useState("click");
+  const [effectiveness, setEffectiveness] = useState(null);
 
   const headers = { "X-Admin-Key": adminKey };
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const [statusRes, runsRes, metricsRes, fiRes] = await Promise.all([
+      const [statusRes, runsRes, metricsRes, fiRes, effectRes] = await Promise.all([
         axios.get(`${API}/api/v1/ml-training/status`, { headers }),
         axios.get(`${API}/api/v1/ml-training/runs?limit=20`, { headers }),
         axios.get(`${API}/api/v1/ml-training/metrics`, { headers }),
         axios.get(`${API}/api/v1/ml-training/feature-importance?target=${activeModel}`, { headers }),
+        axios.get(`${API}/api/v1/ml-training/effectiveness`, { headers }).catch(() => ({ data: null })),
       ]);
       setStatus(statusRes.data);
       setRuns(runsRes.data.runs || []);
       setMetrics(metricsRes.data || { click: [], order: [] });
       setFeatureImportance(fiRes.data);
+      setEffectiveness(effectRes.data);
     } catch (e) {
       console.error("ML Training fetch error:", e);
     } finally {
@@ -117,6 +120,13 @@ export default function MLTrainingDashboard({ adminKey }) {
       <div className="bg-white rounded-xl border p-6">
         <h3 className="text-lg font-semibold mb-4">🎯 特徴量重要度（{activeModel === "click" ? "クリック" : "注文"}モデル）</h3>
         <FeatureImportanceChart data={featureImportance} />
+      </div>
+
+      {/* Version Effectiveness - NEW */}
+      <div className="bg-white rounded-xl border p-6">
+        <h3 className="text-lg font-semibold mb-4">AI Version Effectiveness</h3>
+        <p className="text-xs text-gray-500 mb-4">各AIバージョンで生成されたクリップの採点・採用率・NG率を比較</p>
+        <VersionEffectivenessChart data={effectiveness} />
       </div>
 
       {/* Training History */}
@@ -287,6 +297,109 @@ function FeatureImportanceChart({ data }) {
       {data.trained_at && (
         <div className="text-xs text-gray-400 mt-2">
           モデル: v{data.model_version} | 学習日: {new Date(data.trained_at).toLocaleString("ja-JP")}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function VersionEffectivenessChart({ data }) {
+  if (!data || !data.version_clip_stats || data.version_clip_stats.length === 0) {
+    return (
+      <div className="text-center py-8 text-gray-400">
+        <p>まだバージョン別データがありません</p>
+        <p className="text-xs mt-1">AIモデルでクリップが生成されると、ここに効果計測データが表示されます</p>
+      </div>
+    );
+  }
+
+  const stats = data.version_clip_stats;
+  const aucHistory = data.auc_history || [];
+
+  return (
+    <div className="space-y-4">
+      {/* Version comparison table */}
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-gray-500 border-b">
+              <th className="pb-2 pr-4">AIバージョン</th>
+              <th className="pb-2 pr-4">クリップ数</th>
+              <th className="pb-2 pr-4">採用率</th>
+              <th className="pb-2 pr-4">NG率</th>
+              <th className="pb-2 pr-4">レビュー済</th>
+              <th className="pb-2">期間</th>
+            </tr>
+          </thead>
+          <tbody>
+            {stats.map((v) => (
+              <tr key={v.version} className="border-b border-gray-50 hover:bg-gray-50">
+                <td className="py-2.5 pr-4">
+                  <span className={`inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-full ${
+                    v.version === 'pre-AI' 
+                      ? 'bg-gray-100 text-gray-600' 
+                      : 'bg-purple-100 text-purple-700'
+                  }`}>
+                    {v.version === 'pre-AI' ? '— Pre-AI' : `AI ${v.version}`}
+                  </span>
+                </td>
+                <td className="py-2.5 pr-4 font-medium">{v.total_clips}</td>
+                <td className="py-2.5 pr-4">
+                  <span className={`font-medium ${v.adopt_rate > 50 ? 'text-green-600' : v.adopt_rate > 30 ? 'text-yellow-600' : 'text-gray-500'}`}>
+                    {v.reviewed_count > 0 ? `${v.adopt_rate}%` : '—'}
+                  </span>
+                  {v.reviewed_count > 0 && (
+                    <span className="text-xs text-gray-400 ml-1">({v.adopt_count}/{v.reviewed_count})</span>
+                  )}
+                </td>
+                <td className="py-2.5 pr-4">
+                  <span className={`font-medium ${v.ng_rate > 30 ? 'text-red-600' : v.ng_rate > 15 ? 'text-yellow-600' : 'text-green-600'}`}>
+                    {v.ng_rate}%
+                  </span>
+                  <span className="text-xs text-gray-400 ml-1">({v.ng_count})</span>
+                </td>
+                <td className="py-2.5 pr-4 text-xs text-gray-500">{v.reviewed_count}</td>
+                <td className="py-2.5 text-xs text-gray-400">
+                  {v.first_clip_at ? new Date(v.first_clip_at).toLocaleDateString("ja-JP", { month: "short", day: "numeric" }) : '—'}
+                  {v.last_clip_at && v.first_clip_at !== v.last_clip_at && (
+                    <> ~ {new Date(v.last_clip_at).toLocaleDateString("ja-JP", { month: "short", day: "numeric" })}</>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* AUC trend mini chart */}
+      {aucHistory.length > 0 && (
+        <div className="mt-4 pt-4 border-t">
+          <h4 className="text-sm font-medium text-gray-700 mb-2">AUCスコア推移</h4>
+          <div className="flex items-end gap-2 h-20">
+            {aucHistory.map((h, i) => {
+              const height = (h.auc_score - 0.5) / 0.5 * 100;
+              return (
+                <div key={i} className="flex-1 flex flex-col items-center justify-end group relative">
+                  <div className="absolute -top-8 hidden group-hover:block bg-gray-800 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10">
+                    {h.model_version} ({h.target}): {(h.auc_score * 100).toFixed(1)}%
+                  </div>
+                  <div
+                    className={`w-full rounded-t min-h-[4px] ${
+                      h.target === 'click' ? 'bg-blue-400 hover:bg-blue-600' : 'bg-green-400 hover:bg-green-600'
+                    }`}
+                    style={{ height: `${Math.max(height, 4)}%` }}
+                  />
+                  <div className="text-[9px] text-gray-400 mt-1 truncate w-full text-center">
+                    {h.model_version?.replace('v7.', '')}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="flex gap-3 mt-2 text-xs text-gray-500">
+            <span className="flex items-center gap-1"><span className="w-2 h-2 bg-blue-400 rounded-full"></span>Click</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-2 bg-green-400 rounded-full"></span>Order</span>
+          </div>
         </div>
       )}
     </div>

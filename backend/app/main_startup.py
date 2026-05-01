@@ -569,9 +569,24 @@ async def run_all_ddl_migrations():
                 await conn.execute(_text("CREATE INDEX IF NOT EXISTS idx_ml_runs_target ON ml_training_runs(target)"))
                 await conn.execute(_text("CREATE INDEX IF NOT EXISTS idx_ml_runs_status ON ml_training_runs(status)"))
                 await conn.execute(_text("CREATE INDEX IF NOT EXISTS idx_ml_runs_started ON ml_training_runs(started_at DESC)"))
-                logger.info("[DDL] ml_training_runs ✓")
+                logger.info("[DDL] ml_training_runs \u2713")
         except Exception as e:
             logger.warning(f"[DDL] ml_training_runs: {e}")
+
+        # \u2500\u2500 ML Model Version tracking on clips \u2500\u2500
+        try:
+            await conn.execute(_text("""
+                ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS ml_model_version VARCHAR(30)
+            """))
+            await conn.execute(_text("""
+                ALTER TABLE group_best_phases ADD COLUMN IF NOT EXISTS ml_model_version VARCHAR(30)
+            """))
+            await conn.execute(_text("""
+                CREATE INDEX IF NOT EXISTS idx_vc_ml_version ON video_clips(ml_model_version) WHERE ml_model_version IS NOT NULL
+            """))
+            logger.info("[DDL] ml_model_version columns \u2713")
+        except Exception as e:
+            logger.warning(f"[DDL] ml_model_version: {e}")
 
         elapsed = time.time() - ddl_start
         logger.info(f"[DDL] All migrations completed in {elapsed:.1f}s")

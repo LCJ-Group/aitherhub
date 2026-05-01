@@ -140,6 +140,11 @@ function ClipCard({ clip, onPlay }) {
               <ThumbsDown className="w-2.5 h-2.5" /> Bad
             </span>
           )}
+          {clip.ml_model_version && (
+            <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-purple-600 text-white shadow">
+              AI {clip.ml_model_version}
+            </span>
+          )}
         </div>
         {/* Duration badge */}
         <div className="absolute bottom-2 right-2">

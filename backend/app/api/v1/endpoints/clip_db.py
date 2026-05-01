@@ -128,6 +128,8 @@ class ClipSearchResult(BaseModel):
     unusable_comment: Optional[str] = None
     # Language detection
     detected_language: Optional[str] = None
+    # AI model version
+    ml_model_version: Optional[str] = None
 
 
 class ClipSearchResponse(BaseModel):
@@ -396,7 +398,8 @@ async def search_clips(
             COALESCE(vc.is_unusable, FALSE) as is_unusable,
             vc.unusable_reason,
             vc.unusable_comment,
-            vc.detected_language
+            vc.detected_language,
+            vc.ml_model_version
         FROM video_clips vc
         LEFT JOIN video_phases vp ON vp.video_id = vc.video_id
             AND vp.phase_index = CASE
@@ -523,6 +526,7 @@ async def search_clips(
                 unusable_reason=row.unusable_reason if hasattr(row, 'unusable_reason') else None,
                 unusable_comment=row.unusable_comment if hasattr(row, 'unusable_comment') else None,
                 detected_language=row.detected_language if hasattr(row, 'detected_language') else None,
+                ml_model_version=row.ml_model_version if hasattr(row, 'ml_model_version') else None,
             ))
 
         return ClipSearchResponse(

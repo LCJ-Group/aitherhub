@@ -1597,6 +1597,7 @@ def main():
                     "view_velocity": m.get("view_velocity"),
                     "like_velocity": m.get("like_velocity"),
                     "like_per_viewer": m.get("like_per_viewer"),
+                    "ml_model_version": best.get("ml_model_version"),
                 })
 
             logger.info(f"[STEP8] Bulk upsert {len(bulk_rows)} group best phases")

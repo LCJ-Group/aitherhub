@@ -314,6 +314,11 @@ function ClipCard({ clip, onPlay, brands, adminKey, onBrandChange }) {
               <ThumbsDown className="w-2.5 h-2.5" /> Bad
             </span>
           )}
+          {clip.ml_model_version && (
+            <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-purple-600 text-white shadow">
+              AI {clip.ml_model_version}
+            </span>
+          )}
           {clip.detected_language && clip.detected_language !== 'ja' && clip.detected_language !== 'unknown' && (
             <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold shadow ${
               clip.detected_language === 'zh-TW' ? 'bg-rose-500 text-white' :

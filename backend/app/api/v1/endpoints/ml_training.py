@@ -295,3 +295,118 @@ async def get_feature_importance(
         "model_version": row[1],
         "trained_at": row[2].isoformat() if row[2] else None,
     }
+
+
+@router.get("/effectiveness")
+async def get_effectiveness_by_version(
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """バージョン別の効果計測データを取得
+    
+    - 各バージョンで生成されたクリップの平均採点スコア
+    - NG率（unusable率）
+    - 採用率（adopt率）
+    - AUCスコアの推移
+    """
+    _check_admin(x_admin_key)
+
+    # 1. バージョン別のクリップ統計
+    clip_stats_query = """
+        SELECT 
+            COALESCE(vc.ml_model_version, 'pre-AI') as version,
+            COUNT(*) as total_clips,
+            COUNT(CASE WHEN vc.is_unusable = true THEN 1 END) as ng_count,
+            COUNT(CASE WHEN cf.feedback = 'adopt' THEN 1 END) as adopt_count,
+            COUNT(CASE WHEN cf.feedback = 'reject' THEN 1 END) as reject_count,
+            COUNT(CASE WHEN cf.feedback IS NOT NULL THEN 1 END) as reviewed_count,
+            AVG(CASE WHEN cf.ai_score_at_feedback IS NOT NULL 
+                THEN CAST(cf.ai_score_at_feedback AS FLOAT) END) as avg_ai_score,
+            MIN(vc.created_at) as first_clip_at,
+            MAX(vc.created_at) as last_clip_at
+        FROM video_clips vc
+        LEFT JOIN clip_feedback cf ON cf.video_id = vc.video_id 
+            AND cf.phase_index = CAST(vc.phase_index AS TEXT)
+        GROUP BY COALESCE(vc.ml_model_version, 'pre-AI')
+        ORDER BY first_clip_at ASC
+    """
+
+    # 2. バージョン別のgroup_best_phases統計
+    best_phase_stats_query = """
+        SELECT 
+            COALESCE(ml_model_version, 'pre-AI') as version,
+            COUNT(*) as total_best_phases,
+            AVG(score) as avg_score,
+            MIN(created_at) as first_at,
+            MAX(created_at) as last_at
+        FROM group_best_phases
+        GROUP BY COALESCE(ml_model_version, 'pre-AI')
+        ORDER BY first_at ASC
+    """
+
+    # 3. AUCスコアの推移（ml_training_runsから）
+    auc_history_query = """
+        SELECT model_version, target, auc_score, completed_at, dataset_size
+        FROM ml_training_runs
+        WHERE status = 'completed' AND auc_score IS NOT NULL
+        ORDER BY completed_at ASC
+    """
+
+    async with get_session() as session:
+        clip_result = await session.execute(text(clip_stats_query))
+        clip_rows = clip_result.fetchall()
+
+        best_result = await session.execute(text(best_phase_stats_query))
+        best_rows = best_result.fetchall()
+
+        auc_result = await session.execute(text(auc_history_query))
+        auc_rows = auc_result.fetchall()
+
+    # Format clip stats
+    version_stats = []
+    for row in clip_rows:
+        total = row[1] or 0
+        ng = row[2] or 0
+        adopt = row[3] or 0
+        reject = row[4] or 0
+        reviewed = row[5] or 0
+        version_stats.append({
+            "version": row[0],
+            "total_clips": total,
+            "ng_count": ng,
+            "ng_rate": round(ng / total * 100, 1) if total > 0 else 0,
+            "adopt_count": adopt,
+            "reject_count": reject,
+            "reviewed_count": reviewed,
+            "adopt_rate": round(adopt / reviewed * 100, 1) if reviewed > 0 else 0,
+            "avg_ai_score": round(row[6], 2) if row[6] else None,
+            "first_clip_at": row[7].isoformat() if row[7] else None,
+            "last_clip_at": row[8].isoformat() if row[8] else None,
+        })
+
+    # Format best phase stats
+    best_phase_versions = []
+    for row in best_rows:
+        best_phase_versions.append({
+            "version": row[0],
+            "total_best_phases": row[1],
+            "avg_score": round(row[2], 4) if row[2] else None,
+            "first_at": row[3].isoformat() if row[3] else None,
+            "last_at": row[4].isoformat() if row[4] else None,
+        })
+
+    # Format AUC history
+    auc_history = []
+    for row in auc_rows:
+        auc_history.append({
+            "model_version": row[0],
+            "target": row[1],
+            "auc_score": row[2],
+            "trained_at": row[3].isoformat() if row[3] else None,
+            "dataset_size": row[4],
+        })
+
+    return {
+        "version_clip_stats": version_stats,
+        "version_best_phase_stats": best_phase_versions,
+        "auc_history": auc_history,
+    }
