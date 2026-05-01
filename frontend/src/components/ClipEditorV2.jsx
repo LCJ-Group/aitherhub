@@ -219,6 +219,10 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
   const [transcribeProgress, setTranscribeProgress] = useState(0); // 0-100
   const [captionsLoaded, setCaptionsLoaded] = useState(false);
   const [subtitleDictionary, setSubtitleDictionary] = useState([]); // User's subtitle dictionary entries
+  const [dictDialogOpen, setDictDialogOpen] = useState(false);
+  const [dictDialogData, setDictDialogData] = useState({ from_text: '', to_text: '', no_break: true, category: 'brand' });
+  const [dictDialogSaving, setDictDialogSaving] = useState(false);
+  const [dictDialogError, setDictDialogError] = useState('');
   // Default subtitle language: always auto-detect via Whisper (not tied to UI language)
   const defaultSubLang = 'auto';
   const [targetLanguage, setTargetLanguage] = useState(defaultSubLang); // 'ja' | 'zh-TW' | 'auto' (original language)
@@ -530,6 +534,47 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
       .filter(Boolean)
       .sort((a, b) => b.length - a.length); // Longest first for greedy matching
   }, [subtitleDictionary]);
+
+  // ── Inline dictionary registration ──
+  const openDictDialog = useCallback((selectedText = '') => {
+    setDictDialogData({ from_text: selectedText, to_text: '', no_break: true, category: 'brand' });
+    setDictDialogError('');
+    setDictDialogOpen(true);
+  }, []);
+
+  const saveDictEntry = useCallback(async () => {
+    if (!dictDialogData.from_text.trim()) {
+      setDictDialogError('変換元テキストを入力してください');
+      return;
+    }
+    setDictDialogSaving(true);
+    setDictDialogError('');
+    try {
+      const baseURL = import.meta.env.VITE_API_BASE_URL;
+      const res = await fetch(`${baseURL}/api/v1/subtitle-dictionary`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Admin-Key': 'aither:hub' },
+        body: JSON.stringify({
+          from_text: dictDialogData.from_text.trim(),
+          to_text: dictDialogData.to_text.trim(),
+          no_break: dictDialogData.no_break,
+          category: dictDialogData.category,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Error ${res.status}`);
+      }
+      const newEntry = await res.json();
+      setSubtitleDictionary(prev => [...prev, newEntry]);
+      setDictDialogOpen(false);
+      console.log('[Dict] Added entry:', newEntry.from_text, '→', newEntry.to_text);
+    } catch (e) {
+      setDictDialogError(e.message || '登録に失敗しました');
+    } finally {
+      setDictDialogSaving(false);
+    }
+  }, [dictDialogData]);
 
   // Helper: build captions from real speech transcripts (Whisper segments)
   const buildCaptionsFromTranscripts = useCallback((transcripts, clipData) => {
@@ -3030,6 +3075,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                             {fmt(cap.start)}
                           </span>
                           <textarea
+                            data-cap-idx={i}
                             value={cap.text}
                             onChange={(e) => editCap(i, e.target.value)}
                             rows={2}
@@ -3056,6 +3102,42 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                               e.target.style.borderColor = C.border;
                             }}
                           />
+                          {/* Add to dictionary button */}
+                          <button
+                            onClick={() => {
+                              const textarea = document.querySelector(`textarea[data-cap-idx="${i}"]`);
+                              const selected = textarea ? textarea.value.substring(textarea.selectionStart, textarea.selectionEnd).trim() : '';
+                              openDictDialog(selected || cap.text);
+                            }}
+                            title="辞書に登録"
+                            style={{
+                              flexShrink: 0,
+                              width: 24,
+                              height: 24,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              border: 'none',
+                              borderRadius: 4,
+                              backgroundColor: 'transparent',
+                              color: C.textDim,
+                              fontSize: 13,
+                              cursor: 'pointer',
+                              padding: 0,
+                              marginTop: 2,
+                              transition: 'all 0.15s ease',
+                            }}
+                            onMouseEnter={(e) => {
+                              e.target.style.backgroundColor = C.accent + '22';
+                              e.target.style.color = C.accent;
+                            }}
+                            onMouseLeave={(e) => {
+                              e.target.style.backgroundColor = 'transparent';
+                              e.target.style.color = C.textDim;
+                            }}
+                          >
+                            {'📖'}
+                          </button>
                           {/* Delete single caption button */}
                           <button
                             onClick={() => deleteCap(i)}
@@ -3736,14 +3818,115 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
             ))}
           </div>
         </div>
-      </div>
+        </div>
+
+      {/* ═══ Dictionary Registration Dialog ═══ */}
+      {dictDialogOpen && (
+        <div
+          onClick={() => setDictDialogOpen(false)}
+          style={{
+            position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.6)',
+            zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              backgroundColor: C.surface, borderRadius: 12, padding: 24,
+              width: 340, maxWidth: '90vw', boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
+            }}
+          >
+            <h3 style={{ color: C.text, fontSize: 15, fontWeight: 700, marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
+              {'\ud83d\udcd6'} \u8f9e\u66f8\u306b\u767b\u9332
+            </h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div>
+                <label style={{ color: C.textMuted, fontSize: 11, marginBottom: 4, display: 'block' }}>\u5909\u63db\u5143\uff08Whisper\u8aa4\u8a8d\u8b58\u30c6\u30ad\u30b9\u30c8\uff09</label>
+                <input
+                  type="text"
+                  value={dictDialogData.from_text}
+                  onChange={(e) => setDictDialogData(d => ({ ...d, from_text: e.target.value }))}
+                  style={{
+                    width: '100%', padding: '8px 10px', backgroundColor: C.bg,
+                    border: `1px solid ${C.border}`, borderRadius: 6, color: C.text, fontSize: 13,
+                    outline: 'none',
+                  }}
+                  placeholder="\u4f8b: \u304d\u3087\u3046\u3054\u304f"
+                />
+              </div>
+              <div>
+                <label style={{ color: C.textMuted, fontSize: 11, marginBottom: 4, display: 'block' }}>\u5909\u63db\u5148\uff08\u6b63\u3057\u3044\u30c6\u30ad\u30b9\u30c8\uff09</label>
+                <input
+                  type="text"
+                  value={dictDialogData.to_text}
+                  onChange={(e) => setDictDialogData(d => ({ ...d, to_text: e.target.value }))}
+                  style={{
+                    width: '100%', padding: '8px 10px', backgroundColor: C.bg,
+                    border: `1px solid ${C.border}`, borderRadius: 6, color: C.text, fontSize: 13,
+                    outline: 'none',
+                  }}
+                  placeholder="\u4f8b: KYOGOKU"
+                  autoFocus
+                />
+              </div>
+              <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={dictDialogData.no_break}
+                    onChange={(e) => setDictDialogData(d => ({ ...d, no_break: e.target.checked }))}
+                    style={{ accentColor: C.accent }}
+                  />
+                  <span style={{ color: C.textMuted, fontSize: 11 }}>\u5206\u5272\u7981\u6b62</span>
+                </label>
+                <select
+                  value={dictDialogData.category}
+                  onChange={(e) => setDictDialogData(d => ({ ...d, category: e.target.value }))}
+                  style={{
+                    padding: '4px 8px', backgroundColor: C.bg, border: `1px solid ${C.border}`,
+                    borderRadius: 4, color: C.text, fontSize: 11,
+                  }}
+                >
+                  <option value="brand">\u30d6\u30e9\u30f3\u30c9</option>
+                  <option value="product">\u5546\u54c1\u540d</option>
+                  <option value="person">\u4eba\u540d</option>
+                  <option value="other">\u305d\u306e\u4ed6</option>
+                </select>
+              </div>
+              {dictDialogError && (
+                <p style={{ color: C.red || '#ef4444', fontSize: 11 }}>{dictDialogError}</p>
+              )}
+              <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                <button
+                  onClick={() => setDictDialogOpen(false)}
+                  style={{
+                    flex: 1, padding: '8px 12px', border: `1px solid ${C.border}`,
+                    borderRadius: 8, backgroundColor: 'transparent', color: C.textMuted,
+                    fontSize: 12, fontWeight: 500, cursor: 'pointer',
+                  }}
+                >\u30ad\u30e3\u30f3\u30bb\u30eb</button>
+                <button
+                  onClick={saveDictEntry}
+                  disabled={dictDialogSaving}
+                  style={{
+                    flex: 1, padding: '8px 12px', border: 'none',
+                    borderRadius: 8, backgroundColor: C.accent, color: '#fff',
+                    fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                    opacity: dictDialogSaving ? 0.6 : 1,
+                  }}
+                >{dictDialogSaving ? '\u4fdd\u5b58\u4e2d...' : '\u767b\u9332'}</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
 
-// ═══════════════════════════════════════════════════════════════════════════
+// \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
 // Sub-components
-// ═══════════════════════════════════════════════════════════════════════════
+// \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550══════
 
 const Section = ({ title, children }) => (
   <div style={{ marginBottom: 16 }}>
