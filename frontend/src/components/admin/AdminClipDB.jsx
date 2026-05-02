@@ -395,6 +395,13 @@ function ClipCard({ clip, onPlay, brands, adminKey, onBrandChange }) {
             </span>
           )}
         </div>
+        {/* 生成日 */}
+        {clip.created_at && (
+          <div className="flex items-center gap-1 text-[10px] text-gray-400">
+            <Clock className="w-3 h-3" />
+            <span>{new Date(clip.created_at).toLocaleDateString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit' })}</span>
+          </div>
+        )}
 
         {/* Brand assignments */}
         <div className="relative">

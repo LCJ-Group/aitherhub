@@ -83,6 +83,19 @@ async def _get_dashboard_data(db: AsyncSession) -> dict:
     total_hours = total_duration_seconds // 3600
     total_minutes = (total_duration_seconds % 3600) // 60
 
+    # ── Daily uploads (past 30 days) ──
+    daily_uploads_raw = await db.execute(
+        text("""
+            SELECT DATE(created_at) as dt, COUNT(*) as cnt
+            FROM videos
+            WHERE created_at >= CURRENT_DATE - INTERVAL '30 days'
+            GROUP BY DATE(created_at)
+            ORDER BY dt ASC
+        """)
+    )
+    daily_uploads_rows = daily_uploads_raw.fetchall()
+    daily_uploads = [{"date": str(r.dt), "count": r.cnt} for r in daily_uploads_rows]
+
     return {
         "data_volume": {
             "total_videos": total_videos,
@@ -90,6 +103,7 @@ async def _get_dashboard_data(db: AsyncSession) -> dict:
             "pending_videos": pending_videos,
             "total_duration_seconds": total_duration_seconds,
             "total_duration_display": f"{total_hours}時間{total_minutes}分",
+            "daily_uploads": daily_uploads,
         },
         "video_types": {
             "screen_recording_count": screen_recording_count,
@@ -5720,3 +5734,43 @@ async def backfill_transcript_text(
         except Exception:
             pass
         raise HTTPException(status_code=500, detail=str(e))
+
+
+
+@router.get("/users-list")
+async def get_users_list(
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get list of all users with their video counts and last upload date."""
+    expected_key = f"{ADMIN_ID}:{ADMIN_PASS}"
+    if x_admin_key != expected_key:
+        raise HTTPException(status_code=403, detail="Invalid admin credentials")
+
+    result = await db.execute(
+        text("""
+            SELECT
+                u.id,
+                u.email,
+                u.username,
+                u.created_at,
+                COUNT(v.id) as video_count,
+                MAX(v.created_at) as last_upload
+            FROM users u
+            LEFT JOIN videos v ON v.user_id = u.id
+            GROUP BY u.id, u.email, u.username, u.created_at
+            ORDER BY video_count DESC, u.created_at DESC
+        """)
+    )
+    rows = result.fetchall()
+    users = []
+    for r in rows:
+        users.append({
+            "id": str(r.id),
+            "email": r.email or "",
+            "name": r.username or r.email or "",
+            "video_count": r.video_count,
+            "last_upload": r.last_upload.isoformat() if r.last_upload else None,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        })
+    return {"users": users, "total": len(users)}

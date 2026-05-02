@@ -641,6 +641,10 @@ export default function AdminDashboard() {
                 <StatCard label={window.__t('adminDashboard_fbce43', '解析待ち')} value={data_volume.pending_videos} unit={window.__t('adminDashboard_a4fb84', '本')} color="yellow" />
                 <StatCard label={window.__t('adminDashboard_6eea5d', '総動画時間')} value={data_volume.total_duration_display} color="blue" />
               </div>
+              {/* 毎日のアップロード数 */}
+              {data_volume.daily_uploads && (
+                <DailyUploadsChart dailyUploads={data_volume.daily_uploads} />
+              )}
             </section>
 
             {/* 動画タイプ (データ構造) */}
@@ -658,18 +662,7 @@ export default function AdminDashboard() {
             </section>
 
             {/* 会員規模 (母数) */}
-            <section className="mb-8">
-              <div className="flex items-center gap-2 mb-4">
-                <span className="text-lg">👥</span>
-                <h2 className="text-lg font-semibold text-gray-700">{window.__t('adminDashboard_805412', '会員規模')}</h2>
-                <span className="text-xs text-gray-400 ml-1">{window.__t('adminDashboard_7c37c3', '母数')}</span>
-              </div>
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                <StatCard label={window.__t('adminDashboard_0acdd7', '総ユーザー')} value={user_scale.total_users} unit={window.__t('analytics_personUnit', '人')} color="orange" />
-                <StatCard label={window.__t('adminDashboard_114cea', '配信者数')} value={user_scale.total_streamers} unit={window.__t('analytics_personUnit', '人')} color="red" />
-                <StatCard label={window.__t('adminDashboard_ed0dea', '今月アップ人数')} value={user_scale.this_month_uploaders} unit={window.__t('analytics_personUnit', '人')} color="teal" />
-              </div>
-            </section>
+            <UserScaleSection userScale={user_scale} />
 
             {/* クリップDB (売れる瞬間) */}
             <ClipDBStatsSection />
@@ -2013,4 +2006,129 @@ function formatSeconds(sec) {
   const m = Math.floor(sec / 60);
   const s = Math.floor(sec % 60);
   return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+// ─── Daily Uploads Chart ───
+function DailyUploadsChart({ dailyUploads }) {
+  if (!dailyUploads || dailyUploads.length === 0) return null;
+  const maxCount = Math.max(...dailyUploads.map(d => d.count), 1);
+  return (
+    <div className="mt-4 bg-white rounded-xl border border-gray-200 p-4">
+      <h3 className="text-sm font-semibold text-gray-600 mb-3">📅 毎日のアップロード数（過去30日）</h3>
+      <div className="flex items-end gap-1 h-24">
+        {dailyUploads.map((d, i) => {
+          const height = Math.max((d.count / maxCount) * 100, 4);
+          const dateLabel = new Date(d.date).toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' });
+          return (
+            <div key={i} className="flex-1 flex flex-col items-center group relative">
+              <div className="absolute -top-6 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-[9px] px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-10">
+                {dateLabel}: {d.count}本
+              </div>
+              <div
+                className={`w-full rounded-t transition-all ${
+                  d.count > 0 ? 'bg-blue-400 hover:bg-blue-500' : 'bg-gray-200'
+                }`}
+                style={{ height: `${height}%`, minHeight: d.count > 0 ? '4px' : '2px' }}
+              />
+            </div>
+          );
+        })}
+      </div>
+      <div className="flex justify-between mt-1">
+        <span className="text-[9px] text-gray-400">{dailyUploads.length > 0 ? new Date(dailyUploads[0].date).toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' }) : ''}</span>
+        <span className="text-[9px] text-gray-400">{dailyUploads.length > 0 ? new Date(dailyUploads[dailyUploads.length - 1].date).toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' }) : ''}</span>
+      </div>
+    </div>
+  );
+}
+
+// ─── User Scale Section with detail modal ───
+function UserScaleSection({ userScale }) {
+  const [showDetail, setShowDetail] = useState(false);
+  const [users, setUsers] = useState([]);
+  const [loadingUsers, setLoadingUsers] = useState(false);
+
+  const fetchUsers = async () => {
+    if (users.length > 0) { setShowDetail(true); return; }
+    setLoadingUsers(true);
+    setShowDetail(true);
+    try {
+      const baseURL = import.meta.env.VITE_API_BASE_URL;
+      const res = await axios.get(`${baseURL}/api/v1/admin/users-list`, {
+        headers: { "X-Admin-Key": "aither:hub" },
+        timeout: 30000,
+      });
+      setUsers(res.data.users || []);
+    } catch (e) {
+      console.error("Failed to fetch users:", e);
+    } finally {
+      setLoadingUsers(false);
+    }
+  };
+
+  if (!userScale) return null;
+
+  return (
+    <section className="mb-8">
+      <div className="flex items-center gap-2 mb-4">
+        <span className="text-lg">👥</span>
+        <h2 className="text-lg font-semibold text-gray-700">{window.__t('adminDashboard_805412', '会員規模')}</h2>
+        <span className="text-xs text-gray-400 ml-1">{window.__t('adminDashboard_7c37c3', '母数')}</span>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+        <div onClick={fetchUsers} className="cursor-pointer hover:scale-[1.02] transition-transform">
+          <StatCard label={window.__t('adminDashboard_0acdd7', '総ユーザー')} value={userScale.total_users} unit={window.__t('analytics_personUnit', '人')} color="orange" />
+        </div>
+        <div onClick={fetchUsers} className="cursor-pointer hover:scale-[1.02] transition-transform">
+          <StatCard label={window.__t('adminDashboard_114cea', '配信者数')} value={userScale.total_streamers} unit={window.__t('analytics_personUnit', '人')} color="red" />
+        </div>
+        <div onClick={fetchUsers} className="cursor-pointer hover:scale-[1.02] transition-transform">
+          <StatCard label={window.__t('adminDashboard_ed0dea', '今月アップ人数')} value={userScale.this_month_uploaders} unit={window.__t('analytics_personUnit', '人')} color="teal" />
+        </div>
+      </div>
+      <p className="text-[10px] text-gray-400 mt-1 ml-1">※ タップでユーザー一覧を表示</p>
+
+      {/* User detail modal */}
+      {showDetail && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setShowDetail(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[80vh] overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+              <h3 className="text-lg font-bold text-gray-800">👥 ユーザー一覧</h3>
+              <button onClick={() => setShowDetail(false)} className="text-gray-400 hover:text-gray-600 text-xl">&times;</button>
+            </div>
+            <div className="overflow-y-auto max-h-[65vh] px-6 py-4">
+              {loadingUsers ? (
+                <div className="text-center py-8 text-gray-400">読み込み中...</div>
+              ) : users.length === 0 ? (
+                <div className="text-center py-8 text-gray-400">ユーザーが見つかりません</div>
+              ) : (
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-200">
+                      <th className="text-left py-2 px-2 text-gray-500 font-medium">ユーザー</th>
+                      <th className="text-left py-2 px-2 text-gray-500 font-medium">メール</th>
+                      <th className="text-center py-2 px-2 text-gray-500 font-medium">動画数</th>
+                      <th className="text-center py-2 px-2 text-gray-500 font-medium">最終アップ</th>
+                      <th className="text-center py-2 px-2 text-gray-500 font-medium">登録日</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {users.map((u, i) => (
+                      <tr key={u.id || i} className="border-b border-gray-100 hover:bg-gray-50">
+                        <td className="py-2 px-2 font-medium text-gray-800">{u.name || u.username || '-'}</td>
+                        <td className="py-2 px-2 text-gray-500 text-xs">{u.email || '-'}</td>
+                        <td className="py-2 px-2 text-center text-gray-700">{u.video_count ?? '-'}</td>
+                        <td className="py-2 px-2 text-center text-gray-500 text-xs">{u.last_upload ? formatDate(u.last_upload) : '-'}</td>
+                        <td className="py-2 px-2 text-center text-gray-500 text-xs">{u.created_at ? formatDate(u.created_at) : '-'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </section>
+  );
 }
