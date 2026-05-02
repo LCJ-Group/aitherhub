@@ -3,12 +3,14 @@ Generate TikTok-style clip from a video phase.
 
 Steps:
 1. Download source video from Azure Blob
-2. Cut the specified segment
+2. Cut the specified segment (+ silence removal)
 3. Extract audio and transcribe with Whisper (word-level timestamps)
-4. Crop/resize to 9:16 vertical format
-5. Burn TikTok-style subtitles (random style)
+4. Crop/resize to 9:16 vertical format + burn TikTok-style subtitles
+5. Hook intro insertion (climax at start) — ML-scored clips only
+5b. Sound effect auto-insertion (price/CTA/transition) — ML-scored clips only
 6. Upload to Azure Blob
-7. Update DB with clip URL
+7. Update DB with clip URL + captions
+8. Auto-enrich clip metadata (Clip DB)
 
 Usage:
     python generate_clip.py \
@@ -2292,6 +2294,623 @@ def remove_silence_from_video(video_path: str, output_path: str, silence_interva
 
 
 # =========================
+# Hook intro insertion (climax at start)
+# =========================
+
+def _check_is_ml_clip(clip_id: str) -> bool:
+    """
+    Check if this clip was generated via ML scoring (has ml_model_version set).
+    Hook intro is only applied to ML-scored clips.
+    """
+    loop = get_event_loop()
+
+    async def _check():
+        async with get_session() as session:
+            sql = text("SELECT ml_model_version FROM video_clips WHERE id = :cid")
+            result = await session.execute(sql, {"cid": clip_id})
+            row = result.fetchone()
+            if row and row.ml_model_version:
+                return True
+            return False
+
+    try:
+        return loop.run_until_complete(_check())
+    except Exception as e:
+        logger.warning(f"[HOOK] Failed to check ml_model_version: {e}")
+        return False
+
+
+def detect_hook_moment(clip_path: str, segments: list, hook_duration: float = 2.5) -> tuple:
+    """
+    Detect the best "climax" moment in the clip for hook intro insertion.
+
+    Strategy (priority order):
+      1. Segment with emphasis=True AND highlight_words containing 'price' or 'cta'
+      2. Segment with emphasis=True (loudest/most important)
+      3. Audio peak detection (highest RMS energy window)
+
+    Returns:
+        (hook_start_sec, hook_end_sec) or (None, None) if no suitable moment found.
+        Times are relative to the clip (0-based).
+    """
+    clip_duration = _get_video_duration_sec(clip_path)
+    if not clip_duration or clip_duration < 8.0:
+        # Too short for hook insertion (need at least 8s: 2.5s hook + 5.5s content)
+        logger.info(f"[HOOK] Clip too short ({clip_duration}s) for hook insertion, skipping")
+        return (None, None)
+
+    best_start = None
+    best_score = -1
+
+    # Strategy 1 & 2: Use emphasis segments and highlight_words
+    if segments:
+        for seg in segments:
+            seg_start = seg.get("start", 0)
+            seg_end = seg.get("end", 0)
+            seg_mid = (seg_start + seg_end) / 2
+
+            # Skip segments in the first 3 seconds (would be redundant as hook)
+            if seg_mid < 3.0:
+                continue
+            # Skip if segment is too close to the end
+            if seg_start + hook_duration > clip_duration:
+                continue
+
+            score = 0
+            is_emphasis = seg.get("emphasis", False)
+            hw_list = seg.get("highlight_words", [])
+
+            if is_emphasis:
+                score += 10
+
+            # Bonus for price/cta highlight words
+            for hw in hw_list:
+                hw_type = hw.get("type", "")
+                if hw_type == "price":
+                    score += 8  # Price reveal is very hook-worthy
+                elif hw_type == "cta":
+                    score += 6  # CTA is also compelling
+                elif hw_type == "emotion":
+                    score += 4  # Emotional moments are engaging
+                elif hw_type == "product":
+                    score += 2  # Product mentions are mildly interesting
+
+            # Prefer moments later in the clip (more likely to be climax)
+            position_bonus = min(seg_mid / clip_duration * 3, 3.0)
+            score += position_bonus
+
+            if score > best_score:
+                best_score = score
+                # Center the hook window around the segment
+                best_start = max(0, seg_start - 0.3)  # Start slightly before
+
+    # Strategy 3: Audio peak detection (fallback)
+    if best_start is None or best_score < 5:
+        logger.info("[HOOK] No strong emphasis segment found, trying audio peak detection...")
+        try:
+            audio_peak_start = _detect_audio_peak_window(clip_path, hook_duration, skip_first_sec=3.0)
+            if audio_peak_start is not None:
+                if best_start is None or best_score < 3:
+                    best_start = audio_peak_start
+                    best_score = 3
+                    logger.info(f"[HOOK] Audio peak detected at {audio_peak_start:.1f}s")
+        except Exception as e:
+            logger.warning(f"[HOOK] Audio peak detection failed: {e}")
+
+    if best_start is None:
+        logger.info("[HOOK] No suitable hook moment found")
+        return (None, None)
+
+    hook_end = min(best_start + hook_duration, clip_duration)
+    logger.info(f"[HOOK] Best hook moment: {best_start:.1f}s - {hook_end:.1f}s (score={best_score:.1f})")
+    return (best_start, hook_end)
+
+
+def _detect_audio_peak_window(video_path: str, window_sec: float = 2.5, skip_first_sec: float = 3.0) -> float:
+    """
+    Find the time window with highest average audio energy using FFmpeg volumedetect.
+    Uses astats filter to get per-frame RMS values.
+
+    Returns start time of the loudest window, or None.
+    """
+    # Extract audio levels using FFmpeg astats
+    cmd = [
+        FFMPEG_BIN, "-y",
+        "-i", video_path,
+        "-af", "astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level:file=-",
+        "-f", "null", "-",
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        output = result.stderr + result.stdout
+    except Exception as e:
+        logger.warning(f"[HOOK] astats failed: {e}")
+        return None
+
+    # Parse RMS levels with timestamps
+    # Format: frame:N    pts:N    pts_time:N.NNN
+    #         lavfi.astats.Overall.RMS_level=-N.N
+    rms_data = []  # [(time_sec, rms_db)]
+    lines = output.split("\n")
+    current_time = None
+    for line in lines:
+        if "pts_time:" in line:
+            try:
+                t = float(line.split("pts_time:")[1].strip().split()[0])
+                current_time = t
+            except (ValueError, IndexError):
+                pass
+        elif "RMS_level=" in line and current_time is not None:
+            try:
+                rms_str = line.split("RMS_level=")[1].strip()
+                if rms_str != "-inf":
+                    rms_db = float(rms_str)
+                    rms_data.append((current_time, rms_db))
+            except (ValueError, IndexError):
+                pass
+            current_time = None
+
+    if len(rms_data) < 5:
+        logger.info(f"[HOOK] Not enough audio data points ({len(rms_data)})")
+        return None
+
+    # Find the window with highest average RMS (skip first N seconds)
+    best_avg = -999
+    best_time = None
+    for i in range(len(rms_data)):
+        t, _ = rms_data[i]
+        if t < skip_first_sec:
+            continue
+        # Collect RMS values in the window
+        window_vals = []
+        for j in range(i, len(rms_data)):
+            tj, rms_j = rms_data[j]
+            if tj - t > window_sec:
+                break
+            window_vals.append(rms_j)
+        if len(window_vals) >= 2:
+            avg = sum(window_vals) / len(window_vals)
+            if avg > best_avg:
+                best_avg = avg
+                best_time = t
+
+    return best_time
+
+
+def insert_hook_intro(clip_path: str, hook_start: float, hook_end: float,
+                      output_path: str, crossfade_sec: float = 0.3) -> bool:
+    """
+    Insert a hook intro at the beginning of the clip.
+
+    The hook is a short excerpt from the clip's climax moment, placed at the
+    very beginning with a brief flash/crossfade transition, then the full
+    clip plays from the start.
+
+    Flow: [Hook 2-3s] → [Flash transition] → [Full clip from start]
+
+    Uses FFmpeg filter_complex with xfade for smooth transition.
+    """
+    hook_duration = hook_end - hook_start
+    if hook_duration < 1.0:
+        logger.warning(f"[HOOK] Hook too short ({hook_duration:.1f}s), skipping")
+        return False
+
+    clip_duration = _get_video_duration_sec(clip_path)
+    if not clip_duration:
+        return False
+
+    logger.info(f"[HOOK] Inserting hook intro: {hook_start:.1f}-{hook_end:.1f}s "
+                f"({hook_duration:.1f}s) at start of {clip_duration:.1f}s clip")
+
+    # Strategy: Use filter_complex to:
+    # 1. Extract hook segment (trim)
+    # 2. Keep full original clip
+    # 3. Concatenate with xfade transition
+    xfade_dur = min(crossfade_sec, hook_duration * 0.3, 0.5)
+
+    # Video filter: trim hook, then xfade into full clip
+    filter_complex = (
+        f"[0:v]trim=start={hook_start:.3f}:end={hook_end:.3f},setpts=PTS-STARTPTS[hookv];"
+        f"[0:v]setpts=PTS-STARTPTS[mainv];"
+        f"[hookv][mainv]xfade=transition=fadewhite:duration={xfade_dur:.2f}:"
+        f"offset={hook_duration - xfade_dur:.3f}[outv];"
+        # Audio: trim hook, then acrossfade into full clip
+        f"[0:a]atrim=start={hook_start:.3f}:end={hook_end:.3f},asetpts=PTS-STARTPTS[hooka];"
+        f"[0:a]asetpts=PTS-STARTPTS[maina];"
+        f"[hooka][maina]acrossfade=d={xfade_dur:.2f}:c1=tri:c2=tri[outa]"
+    )
+
+    cmd = [
+        FFMPEG_BIN, "-y",
+        "-i", clip_path,
+        "-filter_complex", filter_complex,
+        "-map", "[outv]", "-map", "[outa]",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+        "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
+        "-movflags", "+faststart", "-r", "30",
+        output_path,
+    ]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600,
+                                preexec_fn=_limit_ffmpeg_memory)
+        if result.returncode != 0:
+            logger.error(f"[HOOK] FFmpeg xfade failed: {result.stderr[-500:]}")
+            # Fallback: simple concat without crossfade
+            return _insert_hook_simple_concat(clip_path, hook_start, hook_end, output_path)
+        logger.info(f"[HOOK] Hook intro inserted successfully (xfade transition)")
+        return True
+    except subprocess.TimeoutExpired:
+        logger.error("[HOOK] FFmpeg hook insertion timed out")
+        return False
+    except Exception as e:
+        logger.error(f"[HOOK] Hook insertion failed: {e}")
+        return _insert_hook_simple_concat(clip_path, hook_start, hook_end, output_path)
+
+
+def _insert_hook_simple_concat(clip_path: str, hook_start: float, hook_end: float,
+                                output_path: str) -> bool:
+    """
+    Fallback: Simple concat without crossfade transition.
+    Extracts hook segment, then concatenates with full clip via concat demuxer.
+    """
+    work_dir = os.path.dirname(output_path)
+    hook_path = os.path.join(work_dir, "hook_segment.mp4")
+
+    # 1. Extract hook segment
+    hook_duration = hook_end - hook_start
+    cmd_hook = [
+        FFMPEG_BIN, "-y",
+        "-ss", f"{hook_start:.3f}",
+        "-i", clip_path,
+        "-t", f"{hook_duration:.3f}",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+        "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
+        "-movflags", "+faststart", "-r", "30",
+        hook_path,
+    ]
+    try:
+        subprocess.run(cmd_hook, check=True, capture_output=True, text=True, timeout=120)
+    except Exception as e:
+        logger.error(f"[HOOK] Failed to extract hook segment: {e}")
+        return False
+
+    # 2. Create concat list
+    concat_list = os.path.join(work_dir, "hook_concat.txt")
+    with open(concat_list, "w") as f:
+        f.write(f"file '{hook_path}'\n")
+        f.write(f"file '{clip_path}'\n")
+
+    # 3. Concatenate (stream copy since both are same codec settings)
+    cmd_concat = [
+        FFMPEG_BIN, "-y",
+        "-f", "concat", "-safe", "0",
+        "-i", concat_list,
+        "-c", "copy",
+        "-movflags", "+faststart",
+        output_path,
+    ]
+    try:
+        subprocess.run(cmd_concat, check=True, capture_output=True, text=True, timeout=120)
+        logger.info("[HOOK] Hook intro inserted (simple concat fallback)")
+        return True
+    except Exception as e:
+        logger.error(f"[HOOK] Simple concat failed: {e}")
+        return False
+    finally:
+        for f_path in [hook_path, concat_list]:
+            if os.path.exists(f_path):
+                try:
+                    os.remove(f_path)
+                except OSError:
+                    pass
+
+
+def _adjust_captions_for_hook(captions_or_segments: list, hook_duration: float,
+                               crossfade_sec: float = 0.3) -> list:
+    """
+    Shift all caption/segment timestamps forward by hook_duration to account
+    for the hook intro that was prepended to the clip.
+
+    The hook intro adds time at the beginning, so all original timestamps
+    need to be offset by the hook duration (minus crossfade overlap).
+    """
+    offset = hook_duration - crossfade_sec
+    if offset <= 0:
+        return captions_or_segments
+
+    adjusted = []
+    for item in captions_or_segments:
+        new_item = dict(item)
+        new_item["start"] = round(item.get("start", 0) + offset, 3)
+        new_item["end"] = round(item.get("end", 0) + offset, 3)
+        # Adjust word-level timestamps too
+        if "words" in new_item and new_item["words"]:
+            new_words = []
+            for w in new_item["words"]:
+                new_w = dict(w)
+                new_w["start"] = round(w.get("start", 0) + offset, 3)
+                new_w["end"] = round(w.get("end", 0) + offset, 3)
+                new_words.append(new_w)
+            new_item["words"] = new_words
+        adjusted.append(new_item)
+    return adjusted
+
+
+# =========================
+# Sound effect (SE) auto-insertion
+# =========================
+
+# SE types and their default local paths (fallback; prefer Azure Blob)
+_SE_TYPES = {
+    "hook_transition": "whoosh_transition.mp3",
+    "price_reveal": "price_reveal.mp3",
+    "cta_attention": "cta_attention.mp3",
+}
+
+# Azure Blob path for SE files (shared across all clips)
+_SE_BLOB_PREFIX = "shared/sound_effects"
+
+
+def _get_se_file(se_type: str, work_dir: str) -> str | None:
+    """
+    Get a sound effect file for the given type.
+    First tries to download from Azure Blob, then falls back to local bundled files.
+
+    Returns local file path or None if not available.
+    """
+    filename = _SE_TYPES.get(se_type)
+    if not filename:
+        return None
+
+    local_path = os.path.join(work_dir, filename)
+    if os.path.exists(local_path):
+        return local_path
+
+    # Try Azure Blob download
+    try:
+        from split_video import AZURE_STORAGE_CONNECTION_STRING, AZURE_BLOB_CONTAINER
+        if AZURE_STORAGE_CONNECTION_STRING:
+            from azure.storage.blob import BlobServiceClient
+            blob_name = f"{_SE_BLOB_PREFIX}/{filename}"
+            bsc = BlobServiceClient.from_connection_string(AZURE_STORAGE_CONNECTION_STRING)
+            blob_client = bsc.get_blob_client(container=AZURE_BLOB_CONTAINER, blob=blob_name)
+            with open(local_path, "wb") as f:
+                data = blob_client.download_blob().readall()
+                f.write(data)
+            if os.path.getsize(local_path) > 100:
+                logger.info(f"[SE] Downloaded {se_type} from blob: {blob_name}")
+                return local_path
+            else:
+                os.remove(local_path)
+    except Exception as e:
+        logger.debug(f"[SE] Blob download failed for {se_type}: {e}")
+
+    # Fallback: bundled SE files in worker/batch/sound_effects/
+    bundled_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sound_effects")
+    bundled_path = os.path.join(bundled_dir, filename)
+    if os.path.exists(bundled_path) and os.path.getsize(bundled_path) > 100:
+        import shutil
+        shutil.copy2(bundled_path, local_path)
+        logger.info(f"[SE] Using bundled SE file: {bundled_path}")
+        return local_path
+
+    # Fallback: generate synthetic SE using FFmpeg
+    return _generate_synthetic_se(se_type, local_path)
+
+
+def _generate_synthetic_se(se_type: str, output_path: str) -> str | None:
+    """
+    Generate a synthetic sound effect using FFmpeg sine wave synthesis.
+    Used as last-resort fallback when no pre-made SE files are available.
+    """
+    try:
+        if se_type == "hook_transition":
+            # Whoosh: frequency sweep 800Hz, short fade
+            cmd = [
+                FFMPEG_BIN, "-y",
+                "-f", "lavfi", "-i", "sine=frequency=800:duration=0.5",
+                "-af", "afade=t=in:d=0.1,afade=t=out:d=0.3,asetrate=44100*1.5,aresample=44100,volume=0.6",
+                "-c:a", "aac", "-b:a", "128k",
+                output_path,
+            ]
+        elif se_type == "price_reveal":
+            # Ascending dual tone
+            cmd = [
+                FFMPEG_BIN, "-y",
+                "-f", "lavfi", "-i", "sine=frequency=1200:duration=0.3",
+                "-f", "lavfi", "-i", "sine=frequency=1800:duration=0.3",
+                "-filter_complex", "[0][1]amix=inputs=2:duration=shortest,afade=t=in:d=0.05,afade=t=out:d=0.15,volume=0.5",
+                "-c:a", "aac", "-b:a", "128k",
+                output_path,
+            ]
+        elif se_type == "cta_attention":
+            # Double beep
+            cmd = [
+                FFMPEG_BIN, "-y",
+                "-f", "lavfi", "-i", "sine=frequency=1000:duration=0.15",
+                "-f", "lavfi", "-i", "sine=frequency=1500:duration=0.15",
+                "-filter_complex", "[0]apad=pad_dur=0.1[a0];[a0][1]concat=n=2:v=0:a=1,afade=t=out:d=0.1,volume=0.5",
+                "-c:a", "aac", "-b:a", "128k",
+                output_path,
+            ]
+        else:
+            return None
+
+        subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=30)
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 50:
+            logger.info(f"[SE] Generated synthetic SE: {se_type}")
+            return output_path
+    except Exception as e:
+        logger.warning(f"[SE] Failed to generate synthetic SE {se_type}: {e}")
+    return None
+
+
+def detect_se_insertion_points(segments: list, hook_applied: bool = False,
+                               hook_duration: float = 0.0) -> list:
+    """
+    Detect where to insert sound effects based on segment metadata.
+
+    Returns list of dicts: [{"time": float, "se_type": str, "volume": float}]
+    """
+    points = []
+
+    # 1. Hook transition SE (at the crossfade point)
+    if hook_applied and hook_duration > 0:
+        points.append({
+            "time": max(0, hook_duration - 0.3),  # Just before crossfade
+            "se_type": "hook_transition",
+            "volume": 0.4,  # Subtle
+        })
+
+    # 2. Scan segments for price/cta highlight_words
+    for seg in segments:
+        hw_list = seg.get("highlight_words", [])
+        if not hw_list:
+            continue
+
+        seg_start = seg.get("start", 0)
+
+        for hw in hw_list:
+            hw_type = hw.get("type", "")
+            hw_word = hw.get("word", "")
+
+            # Find the exact timestamp of the highlight word in the segment's words
+            hw_time = seg_start  # Default to segment start
+            for w in seg.get("words", []):
+                if hw_word and hw_word in w.get("word", ""):
+                    hw_time = w.get("start", seg_start)
+                    break
+
+            if hw_type == "price":
+                points.append({
+                    "time": max(0, hw_time - 0.1),  # Slightly before price reveal
+                    "se_type": "price_reveal",
+                    "volume": 0.35,
+                })
+            elif hw_type == "cta":
+                points.append({
+                    "time": max(0, hw_time - 0.05),
+                    "se_type": "cta_attention",
+                    "volume": 0.3,
+                })
+
+    # Deduplicate: remove SE points that are too close together (< 1.5s)
+    if len(points) > 1:
+        points.sort(key=lambda p: p["time"])
+        deduped = [points[0]]
+        for p in points[1:]:
+            if p["time"] - deduped[-1]["time"] >= 1.5:
+                deduped.append(p)
+        points = deduped
+
+    # Cap at 5 SE insertions per clip to avoid over-saturation
+    if len(points) > 5:
+        # Keep hook_transition + top 4 by priority (price > cta)
+        hook_points = [p for p in points if p["se_type"] == "hook_transition"]
+        price_points = [p for p in points if p["se_type"] == "price_reveal"]
+        cta_points = [p for p in points if p["se_type"] == "cta_attention"]
+        points = hook_points + price_points[:3] + cta_points[:1]
+        points.sort(key=lambda p: p["time"])
+
+    se_summary = [(p['se_type'], round(p['time'], 1)) for p in points]
+    logger.info(f"[SE] Detected {len(points)} SE insertion points: {se_summary}")
+    return points
+
+
+def insert_sound_effects(clip_path: str, se_points: list, output_path: str,
+                          work_dir: str) -> bool:
+    """
+    Insert sound effects into the clip at specified time points.
+    Uses FFmpeg amix filter to overlay SE audio onto the clip's audio track.
+
+    Args:
+        clip_path: Path to the input clip
+        se_points: List of {"time": float, "se_type": str, "volume": float}
+        output_path: Path for the output clip with SE
+        work_dir: Working directory for temp files
+
+    Returns True if successful.
+    """
+    if not se_points:
+        return False
+
+    # Download/prepare SE files
+    se_files = {}  # se_type -> local_path
+    for p in se_points:
+        st = p["se_type"]
+        if st not in se_files:
+            se_path = _get_se_file(st, work_dir)
+            if se_path:
+                se_files[st] = se_path
+
+    # Filter out points without available SE files
+    valid_points = [p for p in se_points if p["se_type"] in se_files]
+    if not valid_points:
+        logger.warning("[SE] No valid SE files available, skipping")
+        return False
+
+    logger.info(f"[SE] Inserting {len(valid_points)} sound effects")
+
+    # Build FFmpeg command with adelay + amix
+    # Input 0: original clip
+    # Input 1..N: SE files
+    inputs = ["-i", clip_path]
+    filter_parts = []
+    mix_inputs = ["[0:a]"]
+
+    for i, p in enumerate(valid_points):
+        se_path = se_files[p["se_type"]]
+        inputs.extend(["-i", se_path])
+
+        delay_ms = int(p["time"] * 1000)
+        vol = p.get("volume", 0.3)
+        idx = i + 1
+
+        # Delay the SE to the correct time position and adjust volume
+        filter_parts.append(
+            f"[{idx}:a]adelay={delay_ms}|{delay_ms},volume={vol:.2f}[se{i}]"
+        )
+        mix_inputs.append(f"[se{i}]")
+
+    # Mix all audio streams
+    n_inputs = len(mix_inputs)
+    mix_str = "".join(mix_inputs)
+    filter_parts.append(
+        f"{mix_str}amix=inputs={n_inputs}:duration=first:dropout_transition=0[outa]"
+    )
+
+    filter_complex = ";".join(filter_parts)
+
+    cmd = [
+        FFMPEG_BIN, "-y",
+        *inputs,
+        "-filter_complex", filter_complex,
+        "-map", "0:v",  # Keep original video
+        "-map", "[outa]",  # Use mixed audio
+        "-c:v", "copy",  # No re-encode for video
+        "-c:a", "aac", "-b:a", "128k",
+        "-movflags", "+faststart",
+        output_path,
+    ]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300,
+                                preexec_fn=_limit_ffmpeg_memory)
+        if result.returncode != 0:
+            logger.error(f"[SE] FFmpeg amix failed: {result.stderr[-500:]}")
+            return False
+        logger.info(f"[SE] Sound effects inserted successfully ({len(valid_points)} SEs)")
+        return True
+    except subprocess.TimeoutExpired:
+        logger.error("[SE] FFmpeg SE insertion timed out")
+        return False
+    except Exception as e:
+        logger.error(f"[SE] SE insertion failed: {e}")
+        return False
+
+
+# =========================
 # Main pipeline
 # =========================
 
@@ -2641,6 +3260,69 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
 
         logger.info(f"Clip created: {os.path.getsize(clip_path)} bytes")
 
+        # 5. Hook intro insertion (climax at start) — ML-scored clips only
+        hook_applied = False
+        hook_duration_actual = 0.0
+        try:
+            is_ml_clip = _check_is_ml_clip(clip_id)
+            if is_ml_clip:
+                update_clip_progress(clip_id, 82, "hook_detection")
+                logger.info("[HOOK] ML-scored clip detected, attempting hook intro insertion...")
+                hook_start, hook_end = detect_hook_moment(clip_path, segments)
+                if hook_start is not None and hook_end is not None:
+                    update_clip_progress(clip_id, 85, "hook_insertion")
+                    hooked_path = os.path.join(work_dir, "clip_hooked.mp4")
+                    if insert_hook_intro(clip_path, hook_start, hook_end, hooked_path):
+                        # Verify hooked clip is valid
+                        hooked_dur = _get_video_duration_sec(hooked_path)
+                        if hooked_dur and hooked_dur > _get_video_duration_sec(clip_path):
+                            hook_duration_actual = hook_end - hook_start
+                            # Replace clip_path with hooked version
+                            os.replace(hooked_path, clip_path)
+                            hook_applied = True
+                            # Adjust segment timestamps to account for prepended hook
+                            segments = _adjust_captions_for_hook(segments, hook_duration_actual)
+                            logger.info(f"[HOOK] Hook intro applied! Duration added: {hook_duration_actual:.1f}s")
+                        else:
+                            logger.warning(f"[HOOK] Hooked clip invalid (dur={hooked_dur}), keeping original")
+                            if os.path.exists(hooked_path):
+                                os.remove(hooked_path)
+                    else:
+                        logger.info("[HOOK] Hook insertion failed, keeping original clip")
+                else:
+                    logger.info("[HOOK] No suitable hook moment found, keeping original clip")
+            else:
+                logger.info("[HOOK] Not an ML-scored clip, skipping hook insertion")
+        except Exception as hook_err:
+            logger.warning(f"[HOOK] Hook insertion error (non-fatal): {hook_err}")
+            # Continue with original clip — hook is a nice-to-have, not critical
+
+        # 5b. Sound effect auto-insertion — ML-scored clips only
+        try:
+            if _check_is_ml_clip(clip_id):
+                se_points = detect_se_insertion_points(segments, hook_applied=hook_applied,
+                                                       hook_duration=hook_duration_actual)
+                if se_points:
+                    update_clip_progress(clip_id, 87, "sound_effects")
+                    se_output_path = os.path.join(work_dir, "clip_with_se.mp4")
+                    if insert_sound_effects(clip_path, se_points, se_output_path, work_dir):
+                        # Verify SE clip is valid
+                        se_dur = _get_video_duration_sec(se_output_path)
+                        orig_dur = _get_video_duration_sec(clip_path)
+                        if se_dur and orig_dur and abs(se_dur - orig_dur) < 1.0:
+                            os.replace(se_output_path, clip_path)
+                            logger.info(f"[SE] Sound effects applied ({len(se_points)} SEs)")
+                        else:
+                            logger.warning(f"[SE] SE clip duration mismatch (se={se_dur}, orig={orig_dur}), keeping original")
+                            if os.path.exists(se_output_path):
+                                os.remove(se_output_path)
+                    else:
+                        logger.info("[SE] SE insertion failed, keeping original clip")
+                else:
+                    logger.info("[SE] No SE insertion points detected")
+        except Exception as se_err:
+            logger.warning(f"[SE] SE insertion error (non-fatal): {se_err}")
+
         update_clip_progress(clip_id, 90, "uploading")
 
         # 6. Upload to Azure Blob
@@ -2661,7 +3343,7 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
         # Convert segments to captions format for frontend
         captions_data = []
         for seg in segments:
-            captions_data.append({
+            cap_entry = {
                 "start": round(seg.get("start", 0), 3),
                 "end": round(seg.get("end", 0), 3),
                 "text": seg.get("text", ""),
@@ -2671,9 +3353,17 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
                 ] if seg.get("words") else [],
                 "source": "whisper",
                 "language": subtitle_language,
-            })
+            }
+            # Preserve highlight_words and emphasis from GPT refinement
+            if seg.get("highlight_words"):
+                cap_entry["highlight_words"] = seg["highlight_words"]
+            if seg.get("emphasis"):
+                cap_entry["emphasis"] = True
+            captions_data.append(cap_entry)
+
         update_clip_status(clip_id, "completed", clip_url=uploaded_url, captions=captions_data if captions_data else None)
-        logger.info(f"=== Clip generation completed successfully ({len(captions_data)} captions saved) ===")
+        hook_info = f", hook={hook_duration_actual:.1f}s" if hook_applied else ""
+        logger.info(f"=== Clip generation completed successfully ({len(captions_data)} captions saved{hook_info}) ===")
 
         # 8. Auto-enrich clip metadata (Clip DB)
         try:
