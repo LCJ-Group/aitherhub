@@ -50,6 +50,36 @@ router = APIRouter()
 
 # ─── Helpers ───
 
+import re as _re
+import unicodedata as _unicodedata
+
+def _normalize_brand_name(name: str) -> str:
+    """Normalize brand name for duplicate detection.
+    Handles: case, spaces, 'Professional'/'Pro' suffixes,
+    common Japanese/English brand name variations (KYOUGOKU→KYOGOKU etc.)
+    """
+    if not name:
+        return ""
+    # Lowercase
+    n = name.strip().lower()
+    # Normalize unicode (full-width → half-width)
+    n = _unicodedata.normalize("NFKC", n)
+    # Remove common suffixes
+    for suffix in [" professional", " pro", " inc", " co", " ltd", " corp", " 株式会社", " co.", " inc."]:
+        if n.endswith(suffix):
+            n = n[:-len(suffix)]
+    # Remove all spaces, hyphens, underscores
+    n = _re.sub(r"[\s\-_\.]+", "", n)
+    # Common romanization normalizations
+    # OU → O (e.g., KYOUGOKU → KYOGOKU)
+    n = n.replace("ou", "o")
+    # UU → U
+    n = n.replace("uu", "u")
+    # II → I
+    n = n.replace("ii", "i")
+    return n
+
+
 def _replace_blob_url_to_cdn(url: str) -> str:
     """Replace Azure Blob URL with CDN URL if configured."""
     if not url:
@@ -1216,6 +1246,20 @@ async def create_brand_manual(
     import uuid
     import secrets as _secrets
 
+    # Check for existing brand with similar name (prevent duplicates)
+    normalized = _normalize_brand_name(req.name)
+    existing_brands = await db.execute(
+        text("SELECT client_id, name FROM widget_clients WHERE is_active = TRUE"),
+    )
+    for row in existing_brands.fetchall():
+        if _normalize_brand_name(row.name) == normalized:
+            return {
+                "status": "exists",
+                "client_id": row.client_id,
+                "name": row.name,
+                "message": f"Similar brand '{row.name}' already exists (normalized: {normalized})",
+            }
+
     client_id = str(uuid.uuid4())[:8]
     brand_password = _secrets.token_urlsafe(12)
     from app.api.v1.endpoints.brand_portal import _hash_password
@@ -1565,3 +1609,136 @@ async def detect_languages_batch(
         await db.rollback()
         logger.error(f"[clip-db] Language detection failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Language detection failed: {str(e)}")
+
+
+# ─── Brand Merge ───
+
+class BrandMergeRequest(BaseModel):
+    target_client_id: str = Field(..., description="The client_id to merge INTO (the surviving brand)")
+    source_client_ids: list[str] = Field(..., description="List of client_ids to merge FROM (will be deactivated)")
+    deactivate_sources: bool = Field(True, description="Whether to deactivate source brands after merge")
+
+@router.post("/brands/merge")
+async def merge_brands(
+    req: BrandMergeRequest,
+    db: AsyncSession = Depends(get_db),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """Merge multiple brands into one. Moves all clip assignments to target brand and deactivates sources."""
+    if not _check_admin_or_user(x_admin_key=x_admin_key):
+        raise HTTPException(status_code=403, detail="Admin only")
+    import uuid as _uuid
+    try:
+        target = req.target_client_id
+        sources = req.source_client_ids
+
+        # Verify target exists
+        t_check = await db.execute(
+            text("SELECT client_id, name FROM widget_clients WHERE client_id = :cid"),
+            {"cid": target},
+        )
+        t_row = t_check.first()
+        if not t_row:
+            raise HTTPException(status_code=404, detail=f"Target brand {target} not found")
+
+        moved_total = 0
+        skipped_total = 0
+        deactivated = []
+
+        for src in sources:
+            if src == target:
+                continue
+
+            # Get all active clip assignments from source
+            src_clips = await db.execute(
+                text("""
+                    SELECT clip_id FROM widget_clip_assignments
+                    WHERE client_id = :src AND is_active = TRUE
+                """),
+                {"src": src},
+            )
+            clip_ids = [str(r[0]) for r in src_clips.fetchall()]
+
+            moved = 0
+            skipped = 0
+            for cid in clip_ids:
+                # Check if already assigned to target
+                existing = await db.execute(
+                    text("""
+                        SELECT id, is_active FROM widget_clip_assignments
+                        WHERE client_id = :target AND clip_id = :cid
+                    """),
+                    {"target": target, "cid": cid},
+                )
+                ex_row = existing.first()
+                if ex_row and ex_row.is_active:
+                    skipped += 1
+                elif ex_row:
+                    # Reactivate existing assignment
+                    await db.execute(
+                        text("""
+                            UPDATE widget_clip_assignments
+                            SET is_active = TRUE
+                            WHERE client_id = :target AND clip_id = :cid
+                        """),
+                        {"target": target, "cid": cid},
+                    )
+                    moved += 1
+                else:
+                    # Get next sort order
+                    max_order = await db.execute(
+                        text("SELECT COALESCE(MAX(sort_order), -1) + 1 FROM widget_clip_assignments WHERE client_id = :cid"),
+                        {"cid": target},
+                    )
+                    next_order = max_order.scalar() or 0
+                    # Create new assignment
+                    await db.execute(
+                        text("""
+                            INSERT INTO widget_clip_assignments (id, client_id, clip_id, sort_order, is_active, created_at)
+                            VALUES (:id, :client_id, :clip_id, :sort_order, TRUE, NOW())
+                        """),
+                        {
+                            "id": str(_uuid.uuid4()),
+                            "client_id": target,
+                            "clip_id": cid,
+                            "sort_order": next_order,
+                        },
+                    )
+                    moved += 1
+
+                # Deactivate source assignment
+                await db.execute(
+                    text("""
+                        UPDATE widget_clip_assignments
+                        SET is_active = FALSE
+                        WHERE client_id = :src AND clip_id = :cid
+                    """),
+                    {"src": src, "cid": cid},
+                )
+
+            moved_total += moved
+            skipped_total += skipped
+
+            # Deactivate source brand
+            if req.deactivate_sources:
+                await db.execute(
+                    text("UPDATE widget_clients SET is_active = FALSE WHERE client_id = :cid"),
+                    {"cid": src},
+                )
+                deactivated.append(src)
+
+        await db.commit()
+        return {
+            "status": "merged",
+            "target": target,
+            "target_name": t_row.name,
+            "clips_moved": moved_total,
+            "clips_skipped_already_assigned": skipped_total,
+            "sources_deactivated": deactivated,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"[clip-db] Brand merge failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Brand merge failed: {str(e)}")

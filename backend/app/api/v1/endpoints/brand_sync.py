@@ -15,7 +15,9 @@ Authentication: Shared secret via X-Sync-Secret header.
 import hashlib
 import logging
 import os
+import re as _re
 import secrets
+import unicodedata as _unicodedata
 import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -56,6 +58,20 @@ def _hash_password(password: str) -> str:
     salt = secrets.token_hex(16)
     hashed = hashlib.sha256(f"{salt}:{password}".encode()).hexdigest()
     return f"{salt}:{hashed}"
+
+
+def _normalize_brand_name(name: str) -> str:
+    """Normalize brand name for duplicate detection."""
+    if not name:
+        return ""
+    n = name.strip().lower()
+    n = _unicodedata.normalize("NFKC", n)
+    for suffix in [" professional", " pro", " inc", " co", " ltd", " corp", " 株式会社", " co.", " inc."]:
+        if n.endswith(suffix):
+            n = n[:-len(suffix)]
+    n = _re.sub(r"[\s\-_\.]+", "", n)
+    n = n.replace("ou", "o").replace("uu", "u").replace("ii", "i")
+    return n
 
 
 def _build_keywords(name: str, name_ja: str = "", category: str = "", company_name: str = "") -> str:
@@ -190,6 +206,49 @@ async def sync_brand(
                 portal_url=f"https://www.aitherhub.com/brand?id={client_id}",
             )
         else:
+            # Check for existing brand with similar normalized name (prevent duplicates)
+            normalized_new = _normalize_brand_name(payload.name)
+            all_brands = await db.execute(
+                text("SELECT client_id, name FROM widget_clients WHERE is_active = TRUE")
+            )
+            similar_brand = None
+            for row in all_brands.fetchall():
+                if _normalize_brand_name(row.name) == normalized_new:
+                    similar_brand = row
+                    break
+
+            if similar_brand:
+                # Merge into existing similar brand instead of creating new
+                client_id = similar_brand.client_id
+                await db.execute(
+                    text("""
+                        UPDATE widget_clients
+                        SET lcj_brand_id = :lcj_brand_id,
+                            logo_url = CASE WHEN :logo_url != '' THEN :logo_url ELSE logo_url END,
+                            company_name = CASE WHEN :company_name != '' THEN :company_name ELSE company_name END,
+                            name_ja = CASE WHEN :name_ja != '' THEN :name_ja ELSE name_ja END,
+                            updated_at = NOW()
+                        WHERE client_id = :cid
+                    """),
+                    {
+                        "lcj_brand_id": payload.lcj_brand_id,
+                        "logo_url": payload.logo_url or "",
+                        "company_name": payload.company_name or "",
+                        "name_ja": payload.name_ja or "",
+                        "cid": client_id,
+                    }
+                )
+                await db.commit()
+                assigned_count = await _auto_assign_clips(db, client_id, keywords)
+                logger.info(f"Merged brand '{payload.name}' into existing '{similar_brand.name}' ({client_id})")
+                return BrandSyncResponse(
+                    success=True,
+                    client_id=client_id,
+                    action="merged",
+                    message=f"ブランド '{payload.name}' を既存の '{similar_brand.name}' に統合しました（{assigned_count}件のクリップを自動紐付け）",
+                    portal_url=f"https://www.aitherhub.com/brand?id={client_id}",
+                )
+
             # CREATE new widget_client
             client_id = _generate_client_id()
             raw_password = _generate_password()
