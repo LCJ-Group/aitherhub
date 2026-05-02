@@ -925,7 +925,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
         for (const c of clip.captions) {
           const txt = (c.text || '').trim();
           if (txt.length <= MAX_CAP_CHARS) {
-            splitClipCaps.push(c);
+            splitClipCaps.push({ ...c, highlight_words: c.highlight_words || [] });
           } else if (c.words && c.words.length > 0) {
             // Use word-level timestamps to split
             let curText = '';
@@ -936,7 +936,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
               if (!wt) continue;
               if (curStart === null) curStart = w.start;
               if ((curText + wt).length > MAX_CAP_CHARS && curText.length >= 4) {
-                splitClipCaps.push({ start: curStart, end: curWords[curWords.length - 1].end, text: curText, words: [...curWords], source: c.source });
+                splitClipCaps.push({ start: curStart, end: curWords[curWords.length - 1].end, text: curText, words: [...curWords], source: c.source, highlight_words: c.highlight_words || [] });
                 curText = wt;
                 curWords = [w];
                 curStart = w.start;
@@ -959,7 +959,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
               if (!ct.trim()) continue;
               const rs = ci * cpc / chars.length;
               const re = Math.min((ci + 1) * cpc / chars.length, 1.0);
-              splitClipCaps.push({ start: (c.start || 0) + dur * rs, end: (c.start || 0) + dur * re, text: ct, source: c.source });
+              splitClipCaps.push({ start: (c.start || 0) + dur * rs, end: (c.start || 0) + dur * re, text: ct, source: c.source, highlight_words: c.highlight_words || [] });
             }
           }
         }
@@ -1755,6 +1755,45 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
     });
   };
 
+  // ─── Highlight word color mapping ───
+  const HW_COLORS = {
+    product: '#FFD700',   // yellow
+    price: '#FF4444',     // red
+    emotion: '#FF8C00',   // orange
+    cta: '#00FF7F',       // green
+  };
+
+  const getHighlightColor = (wordText, highlightWords) => {
+    if (!highlightWords || highlightWords.length === 0) return null;
+    const w = wordText.trim();
+    for (const hw of highlightWords) {
+      if (hw.word && hw.type && (w.includes(hw.word) || hw.word.includes(w))) {
+        return HW_COLORS[hw.type] || null;
+      }
+    }
+    return null;
+  };
+
+  // ─── Render text with highlight_words color for non-karaoke styles ───
+  const renderHighlightedText = (caption) => {
+    if (!caption) return null;
+    const hwList = caption.highlight_words || [];
+    if (!hwList.length) return caption.text;
+    // Build regex from highlight words
+    const keywords = hwList.filter(hw => hw.word && hw.type).map(hw => hw.word);
+    if (!keywords.length) return caption.text;
+    const escaped = keywords.map(kw => kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    const regex = new RegExp(`(${escaped.join('|')})`, 'g');
+    const parts = caption.text.split(regex);
+    return parts.map((part, i) => {
+      const hw = hwList.find(h => h.word === part);
+      if (hw && hw.type && HW_COLORS[hw.type]) {
+        return <span key={i} style={{ color: HW_COLORS[hw.type], fontWeight: 900 }}>{part}</span>;
+      }
+      return <span key={i}>{part}</span>;
+    });
+  };
+
   // ─── Karaoke style: word-by-word highlight synced to playback ───
   const renderKaraokeText = (caption) => {
     if (!caption) return null;
@@ -1762,6 +1801,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
     const highlightColor = preset.highlightColor || '#FFE135';
     const dimColor = preset.text.color || 'rgba(255,255,255,0.5)';
     const t = currentTime;
+    const hwList = caption.highlight_words || [];
 
     // If word-level timestamps are available, use them
     if (caption.words && caption.words.length > 0) {
@@ -1770,12 +1810,14 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
         const wEnd = toLocalTime(w.end || 0) + captionOffset;
         const isActive = t >= wStart && t <= wEnd;
         const isPast = t > wEnd;
+        const hwColor = getHighlightColor(w.word || '', hwList);
+        const baseColor = hwColor || (isPast ? '#fff' : dimColor);
         return (
           <span
             key={i}
             style={{
-              color: isActive ? highlightColor : isPast ? '#fff' : dimColor,
-              fontWeight: isActive ? 900 : 700,
+              color: isActive ? (hwColor || highlightColor) : baseColor,
+              fontWeight: (isActive || hwColor) ? 900 : 700,
               fontSize: isActive ? `${(preset.text.fontSize || 18) * 1.15}px` : `${preset.text.fontSize || 18}px`,
               transition: 'color 0.15s ease, font-size 0.15s ease',
               display: 'inline',
@@ -2348,7 +2390,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                       ? renderKaraokeText(currentCaption)
                       : subtitleStyle === 'pop'
                         ? renderPopText(currentCaption.text)
-                        : currentCaption.text}
+                        : renderHighlightedText(currentCaption)}
                   </span>
                 </div>
               );
@@ -3171,6 +3213,24 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                             {'×'}
                           </button>
                         </div>
+                        {/* Highlight words badges */}
+                        {cap.highlight_words && cap.highlight_words.length > 0 && (
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, marginTop: 3 }}>
+                            {cap.highlight_words.map((hw, hi) => (
+                              <span key={hi} style={{
+                                fontSize: 10,
+                                padding: '1px 5px',
+                                borderRadius: 3,
+                                backgroundColor: (HW_COLORS[hw.type] || '#888') + '22',
+                                color: HW_COLORS[hw.type] || '#888',
+                                fontWeight: 600,
+                              }}>
+                                {hw.word}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                       );
                     })}
 

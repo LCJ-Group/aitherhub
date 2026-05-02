@@ -1482,7 +1482,8 @@ def _generate_ass_content(captions: list, style: str, position_x: float, positio
             local_start = 0
         if local_end <= local_start:
             continue
-        processed.append({'start': local_start, 'end': local_end, 'text': cap_text, 'words': cap_words})
+        cap_highlight_words = _cap_get(cap, 'highlight_words', [])
+        processed.append({'start': local_start, 'end': local_end, 'text': cap_text, 'words': cap_words, 'highlight_words': cap_highlight_words})
 
     processed.sort(key=lambda c: c['start'])
 
@@ -1495,9 +1496,25 @@ def _generate_ass_content(captions: list, style: str, position_x: float, positio
 
     logger.info(f"[ass] Processed {len(processed)} captions (from {len(captions)} raw), style={style}")
 
+    # Color mapping for highlight_words types (ASS BGR format)
+    _HW_COLORS = {
+        'product': '&H0000D7FF',   # #FFD700 yellow -> BGR 00D7FF
+        'price': '&H004444FF',      # #FF4444 red -> BGR 4444FF
+        'emotion': '&H00008CFF',    # #FF8C00 orange -> BGR 008CFF
+        'cta': '&H007FFF00',        # #00FF7F green -> BGR 7FFF00
+    }
+
     for cap in processed:
         start_ts = _seconds_to_ass_time(cap['start'])
         end_ts = _seconds_to_ass_time(cap['end'])
+
+        # Build highlight keyword lookup
+        hw_map = {}
+        for hw in (cap.get('highlight_words') or []):
+            hw_word = hw.get('word', '') if isinstance(hw, dict) else ''
+            hw_type = hw.get('type', '') if isinstance(hw, dict) else ''
+            if hw_word and hw_type in _HW_COLORS:
+                hw_map[hw_word] = _HW_COLORS[hw_type]
 
         if is_karaoke and cap.get('words'):
             karaoke_text = ""
@@ -1510,10 +1527,28 @@ def _generate_ass_content(captions: list, style: str, position_x: float, positio
                 duration_cs = max(1, int((w_end - w_start) * 100))
                 word_text = w.get('word', '')
                 word_text = word_text.replace('\\', '\\\\').replace('{', '\\{').replace('}', '\\}')
-                karaoke_text += f"{{\\kf{duration_cs}}}{word_text}"
+                # Check highlight color
+                color_tag = ''
+                if hw_map:
+                    w_raw = w.get('word', '').strip()
+                    for kw, kw_color in hw_map.items():
+                        if kw in w_raw or w_raw in kw:
+                            color_tag = f'\\c{kw_color}'
+                            break
+                if color_tag:
+                    karaoke_text += f"{{\\kf{duration_cs}{color_tag}}}{word_text}"
+                else:
+                    karaoke_text += f"{{\\kf{duration_cs}}}{word_text}"
             ass += f"Dialogue: 0,{start_ts},{end_ts},Default,,0,0,0,,{karaoke_text}\n"
         else:
-            text = cap['text'].replace('\n', '\\N')
+            text = cap['text']
+            # Apply inline color tags for highlight_words
+            if hw_map:
+                for kw, kw_color in hw_map.items():
+                    if kw in text:
+                        escaped_kw = kw.replace('\\', '\\\\').replace('{', '\\{').replace('}', '\\}')
+                        text = text.replace(kw, f'{{\\c{kw_color}}}{escaped_kw}{{\\c}}')
+            text = text.replace('\n', '\\N')
             ass += f"Dialogue: 0,{start_ts},{end_ts},Default,,0,0,0,,{text}\n"
 
     return ass
