@@ -314,11 +314,6 @@ function ClipCard({ clip, onPlay, brands, adminKey, onBrandChange }) {
               <ThumbsDown className="w-2.5 h-2.5" /> Bad
             </span>
           )}
-          {clip.ml_model_version && (
-            <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-purple-600 text-white shadow">
-              AI {clip.ml_model_version}
-            </span>
-          )}
           {clip.detected_language && clip.detected_language !== 'ja' && clip.detected_language !== 'unknown' && (
             <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold shadow ${
               clip.detected_language === 'zh-TW' ? 'bg-rose-500 text-white' :
@@ -395,13 +390,25 @@ function ClipCard({ clip, onPlay, brands, adminKey, onBrandChange }) {
             </span>
           )}
         </div>
-        {/* 生成日 */}
-        {clip.created_at && (
-          <div className="flex items-center gap-1 text-[10px] text-gray-400">
-            <Clock className="w-3 h-3" />
-            <span>{new Date(clip.created_at).toLocaleDateString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit' })}</span>
-          </div>
-        )}
+        {/* AI Version + 生成日 */}
+        <div className="flex items-center gap-2 flex-wrap">
+          {clip.ml_model_version ? (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-gradient-to-r from-purple-500 to-indigo-500 text-white shadow-sm">
+              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
+              AI {clip.ml_model_version}
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-medium bg-gray-100 text-gray-500">
+              Pre-AI
+            </span>
+          )}
+          {clip.created_at && (
+            <span className="flex items-center gap-0.5 text-[10px] text-gray-400">
+              <Clock className="w-3 h-3" />
+              {new Date(clip.created_at).toLocaleDateString('ja-JP', { month: '2-digit', day: '2-digit' })}
+            </span>
+          )}
+        </div>
 
         {/* Brand assignments */}
         <div className="relative">
@@ -1233,6 +1240,7 @@ export default function AdminClipDB({ adminKey }) {
   const [hasSubtitleFilter, setHasSubtitleFilter] = useState(null);
   const [hasTrimFilter, setHasTrimFilter] = useState(null);
   const [languageFilter, setLanguageFilter] = useState("");
+  const [aiVersionFilter, setAiVersionFilter] = useState("");
   const [sortBy, setSortBy] = useState("created_at");
   const [sortOrder, setSortOrder] = useState("desc");
   const [page, setPage] = useState(1);
@@ -1272,7 +1280,7 @@ export default function AdminClipDB({ adminKey }) {
     if (searchMode === "structured" && enrichTriggered.current) {
       loadClips();
     }
-  }, [page, sortBy, sortOrder, selectedTag, soldFilter, ratingFilter, selectedBrand, unusableFilter, noBrandFilter, hasSubtitleFilter, hasTrimFilter, languageFilter]);
+  }, [page, sortBy, sortOrder, selectedTag, soldFilter, ratingFilter, selectedBrand, unusableFilter, noBrandFilter, hasSubtitleFilter, hasTrimFilter, languageFilter, aiVersionFilter]);
 
   async function autoEnrichAndLoad() {
     // 1. Auto enrich (non-blocking for already-enriched clips)
@@ -1347,6 +1355,7 @@ export default function AdminClipDB({ adminKey }) {
       if (hasSubtitleFilter !== null) params.has_subtitle = hasSubtitleFilter;
       if (hasTrimFilter !== null) params.has_trim = hasTrimFilter;
       if (languageFilter) params.language = languageFilter;
+      if (aiVersionFilter) params.ai_version = aiVersionFilter;
 
       const data = await clipDbFetch("/search", params, adminKey);
       setClips(data.clips || []);
@@ -1599,6 +1608,16 @@ export default function AdminClipDB({ adminKey }) {
               <option value="">NG: すべて</option>
               <option value="true">NGのみ</option>
               <option value="false">使えるのみ</option>
+            </select>
+
+            <select
+              value={aiVersionFilter}
+              onChange={(e) => { setAiVersionFilter(e.target.value); setPage(1); }}
+              className="px-3 py-1.5 rounded-lg border border-purple-300 text-xs bg-purple-50 focus:outline-none focus:ring-2 focus:ring-purple-500 font-medium"
+            >
+              <option value="">AI Ver: すべて</option>
+              <option value="pre-ai">Pre-AI（従来）</option>
+              <option value="v7.20260501">AI v7.20260501</option>
             </select>
 
             <select

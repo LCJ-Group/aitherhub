@@ -189,6 +189,7 @@ async def search_clips(
     has_subtitle: Optional[bool] = Query(None, description="Filter clips with/without subtitle export"),
     has_trim: Optional[bool] = Query(None, description="Filter clips with/without trim data"),
     language: Optional[str] = Query(None, description="Filter by detected language: ja, zh-TW, zh-CN, en, ko, th"),
+    ai_version: Optional[str] = Query(None, description="Filter by AI model version (e.g. v7.20260501, pre-ai for no version)"),
     # Sorting
     sort_by: str = Query("created_at", description="Sort field: created_at, gmv, cta_score, importance_score, duration_sec"),
     sort_order: str = Query("desc", description="Sort order: asc or desc"),
@@ -320,6 +321,14 @@ async def search_clips(
     if language:
         conditions.append("vc.detected_language = :language")
         params["language"] = language
+
+    # AI version filter
+    if ai_version:
+        if ai_version.lower() in ('pre-ai', 'pre_ai', 'none'):
+            conditions.append("vc.ml_model_version IS NULL")
+        else:
+            conditions.append("vc.ml_model_version = :ai_version")
+            params["ai_version"] = ai_version
 
     where_clause = " AND ".join(conditions)
 
