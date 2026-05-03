@@ -261,16 +261,17 @@ async def sync_brand(
                 text("""
                     INSERT INTO widget_clients 
                     (client_id, name, domain, theme_color, position, cta_text, is_active,
-                     password_hash, brand_keywords, lcj_brand_id, logo_url, company_name, name_ja, created_at, updated_at)
+                     password_hash, password_plain, brand_keywords, lcj_brand_id, logo_url, company_name, name_ja, created_at, updated_at)
                     VALUES 
                     (:client_id, :name, :domain, '#FF2D55', 'bottom-right', '購入する', TRUE,
-                     :password_hash, :keywords, :lcj_brand_id, :logo_url, :company_name, :name_ja, NOW(), NOW())
+                     :password_hash, :password_plain, :keywords, :lcj_brand_id, :logo_url, :company_name, :name_ja, NOW(), NOW())
                 """),
                 {
                     "client_id": client_id,
                     "name": payload.name,
                     "domain": domain,
                     "password_hash": password_hash,
+                    "password_plain": raw_password,
                     "keywords": keywords,
                     "lcj_brand_id": payload.lcj_brand_id,
                     "logo_url": payload.logo_url or "",
@@ -365,16 +366,17 @@ async def sync_brands_bulk(
                     text("""
                         INSERT INTO widget_clients 
                         (client_id, name, domain, theme_color, position, cta_text, is_active,
-                         password_hash, brand_keywords, lcj_brand_id, logo_url, company_name, name_ja, created_at, updated_at)
+                         password_hash, password_plain, brand_keywords, lcj_brand_id, logo_url, company_name, name_ja, created_at, updated_at)
                         VALUES 
                         (:client_id, :name, :domain, '#FF2D55', 'bottom-right', '購入する', TRUE,
-                         :password_hash, :keywords, :lcj_brand_id, :logo_url, :company_name, :name_ja, NOW(), NOW())
+                         :password_hash, :password_plain, :keywords, :lcj_brand_id, :logo_url, :company_name, :name_ja, NOW(), NOW())
                     """),
                     {
                         "client_id": client_id,
                         "name": brand.name,
                         "domain": domain,
                         "password_hash": password_hash,
+                        "password_plain": raw_password,
                         "keywords": keywords,
                         "lcj_brand_id": brand.lcj_brand_id,
                         "logo_url": brand.logo_url or "",

@@ -540,6 +540,7 @@ async def list_widget_clients(
                 SELECT client_id, name, domain, theme_color, position, cta_text, 
                        is_active, brand_keywords, lcj_brand_id, logo_url,
                        fab_type, fab_shape, fab_size, fab_image_url, fab_banner_width, fab_banner_height,
+                       password_plain,
                        created_at::text as created_at, updated_at::text as updated_at
                 FROM widget_clients ORDER BY created_at DESC
             """)
@@ -662,10 +663,10 @@ async def create_widget_client(
         text("""
             INSERT INTO widget_clients
                 (client_id, name, domain, theme_color, position, cta_text,
-                 cta_url_template, cart_selector, brand_keywords, is_active, created_at, updated_at, password_hash)
+                 cta_url_template, cart_selector, brand_keywords, is_active, created_at, updated_at, password_hash, password_plain)
             VALUES
                 (:client_id, :name, :domain, :theme_color, :position, :cta_text,
-                 :cta_url_template, :cart_selector, :brand_keywords, TRUE, NOW(), NOW(), :password_hash)
+                 :cta_url_template, :cart_selector, :brand_keywords, TRUE, NOW(), NOW(), :password_hash, :password_plain)
         """),
         {
             "client_id": client_id,
@@ -678,6 +679,7 @@ async def create_widget_client(
             "cart_selector": payload.cart_selector,
             "brand_keywords": payload.brand_keywords,
             "password_hash": password_hash,
+            "password_plain": brand_password,
         },
     )
     await db.commit()
@@ -951,8 +953,8 @@ async def reset_brand_password(
     password_hash = _hash_password(new_password)
 
     await db.execute(
-        text("UPDATE widget_clients SET password_hash = :ph WHERE client_id = :cid"),
-        {"ph": password_hash, "cid": client_id},
+        text("UPDATE widget_clients SET password_hash = :ph, password_plain = :pp WHERE client_id = :cid"),
+        {"ph": password_hash, "pp": new_password, "cid": client_id},
     )
     await db.commit()
 

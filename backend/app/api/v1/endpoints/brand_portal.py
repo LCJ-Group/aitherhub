@@ -1365,3 +1365,41 @@ async def brand_analytics_daily(
         })
 
     return {"period_days": days, "daily": daily}
+
+
+# ─── Brand Password Change ───
+
+@router.post("/brand/change-password")
+async def brand_change_password(
+    payload: dict,
+    client_id: str = Depends(_get_brand_client_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Allow brand to change their own password."""
+    current_password = payload.get("current_password", "")
+    new_password = payload.get("new_password", "")
+
+    if not new_password or len(new_password) < 6:
+        raise HTTPException(status_code=400, detail="新しいパスワードは6文字以上で入力してください")
+
+    # Verify current password
+    result = await db.execute(
+        text("SELECT password_hash FROM widget_clients WHERE client_id = :cid"),
+        {"cid": client_id},
+    )
+    row = result.mappings().first()
+    if not row or not row.get("password_hash"):
+        raise HTTPException(status_code=400, detail="パスワードが設定されていません")
+
+    if not _verify_password(current_password, row["password_hash"]):
+        raise HTTPException(status_code=400, detail="現在のパスワードが正しくありません")
+
+    # Update password
+    new_hash = _hash_password(new_password)
+    await db.execute(
+        text("UPDATE widget_clients SET password_hash = :ph, password_plain = :pp WHERE client_id = :cid"),
+        {"ph": new_hash, "pp": new_password, "cid": client_id},
+    )
+    await db.commit()
+
+    return {"success": True, "message": "パスワードを変更しました"}

@@ -479,6 +479,7 @@ async def run_all_ddl_migrations():
                         "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS subtitle_language VARCHAR(10) DEFAULT 'ja'",
                         "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS unusable_comment TEXT",
                         "ALTER TABLE widget_clients ADD COLUMN IF NOT EXISTS source VARCHAR(20)",
+                        "ALTER TABLE widget_clients ADD COLUMN IF NOT EXISTS password_plain TEXT",
                         "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS detected_language VARCHAR(10)",
                     ]:
                         try:

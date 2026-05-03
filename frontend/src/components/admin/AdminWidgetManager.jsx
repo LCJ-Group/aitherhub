@@ -130,6 +130,15 @@ export default function AdminWidgetManager({ adminKey }) {
     }
   };
 
+  const handleSetPassword = async (clientId, newPassword) => {
+    try {
+      const res = await axios.post(`${API_BASE}/api/v1/widget/admin/clients/${clientId}/reset-password`, { password: newPassword }, { headers });
+      setBrandLoginInfo(prev => ({ ...prev, [clientId]: { password: res.data.new_password, editing: false } }));
+    } catch (err) {
+      setError(`パスワード設定失敗: ${err.response?.data?.detail || err.message}`);
+    }
+  };
+
   const copyToClipboard = (text) => {
     navigator.clipboard.writeText(text);
   };
@@ -553,24 +562,70 @@ export default function AdminWidgetManager({ adminKey }) {
                       <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
                     </button>
                   </div>
-                  {brandLoginInfo[client.client_id]?.showPassword ? (
-                    <div className="flex items-center gap-1 bg-yellow-50 border border-yellow-200 rounded px-2 py-1">
-                      <span className="text-xs text-gray-500">PW:</span>
-                      <span className="text-xs font-mono text-yellow-700 font-bold">{brandLoginInfo[client.client_id].password}</span>
-                      <button onClick={() => copyToClipboard(brandLoginInfo[client.client_id].password)} className="text-gray-400 hover:text-yellow-600 ml-1" title="パスワードをコピー">
-                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
-                      </button>
-                      <button onClick={() => {
-                        const info = `ブランドポータル ログイン情報\n\nURL: https://www.aitherhub.com/brand?id=${client.client_id}\nID: ${client.client_id}\nパスワード: ${brandLoginInfo[client.client_id].password}`;
-                        copyToClipboard(info);
-                      }} className="px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded text-[10px] hover:bg-yellow-200 ml-1" title="全情報をまとめてコピー">まとめてコピー</button>
-                    </div>
-                  ) : (
-                    <button onClick={() => handleResetPassword(client.client_id)} className="px-2 py-1 bg-orange-100 text-orange-700 rounded text-xs hover:bg-orange-200 flex items-center gap-1">
-                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" /></svg>
-                      PW発行
-                    </button>
-                  )}
+                  {/* Password display - always show if available */}
+                  {(() => {
+                    const pw = brandLoginInfo[client.client_id]?.password || client.password_plain;
+                    const isEditing = brandLoginInfo[client.client_id]?.editing;
+                    if (isEditing) {
+                      return (
+                        <div className="flex items-center gap-1 bg-blue-50 border border-blue-200 rounded px-2 py-1">
+                          <span className="text-xs text-gray-500">PW:</span>
+                          <input
+                            type="text"
+                            className="text-xs font-mono text-blue-700 font-bold bg-white border border-blue-300 rounded px-1.5 py-0.5 w-32 outline-none focus:border-blue-500"
+                            defaultValue={pw || ''}
+                            autoFocus
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                const newPw = e.target.value.trim();
+                                if (newPw.length < 1) return;
+                                handleSetPassword(client.client_id, newPw);
+                              } else if (e.key === 'Escape') {
+                                setBrandLoginInfo(prev => ({ ...prev, [client.client_id]: { ...prev[client.client_id], editing: false } }));
+                              }
+                            }}
+                          />
+                          <button onClick={(e) => {
+                            const input = e.target.closest('div').querySelector('input');
+                            const newPw = input?.value?.trim();
+                            if (newPw && newPw.length >= 1) handleSetPassword(client.client_id, newPw);
+                          }} className="px-1.5 py-0.5 bg-blue-500 text-white rounded text-[10px] hover:bg-blue-600">保存</button>
+                          <button onClick={() => setBrandLoginInfo(prev => ({ ...prev, [client.client_id]: { ...prev[client.client_id], editing: false } }))} className="px-1.5 py-0.5 bg-gray-200 text-gray-600 rounded text-[10px] hover:bg-gray-300">×</button>
+                        </div>
+                      );
+                    }
+                    if (pw) {
+                      return (
+                        <div className="flex items-center gap-1 bg-green-50 border border-green-200 rounded px-2 py-1">
+                          <span className="text-xs text-gray-500">PW:</span>
+                          <span className="text-xs font-mono text-green-700 font-bold">{pw}</span>
+                          <button onClick={() => copyToClipboard(pw)} className="text-gray-400 hover:text-green-600 ml-1" title="パスワードをコピー">
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+                          </button>
+                          <button onClick={() => setBrandLoginInfo(prev => ({ ...prev, [client.client_id]: { ...prev[client.client_id], password: pw, editing: true } }))} className="text-gray-400 hover:text-blue-500 ml-0.5" title="パスワードを編集">
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                          </button>
+                          <button onClick={() => {
+                            const info = `ブランドポータル ログイン情報\n\nURL: https://www.aitherhub.com/brand?id=${client.client_id}\nID: ${client.client_id}\nパスワード: ${pw}`;
+                            copyToClipboard(info);
+                          }} className="px-2 py-0.5 bg-green-100 text-green-700 rounded text-[10px] hover:bg-green-200 ml-1" title="全情報をまとめてコピー">まとめてコピー</button>
+                        </div>
+                      );
+                    }
+                    return (
+                      <div className="flex items-center gap-1">
+                        <span className="text-xs text-gray-400 italic">PW未設定</span>
+                        <button onClick={() => setBrandLoginInfo(prev => ({ ...prev, [client.client_id]: { editing: true } }))} className="px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs hover:bg-blue-200 flex items-center gap-1">
+                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                          PW設定
+                        </button>
+                        <button onClick={() => handleResetPassword(client.client_id)} className="px-2 py-1 bg-orange-100 text-orange-700 rounded text-xs hover:bg-orange-200 flex items-center gap-1">
+                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" /></svg>
+                          PW自動生成
+                        </button>
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
 

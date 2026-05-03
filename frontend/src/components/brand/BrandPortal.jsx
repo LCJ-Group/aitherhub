@@ -594,6 +594,71 @@ function KeywordsSettings({ initialKeywords, onSaved }) {
   );
 }
 
+// ─── Password Change Component ───
+function PasswordChangeSection() {
+  const [currentPw, setCurrentPw] = useState('');
+  const [newPw, setNewPw] = useState('');
+  const [confirmPw, setConfirmPw] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState({ text: '', type: '' });
+
+  const handleChange = async () => {
+    if (!currentPw) { setMessage({ text: '現在のパスワードを入力してください', type: 'error' }); return; }
+    if (newPw.length < 6) { setMessage({ text: '新しいパスワードは6文字以上で入力してください', type: 'error' }); return; }
+    if (newPw !== confirmPw) { setMessage({ text: '新しいパスワードが一致しません', type: 'error' }); return; }
+    setSaving(true); setMessage({ text: '', type: '' });
+    try {
+      const res = await brandFetch('/brand/change-password', {
+        method: 'POST', body: JSON.stringify({ current_password: currentPw, new_password: newPw }),
+      });
+      if (res && res.ok) {
+        setMessage({ text: 'パスワードを変更しました', type: 'success' });
+        setCurrentPw(''); setNewPw(''); setConfirmPw('');
+        setTimeout(() => setMessage({ text: '', type: '' }), 3000);
+      } else {
+        const data = await res?.json().catch(() => ({}));
+        setMessage({ text: data?.detail || 'パスワードの変更に失敗しました', type: 'error' });
+      }
+    } catch (err) {
+      setMessage({ text: '通信エラーが発生しました', type: 'error' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const inputStyle = { width: '100%', padding: '10px 14px', background: colors.bg, border: `1px solid ${colors.border}`, borderRadius: 8, color: colors.text, fontSize: 14, outline: 'none', boxSizing: 'border-box' };
+
+  return (
+    <div style={{ ...baseCard, marginTop: 20 }}>
+      <h3 style={{ color: colors.text, margin: '0 0 8px', fontSize: 16 }}>パスワード変更</h3>
+      <p style={{ color: colors.textSecondary, fontSize: 13, margin: '0 0 16px' }}>
+        ブランドポータルのログインパスワードを変更できます。
+      </p>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div>
+          <label style={{ color: colors.textSecondary, fontSize: 12, display: 'block', marginBottom: 4 }}>現在のパスワード</label>
+          <input type="password" value={currentPw} onChange={e => setCurrentPw(e.target.value)} placeholder="現在のパスワード" style={inputStyle} />
+        </div>
+        <div>
+          <label style={{ color: colors.textSecondary, fontSize: 12, display: 'block', marginBottom: 4 }}>新しいパスワード</label>
+          <input type="password" value={newPw} onChange={e => setNewPw(e.target.value)} placeholder="6文字以上" style={inputStyle} />
+        </div>
+        <div>
+          <label style={{ color: colors.textSecondary, fontSize: 12, display: 'block', marginBottom: 4 }}>新しいパスワード（確認）</label>
+          <input type="password" value={confirmPw} onChange={e => setConfirmPw(e.target.value)} placeholder="もう一度入力" style={inputStyle} />
+        </div>
+        {message.text && (
+          <p style={{ color: message.type === 'success' ? colors.success : colors.danger, fontSize: 13, margin: 0 }}>{message.text}</p>
+        )}
+        <button onClick={handleChange} disabled={saving}
+          style={{ padding: '10px 20px', background: colors.accent, color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer', opacity: saving ? 0.6 : 1, alignSelf: 'flex-start' }}>
+          {saving ? '変更中...' : 'パスワードを変更'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Dashboard ───
 function BrandDashboard({ brandInfo, onLogout }) {
   const [tab, setTab] = useState('widget');
@@ -1003,6 +1068,7 @@ function BrandDashboard({ brandInfo, onLogout }) {
             <div style={{ marginTop: 20 }}>
               <GtmTagPanel tagData={tagData} />
             </div>
+            <PasswordChangeSection />
             <div style={{ ...baseCard, marginTop: 20 }}>
               <h3 style={{ color: colors.text, fontSize: 16, margin: '0 0 12px' }}>アカウント情報</h3>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
