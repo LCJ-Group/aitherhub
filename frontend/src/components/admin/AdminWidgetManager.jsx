@@ -21,6 +21,8 @@ export default function AdminWidgetManager({ adminKey }) {
   const [editProductForm, setEditProductForm] = useState({});
   // Video preview modal
   const [previewClip, setPreviewClip] = useState(null);
+  // Brand login info
+  const [brandLoginInfo, setBrandLoginInfo] = useState({});
   // Clip search/picker modal
   const [showClipPicker, setShowClipPicker] = useState(false);
   const [clipSearchQuery, setClipSearchQuery] = useState("");
@@ -115,6 +117,21 @@ export default function AdminWidgetManager({ adminKey }) {
     } catch (err) {
       setError(`タグ取得失敗: ${err.response?.data?.detail || err.message}`);
     }
+  };
+
+  // ── Reset brand password & show login info ──
+  const handleResetPassword = async (clientId) => {
+    if (!confirm("このブランドのパスワードをリセットしますか？")) return;
+    try {
+      const res = await axios.post(`${API_BASE}/api/v1/widget/admin/clients/${clientId}/reset-password`, {}, { headers });
+      setBrandLoginInfo(prev => ({ ...prev, [clientId]: { password: res.data.new_password, url: res.data.brand_portal_url, showPassword: true } }));
+    } catch (err) {
+      setError(`パスワードリセット失敗: ${err.response?.data?.detail || err.message}`);
+    }
+  };
+
+  const copyToClipboard = (text) => {
+    navigator.clipboard.writeText(text);
   };
 
   // ── Fetch clip assignments ──
@@ -516,6 +533,44 @@ export default function AdminWidgetManager({ adminKey }) {
                   </button>
                   <button onClick={() => handleGetTag(client.client_id)} className="px-3 py-1.5 bg-green-100 text-green-700 rounded-lg text-xs hover:bg-green-200">GTMタグ</button>
                   <button onClick={() => startEdit(client)} className="px-3 py-1.5 bg-blue-100 text-blue-700 rounded-lg text-xs hover:bg-blue-200">編集</button>
+                </div>
+              </div>
+
+              {/* Brand Login Info */}
+              <div className="mt-3 pt-3 border-t border-gray-100">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs text-gray-500 font-medium">ブランドポータル:</span>
+                  <div className="flex items-center gap-1 bg-gray-50 rounded px-2 py-1">
+                    <span className="text-xs text-blue-600 font-mono">https://www.aitherhub.com/brand?id={client.client_id}</span>
+                    <button onClick={() => copyToClipboard(`https://www.aitherhub.com/brand?id=${client.client_id}`)} className="text-gray-400 hover:text-blue-500 ml-1" title="URLをコピー">
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-1 bg-gray-50 rounded px-2 py-1">
+                    <span className="text-xs text-gray-500">ID:</span>
+                    <span className="text-xs font-mono text-gray-700">{client.client_id}</span>
+                    <button onClick={() => copyToClipboard(client.client_id)} className="text-gray-400 hover:text-blue-500 ml-1" title="IDをコピー">
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+                    </button>
+                  </div>
+                  {brandLoginInfo[client.client_id]?.showPassword ? (
+                    <div className="flex items-center gap-1 bg-yellow-50 border border-yellow-200 rounded px-2 py-1">
+                      <span className="text-xs text-gray-500">PW:</span>
+                      <span className="text-xs font-mono text-yellow-700 font-bold">{brandLoginInfo[client.client_id].password}</span>
+                      <button onClick={() => copyToClipboard(brandLoginInfo[client.client_id].password)} className="text-gray-400 hover:text-yellow-600 ml-1" title="パスワードをコピー">
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+                      </button>
+                      <button onClick={() => {
+                        const info = `ブランドポータル ログイン情報\n\nURL: https://www.aitherhub.com/brand?id=${client.client_id}\nID: ${client.client_id}\nパスワード: ${brandLoginInfo[client.client_id].password}`;
+                        copyToClipboard(info);
+                      }} className="px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded text-[10px] hover:bg-yellow-200 ml-1" title="全情報をまとめてコピー">まとめてコピー</button>
+                    </div>
+                  ) : (
+                    <button onClick={() => handleResetPassword(client.client_id)} className="px-2 py-1 bg-orange-100 text-orange-700 rounded text-xs hover:bg-orange-200 flex items-center gap-1">
+                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" /></svg>
+                      PW発行
+                    </button>
+                  )}
                 </div>
               </div>
 
