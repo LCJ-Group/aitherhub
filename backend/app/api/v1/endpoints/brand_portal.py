@@ -1403,3 +1403,66 @@ async def brand_change_password(
     await db.commit()
 
     return {"success": True, "message": "パスワードを変更しました"}
+
+
+# ─── FAB Settings (Brand self-service) ───
+
+class FabSettingsUpdate(BaseModel):
+    fab_type: Optional[str] = None       # "circle" | "banner" | "hidden"
+    fab_shape: Optional[str] = None      # "round" | "square"
+    fab_size: Optional[str] = None       # "small" | "medium" | "large"
+    fab_image_url: Optional[str] = None
+    fab_banner_width: Optional[int] = None
+    fab_banner_height: Optional[int] = None
+
+
+@router.get("/brand/fab-settings")
+async def get_fab_settings(
+    client_id: str = Depends(_get_brand_client_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get current FAB settings for the brand."""
+    result = await db.execute(
+        text("""SELECT fab_type, fab_shape, fab_size, fab_image_url,
+                       fab_banner_width, fab_banner_height
+                FROM widget_clients WHERE client_id = :cid"""),
+        {"cid": client_id},
+    )
+    row = result.mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Client not found")
+    return {
+        "fab_type": row.get("fab_type") or "circle",
+        "fab_shape": row.get("fab_shape") or "round",
+        "fab_size": row.get("fab_size") or "medium",
+        "fab_image_url": row.get("fab_image_url") or "",
+        "fab_banner_width": row.get("fab_banner_width") or 300,
+        "fab_banner_height": row.get("fab_banner_height") or 80,
+    }
+
+
+@router.put("/brand/fab-settings")
+async def update_fab_settings(
+    payload: FabSettingsUpdate,
+    client_id: str = Depends(_get_brand_client_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update FAB settings for the brand."""
+    updates = payload.model_dump(exclude_none=True)
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    # Validate values
+    if "fab_type" in updates and updates["fab_type"] not in ("circle", "banner", "hidden"):
+        raise HTTPException(status_code=400, detail="fab_type must be circle, banner, or hidden")
+    if "fab_shape" in updates and updates["fab_shape"] not in ("round", "square"):
+        raise HTTPException(status_code=400, detail="fab_shape must be round or square")
+    if "fab_size" in updates and updates["fab_size"] not in ("small", "medium", "large"):
+        raise HTTPException(status_code=400, detail="fab_size must be small, medium, or large")
+    set_clauses = ", ".join(f"{k} = :{k}" for k in updates)
+    updates["cid"] = client_id
+    await db.execute(
+        text(f"UPDATE widget_clients SET {set_clauses} WHERE client_id = :cid"),
+        updates,
+    )
+    await db.commit()
+    return {"success": True, "message": "FAB設定を更新しました"}

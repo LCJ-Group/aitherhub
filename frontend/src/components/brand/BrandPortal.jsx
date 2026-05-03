@@ -659,6 +659,161 @@ function PasswordChangeSection() {
   );
 }
 
+// ─── FAB Settings Component ───
+function FabSettingsSection() {
+  const [fabSettings, setFabSettings] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState({ text: '', type: '' });
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await brandFetch('/brand/fab-settings');
+        if (res && res.ok) {
+          const data = await res.json();
+          setFabSettings(data);
+        }
+      } catch (err) {
+        console.error('Failed to load FAB settings:', err);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  const handleSave = async () => {
+    setSaving(true); setMessage({ text: '', type: '' });
+    try {
+      const res = await brandFetch('/brand/fab-settings', {
+        method: 'PUT', body: JSON.stringify(fabSettings),
+      });
+      if (res && res.ok) {
+        setMessage({ text: 'FAB設定を保存しました', type: 'success' });
+        setTimeout(() => setMessage({ text: '', type: '' }), 3000);
+      } else {
+        const data = await res?.json().catch(() => ({}));
+        setMessage({ text: data?.detail || 'FAB設定の保存に失敗しました', type: 'error' });
+      }
+    } catch (err) {
+      setMessage({ text: '通信エラーが発生しました', type: 'error' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const inputStyle = { width: '100%', padding: '10px 14px', background: colors.bg, border: `1px solid ${colors.border}`, borderRadius: 8, color: colors.text, fontSize: 14, outline: 'none', boxSizing: 'border-box' };
+  const selectStyle = { ...inputStyle, cursor: 'pointer', appearance: 'none', WebkitAppearance: 'none', backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23a1a1aa' d='M6 8L1 3h10z'/%3E%3C/svg%3E")`, backgroundRepeat: 'no-repeat', backgroundPosition: 'right 12px center' };
+  const labelStyle = { color: colors.textSecondary, fontSize: 12, display: 'block', marginBottom: 4 };
+
+  if (loading) return <div style={{ ...baseCard, marginTop: 20, textAlign: 'center', color: colors.textSecondary }}>読み込み中...</div>;
+  if (!fabSettings) return null;
+
+  return (
+    <div style={{ ...baseCard, marginTop: 20 }}>
+      <h3 style={{ color: colors.text, margin: '0 0 8px', fontSize: 16 }}>FAB（フローティングボタン）設定</h3>
+      <p style={{ color: colors.textSecondary, fontSize: 13, margin: '0 0 16px' }}>
+        ウィジェットのフローティングアクションボタンの表示方法をカスタマイズできます。
+      </p>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+        <div>
+          <label style={labelStyle}>タイプ</label>
+          <select value={fabSettings.fab_type} onChange={e => setFabSettings(s => ({ ...s, fab_type: e.target.value }))} style={selectStyle}>
+            <option value="circle">円形ボタン</option>
+            <option value="banner">バナー</option>
+            <option value="hidden">非表示</option>
+          </select>
+        </div>
+        {fabSettings.fab_type === 'circle' && (
+          <>
+            <div>
+              <label style={labelStyle}>形状</label>
+              <select value={fabSettings.fab_shape} onChange={e => setFabSettings(s => ({ ...s, fab_shape: e.target.value }))} style={selectStyle}>
+                <option value="round">丸型</option>
+                <option value="square">四角</option>
+              </select>
+            </div>
+            <div>
+              <label style={labelStyle}>サイズ</label>
+              <select value={fabSettings.fab_size} onChange={e => setFabSettings(s => ({ ...s, fab_size: e.target.value }))} style={selectStyle}>
+                <option value="small">小 (48px)</option>
+                <option value="medium">中 (60px)</option>
+                <option value="large">大 (80px)</option>
+              </select>
+            </div>
+          </>
+        )}
+        {fabSettings.fab_type === 'banner' && (
+          <>
+            <div>
+              <label style={labelStyle}>バナー幅 (px)</label>
+              <input type="number" value={fabSettings.fab_banner_width} onChange={e => setFabSettings(s => ({ ...s, fab_banner_width: parseInt(e.target.value) || 300 }))} style={inputStyle} />
+            </div>
+            <div>
+              <label style={labelStyle}>バナー高さ (px)</label>
+              <input type="number" value={fabSettings.fab_banner_height} onChange={e => setFabSettings(s => ({ ...s, fab_banner_height: parseInt(e.target.value) || 80 }))} style={inputStyle} />
+            </div>
+          </>
+        )}
+        {fabSettings.fab_type !== 'hidden' && (
+          <div style={{ gridColumn: '1 / -1' }}>
+            <label style={labelStyle}>カスタム画像URL（空欄でデフォルトアイコン）</label>
+            <input type="text" value={fabSettings.fab_image_url} onChange={e => setFabSettings(s => ({ ...s, fab_image_url: e.target.value }))} placeholder="https://example.com/fab-icon.png" style={inputStyle} />
+          </div>
+        )}
+      </div>
+      {/* Preview */}
+      {fabSettings.fab_type !== 'hidden' && (
+        <div style={{ marginTop: 16, padding: 16, background: colors.bg, borderRadius: 12, border: `1px solid ${colors.border}` }}>
+          <label style={{ ...labelStyle, marginBottom: 8 }}>プレビュー</label>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 100 }}>
+            {fabSettings.fab_type === 'circle' ? (
+              <div style={{
+                width: fabSettings.fab_size === 'small' ? 48 : fabSettings.fab_size === 'large' ? 80 : 60,
+                height: fabSettings.fab_size === 'small' ? 48 : fabSettings.fab_size === 'large' ? 80 : 60,
+                borderRadius: fabSettings.fab_shape === 'round' ? '50%' : 12,
+                background: 'linear-gradient(135deg, #a855f7, #6366f1)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                boxShadow: '0 4px 20px rgba(168,85,247,0.4)',
+                overflow: 'hidden',
+              }}>
+                {fabSettings.fab_image_url ? (
+                  <img src={fabSettings.fab_image_url} alt="FAB" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                ) : (
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="white"><path d="M8 5v14l11-7z"/></svg>
+                )}
+              </div>
+            ) : (
+              <div style={{
+                width: fabSettings.fab_banner_width || 300,
+                height: fabSettings.fab_banner_height || 80,
+                borderRadius: 12,
+                background: fabSettings.fab_image_url ? 'transparent' : 'linear-gradient(135deg, #a855f7, #6366f1)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                boxShadow: '0 4px 20px rgba(168,85,247,0.4)',
+                overflow: 'hidden', maxWidth: '100%',
+              }}>
+                {fabSettings.fab_image_url ? (
+                  <img src={fabSettings.fab_image_url} alt="FAB Banner" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                ) : (
+                  <span style={{ color: '#fff', fontSize: 14, fontWeight: 600 }}>Banner Preview</span>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      {message.text && (
+        <p style={{ color: message.type === 'success' ? colors.success : colors.danger, fontSize: 13, margin: '12px 0 0' }}>{message.text}</p>
+      )}
+      <button onClick={handleSave} disabled={saving}
+        style={{ marginTop: 16, padding: '10px 20px', background: colors.accent, color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer', opacity: saving ? 0.6 : 1 }}>
+        {saving ? '保存中...' : 'FAB設定を保存'}
+      </button>
+    </div>
+  );
+}
+
 // ─── Main Dashboard ───
 function BrandDashboard({ brandInfo, onLogout }) {
   const [tab, setTab] = useState('widget');
@@ -1069,6 +1224,7 @@ function BrandDashboard({ brandInfo, onLogout }) {
               <GtmTagPanel tagData={tagData} />
             </div>
             <PasswordChangeSection />
+            <FabSettingsSection />
             <div style={{ ...baseCard, marginTop: 20 }}>
               <h3 style={{ color: colors.text, fontSize: 16, margin: '0 0 12px' }}>アカウント情報</h3>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
