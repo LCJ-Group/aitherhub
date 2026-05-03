@@ -1324,8 +1324,8 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
                         : 'text-gray-500'
                     }`}
                   >
-                    <span className="shrink-0 mt-0.5">{log.message?.charAt(0) === '\u2705' || log.message?.charAt(0) === '\u2b50' || log.message?.charAt(0) === '\U0001f389' ? log.message.charAt(0) : idx === processingLogs.length - 1 ? '\u25b6' : '\u2713'}</span>
-                    <span className="leading-relaxed">{log.message?.slice(log.message?.charAt(1) === '\ufe0f' ? 3 : log.message?.charAt(0)?.match(/[\u{1F000}-\u{1FFFF}]/u) ? 2 : 0) || log.message}</span>
+                    <span className="shrink-0 mt-0.5">{idx === processingLogs.length - 1 ? '\u25b6' : '\u2713'}</span>
+                    <span className="leading-relaxed">{log.message || ''}</span>
                   </div>
                 ))}
               </div>
