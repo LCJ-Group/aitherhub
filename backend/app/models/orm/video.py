@@ -49,3 +49,6 @@ class Video(Base, UUIDMixin, TimestampMixin):
 
     # Language for AI analysis output (ja, zh-TW, etc.)
     language: Mapped[Optional[str]] = mapped_column(String(10), nullable=True, default="ja", server_default="ja")
+
+    # Real-time processing logs (JSONB array of log entries for live UI display)
+    processing_logs: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
