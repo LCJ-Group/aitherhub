@@ -1317,7 +1317,7 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
               <div className="space-y-1.5 max-h-40 overflow-y-auto">
                 {processingLogs.map((log, idx) => (
                   <div
-                    key={`${log.step}-${idx}`}
+                    key={`${log.step || log.ts || ''}-${idx}`}
                     className={`flex items-start gap-2 text-xs transition-all duration-300 ${
                       idx === processingLogs.length - 1
                         ? 'text-indigo-700 font-medium'
@@ -1325,7 +1325,7 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
                     }`}
                   >
                     <span className="shrink-0 mt-0.5">{idx === processingLogs.length - 1 ? '\u25b6' : '\u2713'}</span>
-                    <span className="leading-relaxed">{log.message || ''}</span>
+                    <span className="leading-relaxed">{log.msg || log.message || ''}</span>
                   </div>
                 ))}
               </div>

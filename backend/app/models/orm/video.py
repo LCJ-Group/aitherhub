@@ -1,5 +1,5 @@
 # app/models/orm/video.py
-from sqlalchemy import ForeignKey, Text, Integer, String, Float, DateTime
+from sqlalchemy import ForeignKey, Text, Integer, String, Float, DateTime, JSON
 from sqlalchemy.orm import Mapped, mapped_column
 from app.models.orm.base import Base, UUIDMixin, TimestampMixin
 from typing import Optional
@@ -51,4 +51,4 @@ class Video(Base, UUIDMixin, TimestampMixin):
     language: Mapped[Optional[str]] = mapped_column(String(10), nullable=True, default="ja", server_default="ja")
 
     # Real-time processing logs (JSONB array of log entries for live UI display)
-    processing_logs: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    processing_logs = mapped_column(JSON, nullable=True)
