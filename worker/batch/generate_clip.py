@@ -194,10 +194,10 @@ def update_clip_progress(clip_id: str, progress_pct: int, progress_step: str, lo
     """
     loop = get_event_loop()
     async def _update():
-        async with get_session() as session:
-            if log_message:
-                # Try to append a structured log entry to processing_logs JSONB array
-                try:
+        if log_message:
+            # Try to append a structured log entry to processing_logs JSONB array
+            try:
+                async with get_session() as session:
                     sql = text("""
                         UPDATE video_clips
                         SET progress_pct = :pct,
@@ -217,15 +217,17 @@ def update_clip_progress(clip_id: str, progress_pct: int, progress_step: str, lo
                         "pct": progress_pct, "step": progress_step,
                         "log_entry": log_entry, "clip_id": clip_id,
                     })
-                except Exception:
-                    # Fallback: processing_logs column may not exist yet
+            except Exception:
+                # Fallback with NEW session: processing_logs column may not exist yet
+                async with get_session() as session2:
                     sql = text("""
                         UPDATE video_clips
                         SET progress_pct = :pct, progress_step = :step, updated_at = NOW()
                         WHERE id = :clip_id
                     """)
-                    await session.execute(sql, {"pct": progress_pct, "step": progress_step, "clip_id": clip_id})
-            else:
+                    await session2.execute(sql, {"pct": progress_pct, "step": progress_step, "clip_id": clip_id})
+        else:
+            async with get_session() as session:
                 sql = text("""
                     UPDATE video_clips
                     SET progress_pct = :pct, progress_step = :step, updated_at = NOW()
