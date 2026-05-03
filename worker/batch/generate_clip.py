@@ -190,31 +190,41 @@ def update_clip_progress(clip_id: str, progress_pct: int, progress_step: str, lo
     
     If log_message is provided, it is appended to the processing_logs JSONB array
     so the frontend can display a real-time AI processing log panel.
+    Falls back to basic progress update if processing_logs column doesn't exist yet.
     """
     loop = get_event_loop()
     async def _update():
         async with get_session() as session:
             if log_message:
-                # Append a structured log entry to processing_logs JSONB array
-                sql = text("""
-                    UPDATE video_clips
-                    SET progress_pct = :pct,
-                        progress_step = :step,
-                        processing_logs = COALESCE(processing_logs, '[]'::jsonb) || :log_entry::jsonb,
-                        updated_at = NOW()
-                    WHERE id = :clip_id
-                """)
-                import json as _json
-                log_entry = _json.dumps({
-                    "ts": datetime.now().strftime("%H:%M:%S"),
-                    "pct": progress_pct,
-                    "step": progress_step,
-                    "msg": log_message,
-                })
-                await session.execute(sql, {
-                    "pct": progress_pct, "step": progress_step,
-                    "log_entry": log_entry, "clip_id": clip_id,
-                })
+                # Try to append a structured log entry to processing_logs JSONB array
+                try:
+                    sql = text("""
+                        UPDATE video_clips
+                        SET progress_pct = :pct,
+                            progress_step = :step,
+                            processing_logs = COALESCE(processing_logs, '[]'::jsonb) || :log_entry::jsonb,
+                            updated_at = NOW()
+                        WHERE id = :clip_id
+                    """)
+                    import json as _json
+                    log_entry = _json.dumps({
+                        "ts": datetime.now().strftime("%H:%M:%S"),
+                        "pct": progress_pct,
+                        "step": progress_step,
+                        "msg": log_message,
+                    })
+                    await session.execute(sql, {
+                        "pct": progress_pct, "step": progress_step,
+                        "log_entry": log_entry, "clip_id": clip_id,
+                    })
+                except Exception:
+                    # Fallback: processing_logs column may not exist yet
+                    sql = text("""
+                        UPDATE video_clips
+                        SET progress_pct = :pct, progress_step = :step, updated_at = NOW()
+                        WHERE id = :clip_id
+                    """)
+                    await session.execute(sql, {"pct": progress_pct, "step": progress_step, "clip_id": clip_id})
             else:
                 sql = text("""
                     UPDATE video_clips
@@ -2993,11 +3003,14 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
 
     # Update status to processing + clear previous logs
     update_clip_status(clip_id, "processing")
-    # Reset processing_logs for fresh run
+    # Reset processing_logs for fresh run (graceful if column doesn't exist yet)
     _reset_loop = get_event_loop()
     async def _reset_logs():
-        async with get_session() as _s:
-            await _s.execute(text("UPDATE video_clips SET processing_logs = '[]'::jsonb WHERE id = :cid"), {"cid": clip_id})
+        try:
+            async with get_session() as _s:
+                await _s.execute(text("UPDATE video_clips SET processing_logs = '[]'::jsonb WHERE id = :cid"), {"cid": clip_id})
+        except Exception:
+            logger.debug("processing_logs column not available yet, skipping reset")
     _reset_loop.run_until_complete(_reset_logs())
     update_clip_progress(clip_id, 5, "downloading", log_message="\u2b07\ufe0f Starting source video download...")
 
