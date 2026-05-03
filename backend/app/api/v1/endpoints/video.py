@@ -336,6 +336,16 @@ async def stream_video_status(
                         progress = calculate_progress(current_status)
                         message = get_status_message(current_status)
 
+                        # Include processing_logs if available
+                        _processing_logs = None
+                        try:
+                            _pl_raw = getattr(video, 'processing_logs', None)
+                            if _pl_raw:
+                                import json as _json_mod
+                                _processing_logs = _json_mod.loads(_pl_raw) if isinstance(_pl_raw, str) else _pl_raw
+                        except Exception:
+                            pass
+
                         payload = {
                             "video_id": str(video.id),
                             "status": current_status,
@@ -351,6 +361,8 @@ async def stream_video_status(
                             "enqueue_error": getattr(video, 'enqueue_error', None),
                             "worker_claimed_at": video.worker_claimed_at.isoformat() if getattr(video, 'worker_claimed_at', None) else None,
                             "dequeue_count": getattr(video, 'dequeue_count', None),
+                            # Processing logs for live display
+                            "processing_logs": _processing_logs,
                         }
 
                         yield f"data: {json.dumps(payload)}\n\n"

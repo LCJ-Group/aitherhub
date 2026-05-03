@@ -65,6 +65,9 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
   const [workerClaimedAt, setWorkerClaimedAt] = useState(null);
   const [enqueueError, setEnqueueError] = useState(null);
 
+  // ── Processing logs state ──
+  const [processingLogs, setProcessingLogs] = useState([]);
+
   // ── Stall detection state ──
   const [isStalled, setIsStalled] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
@@ -600,6 +603,11 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
           startGradualProgress(safeProgress, nextStatus);
         }
         lastStatusChangeRef.current = Date.now();
+
+        // ── Processing logs update ──
+        if (data.processing_logs && Array.isArray(data.processing_logs)) {
+          setProcessingLogs(data.processing_logs);
+        }
 
         // ── Timing update ──
         handleTimingUpdate(data);
@@ -1295,6 +1303,34 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
           <p className="text-sm text-gray-400 mt-5 text-center">
             {window.__t('progressCompleteMessage') || '解析が完了すると、自動的に結果が表示されます。'}
           </p>
+
+          {/* ── Live Processing Logs Panel ── */}
+          {processingLogs.length > 0 && !isDone && (
+            <div className="mt-4 p-3 bg-gradient-to-br from-indigo-50 to-violet-50 border border-indigo-100 rounded-xl">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
+                </span>
+                <span className="text-xs font-medium text-indigo-600">AI解析ログ</span>
+              </div>
+              <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                {processingLogs.map((log, idx) => (
+                  <div
+                    key={`${log.step}-${idx}`}
+                    className={`flex items-start gap-2 text-xs transition-all duration-300 ${
+                      idx === processingLogs.length - 1
+                        ? 'text-indigo-700 font-medium'
+                        : 'text-gray-500'
+                    }`}
+                  >
+                    <span className="shrink-0 mt-0.5">{log.message?.charAt(0) === '\u2705' || log.message?.charAt(0) === '\u2b50' || log.message?.charAt(0) === '\U0001f389' ? log.message.charAt(0) : idx === processingLogs.length - 1 ? '\u25b6' : '\u2713'}</span>
+                    <span className="leading-relaxed">{log.message?.slice(log.message?.charAt(1) === '\ufe0f' ? 3 : log.message?.charAt(0)?.match(/[\u{1F000}-\u{1FFFF}]/u) ? 2 : 0) || log.message}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Show warning if using polling fallback */}
           {errorMessage && (

@@ -84,6 +84,8 @@ from db_ops import (
     ensure_sales_moments_table_sync,
     bulk_insert_sales_moments_sync,
     insert_video_error_log_sync,
+    update_video_processing_log_sync,
+    reset_video_processing_logs_sync,
 )
 
 from video_structure_features import build_video_structure_features
@@ -714,6 +716,9 @@ def main():
         if start_step <= 0:
             _current_step_name = VideoStatus.STEP_0_EXTRACT_FRAMES
             update_video_status_sync(video_id, VideoStatus.STEP_0_EXTRACT_FRAMES)
+            # Reset processing_logs for fresh analysis run
+            reset_video_processing_logs_sync(video_id)
+            update_video_processing_log_sync(video_id, "\U0001f680 AI\u89e3\u6790\u30d1\u30a4\u30d7\u30e9\u30a4\u30f3\u3092\u958b\u59cb\u3057\u307e\u3059...", "init", 0)
             logger.info("=== v6: DIRECT FRAME EXTRACTION (no analysis video) ===")
 
         # =========================
@@ -767,16 +772,22 @@ def main():
 
             def _do_extract_frames():
                 logger.info("[STEP0] Starting frame extraction (fps=1) from %s", _frames_source)
+                update_video_processing_log_sync(video_id, "\U0001f39e\ufe0f \u52d5\u753b\u304b\u3089\u30d5\u30ec\u30fc\u30e0\u3092\u62bd\u51fa\u4e2d... (1fps)", "frames", 5)
                 extract_frames(
                     video_path=_frames_source,
                     fps=1,
                     frames_root=video_root(video_id),
                     on_progress=_on_frames_progress,
                 )
+                # Count extracted frames for log
+                _fd = frames_dir(video_id)
+                _fcount = len([f for f in os.listdir(_fd) if f.endswith('.jpg')]) if os.path.isdir(_fd) else 0
+                update_video_processing_log_sync(video_id, f"\u2705 {_fcount}\u30d5\u30ec\u30fc\u30e0\u3092\u62bd\u51fa\u5b8c\u4e86\uff08\u52d5\u753b\u6642\u9593: {_vid_duration:.0f}\u79d2\uff09", "frames", 25)
                 logger.info("[STEP0] Frame extraction DONE")
 
             def _do_audio_transcription():
                 logger.info("[STEP3] Starting audio extraction + transcription")
+                update_video_processing_log_sync(video_id, "\U0001f3a4 \u97f3\u58f0\u3092\u62bd\u51fa\u4e2d... Whisper AI\u304c\u30bb\u30ea\u30d5\u3092\u8a8d\u8b58\u3057\u307e\u3059", "transcribe", 10)
                 # Audio progress split: extraction=20%, transcription=80%
                 def _on_transcription_progress(pct):
                     # Map transcription 0-100 to overall audio 20-100
@@ -795,7 +806,22 @@ def main():
                     extract_audio_chunks(video_path, ad)
                     _on_audio_progress(20)
 
+                update_video_processing_log_sync(video_id, "\U0001f9e0 Whisper large-v3\u3067\u97f3\u58f0\u8a8d\u8b58\u4e2d...", "transcribe", 15)
                 transcribe_audio_chunks(ad, atd, on_progress=_on_transcription_progress)
+                # Read first transcription result for display
+                _first_speech = ""
+                try:
+                    if os.path.isdir(atd):
+                        _txt_files = sorted([f for f in os.listdir(atd) if f.endswith('.txt')])
+                        if _txt_files:
+                            with open(os.path.join(atd, _txt_files[0]), 'r', encoding='utf-8') as _tf:
+                                _first_speech = _tf.read().strip()[:60]
+                except Exception:
+                    pass
+                if _first_speech:
+                    update_video_processing_log_sync(video_id, f"\U0001f4ac \u97f3\u58f0\u8a8d\u8b58\u5b8c\u4e86\uff01\u300c{_first_speech}\u300d", "transcribe", 30)
+                else:
+                    update_video_processing_log_sync(video_id, "\u2705 \u97f3\u58f0\u8a8d\u8b58\u5b8c\u4e86", "transcribe", 30)
                 logger.info("[STEP3] Audio transcription DONE")
 
             if _use_sequential:
@@ -883,6 +909,7 @@ def main():
         if start_step <= 1:
             _current_step_name = VideoStatus.STEP_1_DETECT_PHASES
             update_video_status_sync(video_id, VideoStatus.STEP_1_DETECT_PHASES)
+            update_video_processing_log_sync(video_id, "\U0001f3ac YOLO\u3067\u30b7\u30fc\u30f3\u5909\u5316\u3092\u691c\u51fa\u4e2d...", "phase_detect", 35)
 
             logger.info("=== STEP 1 – PHASE DETECTION (YOLO) ===")
             import torch
@@ -900,6 +927,9 @@ def main():
                 model=model,
                 on_progress=_on_step1_progress,
             )
+            # Log phase detection result
+            _n_phases = len(keyframes) if keyframes else 0
+            update_video_processing_log_sync(video_id, f"\U0001f4ca {_n_phases}\u500b\u306e\u30b7\u30fc\u30f3\u306b\u5206\u5272\u5b8c\u4e86", "phase_detect", 40)
 
             save_step1_cache(
                 video_id=video_id,
@@ -957,6 +987,7 @@ def main():
         if start_step <= 2:
             _current_step_name = VideoStatus.STEP_2_EXTRACT_METRICS
             update_video_status_sync(video_id, VideoStatus.STEP_2_EXTRACT_METRICS)
+            update_video_processing_log_sync(video_id, "\U0001f4c8 \u5404\u30b7\u30fc\u30f3\u306e\u8996\u8074\u8005\u30c7\u30fc\u30bf\u3092\u5206\u6790\u4e2d...", "metrics", 42)
             logger.info("=== STEP 2 – PHASE METRICS ===")
 
             # クリーン動画 + CSVトレンドデータあり → GPT Vision不要、CSVで代替
@@ -1008,7 +1039,8 @@ def main():
         if start_step <= 4:
             _current_step_name = VideoStatus.STEP_4_IMAGE_CAPTION
             update_video_status_sync(video_id, VideoStatus.STEP_4_IMAGE_CAPTION)
-            logger.info("=== STEP 4 – IMAGE CAPTION ===")
+            update_video_processing_log_sync(video_id, "\U0001f441\ufe0f AI\u304c\u5404\u30b7\u30fc\u30f3\u306e\u5185\u5bb9\u3092\u89e3\u6790\u4e2d... (GPT Vision)", "caption", 48)
+            logger.info("=== STEP 4 \u2013 IMAGE CAPTION ===")
 
             # Filter rep_frames to only important phases
             filtered_rep_frames = rep_frames
@@ -1043,6 +1075,7 @@ def main():
         if start_step <= 5:
             _current_step_name = VideoStatus.STEP_5_BUILD_PHASE_UNITS
             update_video_status_sync(video_id, VideoStatus.STEP_5_BUILD_PHASE_UNITS)
+            update_video_processing_log_sync(video_id, "\U0001f3d7\ufe0f \u30d5\u30a7\u30fc\u30ba\u69cb\u9020\u3092\u69cb\u7bc9\u4e2d...", "build_units", 55)
             logger.info("=== STEP 5 – BUILD PHASE UNITS ===")
             phase_units = build_phase_units(
                 user_id,
@@ -1055,6 +1088,18 @@ def main():
                 audio_text_dir=atd,
                 video_id=video_id,
             )
+            # Log phase units result with sample speech
+            _pu_count = len(phase_units) if phase_units else 0
+            _sample_speech = ""
+            for _pu in (phase_units or []):
+                _s = (_pu.get("speech_text") or "").strip()
+                if _s:
+                    _sample_speech = _s[:50]
+                    break
+            if _sample_speech:
+                update_video_processing_log_sync(video_id, f"\U0001f4dd {_pu_count}\u30d5\u30a7\u30fc\u30ba\u69cb\u7bc9\u5b8c\u4e86\u3002\u30bb\u30ea\u30d5: \u300c{_sample_speech}...\u300d", "build_units", 58)
+            else:
+                update_video_processing_log_sync(video_id, f"\U0001f4dd {_pu_count}\u30d5\u30a7\u30fc\u30ba\u69cb\u7bc9\u5b8c\u4e86", "build_units", 58)
 
             # --- Persist audio_text (speech_text) to DB ---
             logger.info("[DB] Persist audio_text (speech_text) to video_phases")
@@ -1437,6 +1482,7 @@ def main():
         if start_step <= 6:
             _current_step_name = VideoStatus.STEP_6_BUILD_PHASE_DESCRIPTION
             update_video_status_sync(video_id, VideoStatus.STEP_6_BUILD_PHASE_DESCRIPTION)
+            update_video_processing_log_sync(video_id, "\u270d\ufe0f AI\u304c\u30b7\u30fc\u30f3\u3092\u8aac\u660e\u4e2d... (GPT-4.1)", "description", 60)
             logger.info("=== STEP 6 – PHASE DESCRIPTION ===")
 
             # Get video language for phase description generation
@@ -1535,6 +1581,7 @@ def main():
         if start_step <= 7:
             _current_step_name = VideoStatus.STEP_7_GROUPING
             update_video_status_sync(video_id, VideoStatus.STEP_7_GROUPING)
+            update_video_processing_log_sync(video_id, "\U0001f517 \u95a2\u9023\u30b7\u30fc\u30f3\u3092\u30b0\u30eb\u30fc\u30d4\u30f3\u30b0\u4e2d... (Embedding)", "grouping", 70)
             logger.info("=== STEP 7 – GLOBAL PHASE GROUPING ===")
             phase_units = embed_phase_descriptions(phase_units)
 
@@ -1566,6 +1613,7 @@ def main():
         if start_step <= 8:
             _current_step_name = VideoStatus.STEP_8_UPDATE_BEST_PHASE
             update_video_status_sync(video_id, VideoStatus.STEP_8_UPDATE_BEST_PHASE)
+            update_video_processing_log_sync(video_id, "\U0001f9e0 AI\u304c\u6700\u3082\u30d0\u30ba\u308b\u30b7\u30fc\u30f3\u3092\u9078\u5b9a\u4e2d... (ML\u30b9\u30b3\u30a2\u30ea\u30f3\u30b0)", "best_phase", 75)
             logger.info("=== STEP 8 – GROUP BEST PHASES (BULK) ===")
 
             best_data = load_group_best_phases(ART_ROOT, video_id)
@@ -1606,6 +1654,11 @@ def main():
             bulk_upsert_group_best_phases_sync(user_id,bulk_rows)
             bulk_refresh_phase_insights_sync( user_id,bulk_rows)
 
+            # Log best phase score for user-facing display
+            if bulk_rows:
+                _top_score = max(r["score"] for r in bulk_rows)
+                update_video_processing_log_sync(video_id, f"\u2b50 \u30d9\u30b9\u30c8\u30b7\u30fc\u30f3\u767a\u898b\uff01 \u30b9\u30b3\u30a2: {int(_top_score)}/100", "best_phase", 80)
+
         else:
             logger.info("[SKIP] STEP 8")
 
@@ -1616,7 +1669,8 @@ def main():
         if start_step <= 9:
             _current_step_name = VideoStatus.STEP_9_BUILD_VIDEO_STRUCTURE_FEATURES
             update_video_status_sync(video_id, VideoStatus.STEP_9_BUILD_VIDEO_STRUCTURE_FEATURES)
-            logger.info("=== STEP 9 – BUILD VIDEO STRUCTURE FEATURES ===")
+            update_video_processing_log_sync(video_id, "\U0001f4ca \u52d5\u753b\u69cb\u9020\u7279\u5fb4\u91cf\u3092\u8a08\u7b97\u4e2d...", "structure", 82)
+            logger.info("=== STEP 9 \u2013 BUILD VIDEO STRUCTURE FEATURES ===")
             build_video_structure_features(video_id, user_id)
         else:
             logger.info("[SKIP] STEP 9")
@@ -1681,6 +1735,7 @@ def main():
         if start_step <= 13:  # index 13 in STEP_ORDER
             _current_step_name = VideoStatus.STEP_12_5_PRODUCT_DETECTION
             update_video_status_sync(video_id, VideoStatus.STEP_12_5_PRODUCT_DETECTION)
+            update_video_processing_log_sync(video_id, "\U0001f6cd\ufe0f \u5546\u54c1\u30b7\u30fc\u30f3\u3092\u691c\u51fa\u4e2d...", "product", 82)
             logger.info("=== STEP 12.5 – PRODUCT DETECTION ===")
 
             def _on_product_progress(pct):
@@ -1890,6 +1945,7 @@ def main():
         if start_step <= 14:  # index 14 in STEP_ORDER (shifted +1)
             _current_step_name = VideoStatus.STEP_13_BUILD_REPORTS
             update_video_status_sync(video_id, VideoStatus.STEP_13_BUILD_REPORTS)
+            update_video_processing_log_sync(video_id, "\U0001f4dd AI\u304c\u5206\u6790\u30ec\u30dd\u30fc\u30c8\u3092\u4f5c\u6210\u4e2d...", "reports", 88)
             logger.info("=== STEP 13 – BUILD REPORTS ===")
 
             # ---------- REPORT 1 ----------
@@ -2025,6 +2081,7 @@ def main():
             _current_step_name = VideoStatus.STEP_14_FINALIZE
             update_video_status_sync(video_id, VideoStatus.STEP_14_FINALIZE)
             update_video_step_progress_sync(video_id, 0)
+            update_video_processing_log_sync(video_id, "\u23f3 \u30af\u30ea\u30c3\u30d7\u5206\u5272\u306e\u5b8c\u4e86\u3092\u5f85\u6a5f\u4e2d...", "finalize", 92)
             logger.info("=== STEP 14 \u2013 FINALIZE PIPELINE (WAIT SPLIT) ===")
 
             CHECK_INTERVAL = 5
@@ -2098,6 +2155,7 @@ def main():
                 if split_status == "done":
                     logger.info("[FINALIZE] Split DONE → mark video DONE")
                     update_video_step_progress_sync(video_id, 100)
+                    update_video_processing_log_sync(video_id, "\U0001f389 \u89e3\u6790\u5b8c\u4e86\uff01 \u52d5\u753b\u306e\u5168\u30b7\u30fc\u30f3\u3092AI\u304c\u7406\u89e3\u3057\u307e\u3057\u305f", "done", 100)
                     update_video_status_sync(video_id, VideoStatus.DONE)
                     break
 

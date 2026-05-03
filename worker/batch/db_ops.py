@@ -2330,3 +2330,64 @@ def get_unusable_phases_sync(video_id: str) -> dict:
     loop = get_event_loop()
     return loop.run_until_complete(get_unusable_phases(video_id))
 # retrigger deploy
+
+
+# ---------- Video Processing Logs (realtime AI log panel) ----------
+
+async def update_video_processing_log(video_id: str, log_message: str, step: str = "", pct: int = 0):
+    """Append a structured log entry to videos.processing_logs JSONB array.
+    
+    Uses CAST(:param AS jsonb) syntax to avoid asyncpg ::jsonb cast issue.
+    Falls back gracefully if the column doesn't exist yet.
+    """
+    from datetime import datetime as _dt
+    try:
+        log_entry = json.dumps({
+            "ts": _dt.now().strftime("%H:%M:%S"),
+            "pct": pct,
+            "step": step,
+            "msg": log_message,
+        })
+        async with AsyncSessionLocal() as session:
+            sql = text("""
+                UPDATE videos
+                SET processing_logs = COALESCE(processing_logs, CAST('[]' AS jsonb)) || CAST(:log_entry AS jsonb),
+                    updated_at = now()
+                WHERE id = CAST(:video_id AS uuid)
+            """)
+            await session.execute(sql, {
+                "log_entry": log_entry,
+                "video_id": video_id,
+            })
+            await session.commit()
+    except Exception:
+        # Column may not exist yet — silently ignore
+        pass
+
+
+def update_video_processing_log_sync(video_id: str, log_message: str, step: str = "", pct: int = 0):
+    """Synchronous wrapper for update_video_processing_log."""
+    loop = get_event_loop()
+    return loop.run_until_complete(update_video_processing_log(video_id, log_message, step, pct))
+
+
+async def reset_video_processing_logs(video_id: str):
+    """Reset processing_logs to empty array at the start of analysis."""
+    try:
+        async with AsyncSessionLocal() as session:
+            sql = text("""
+                UPDATE videos
+                SET processing_logs = CAST('[]' AS jsonb),
+                    updated_at = now()
+                WHERE id = CAST(:video_id AS uuid)
+            """)
+            await session.execute(sql, {"video_id": video_id})
+            await session.commit()
+    except Exception:
+        pass
+
+
+def reset_video_processing_logs_sync(video_id: str):
+    """Synchronous wrapper for reset_video_processing_logs."""
+    loop = get_event_loop()
+    return loop.run_until_complete(reset_video_processing_logs(video_id))

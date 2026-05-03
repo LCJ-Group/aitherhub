@@ -605,6 +605,15 @@ async def run_all_ddl_migrations():
         except Exception as e:
             logger.warning(f"[DDL] ml_model_version: {e}")
 
+            # ── videos.processing_logs (realtime AI log panel) ──
+        try:
+            await conn.execute(_text(
+                "ALTER TABLE videos ADD COLUMN IF NOT EXISTS processing_logs JSONB DEFAULT '[]'::jsonb"
+            ))
+            logger.info("[DDL] videos.processing_logs \u2713")
+        except Exception as e:
+            logger.warning(f"[DDL] videos.processing_logs: {e}")
+
         elapsed = time.time() - ddl_start
         logger.info(f"[DDL] All migrations completed in {elapsed:.1f}s")
 
