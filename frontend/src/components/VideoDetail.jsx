@@ -753,7 +753,7 @@ export default function VideoDetail({ videoData, editorParams }) {
             // Update progress (preserve time_start/time_end)
             setClipStates(prev => ({
               ...prev,
-              [phaseIndex]: { ...prev[phaseIndex], status: statusRes.status, progress_pct: statusRes.progress_pct || 0, progress_step: statusRes.progress_step || '', time_start: statusRes.time_start ?? prev[phaseIndex]?.time_start ?? timeStart, time_end: statusRes.time_end ?? prev[phaseIndex]?.time_end ?? timeEnd },
+              [phaseIndex]: { ...prev[phaseIndex], status: statusRes.status, progress_pct: statusRes.progress_pct || 0, progress_step: statusRes.progress_step || '', processing_logs: statusRes.processing_logs || prev[phaseIndex]?.processing_logs || [], time_start: statusRes.time_start ?? prev[phaseIndex]?.time_start ?? timeStart, time_end: statusRes.time_end ?? prev[phaseIndex]?.time_end ?? timeEnd },
             }));
           }
         } catch (e) {
@@ -2032,9 +2032,14 @@ export default function VideoDetail({ videoData, editorParams }) {
                                             transcribing: window.__t('stepTranscribing'),
                                             refining_subtitles: window.__t('stepRefiningSubtitles'),
                                             creating_clip: window.__t('stepCreatingClip'),
+                                            hook_detection: window.__t('stepHookDetection'),
+                                            hook_insertion: window.__t('stepHookInsertion'),
+                                            sound_effects: window.__t('stepSoundEffects'),
                                             uploading: window.__t('stepUploading'),
+                                            completed: window.__t('stepCompleted'),
                                           };
                                           const label = stepLabels[step] || window.__t('generatingClip');
+                                          const logs = clipState?.processing_logs || [];
                                           return (
                                             <div className="flex-1 flex flex-col gap-1.5">
                                               <div className="flex items-center justify-between">
@@ -2047,6 +2052,24 @@ export default function VideoDetail({ videoData, editorParams }) {
                                                   style={{ width: `${Math.max(pct, 2)}%` }}
                                                 />
                                               </div>
+                                              {/* AI Processing Live Log Panel */}
+                                              {logs.length > 0 && (
+                                                <div className="mt-2 rounded-lg bg-gray-900 border border-gray-700 overflow-hidden">
+                                                  <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-800 border-b border-gray-700">
+                                                    <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse"></span>
+                                                    <span className="text-green-400 text-[10px] font-mono font-medium">{window.__t('aiProcessingLog')}</span>
+                                                  </div>
+                                                  <div className="px-3 py-2 max-h-32 overflow-y-auto" style={{ scrollbarWidth: 'thin', scrollbarColor: '#4B5563 #1F2937' }}>
+                                                    {logs.map((log, logIdx) => (
+                                                      <div key={logIdx} className="flex items-start gap-2 py-0.5 animate-fadeIn">
+                                                        <span className="text-gray-500 text-[10px] font-mono flex-shrink-0 mt-px">{log.ts || ''}</span>
+                                                        <span className="text-gray-300 text-[11px] font-mono leading-relaxed">{log.msg || ''}</span>
+                                                      </div>
+                                                    ))}
+                                                    <div ref={(el) => { if (el) el.scrollIntoView({ behavior: 'smooth' }); }} />
+                                                  </div>
+                                                </div>
+                                              )}
                                             </div>
                                           );
                                         })()

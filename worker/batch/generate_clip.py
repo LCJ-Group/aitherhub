@@ -185,17 +185,43 @@ SUBTITLE_STYLES = [
 # DB helpers
 # =========================
 
-def update_clip_progress(clip_id: str, progress_pct: int, progress_step: str):
-    """Update clip generation progress in database."""
+def update_clip_progress(clip_id: str, progress_pct: int, progress_step: str, log_message: str = None):
+    """Update clip generation progress in database.
+    
+    If log_message is provided, it is appended to the processing_logs JSONB array
+    so the frontend can display a real-time AI processing log panel.
+    """
     loop = get_event_loop()
     async def _update():
         async with get_session() as session:
-            sql = text("""
-                UPDATE video_clips
-                SET progress_pct = :pct, progress_step = :step, updated_at = NOW()
-                WHERE id = :clip_id
-            """)
-            await session.execute(sql, {"pct": progress_pct, "step": progress_step, "clip_id": clip_id})
+            if log_message:
+                # Append a structured log entry to processing_logs JSONB array
+                sql = text("""
+                    UPDATE video_clips
+                    SET progress_pct = :pct,
+                        progress_step = :step,
+                        processing_logs = COALESCE(processing_logs, '[]'::jsonb) || :log_entry::jsonb,
+                        updated_at = NOW()
+                    WHERE id = :clip_id
+                """)
+                import json as _json
+                log_entry = _json.dumps({
+                    "ts": datetime.now().strftime("%H:%M:%S"),
+                    "pct": progress_pct,
+                    "step": progress_step,
+                    "msg": log_message,
+                })
+                await session.execute(sql, {
+                    "pct": progress_pct, "step": progress_step,
+                    "log_entry": log_entry, "clip_id": clip_id,
+                })
+            else:
+                sql = text("""
+                    UPDATE video_clips
+                    SET progress_pct = :pct, progress_step = :step, updated_at = NOW()
+                    WHERE id = :clip_id
+                """)
+                await session.execute(sql, {"pct": progress_pct, "step": progress_step, "clip_id": clip_id})
     loop.run_until_complete(_update())
 
 
@@ -2965,9 +2991,15 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
     # Ensure blob_url has a fresh SAS token (expired tokens cause download failures)
     blob_url = _ensure_fresh_sas_url(blob_url)
 
-    # Update status to processing
+    # Update status to processing + clear previous logs
     update_clip_status(clip_id, "processing")
-    update_clip_progress(clip_id, 5, "downloading")
+    # Reset processing_logs for fresh run
+    _reset_loop = get_event_loop()
+    async def _reset_logs():
+        async with get_session() as _s:
+            await _s.execute(text("UPDATE video_clips SET processing_logs = '[]'::jsonb WHERE id = :cid"), {"cid": clip_id})
+    _reset_loop.run_until_complete(_reset_logs())
+    update_clip_progress(clip_id, 5, "downloading", log_message="\u2b07\ufe0f Starting source video download...")
 
     work_dir = tempfile.mkdtemp(prefix=f"clip_{clip_id}_")
     logger.info(f"Work directory: {work_dir}")
@@ -2976,7 +3008,7 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
         # 1. Download ONLY the needed segment (not the entire video)
         # Use ffmpeg -ss with URL to avoid downloading multi-GB files
         # This is critical for 2h+ videos where full download exceeds timeout
-        update_clip_progress(clip_id, 10, "downloading")
+        update_clip_progress(clip_id, 10, "downloading", log_message=f"\u2b07\ufe0f Downloading segment ({safe_start:.0f}s-{safe_end:.0f}s) from source video")
 
         segment_path = os.path.join(work_dir, "segment.mp4")
         source_path = None  # May be set if full download fallback is needed
@@ -3034,7 +3066,7 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
             time_start_local = time_start
             time_end_local = time_end
 
-        update_clip_progress(clip_id, 15, "speech_boundary")
+        update_clip_progress(clip_id, 15, "speech_boundary", log_message="\U0001f50a Detecting speech boundaries to avoid mid-sentence cuts")
 
         # 1.5. Speech-Aware Cut: adjust boundaries to avoid mid-sentence cuts
         logger.info("[SPEECH_CUT] Adjusting clip boundaries to speech boundaries...")
@@ -3048,7 +3080,7 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
             )
             time_start_local, time_end_local = adj_start, adj_end
 
-        update_clip_progress(clip_id, 20, "cutting")
+        update_clip_progress(clip_id, 20, "cutting", log_message=f"\u2702\ufe0f Cutting segment: {time_start_local:.1f}s \u2192 {time_end_local:.1f}s ({time_end_local - time_start_local:.1f}s)")
 
         # 2. Cut exact segment from source (or wider segment)
         if direct_cut_ok:
@@ -3061,7 +3093,7 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
             if not cut_segment(source_path, segment_path, time_start_local, time_end_local):
                 raise RuntimeError("Failed to cut segment")
 
-        update_clip_progress(clip_id, 30, "person_detection")
+        update_clip_progress(clip_id, 30, "person_detection", log_message="\U0001f9d1 Detecting person presence in video frames")
 
         # 2.5. Person detection: remove scenes without people
         if skip_person_detection:
@@ -3077,13 +3109,14 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
                 filtered_path = os.path.join(work_dir, "segment_filtered.mp4")
                 if concatenate_intervals(segment_path, person_intervals, filtered_path):
                     logger.info(f"Filtered segment: kept {len(person_intervals)} person intervals")
+                    update_clip_progress(clip_id, 35, "person_detection", log_message=f"\u2705 Person detected: kept {len(person_intervals)} intervals with people")
                     segment_path = filtered_path  # Use filtered version
                 else:
                     logger.warning("Failed to filter person intervals, using original segment")
         else:
             logger.info("Person detection not available, using original segment")
 
-        update_clip_progress(clip_id, 45, "silence_removal")
+        update_clip_progress(clip_id, 45, "silence_removal", log_message="\U0001f507 Scanning for silence intervals to remove dead air")
 
         # 2.7. Silence detection: remove silent intervals (coughing, dead air, etc.)
         if skip_silence_removal:
@@ -3097,13 +3130,14 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
             if remove_silence_from_video(segment_path, desilenced_path, silence_intervals):
                 removed_duration = sum(e - s for s, e in silence_intervals)
                 logger.info(f"Removed {removed_duration:.1f}s of silence from segment")
+                update_clip_progress(clip_id, 50, "silence_removal", log_message=f"\u2705 Removed {removed_duration:.1f}s of silence ({len(silence_intervals)} intervals)")
                 segment_path = desilenced_path  # Use desilenced version
             else:
                 logger.warning("Failed to remove silence, using segment as-is")
         else:
             logger.info("No significant silence detected")
 
-        update_clip_progress(clip_id, 55, "transcribing")
+        update_clip_progress(clip_id, 55, "transcribing", log_message="\U0001f3a4 Running Whisper AI speech-to-text transcription")
 
         # 3. Extract audio and transcribe
         audio_path = os.path.join(work_dir, "audio.wav")
@@ -3111,10 +3145,11 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
         if extract_audio(segment_path, audio_path):
             segments = transcribe_audio(audio_path, subtitle_language=subtitle_language)
             logger.info(f"Got {len(segments)} raw subtitle segments from Whisper (lang={subtitle_language})")
+            update_clip_progress(clip_id, 60, "transcribing", log_message=f"\u2705 Whisper transcription complete: {len(segments)} segments detected (lang={subtitle_language})")
         else:
             logger.warning("Audio extraction failed, proceeding without subtitles")
 
-        update_clip_progress(clip_id, 65, "refining_subtitles")
+        update_clip_progress(clip_id, 65, "refining_subtitles", log_message="\u2728 Refining subtitles with GPT-4.1-mini (emphasis + highlight detection)")
 
         # 3.5. GPT subtitle refinement (merge fragments, fix errors, add emphasis)
         if segments:
@@ -3155,6 +3190,10 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
             logger.info("Refining subtitles with GPT-4.1-mini...")
             segments = refine_subtitles_with_gpt(segments, phase_context, product_names=product_names, subtitle_language=subtitle_language, dict_entries=dict_entries)
             logger.info(f"After GPT refinement: {len(segments)} subtitle segments")
+            # Count emphasis and highlight_words for log
+            _emph_count = sum(1 for s in segments if s.get('emphasis'))
+            _hw_count = sum(len(s.get('highlight_words', [])) for s in segments)
+            update_clip_progress(clip_id, 72, "refining_subtitles", log_message=f"\u2705 GPT refinement done: {len(segments)} segments, {_emph_count} emphasis, {_hw_count} highlight words")
 
             # Post-GPT dictionary replacement fallback (ensures dictionary is always applied)
             if dict_entries:
@@ -3183,7 +3222,7 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
             if comma_fix_count > 0:
                 logger.info(f"Replaced punctuation (、/。) with spaces in {comma_fix_count} segments")
 
-        update_clip_progress(clip_id, 75, "creating_clip")
+        update_clip_progress(clip_id, 75, "creating_clip", log_message="\U0001f3ac Creating 1080x1920 vertical clip with FFmpeg")
 
         # 4. Create vertical clip WITHOUT burned-in subtitles
         # Subtitles are rendered as overlay in the frontend (ClipEditorV2)
@@ -3258,7 +3297,9 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
         if not os.path.exists(clip_path) or os.path.getsize(clip_path) == 0:
             raise RuntimeError("Output clip file is empty")
 
+        clip_size_mb = os.path.getsize(clip_path) / (1024 * 1024)
         logger.info(f"Clip created: {os.path.getsize(clip_path)} bytes")
+        update_clip_progress(clip_id, 80, "creating_clip", log_message=f"\u2705 Vertical clip created: {clip_size_mb:.1f}MB")
 
         # 5. Hook intro insertion (climax at start) — ML-scored clips only
         hook_applied = False
@@ -3266,11 +3307,11 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
         try:
             is_ml_clip = _check_is_ml_clip(clip_id)
             if is_ml_clip:
-                update_clip_progress(clip_id, 82, "hook_detection")
+                update_clip_progress(clip_id, 82, "hook_detection", log_message="\U0001f3af ML clip detected! Scanning for climax moment to use as hook intro")
                 logger.info("[HOOK] ML-scored clip detected, attempting hook intro insertion...")
                 hook_start, hook_end = detect_hook_moment(clip_path, segments)
                 if hook_start is not None and hook_end is not None:
-                    update_clip_progress(clip_id, 85, "hook_insertion")
+                    update_clip_progress(clip_id, 85, "hook_insertion", log_message=f"\U0001f525 Inserting hook intro: {hook_start:.1f}s-{hook_end:.1f}s (best climax) with fadewhite transition")
                     hooked_path = os.path.join(work_dir, "clip_hooked.mp4")
                     if insert_hook_intro(clip_path, hook_start, hook_end, hooked_path):
                         # Verify hooked clip is valid
@@ -3303,7 +3344,7 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
                 se_points = detect_se_insertion_points(segments, hook_applied=hook_applied,
                                                        hook_duration=hook_duration_actual)
                 if se_points:
-                    update_clip_progress(clip_id, 87, "sound_effects")
+                    update_clip_progress(clip_id, 87, "sound_effects", log_message=f"\U0001f50a Inserting {len(se_points)} sound effects (transition/price/CTA)")
                     se_output_path = os.path.join(work_dir, "clip_with_se.mp4")
                     if insert_sound_effects(clip_path, se_points, se_output_path, work_dir):
                         # Verify SE clip is valid
@@ -3323,7 +3364,7 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
         except Exception as se_err:
             logger.warning(f"[SE] SE insertion error (non-fatal): {se_err}")
 
-        update_clip_progress(clip_id, 90, "uploading")
+        update_clip_progress(clip_id, 90, "uploading", log_message="\u2601\ufe0f Uploading finished clip to Azure Blob Storage")
 
         # 6. Upload to Azure Blob
         blob_info = parse_blob_url(blob_url)
@@ -3338,6 +3379,7 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
             raise RuntimeError("Failed to upload clip to blob storage")
 
         logger.info(f"Clip uploaded: {uploaded_url}")
+        update_clip_progress(clip_id, 95, "uploading", log_message="\u2705 Upload complete! Saving metadata to database...")
 
         # 7. Update DB with completed status + save captions
         # Convert segments to captions format for frontend
@@ -3364,6 +3406,7 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
         update_clip_status(clip_id, "completed", clip_url=uploaded_url, captions=captions_data if captions_data else None)
         hook_info = f", hook={hook_duration_actual:.1f}s" if hook_applied else ""
         logger.info(f"=== Clip generation completed successfully ({len(captions_data)} captions saved{hook_info}) ===")
+        update_clip_progress(clip_id, 100, "completed", log_message=f"\U0001f389 Clip generation complete! {len(captions_data)} subtitles saved{hook_info}")
 
         # 8. Auto-enrich clip metadata (Clip DB)
         try:

@@ -245,7 +245,8 @@ async def get_clip_status(
                    subtitle_font_size, caption_offset, trim_data, subtitle_language,
                    time_start, time_end,
                    COALESCE(progress_pct, 0) as progress_pct, COALESCE(progress_step, '') as progress_step,
-                   updated_at, job_payload
+                   updated_at, job_payload,
+                   COALESCE(processing_logs, '[]'::jsonb) as processing_logs
             FROM video_clips
             WHERE video_id = :video_id AND phase_index = CAST(:phase_index AS text)
             ORDER BY created_at DESC
@@ -329,6 +330,17 @@ async def get_clip_status(
                         await db.commit()
                         clip_status = "failed"
 
+        # Parse processing_logs
+        _processing_logs = []
+        try:
+            _raw_logs = row.processing_logs if hasattr(row, 'processing_logs') else []
+            if isinstance(_raw_logs, str):
+                _processing_logs = json.loads(_raw_logs)
+            elif isinstance(_raw_logs, list):
+                _processing_logs = _raw_logs
+        except Exception:
+            _processing_logs = []
+
         response = {
             "clip_id": str(row.id),
             "status": clip_status,
@@ -336,6 +348,7 @@ async def get_clip_status(
             "progress_step": row.progress_step if hasattr(row, 'progress_step') else "",
             "time_start": row.time_start if hasattr(row, 'time_start') else None,
             "time_end": row.time_end if hasattr(row, 'time_end') else None,
+            "processing_logs": _processing_logs,
         }
 
         if clip_status == "completed" and row.clip_url:
