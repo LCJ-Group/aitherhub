@@ -297,6 +297,7 @@ async def stream_video_status(
     async def event_generator():
         last_status = None
         last_step_progress = None
+        last_processing_logs_raw = ''
         poll_count = 0
         max_polls = 7200  # 4 hours max for long videos (7200 * 2 seconds = 14400 seconds = 4 hours)
 
@@ -331,8 +332,14 @@ async def stream_video_status(
                     current_status = video.status
                     current_step_progress = getattr(video, 'step_progress', None) or 0
 
-                    # Send update if status changed OR step_progress changed
-                    if current_status != last_status or current_step_progress != last_step_progress:
+                    # Check if processing_logs changed
+                    _current_pl_raw = getattr(video, 'processing_logs', None) or ''
+                    _pl_changed = (_current_pl_raw != last_processing_logs_raw)
+                    if _pl_changed:
+                        last_processing_logs_raw = _current_pl_raw
+
+                    # Send update if status changed OR step_progress changed OR processing_logs changed
+                    if current_status != last_status or current_step_progress != last_step_progress or _pl_changed:
                         progress = calculate_progress(current_status)
                         message = get_status_message(current_status)
 
