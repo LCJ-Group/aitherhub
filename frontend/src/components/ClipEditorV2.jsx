@@ -3090,15 +3090,15 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                           key={i}
                           style={{
                             display: 'flex',
-                            gap: 6,
+                            flexDirection: 'column',
                             padding: '8px 10px',
                             backgroundColor: isActive ? C.accent + '18' : C.surfaceLight,
                             borderRadius: 6,
                             border: isActive ? `1px solid ${C.accent}55` : '1px solid transparent',
                             transition: 'all 0.2s ease',
-                            alignItems: 'flex-start',
                           }}
                         >
+                          <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}>
                           <span
                             onClick={() => {
                               const localT = toLocalTime(cap.start);
@@ -3212,7 +3212,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                           >
                             {'×'}
                           </button>
-                        </div>
+                          </div>
                         {/* Highlight words badges */}
                         {cap.highlight_words && cap.highlight_words.length > 0 && (
                           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, marginTop: 3 }}>
