@@ -202,7 +202,7 @@ def update_clip_progress(clip_id: str, progress_pct: int, progress_step: str, lo
                         UPDATE video_clips
                         SET progress_pct = :pct,
                             progress_step = :step,
-                            processing_logs = COALESCE(processing_logs, '[]'::jsonb) || :log_entry::jsonb,
+                            processing_logs = COALESCE(processing_logs, CAST('[]' AS jsonb)) || CAST(:log_entry AS jsonb),
                             updated_at = NOW()
                         WHERE id = :clip_id
                     """)
@@ -3010,7 +3010,7 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
     async def _reset_logs():
         try:
             async with get_session() as _s:
-                await _s.execute(text("UPDATE video_clips SET processing_logs = '[]'::jsonb WHERE id = :cid"), {"cid": clip_id})
+                await _s.execute(text("UPDATE video_clips SET processing_logs = CAST('[]' AS jsonb) WHERE id = :cid"), {"cid": clip_id})
         except Exception:
             logger.debug("processing_logs column not available yet, skipping reset")
     _reset_loop.run_until_complete(_reset_logs())
