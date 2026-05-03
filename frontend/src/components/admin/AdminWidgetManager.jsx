@@ -39,6 +39,12 @@ export default function AdminWidgetManager({ adminKey }) {
     cta_url_template: "",
     cart_selector: "",
     brand_keywords: "",
+    fab_type: "circle",
+    fab_shape: "round",
+    fab_size: "medium",
+    fab_image_url: "",
+    fab_banner_width: 300,
+    fab_banner_height: 80,
   });
 
   const headers = { "X-Admin-Key": adminKey };
@@ -80,7 +86,7 @@ export default function AdminWidgetManager({ adminKey }) {
       setError(null);
       await axios.post(`${API_BASE}/api/v1/widget/admin/clients`, form, { headers });
       setShowCreateForm(false);
-      setForm({ name: "", domain: "", theme_color: "#FF2D55", position: "bottom-right", cta_text: "購入する", cta_url_template: "", cart_selector: "", brand_keywords: "" });
+      setForm({ name: "", domain: "", theme_color: "#FF2D55", position: "bottom-right", cta_text: "購入する", cta_url_template: "", cart_selector: "", brand_keywords: "", fab_type: "circle", fab_shape: "round", fab_size: "medium", fab_image_url: "", fab_banner_width: 300, fab_banner_height: 80 });
       fetchClients();
     } catch (err) {
       setError(`作成失敗: ${err.response?.data?.detail || err.message}`);
@@ -94,7 +100,7 @@ export default function AdminWidgetManager({ adminKey }) {
       setError(null);
       await axios.put(`${API_BASE}/api/v1/widget/admin/clients/${editingClient}`, form, { headers });
       setEditingClient(null);
-      setForm({ name: "", domain: "", theme_color: "#FF2D55", position: "bottom-right", cta_text: "購入する", cta_url_template: "", cart_selector: "", brand_keywords: "" });
+      setForm({ name: "", domain: "", theme_color: "#FF2D55", position: "bottom-right", cta_text: "購入する", cta_url_template: "", cart_selector: "", brand_keywords: "", fab_type: "circle", fab_shape: "round", fab_size: "medium", fab_image_url: "", fab_banner_width: 300, fab_banner_height: 80 });
       fetchClients();
     } catch (err) {
       setError(`更新失敗: ${err.response?.data?.detail || err.message}`);
@@ -198,6 +204,12 @@ export default function AdminWidgetManager({ adminKey }) {
       cta_url_template: client.cta_url_template || "",
       cart_selector: client.cart_selector || "",
       brand_keywords: client.brand_keywords || "",
+      fab_type: client.fab_type || "circle",
+      fab_shape: client.fab_shape || "round",
+      fab_size: client.fab_size || "medium",
+      fab_image_url: client.fab_image_url || "",
+      fab_banner_width: client.fab_banner_width || 300,
+      fab_banner_height: client.fab_banner_height || 80,
     });
     setShowCreateForm(false);
   };
@@ -266,7 +278,7 @@ export default function AdminWidgetManager({ adminKey }) {
           </p>
         </div>
         <button
-          onClick={() => { setShowCreateForm(!showCreateForm); setEditingClient(null); setForm({ name: "", domain: "", theme_color: "#FF2D55", position: "bottom-right", cta_text: "購入する", cta_url_template: "", cart_selector: "", brand_keywords: "" }); }}
+          onClick={() => { setShowCreateForm(!showCreateForm); setEditingClient(null); setForm({ name: "", domain: "", theme_color: "#FF2D55", position: "bottom-right", cta_text: "購入する", cta_url_template: "", cart_selector: "", brand_keywords: "", fab_type: "circle", fab_shape: "round", fab_size: "medium", fab_image_url: "", fab_banner_width: 300, fab_banner_height: 80 }); }}
           className="px-4 py-2 bg-pink-600 text-white rounded-lg hover:bg-pink-700 transition-colors text-sm font-medium"
         >
           + 新規クライアント
@@ -340,6 +352,67 @@ export default function AdminWidgetManager({ adminKey }) {
               <label className="block text-sm font-medium text-gray-600 mb-1">ブランドキーワード（おすすめクリップ用）</label>
               <input type="text" value={form.brand_keywords} onChange={(e) => setForm({ ...form, brand_keywords: e.target.value })} className="w-full px-3 py-2 border rounded-lg text-sm" placeholder="例: KYOGOKU, 京極, ケラチン, シャンプー" />
               <p className="text-xs text-gray-400 mt-1">カンマ区切りで複数入力可。ブランドポータルの「おすすめ」タブで自動マッチングに使用されます</p>
+            </div>
+
+            {/* ── FABカスタマイズセクション ── */}
+            <div className="col-span-2 border-t pt-4 mt-2">
+              <h4 className="text-sm font-bold text-gray-700 mb-3 flex items-center gap-2">
+                <span className="w-5 h-5 bg-pink-100 rounded flex items-center justify-center text-pink-600 text-xs">F</span>
+                FAB（フローティングボタン）設定
+              </h4>
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">FABタイプ</label>
+                  <select value={form.fab_type} onChange={(e) => setForm({ ...form, fab_type: e.target.value })} className="w-full px-3 py-2 border rounded-lg text-sm">
+                    <option value="circle">丸ボタン</option>
+                    <option value="banner">バナー</option>
+                    <option value="hidden">非表示</option>
+                  </select>
+                </div>
+                {form.fab_type === "circle" && (
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">形状</label>
+                    <select value={form.fab_shape} onChange={(e) => setForm({ ...form, fab_shape: e.target.value })} className="w-full px-3 py-2 border rounded-lg text-sm">
+                      <option value="round">丸</option>
+                      <option value="square">四角</option>
+                    </select>
+                  </div>
+                )}
+                {form.fab_type === "circle" && (
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">サイズ</label>
+                    <select value={form.fab_size} onChange={(e) => setForm({ ...form, fab_size: e.target.value })} className="w-full px-3 py-2 border rounded-lg text-sm">
+                      <option value="small">小 (48px)</option>
+                      <option value="medium">中 (60px)</option>
+                      <option value="large">大 (80px)</option>
+                    </select>
+                  </div>
+                )}
+                {form.fab_type === "banner" && (
+                  <>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">バナー幅 (px)</label>
+                      <input type="number" value={form.fab_banner_width} onChange={(e) => setForm({ ...form, fab_banner_width: parseInt(e.target.value) || 300 })} className="w-full px-3 py-2 border rounded-lg text-sm" min="100" max="600" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">バナー高さ (px)</label>
+                      <input type="number" value={form.fab_banner_height} onChange={(e) => setForm({ ...form, fab_banner_height: parseInt(e.target.value) || 80 })} className="w-full px-3 py-2 border rounded-lg text-sm" min="40" max="200" />
+                    </div>
+                  </>
+                )}
+              </div>
+              {form.fab_type !== "hidden" && (
+                <div className="mt-3">
+                  <label className="block text-xs font-medium text-gray-500 mb-1">カスタム画像 URL（任意）</label>
+                  <input type="text" value={form.fab_image_url} onChange={(e) => setForm({ ...form, fab_image_url: e.target.value })} className="w-full px-3 py-2 border rounded-lg text-sm" placeholder="https://example.com/banner.png" />
+                  <p className="text-xs text-gray-400 mt-1">設定するとサムネイル/動画の代わりにこの画像をFABに表示します</p>
+                  {form.fab_image_url && (
+                    <div className="mt-2 p-2 bg-gray-50 rounded-lg inline-block">
+                      <img src={form.fab_image_url} alt="FAB preview" className="max-h-16 rounded" onError={(e) => { e.target.style.display = 'none'; }} />
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
           <div className="flex gap-2 pt-2">

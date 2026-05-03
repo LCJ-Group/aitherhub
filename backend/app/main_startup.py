@@ -388,6 +388,20 @@ async def run_all_ddl_migrations():
                     """))
                     await conn.execute(_text("CREATE INDEX IF NOT EXISTS ix_widget_clients_domain ON widget_clients (domain)"))
 
+                    # FAB customization columns (added 2025-05)
+                    for _col_sql in [
+                        "ALTER TABLE widget_clients ADD COLUMN IF NOT EXISTS fab_type VARCHAR(20) DEFAULT 'circle'",
+                        "ALTER TABLE widget_clients ADD COLUMN IF NOT EXISTS fab_shape VARCHAR(20) DEFAULT 'round'",
+                        "ALTER TABLE widget_clients ADD COLUMN IF NOT EXISTS fab_size VARCHAR(20) DEFAULT 'medium'",
+                        "ALTER TABLE widget_clients ADD COLUMN IF NOT EXISTS fab_image_url TEXT",
+                        "ALTER TABLE widget_clients ADD COLUMN IF NOT EXISTS fab_banner_width INTEGER DEFAULT 300",
+                        "ALTER TABLE widget_clients ADD COLUMN IF NOT EXISTS fab_banner_height INTEGER DEFAULT 80",
+                    ]:
+                        try:
+                            await conn.execute(_text(_col_sql))
+                        except Exception:
+                            pass
+
                     await conn.execute(_text("""
                         CREATE TABLE IF NOT EXISTS widget_clip_assignments (
                             id VARCHAR(36) PRIMARY KEY,

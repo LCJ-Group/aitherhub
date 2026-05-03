@@ -78,6 +78,12 @@ class WidgetClientUpdate(BaseModel):
     cart_selector: Optional[str] = None
     brand_keywords: Optional[str] = None
     lcj_brand_id: Optional[int] = None
+    fab_type: Optional[str] = None  # circle | banner | hidden
+    fab_shape: Optional[str] = None  # round | square
+    fab_size: Optional[str] = None  # small | medium | large
+    fab_image_url: Optional[str] = None
+    fab_banner_width: Optional[int] = None
+    fab_banner_height: Optional[int] = None
     assigned_clip_ids: Optional[List[str]] = None
 
 
@@ -234,6 +240,12 @@ async def get_widget_config(
         "cta_text": row["cta_text"],
         "cta_url_template": row.get("cta_url_template"),
         "cart_selector": row.get("cart_selector"),
+        "fab_type": row.get("fab_type", "circle"),
+        "fab_shape": row.get("fab_shape", "round"),
+        "fab_size": row.get("fab_size", "medium"),
+        "fab_image_url": row.get("fab_image_url"),
+        "fab_banner_width": row.get("fab_banner_width", 300),
+        "fab_banner_height": row.get("fab_banner_height", 80),
         "clips": clips,
     }
 
@@ -527,6 +539,7 @@ async def list_widget_clients(
             text("""
                 SELECT client_id, name, domain, theme_color, position, cta_text, 
                        is_active, brand_keywords, lcj_brand_id, logo_url,
+                       fab_type, fab_shape, fab_size, fab_image_url, fab_banner_width, fab_banner_height,
                        created_at::text as created_at, updated_at::text as updated_at
                 FROM widget_clients ORDER BY created_at DESC
             """)

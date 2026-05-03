@@ -290,6 +290,16 @@
     var ctaText = config.cta_text || "購入する";
     var brandName = config.name || "";
 
+    // ── FAB Customization Settings ──
+    var fabType = config.fab_type || "circle";       // circle | banner | hidden
+    var fabShape = config.fab_shape || "round";      // round | square
+    var fabSize = config.fab_size || "medium";       // small | medium | large
+    var fabImageUrl = config.fab_image_url || null;   // custom image URL
+    var fabBannerW = config.fab_banner_width || 300;  // banner width px
+    var fabBannerH = config.fab_banner_height || 80;  // banner height px
+    var FAB_SIZES = { small: 48, medium: 60, large: 80 };
+    var fabPx = FAB_SIZES[fabSize] || 60;
+
     // ── CSS ──
     var style = document.createElement("style");
     style.textContent = '\
@@ -300,14 +310,12 @@
         position: fixed;\
         ' + (position.indexOf("right") !== -1 ? "right: 16px;" : "left: 16px;") + '\
         ' + (position.indexOf("top") !== -1 ? "top: 16px;" : "bottom: 16px;") + '\
-        width: 60px;\
-        height: 60px;\
-        border-radius: 50%;\
+        ' + (fabType === "banner" ? 'width: ' + fabBannerW + 'px; height: ' + fabBannerH + 'px; border-radius: 12px;' : 'width: ' + fabPx + 'px; height: ' + fabPx + 'px; border-radius: ' + (fabShape === "square" ? "12px" : "50%") + ';') + '\
         background: ' + themeColor + ';\
         cursor: pointer;\
         pointer-events: auto;\
         box-shadow: 0 4px 24px rgba(0,0,0,0.35);\
-        display: flex;\
+        display: ' + (fabType === "hidden" ? "none" : "flex") + ';\
         align-items: center;\
         justify-content: center;\
         transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.3s;\
@@ -318,9 +326,9 @@
       }\
       .ath-fab:hover { transform: scale(1.1); box-shadow: 0 6px 32px rgba(0,0,0,0.45); }\
       .ath-fab:active { transform: scale(0.95); }\
-      .ath-fab img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }\
+      .ath-fab img { width: 100%; height: 100%; object-fit: cover; border-radius: ' + (fabType === "banner" ? "12px" : (fabShape === "square" ? "12px" : "50%")) + '; }\
       .ath-fab-icon { width: 28px; height: 28px; }\
-      .ath-fab video { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; pointer-events: none; }\
+      .ath-fab video { width: 100%; height: 100%; object-fit: cover; border-radius: ' + (fabType === "banner" ? "12px" : (fabShape === "square" ? "12px" : "50%")) + '; pointer-events: none; }\
       .ath-fab-play-overlay {\
         position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);\
         width: 20px; height: 20px; opacity: 0.9; pointer-events: none;\
@@ -1232,12 +1240,20 @@
     // ── FAB (Floating Action Button) with Video Preview ──
     var fab = document.createElement("div");
     fab.className = "ath-fab";
-    // Use thumbnail for FAB if available, otherwise use lightweight video
-    if (clips[0] && clips[0].thumbnail_url) {
+    var _fabBorderRadius = fabType === "banner" ? "12px" : (fabShape === "square" ? "12px" : "50%");
+
+    // Custom image takes priority over thumbnail/video
+    if (fabImageUrl) {
+      var fabImg = document.createElement("img");
+      fabImg.src = fabImageUrl;
+      fabImg.alt = "Watch video";
+      fabImg.style.cssText = "width:100%;height:100%;object-fit:cover;border-radius:" + _fabBorderRadius + ";";
+      fab.appendChild(fabImg);
+    } else if (clips[0] && clips[0].thumbnail_url) {
       var fabImg = document.createElement("img");
       fabImg.src = clips[0].thumbnail_url;
       fabImg.alt = "Watch video";
-      fabImg.style.cssText = "width:100%;height:100%;object-fit:cover;border-radius:50%;";
+      fabImg.style.cssText = "width:100%;height:100%;object-fit:cover;border-radius:" + _fabBorderRadius + ";";
       fab.appendChild(fabImg);
     } else if (clips[0] && (clips[0].clip_url || clips[0].widget_url)) {
       fabVideo = document.createElement("video");
@@ -1265,12 +1281,14 @@
     } else {
       fab.innerHTML = '<div class="ath-fab-icon">' + ICONS.play + '</div>';
     }
-    // Small play icon overlay
-    var fabPlayOverlay = document.createElement("div");
-    fabPlayOverlay.className = "ath-fab-play-overlay";
-    fabPlayOverlay.innerHTML = ICONS.play;
-    fab.appendChild(fabPlayOverlay);
-    if (clips.length > 1) {
+    // Small play icon overlay (hide for banner with custom image)
+    if (!(fabType === "banner" && fabImageUrl)) {
+      var fabPlayOverlay = document.createElement("div");
+      fabPlayOverlay.className = "ath-fab-play-overlay";
+      fabPlayOverlay.innerHTML = ICONS.play;
+      fab.appendChild(fabPlayOverlay);
+    }
+    if (clips.length > 1 && fabType !== "banner") {
       var badge = document.createElement("span");
       badge.className = "ath-badge";
       badge.textContent = clips.length;
@@ -2678,7 +2696,7 @@
       if (isDetailOpen) closeProductDetail();
       if (isCommentOpen) closeCommentPanel();
       overlay.classList.remove("active");
-      fab.style.display = "flex";
+      fab.style.display = fabType === "hidden" ? "none" : "flex";
       // Restore original URL (remove ?ath_clip= parameter)
       restoreUrl();
       // Resume FAB video
