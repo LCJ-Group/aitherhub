@@ -185,7 +185,7 @@ SUBTITLE_STYLES = [
 # DB helpers
 # =========================
 
-def update_clip_progress(clip_id: str, progress_pct: int, progress_step: str, log_message: str = None):
+def update_clip_progress(clip_id: str, progress_pct: int, progress_step: str, log_message: str = None, preview_url: str = None):
     """Update clip generation progress in database.
     
     If log_message is provided, it is appended to the processing_logs JSONB array
@@ -207,12 +207,15 @@ def update_clip_progress(clip_id: str, progress_pct: int, progress_step: str, lo
                         WHERE id = :clip_id
                     """)
                     import json as _json
-                    log_entry = _json.dumps({
+                    _entry = {
                         "ts": datetime.now().strftime("%H:%M:%S"),
                         "pct": progress_pct,
                         "step": progress_step,
                         "msg": log_message,
-                    })
+                    }
+                    if preview_url:
+                        _entry["preview_url"] = preview_url
+                    log_entry = _json.dumps(_entry)
                     await session.execute(sql, {
                         "pct": progress_pct, "step": progress_step,
                         "log_entry": log_entry, "clip_id": clip_id,
@@ -277,6 +280,29 @@ def update_clip_status(clip_id: str, status: str, clip_url: str = None, error_me
                 })
 
     loop.run_until_complete(_update())
+
+
+# =========================
+# Intermediate preview upload (for real-time monitor)
+# =========================
+
+def _upload_intermediate_preview(local_path: str, clip_id: str, step_name: str) -> str | None:
+    """Upload an intermediate video file to Azure Blob for real-time preview.
+    
+    Returns the blob URL if successful, None otherwise.
+    Non-fatal: errors are logged but do not stop the pipeline.
+    """
+    try:
+        if not os.path.exists(local_path) or os.path.getsize(local_path) == 0:
+            return None
+        blob_name = f"clip-previews/{clip_id}/{step_name}.mp4"
+        url = upload_to_blob(local_path, blob_name)
+        if url:
+            logger.info(f"[PREVIEW] Uploaded intermediate preview: {step_name} -> {url}")
+        return url
+    except Exception as e:
+        logger.warning(f"[PREVIEW] Failed to upload {step_name} preview (non-fatal): {e}")
+        return None
 
 
 # =========================
@@ -3113,6 +3139,11 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
             if not cut_segment(source_path, segment_path, time_start_local, time_end_local):
                 raise RuntimeError("Failed to cut segment")
 
+        # --- Intermediate preview: raw cut ---
+        _prev_url = _upload_intermediate_preview(segment_path, clip_id, "01_raw_cut")
+        if _prev_url:
+            update_clip_progress(clip_id, 25, "cutting", log_message="\U0001f3ac Raw cut preview ready — tap to watch", preview_url=_prev_url)
+
         update_clip_progress(clip_id, 30, "person_detection", log_message="\U0001f9d1 Detecting person presence in video frames")
 
         # 2.5. Person detection: remove scenes without people
@@ -3156,6 +3187,11 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
                 logger.warning("Failed to remove silence, using segment as-is")
         else:
             logger.info("No significant silence detected")
+
+        # --- Intermediate preview: after silence removal ---
+        _prev_url = _upload_intermediate_preview(segment_path, clip_id, "02_cleaned")
+        if _prev_url:
+            update_clip_progress(clip_id, 52, "silence_removal", log_message="\U0001f9f9 Cleaned segment preview ready — silence removed", preview_url=_prev_url)
 
         update_clip_progress(clip_id, 55, "transcribing", log_message="\U0001f3a4 Running Whisper AI speech-to-text transcription")
 
@@ -3324,6 +3360,11 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
 
         clip_size_mb = os.path.getsize(clip_path) / (1024 * 1024)
         logger.info(f"Clip created: {os.path.getsize(clip_path)} bytes")
+        # --- Intermediate preview: vertical clip (no subtitles) ---
+        _prev_url = _upload_intermediate_preview(clip_path, clip_id, "03_vertical")
+        if _prev_url:
+            update_clip_progress(clip_id, 78, "creating_clip", log_message=f"\U0001f4f1 Vertical clip preview ready ({clip_size_mb:.1f}MB)", preview_url=_prev_url)
+
         update_clip_progress(clip_id, 80, "creating_clip", log_message=f"\u2705 Vertical clip created: {clip_size_mb:.1f}MB")
 
         # 5. Hook intro insertion (climax at start) — ML-scored clips only
@@ -3349,6 +3390,10 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
                             # Adjust segment timestamps to account for prepended hook
                             segments = _adjust_captions_for_hook(segments, hook_duration_actual)
                             logger.info(f"[HOOK] Hook intro applied! Duration added: {hook_duration_actual:.1f}s")
+                            # --- Intermediate preview: with hook ---
+                            _prev_url = _upload_intermediate_preview(clip_path, clip_id, "04_hooked")
+                            if _prev_url:
+                                update_clip_progress(clip_id, 86, "hook_insertion", log_message=f"\U0001f525 Hook intro preview ready (+{hook_duration_actual:.1f}s climax)", preview_url=_prev_url)
                         else:
                             logger.warning(f"[HOOK] Hooked clip invalid (dur={hooked_dur}), keeping original")
                             if os.path.exists(hooked_path):
@@ -3378,6 +3423,10 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
                         if se_dur and orig_dur and abs(se_dur - orig_dur) < 1.0:
                             os.replace(se_output_path, clip_path)
                             logger.info(f"[SE] Sound effects applied ({len(se_points)} SEs)")
+                            # --- Intermediate preview: with sound effects ---
+                            _prev_url = _upload_intermediate_preview(clip_path, clip_id, "05_with_se")
+                            if _prev_url:
+                                update_clip_progress(clip_id, 89, "sound_effects", log_message=f"\U0001f3b5 Sound effects preview ready ({len(se_points)} SEs)", preview_url=_prev_url)
                         else:
                             logger.warning(f"[SE] SE clip duration mismatch (se={se_dur}, orig={orig_dur}), keeping original")
                             if os.path.exists(se_output_path):

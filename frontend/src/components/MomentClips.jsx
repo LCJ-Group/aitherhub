@@ -548,6 +548,7 @@ export default function MomentClips({ videoData, onRequestClip, clipStates = {},
                                       progressStep={step}
                                       status={clipState?.status}
                                       compact={true}
+                                      clipUrl={clipState?.clip_url}
                                     />
                                   )}
                                 </div>

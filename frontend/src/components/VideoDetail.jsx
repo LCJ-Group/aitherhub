@@ -2128,6 +2128,7 @@ export default function VideoDetail({ videoData, editorParams }) {
                                                   progressStep={step}
                                                   status={clipState?.status}
                                                   compact={false}
+                                                  clipUrl={clipState?.clip_url}
                                                 />
                                               )}
                                             </div>

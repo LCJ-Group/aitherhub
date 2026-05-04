@@ -228,6 +228,7 @@ export default function SalesClipCandidates({ videoData, onRequestClip, clipStat
               progressStep={step}
               status={clipState?.status}
               compact={true}
+              clipUrl={clipState?.clip_url}
             />
           )}
         </div>
