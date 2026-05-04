@@ -3019,6 +3019,12 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
     work_dir = tempfile.mkdtemp(prefix=f"clip_{clip_id}_")
     logger.info(f"Work directory: {work_dir}")
 
+    # Pre-calculate safe_start/safe_end before try block (used in progress messages)
+    margin = 5.0  # seconds extra on each side for speech boundary adjustment
+    safe_start = max(0.0, time_start - margin)
+    safe_end = time_end + margin
+    safe_duration = safe_end - safe_start
+
     try:
         # 1. Download ONLY the needed segment (not the entire video)
         # Use ffmpeg -ss with URL to avoid downloading multi-GB files
@@ -3030,11 +3036,6 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
 
         # Try direct URL cut first (downloads only the needed portion)
         direct_cut_ok = False
-        # Add margin for speech boundary adjustment
-        margin = 5.0  # seconds extra on each side
-        safe_start = max(0.0, time_start - margin)
-        safe_end = time_end + margin
-        safe_duration = safe_end - safe_start
 
         logger.info(f"[DIRECT_CUT] Attempting ffmpeg cut from URL (range={safe_start:.1f}-{safe_end:.1f}s)")
         wider_segment_path = os.path.join(work_dir, "wider_segment.mp4")
