@@ -416,7 +416,8 @@ export default function VideoDetail({ videoData, editorParams }) {
         const scoredPhases = [];
         for (let i = 0; i < videoData.reports_1.length; i++) {
           const phase = videoData.reports_1[i];
-          const phaseIndex = i;
+          // Use the actual phase_index from DB (1-based), not array index
+          const phaseIndex = phase.phase_index ?? (i + 1);
           const existing = currentStates[phaseIndex];
 
           // Skip if already completed, processing, or requesting
