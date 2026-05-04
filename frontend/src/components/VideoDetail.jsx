@@ -18,6 +18,7 @@ import SectionErrorBoundary from "./SectionErrorBoundary";
 import CsvAssetPanel from "./CsvAssetPanel";
 import CsvReplaceModal from "./CsvReplaceModal";
 import ScriptGeneratorPanel from "./ScriptGeneratorPanel";
+import AIEditorMonitor from "./AIEditorMonitor";
 import { useTranslation } from 'react-i18next';
 // ProductTimeline is now integrated into AnalyticsSection
 
@@ -255,6 +256,7 @@ export default function VideoDetail({ videoData, editorParams }) {
               captions: clip.captions || null,
               progress_pct: clip.progress_pct || 0,
               progress_step: clip.progress_step || '',
+              processing_logs: clip.processing_logs || [],
             };
             // Track in-progress clips that need polling
             if (['pending', 'processing', 'requesting'].includes(clip.status)) {
@@ -2120,21 +2122,13 @@ export default function VideoDetail({ videoData, editorParams }) {
                                               </div>
                                               {/* AI Processing Live Log Panel */}
                                               {logs.length > 0 && (
-                                                <div className="mt-2 rounded-lg bg-gray-900 border border-gray-700 overflow-hidden">
-                                                  <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-800 border-b border-gray-700">
-                                                    <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse"></span>
-                                                    <span className="text-green-400 text-[10px] font-mono font-medium">{window.__t('aiProcessingLog')}</span>
-                                                  </div>
-                                                  <div className="px-3 py-2 max-h-32 overflow-y-auto" style={{ scrollbarWidth: 'thin', scrollbarColor: '#4B5563 #1F2937' }}>
-                                                    {logs.map((log, logIdx) => (
-                                                      <div key={logIdx} className="flex items-start gap-2 py-0.5 animate-fadeIn">
-                                                        <span className="text-gray-500 text-[10px] font-mono flex-shrink-0 mt-px">{log.ts || ''}</span>
-                                                        <span className="text-gray-300 text-[11px] font-mono leading-relaxed">{log.msg || ''}</span>
-                                                      </div>
-                                                    ))}
-                                                    <div ref={(el) => { if (el) el.scrollIntoView({ behavior: 'smooth' }); }} />
-                                                  </div>
-                                                </div>
+                                                <AIEditorMonitor
+                                                  logs={logs}
+                                                  progressPct={pct}
+                                                  progressStep={step}
+                                                  status={clipState?.status}
+                                                  compact={false}
+                                                />
                                               )}
                                             </div>
                                           );

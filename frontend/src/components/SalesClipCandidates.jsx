@@ -17,6 +17,8 @@ import { useTranslation } from 'react-i18next';
  *   onRequestClip      – (candidate) => void  {window.__t('moment_generateClips')}をリクエストする関数
  *   clipStates         – { [phaseIndex]: { status, clip_url } }
  */
+import AIEditorMonitor from "./AIEditorMonitor";
+
 export default function SalesClipCandidates({ videoData, onRequestClip, clipStates = {} }) {
   useTranslation(); // triggers re-render on language change
   const { state, data: candidates, error, execute, retry, setData: setCandidates } = useSectionState("SalesClipCandidates");
@@ -206,6 +208,7 @@ export default function SalesClipCandidates({ videoData, onRequestClip, clipStat
         uploading: window.__t('stepUploading'),
       };
       const label = stepLabels[step] || window.__t('clipGenerating');
+      const clipLogs = clipState?.processing_logs || [];
       return (
         <div className="flex-1 flex flex-col gap-1">
           <div className="flex items-center justify-between">
@@ -218,6 +221,15 @@ export default function SalesClipCandidates({ videoData, onRequestClip, clipStat
               style={{ width: `${Math.max(pct, 2)}%` }}
             />
           </div>
+          {clipLogs.length > 0 && (
+            <AIEditorMonitor
+              logs={clipLogs}
+              progressPct={pct}
+              progressStep={step}
+              status={clipState?.status}
+              compact={true}
+            />
+          )}
         </div>
       );
     }

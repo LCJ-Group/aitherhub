@@ -4,6 +4,7 @@ import { useSectionState } from "../base/hooks/useSectionState";
 import { ErrorState } from "./SectionStateUI";
 import AutoZoomPreview from "./AutoZoomPreview";
 import ClipEditorV2 from "./ClipEditorV2";
+import AIEditorMonitor from "./AIEditorMonitor";
 import { useTranslation } from 'react-i18next';
 
 /**
@@ -527,6 +528,7 @@ export default function MomentClips({ videoData, onRequestClip, clipStates = {},
                                 uploading: window.__t('momentClips_uploading'),
                               };
                               const label = stepLabels[step] || window.__t('momentClips_generating');
+                              const clipLogs = clipState?.processing_logs || [];
                               return (
                                 <div className="flex-1 flex flex-col gap-1">
                                   <div className="flex items-center justify-between">
@@ -539,6 +541,15 @@ export default function MomentClips({ videoData, onRequestClip, clipStates = {},
                                       style={{ width: `${Math.max(pct, 2)}%` }}
                                     />
                                   </div>
+                                  {clipLogs.length > 0 && (
+                                    <AIEditorMonitor
+                                      logs={clipLogs}
+                                      progressPct={pct}
+                                      progressStep={step}
+                                      status={clipState?.status}
+                                      compact={true}
+                                    />
+                                  )}
                                 </div>
                               );
                             })()
