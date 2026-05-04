@@ -218,8 +218,9 @@ export default function AIEditorMonitor({ logs = [], progressPct = 0, progressSt
 
   const stepConfig = getStepConfig(progressStep);
 
-  // Compact collapsed state
+  // Compact collapsed state - always show the monitor button when active
   if (compact && !isExpanded) {
+    if (!isActive && logs.length === 0) return null; // Nothing to show
     const hasPreview = previewEntries.length > 0;
     return (
       <button
@@ -227,12 +228,12 @@ export default function AIEditorMonitor({ logs = [], progressPct = 0, progressSt
         onClick={() => setIsExpanded(true)}
         className="w-full mt-1 flex items-center gap-2 px-2 py-1.5 rounded-lg bg-gray-900/90 border border-gray-700/50 hover:border-green-600/50 transition-all group"
       >
-        <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
+        <span className={`w-2 h-2 rounded-full ${isActive ? 'bg-green-400 animate-pulse' : 'bg-gray-500'}`} />
         <span className="text-[10px] font-mono text-green-400 font-medium">
-          {hasPreview ? '🖥️ AI Monitor' : '⚙️ AI Processing'}
+          {hasPreview ? '🖥️ AI Editor Monitor' : '🖥️ AI Editor Monitor'}
         </span>
         <span className="text-[10px] font-mono text-gray-500 ml-auto">
-          {progressPct}% • {stepConfig.icon} {getStepConfig(progressStep).label}
+          {progressPct > 0 ? `${progressPct}% • ` : ''}{stepConfig.icon} {getStepConfig(progressStep).label}
         </span>
         <svg className="w-3 h-3 text-gray-500 group-hover:text-green-400 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
@@ -241,7 +242,8 @@ export default function AIEditorMonitor({ logs = [], progressPct = 0, progressSt
     );
   }
 
-  if (logs.length === 0 && !isActive) return null;
+  // Always show when active (even with empty logs) or when there are logs
+  if (logs.length === 0 && !isActive && !isCompleted) return null;
 
   return (
     <div className={`rounded-xl overflow-hidden transition-all duration-300 ${

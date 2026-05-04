@@ -370,16 +370,14 @@ export default function SalesMomentClips({ videoData, onRequestClip, clipStates 
                                     style={{ width: `${Math.max(pct, 2)}%` }}
                                   />
                                 </div>
-                                {clipLogs.length > 0 && (
-                                  <AIEditorMonitor
-                                    logs={clipLogs}
-                                    progressPct={pct}
-                                    progressStep={step}
-                                    status={clipState?.status}
-                                    compact={true}
-                                    clipUrl={clipState?.clip_url}
-                                  />
-                                )}
+                                <AIEditorMonitor
+                                  logs={clipLogs}
+                                  progressPct={pct}
+                                  progressStep={step}
+                                  status={clipState?.status}
+                                  compact={true}
+                                  clipUrl={clipState?.clip_url}
+                                />
                               </div>
                             );
                           })()

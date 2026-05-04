@@ -289,7 +289,7 @@ def update_clip_status(clip_id: str, status: str, clip_url: str = None, error_me
 def _upload_intermediate_preview(local_path: str, clip_id: str, step_name: str) -> str | None:
     """Upload an intermediate video file to Azure Blob for real-time preview.
     
-    Returns the blob URL if successful, None otherwise.
+    Returns the blob URL WITH read SAS token if successful, None otherwise.
     Non-fatal: errors are logged but do not stop the pipeline.
     """
     try:
@@ -298,7 +298,27 @@ def _upload_intermediate_preview(local_path: str, clip_id: str, step_name: str) 
         blob_name = f"clip-previews/{clip_id}/{step_name}.mp4"
         url = upload_to_blob(local_path, blob_name)
         if url:
-            logger.info(f"[PREVIEW] Uploaded intermediate preview: {step_name} -> {url}")
+            # Generate a read-only SAS token so the frontend can play the video
+            try:
+                from split_video import AZURE_STORAGE_CONNECTION_STRING, AZURE_BLOB_CONTAINER, _parse_account_from_conn_str
+                from azure.storage.blob import generate_blob_sas, BlobSasPermissions
+                from datetime import datetime, timedelta
+                conn_info = _parse_account_from_conn_str(AZURE_STORAGE_CONNECTION_STRING)
+                account_name = conn_info.get("AccountName")
+                account_key = conn_info.get("AccountKey")
+                if account_name and account_key:
+                    sas = generate_blob_sas(
+                        account_name=account_name,
+                        container_name=AZURE_BLOB_CONTAINER,
+                        blob_name=blob_name,
+                        account_key=account_key,
+                        permission=BlobSasPermissions(read=True),
+                        expiry=datetime.utcnow() + timedelta(hours=24),
+                    )
+                    url = f"{url}?{sas}"
+            except Exception as sas_err:
+                logger.warning(f"[PREVIEW] Failed to generate SAS for {step_name} (non-fatal): {sas_err}")
+            logger.info(f"[PREVIEW] Uploaded intermediate preview: {step_name} -> {url[:80]}...")
         return url
     except Exception as e:
         logger.warning(f"[PREVIEW] Failed to upload {step_name} preview (non-fatal): {e}")
