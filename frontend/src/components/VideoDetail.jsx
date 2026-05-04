@@ -1270,9 +1270,10 @@ export default function VideoDetail({ videoData, editorParams }) {
 
           {/* Sales Moment Clips - spike-based */}
           <SectionErrorBoundary sectionName="Sales Moment Clips">
-            <SalesMomentClips
+             <SalesMomentClips
               videoData={videoData}
               clipStates={clipStates}
+              autoGenerate={true}
               onRequestClip={(candidate) => {
                 handleClipGeneration(
                   { time_start: candidate.time_start, time_end: candidate.time_end },
@@ -1281,12 +1282,12 @@ export default function VideoDetail({ videoData, editorParams }) {
               }}
             />
           </SectionErrorBoundary>
-
           {/* Moment Clips - category-based (screen recording) */}
           <SectionErrorBoundary sectionName="Moment Clips">
             <MomentClips
               videoData={videoData}
               clipStates={clipStates}
+              autoGenerate={true}
               onRequestClip={(candidate) => {
                 handleClipGeneration(
                   { time_start: candidate.time_start, time_end: candidate.time_end },

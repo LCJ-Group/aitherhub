@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import VideoService from "../base/services/videoService";
 import { useSectionState } from "../base/hooks/useSectionState";
 import { ErrorState } from "./SectionStateUI";
@@ -16,11 +16,13 @@ import { useTranslation } from 'react-i18next';
  *   onRequestClip      – (candidate) => void  クリップ生成をリクエストする関数
  *   clipStates         – { [phaseIndex]: { status, clip_url } }
  */
-export default function SalesMomentClips({ videoData, onRequestClip, clipStates = {} }) {
+export default function SalesMomentClips({ videoData, onRequestClip, clipStates = {}, autoGenerate = false }) {
   useTranslation(); // triggers re-render on language change
   const { state, data, error, execute, retry } = useSectionState("SalesMomentClips");
   const [collapsed, setCollapsed] = useState(false);
   const [editorClip, setEditorClip] = useState(null);
+  const autoFetchedRef = useRef(false);
+  const autoGenTriggeredRef = useRef(false);
 
   const formatTime = (seconds) => {
     if (seconds == null || isNaN(seconds)) return "--:--";
@@ -91,6 +93,62 @@ export default function SalesMomentClips({ videoData, onRequestClip, clipStates 
   const getClipState = (candidate) => {
     return clipStates[candidate.phase_index] || null;
   };
+
+  // Reset auto-gen trigger when video changes
+  useEffect(() => {
+    autoFetchedRef.current = false;
+    autoGenTriggeredRef.current = false;
+  }, [videoData?.id]);
+
+  // Auto-fetch spike data when autoGenerate is enabled
+  useEffect(() => {
+    if (!autoGenerate || !videoData?.id) return;
+    if (autoFetchedRef.current) return;
+    if (state === 'success' || state === 'loading') return;
+    autoFetchedRef.current = true;
+    handleFetch();
+  }, [autoGenerate, videoData?.id, state]);
+
+  // Auto-generate clips after data is loaded
+  useEffect(() => {
+    if (!autoGenerate || !onRequestClip) return;
+    if (!data?.candidates || data.candidates.length === 0) return;
+    if (autoGenTriggeredRef.current) return;
+    autoGenTriggeredRef.current = true;
+
+    console.log('[SalesMomentClips AutoGen] Starting auto clip generation...');
+    const CONCURRENCY = 2;
+
+    const toGenerate = data.candidates.filter((candidate) => {
+      const existing = clipStates[candidate.phase_index];
+      return !existing || !['completed', 'requesting', 'pending', 'processing', 'generating_subtitles'].includes(existing.status);
+    });
+
+    if (toGenerate.length === 0) {
+      console.log('[SalesMomentClips AutoGen] All clips already exist');
+      return;
+    }
+
+    console.log(`[SalesMomentClips AutoGen] Generating ${toGenerate.length} clips`);
+
+    (async () => {
+      for (let i = 0; i < toGenerate.length; i += CONCURRENCY) {
+        const batch = toGenerate.slice(i, i + CONCURRENCY);
+        batch.forEach((candidate) => {
+          onRequestClip({
+            phase_index: candidate.phase_index,
+            time_start: candidate.time_start,
+            time_end: candidate.time_end,
+            label: candidate.label,
+          });
+        });
+        if (i + CONCURRENCY < toGenerate.length) {
+          await new Promise(r => setTimeout(r, 1500));
+        }
+      }
+      console.log('[SalesMomentClips AutoGen] All clip generation requests sent');
+    })();
+  }, [data, autoGenerate, onRequestClip, clipStates]);
 
   const isLoading = state === "loading";
   const hasData = state === "success" || state === "empty";

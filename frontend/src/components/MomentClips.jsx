@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import VideoService from "../base/services/videoService";
 import { useSectionState } from "../base/hooks/useSectionState";
 import { ErrorState } from "./SectionStateUI";
@@ -104,13 +104,14 @@ const CATEGORY_CONFIG = {
   },
 };
 
-export default function MomentClips({ videoData, onRequestClip, clipStates = {} }) {
+export default function MomentClips({ videoData, onRequestClip, clipStates = {}, autoGenerate = false }) {
   useTranslation(); // triggers re-render on language change
   const { state, data, error, execute, retry, setData } = useSectionState("MomentClips");
   const [activeTab, setActiveTab] = useState(null);
   const [collapsed, setCollapsed] = useState(false);
   const [autoLoaded, setAutoLoaded] = useState(false);
   const [editorClip, setEditorClip] = useState(null);
+  const autoGenTriggeredRef = useRef(false);
 
   const formatTime = (seconds) => {
     if (seconds == null || isNaN(seconds)) return "--:--";
@@ -143,13 +144,89 @@ export default function MomentClips({ videoData, onRequestClip, clipStates = {} 
     });
   };
 
-  // 画面収録の場合は自動ロード
+  // 画面収録の場合またはautoGenerate有効時は自動ロード
   useEffect(() => {
-    if (videoData?.id && videoData?.upload_type === "screen_recording" && !autoLoaded) {
+    if (videoData?.id && (videoData?.upload_type === "screen_recording" || autoGenerate) && !autoLoaded) {
       setAutoLoaded(true);
       handleFetch();
     }
-  }, [videoData?.id, videoData?.upload_type]);
+  }, [videoData?.id, videoData?.upload_type, autoGenerate]);
+
+  // Reset auto-gen trigger when video changes
+  useEffect(() => {
+    autoGenTriggeredRef.current = false;
+  }, [videoData?.id]);
+
+  // ===== 自動クリップ生成: データ取得後に全クリップを自動生成 =====
+  useEffect(() => {
+    if (!autoGenerate || !onRequestClip) return;
+    if (!data?.categories || data.categories.length === 0) return;
+    if (autoGenTriggeredRef.current) return;
+    autoGenTriggeredRef.current = true;
+
+    console.log('[MomentClips AutoGen] Starting auto clip generation...');
+    const CONCURRENCY = 2;
+    const MAX_AUTO_CLIPS = 15;
+
+    // Collect all clips from all categories, sorted by confidence
+    const allClips = [];
+    for (const cat of data.categories) {
+      for (const clip of (cat.clips || [])) {
+        const clipKey = `moment_${cat.category}_${clip.id}`;
+        const existing = clipStates[clipKey];
+        // Skip if already completed, processing, or requesting
+        if (existing?.status === 'completed' ||
+            existing?.status === 'requesting' ||
+            existing?.status === 'pending' ||
+            existing?.status === 'processing' ||
+            existing?.status === 'generating_subtitles') {
+          continue;
+        }
+        allClips.push({
+          clipKey,
+          category: cat.category,
+          clip,
+          confidence: clip.confidence || 0,
+        });
+      }
+    }
+
+    // Sort by confidence descending, take top N
+    allClips.sort((a, b) => b.confidence - a.confidence);
+    const toGenerate = allClips.slice(0, MAX_AUTO_CLIPS);
+
+    if (toGenerate.length === 0) {
+      console.log('[MomentClips AutoGen] No clips to generate (all already exist)');
+      return;
+    }
+
+    console.log(`[MomentClips AutoGen] Generating ${toGenerate.length} clips (top confidence)`);
+
+    // Generate clips in batches
+    (async () => {
+      for (let i = 0; i < toGenerate.length; i += CONCURRENCY) {
+        const batch = toGenerate.slice(i, i + CONCURRENCY);
+        await Promise.allSettled(
+          batch.map(({ clipKey, category, clip }) => {
+            onRequestClip({
+              phase_index: clipKey,
+              time_start: clip.time_start,
+              time_end: clip.time_end,
+              label: `${CATEGORY_CONFIG[category]?.icon || '📊'} ${clip.video_sec ? formatTime(clip.video_sec) : ''}`,
+              moment_category: category,
+              frame_meta: clip.frame_meta,
+            });
+            return Promise.resolve();
+          })
+        );
+        // Small delay between batches
+        if (i + CONCURRENCY < toGenerate.length) {
+          await new Promise(r => setTimeout(r, 1500));
+        }
+      }
+      console.log('[MomentClips AutoGen] All clip generation requests sent');
+    })();
+  }, [data, autoGenerate, onRequestClip, clipStates]);
 
   const handleClipRequest = (clip, category) => {
     if (onRequestClip) {
