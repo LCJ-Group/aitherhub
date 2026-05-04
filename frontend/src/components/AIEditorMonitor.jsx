@@ -172,7 +172,7 @@ function StepTimeline({ currentStep, previewSteps }) {
 // ─── Main Component ───
 export default function AIEditorMonitor({ logs = [], progressPct = 0, progressStep = '', status = '', compact = false, clipUrl = '' }) {
   const scrollRef = useRef(null);
-  const [isExpanded, setIsExpanded] = useState(!compact);
+  const [isExpanded, setIsExpanded] = useState(true); // Always start expanded
   const [selectedPreviewIdx, setSelectedPreviewIdx] = useState(-1); // -1 = auto (latest)
   const [showLogs, setShowLogs] = useState(false);
 
