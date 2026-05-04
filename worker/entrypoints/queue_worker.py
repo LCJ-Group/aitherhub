@@ -288,24 +288,55 @@ def renew_visibility(msg_id: str, pop_receipt: str, job_id: str):
 
 
 def visibility_renewal_loop():
+    """Periodically renew visibility timeout for active jobs.
+    
+    If renewal fails (pop_receipt expired), the message becomes visible again
+    and may be picked up by another poll cycle. We track consecutive failures
+    to avoid infinite retry loops.
+    """
+    _consecutive_failures: dict = {}  # job_id -> failure count
+    MAX_RENEWAL_FAILURES = 3
+
     while not shutdown_requested:
         time.sleep(VISIBILITY_RENEW_INTERVAL)
         # Renew heavy jobs
         with active_jobs_lock:
             for job_id, info in list(active_jobs.items()):
                 if info["future"].done():
+                    _consecutive_failures.pop(job_id, None)
+                    continue
+                # Skip DB-fallback jobs (no queue message)
+                if info.get("msg_id") is None:
                     continue
                 new_receipt = renew_visibility(info["msg_id"], info["pop_receipt"], job_id)
                 if new_receipt:
                     info["pop_receipt"] = new_receipt
+                    _consecutive_failures.pop(job_id, None)
+                else:
+                    _consecutive_failures[job_id] = _consecutive_failures.get(job_id, 0) + 1
+                    if _consecutive_failures[job_id] >= MAX_RENEWAL_FAILURES:
+                        print(f"[worker] Visibility renewal failed {MAX_RENEWAL_FAILURES}x for {job_id}"
+                              f" — message may have been re-queued")
+                        _consecutive_failures.pop(job_id, None)
         # Renew clip jobs (dedicated executor)
         with active_clip_jobs_lock:
             for job_id, info in list(active_clip_jobs.items()):
                 if info["future"].done():
+                    _consecutive_failures.pop(job_id, None)
+                    continue
+                # Skip DB-fallback jobs (no queue message)
+                if info.get("msg_id") is None:
                     continue
                 new_receipt = renew_visibility(info["msg_id"], info["pop_receipt"], job_id)
                 if new_receipt:
                     info["pop_receipt"] = new_receipt
+                    _consecutive_failures.pop(job_id, None)
+                else:
+                    _consecutive_failures[job_id] = _consecutive_failures.get(job_id, 0) + 1
+                    if _consecutive_failures[job_id] >= MAX_RENEWAL_FAILURES:
+                        print(f"[worker] Visibility renewal failed {MAX_RENEWAL_FAILURES}x for clip {job_id}"
+                              f" — message may have been re-queued")
+                        _consecutive_failures.pop(job_id, None)
 
 
 # =============================================================================
@@ -430,8 +461,46 @@ def update_video_status_to_error(video_id: str, error_code: str = "POISON_MAX_RE
         print(f"[worker] Failed to mark video as ERROR: {db_err}")
 
 
+def _is_clip_already_completed(clip_id: str) -> bool:
+    """Check if a clip is already completed or generating_subtitles (should NOT be dead'd)."""
+    try:
+        from sqlalchemy import text
+        engine, loop = _get_fallback_engine()
+        from sqlalchemy.ext.asyncio import AsyncSession
+        from sqlalchemy.orm import sessionmaker
+        factory = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+
+        result = {"completed": False}
+
+        async def _check():
+            async with factory() as session:
+                try:
+                    row = (await session.execute(
+                        text("SELECT status FROM video_clips WHERE id = :cid"),
+                        {"cid": clip_id},
+                    )).first()
+                    if row and row.status in ('completed', 'generating_subtitles'):
+                        result["completed"] = True
+                finally:
+                    await session.close()
+
+        loop.run_until_complete(_check())
+        return result["completed"]
+    except Exception as e:
+        print(f"[worker] _is_clip_already_completed check failed: {e}")
+        return False
+
+
 def update_clip_status_to_dead(clip_id: str, error_message: str):
-    """Mark a clip as 'dead' in the database."""
+    """Mark a clip as 'dead' in the database.
+    
+    IMPORTANT: Never overwrite completed/generating_subtitles clips.
+    """
+    # Check if clip is already completed — do NOT mark as dead
+    if _is_clip_already_completed(clip_id):
+        print(f"[worker] Clip {clip_id} is already completed — NOT marking as dead")
+        return
+
     try:
         from shared.db.session import get_session, run_sync
         from sqlalchemy import text
@@ -443,6 +512,7 @@ def update_clip_status_to_dead(clip_id: str, error_message: str):
                         UPDATE video_clips
                         SET status = :status, error_message = :error_message, updated_at = NOW()
                         WHERE id = :clip_id
+                        AND status NOT IN ('completed', 'generating_subtitles')
                     """),
                     {"status": ClipStatus.DEAD, "error_message": error_message[:500], "clip_id": clip_id},
                 )
@@ -557,6 +627,26 @@ def _mark_clip_failed(clip_id: str, error_message: str):
         print(f"[worker] Failed to mark clip as failed: {db_err}")
 
 
+def _calculate_clip_timeout(time_start, time_end) -> int:
+    """Calculate dynamic timeout based on clip duration.
+    
+    Formula: base_time + (clip_duration * multiplier)
+    - Base: 300s (5 min) for download, upload, DB ops
+    - Multiplier: 20x clip duration (transcription + subtitle + hook + SE)
+    - Minimum: 600s (10 min)
+    - Maximum: 3600s (60 min)
+    """
+    try:
+        clip_duration = float(time_end) - float(time_start)
+    except (TypeError, ValueError):
+        clip_duration = 60.0  # fallback
+    
+    base_time = 300  # 5 min for overhead
+    multiplier = 20  # 20x clip duration for processing
+    calculated = base_time + int(clip_duration * multiplier)
+    return max(600, min(calculated, 3600))  # clamp to 10min-60min
+
+
 def _run_clip_job(payload: dict) -> bool:
     """Run clip generation as subprocess with heartbeat, metrics, and temp cleanup."""
     clip_id = payload.get("clip_id")
@@ -573,6 +663,9 @@ def _run_clip_job(payload: dict) -> bool:
     speed_factor = payload.get("speed_factor", 1.0)
     subtitle_language = payload.get("subtitle_language", "ja")
 
+    # Dynamic timeout based on clip duration
+    clip_timeout = _calculate_clip_timeout(time_start, time_end)
+
     # ── Task 4: Metrics ──
     try:
         from worker.recovery.metrics_logger import JobMetrics
@@ -588,7 +681,7 @@ def _run_clip_job(payload: dict) -> bool:
     if _heartbeat_manager:
         _heartbeat_manager.register_job(clip_id)
 
-    print(f"[worker] Starting clip generation: clip_id={clip_id} (lang={subtitle_language})")
+    print(f"[worker] Starting clip generation: clip_id={clip_id} (lang={subtitle_language}, timeout={clip_timeout}s)")
     cmd = [
         sys.executable,
         os.path.join(BATCH_DIR, "generate_clip.py"),
@@ -614,15 +707,20 @@ def _run_clip_job(payload: dict) -> bool:
             stderr=subprocess.PIPE,
         )
         try:
-            stdout, stderr = proc.communicate(timeout=WORKER_CLIP_TIMEOUT)
+            stdout, stderr = proc.communicate(timeout=clip_timeout)
         except subprocess.TimeoutExpired:
-            print(f"[worker] Clip timeout — killing pid={proc.pid}")
+            clip_duration = float(time_end) - float(time_start) if time_end and time_start else 0
+            print(f"[worker] Clip timeout — killing pid={proc.pid} "
+                  f"(clip_duration={clip_duration:.1f}s, timeout={clip_timeout}s)")
             try:
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
             except (ProcessLookupError, OSError) as _e:
                 print(f"Suppressed: {_e}")
             proc.wait()
-            log_error_type(clip_id, "generate_clip", "TIMEOUT_CLIP", f"timeout={WORKER_CLIP_TIMEOUT}s")
+            log_error_type(clip_id, "generate_clip", "TIMEOUT_CLIP",
+                          f"timeout={clip_timeout}s clip_duration={clip_duration:.1f}s")
+            # Mark as failed (not dead) so user can retry
+            _mark_clip_failed(clip_id, f"Timeout after {clip_timeout}s (clip={clip_duration:.1f}s)")
             if metrics:
                 metrics.end_phase("processing")
                 metrics.finish(status="timeout")
@@ -1381,6 +1479,13 @@ def poll_and_process(executor: ThreadPoolExecutor, clip_executor: ThreadPoolExec
 
             # --- Clip jobs: dedicated clip_executor (never blocked by heavy jobs) ---
             if job_type == "generate_clip":
+                # Skip already-completed clips (stale queue messages)
+                clip_id_for_check = payload.get("clip_id", job_id)
+                if _is_clip_already_completed(clip_id_for_check):
+                    print(f"[worker] STALE clip msg: {clip_id_for_check} already completed — deleting")
+                    delete_message_safe(msg.id, msg.pop_receipt)
+                    continue
+
                 if clip_slots_full:
                     continue
                 with active_clip_jobs_lock:
