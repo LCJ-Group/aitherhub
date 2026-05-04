@@ -244,6 +244,7 @@ export default function VideoDetail({ videoData, editorParams }) {
         const res = await VideoService.listClips(videoData.id);
         if (res?.clips && res.clips.length > 0) {
           const states = {};
+          const pendingPhases = [];
           for (const clip of res.clips) {
             states[clip.phase_index] = {
               status: clip.status,
@@ -252,9 +253,70 @@ export default function VideoDetail({ videoData, editorParams }) {
               time_start: clip.time_start ?? null,
               time_end: clip.time_end ?? null,
               captions: clip.captions || null,
+              progress_pct: clip.progress_pct || 0,
+              progress_step: clip.progress_step || '',
             };
+            // Track in-progress clips that need polling
+            if (['pending', 'processing', 'requesting'].includes(clip.status)) {
+              pendingPhases.push(clip.phase_index);
+            }
           }
           setClipStates(states);
+
+          // Auto-start polling for in-progress clips
+          for (const phaseIndex of pendingPhases) {
+            if (clipPollingRef.current[phaseIndex]) continue; // already polling
+            console.log(`[ClipPoll] Auto-starting poll for in-progress clip phase=${phaseIndex}`);
+            clipPollingRef.current[phaseIndex] = setInterval(async () => {
+              try {
+                const statusRes = await VideoService.getClipStatus(videoData.id, phaseIndex);
+                if (statusRes.status === 'completed' && statusRes.clip_url) {
+                  clearInterval(clipPollingRef.current[phaseIndex]);
+                  delete clipPollingRef.current[phaseIndex];
+                  // Auto-transcribe after completion
+                  setClipStates(prev => ({
+                    ...prev,
+                    [phaseIndex]: { status: 'generating_subtitles', clip_url: statusRes.clip_url, clip_id: statusRes.clip_id, progress_pct: 100, time_start: statusRes.time_start, time_end: statusRes.time_end },
+                  }));
+                  try {
+                    const transcribeRes = await VideoService.transcribeClip(videoData.id, {
+                      clip_url: statusRes.clip_url,
+                      time_start: statusRes.time_start,
+                      time_end: statusRes.time_end,
+                      phase_index: phaseIndex,
+                    });
+                    if (transcribeRes?.segments?.length > 0) {
+                      const newCaps = transcribeRes.segments.map(s => ({ start: s.start, end: s.end, text: s.text, source: 'whisper' }));
+                      if (statusRes.clip_id) {
+                        await VideoService.updateClipCaptions(videoData.id, statusRes.clip_id, newCaps);
+                      }
+                    }
+                  } catch (transcribeErr) {
+                    console.warn(`[ClipPoll] Transcription failed for phase ${phaseIndex}:`, transcribeErr);
+                  }
+                  setClipStates(prev => ({
+                    ...prev,
+                    [phaseIndex]: { status: 'completed', clip_url: statusRes.clip_url, clip_id: statusRes.clip_id, time_start: statusRes.time_start, time_end: statusRes.time_end },
+                  }));
+                } else if (statusRes.status === 'failed' || statusRes.status === 'dead') {
+                  setClipStates(prev => ({
+                    ...prev,
+                    [phaseIndex]: { status: 'failed', error: statusRes.error_message },
+                  }));
+                  clearInterval(clipPollingRef.current[phaseIndex]);
+                  delete clipPollingRef.current[phaseIndex];
+                } else {
+                  // Update progress in real-time
+                  setClipStates(prev => ({
+                    ...prev,
+                    [phaseIndex]: { ...prev[phaseIndex], status: statusRes.status, progress_pct: statusRes.progress_pct || 0, progress_step: statusRes.progress_step || '', processing_logs: statusRes.processing_logs || prev[phaseIndex]?.processing_logs || [], time_start: statusRes.time_start ?? prev[phaseIndex]?.time_start, time_end: statusRes.time_end ?? prev[phaseIndex]?.time_end },
+                  }));
+                }
+              } catch (e) {
+                // continue polling
+              }
+            }, 5000);
+          }
         }
       } catch (e) {
         // ignore
