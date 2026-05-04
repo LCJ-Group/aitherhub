@@ -40,7 +40,7 @@ sys.path.insert(0, BATCH_DIR)
 MAX_WORKERS = int(os.getenv("WORKER_MAX_CONCURRENT", "2"))
 
 # Maximum retry attempts before moving message to dead-letter queue
-MAX_DEQUEUE_COUNT = int(os.getenv("WORKER_MAX_RETRIES", "6"))  # Increased from 3: 2 workers share queue
+MAX_DEQUEUE_COUNT = int(os.getenv("WORKER_MAX_RETRIES", "10"))  # Increased from 6: allow more retries for transient failures
 
 # Visibility timeout: 15 minutes (renewed every 5 min while job is active)
 VISIBILITY_TIMEOUT = 15 * 60  # 900 seconds
@@ -311,22 +311,60 @@ def update_clip_status_to_dead(clip_id: str, error_message: str):
 
         async def _update():
             async with get_session() as session:
+                # Never overwrite a completed clip with 'dead' status
+                # This prevents race conditions where a clip succeeds on its last retry
+                # but the queue message is dequeued again and triggers POISON detection
                 sql = text("""
                     UPDATE video_clips
                     SET status = :status, error_message = :error_message, updated_at = NOW()
                     WHERE id = :clip_id
+                      AND status NOT IN ('completed', 'generating_subtitles')
                 """)
-                await session.execute(sql, {
+                result = await session.execute(sql, {
                     "status": "dead",
                     "error_message": error_message[:500],
                     "clip_id": clip_id,
                 })
+                return result.rowcount
 
         loop.run_until_complete(_update())
         close_db_sync()
         print(f"[worker] Marked clip {clip_id} as 'dead'")
     except Exception as db_err:
         print(f"[worker] Failed to mark clip as dead: {db_err}")
+
+
+def _is_clip_already_completed(clip_id: str) -> bool:
+    """Check if a clip has already been successfully completed in the DB.
+    Used to prevent POISON detection from overwriting successful clips."""
+    try:
+        sys.path.insert(0, BATCH_DIR)
+        from db_ops import init_db_sync, close_db_sync, get_event_loop, get_session
+        from sqlalchemy import text
+        init_db_sync()
+        loop = get_event_loop()
+
+        async def _check():
+            async with get_session() as session:
+                sql = text("""
+                    SELECT status, clip_url, progress_pct
+                    FROM video_clips
+                    WHERE id = :clip_id
+                """)
+                result = await session.execute(sql, {"clip_id": clip_id})
+                row = result.fetchone()
+                if row:
+                    status, clip_url, pct = row
+                    # Clip is completed if status is 'completed' or if it has a clip_url with 100% progress
+                    return status == 'completed' or (clip_url is not None and pct == 100)
+                return False
+
+        is_completed = loop.run_until_complete(_check())
+        close_db_sync()
+        return is_completed
+    except Exception as e:
+        print(f"[worker] Failed to check clip completion status: {e}")
+        return False
 
 
 # =============================================================================
@@ -857,6 +895,16 @@ def poll_and_process(executor: ThreadPoolExecutor):
             # --- Dead Letter Queue: move after too many retries (NEVER delete) ---
             if hasattr(msg, 'dequeue_count') and msg.dequeue_count is not None:
                 if msg.dequeue_count >= MAX_DEQUEUE_COUNT:
+                    # For clip jobs, check if the clip already completed successfully
+                    # (race condition: clip succeeded on last retry but message was re-dequeued)
+                    if job_type == "generate_clip":
+                        clip_id = payload.get("clip_id", job_id)
+                        if _is_clip_already_completed(clip_id):
+                            print(f"[worker] POISON skip: clip {clip_id} already completed "
+                                  f"(dequeue_count={msg.dequeue_count}). Deleting message.")
+                            delete_message_safe(msg.id, msg.pop_receipt)
+                            continue
+
                     reason = f"POISON_MAX_RETRY (dequeue_count={msg.dequeue_count} >= {MAX_DEQUEUE_COUNT})"
                     print(f"[worker] POISON MESSAGE detected: job={job_id}, type={job_type}, "
                           f"dequeue_count={msg.dequeue_count} >= {MAX_DEQUEUE_COUNT}. "
@@ -881,7 +929,7 @@ def poll_and_process(executor: ThreadPoolExecutor):
                               f"deleting from main queue anyway (data preserved in poison_jobs.jsonl)")
                         delete_message_safe(msg.id, msg.pop_receipt)
 
-                    # Step 4: Mark job as 'dead' in DB
+                    # Step 4: Mark job as 'dead' in DB (won't overwrite completed clips)
                     if job_type in ("video_analysis", None) and job_id != "unknown":
                         update_video_status_to_error(
                             job_id,
