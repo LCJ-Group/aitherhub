@@ -482,12 +482,14 @@ export default function VideoDetail({ videoData, editorParams }) {
           const phaseIndex = phase.phase_index ?? (i + 1);
           const existing = currentStates[phaseIndex];
 
-          // Skip if already completed, processing, or requesting
+          // Skip if already completed, processing, requesting, or permanently failed
           if (existing?.status === 'completed' ||
               existing?.status === 'requesting' ||
               existing?.status === 'pending' ||
               existing?.status === 'processing' ||
-              existing?.status === 'generating_subtitles') {
+              existing?.status === 'generating_subtitles' ||
+              existing?.status === 'dead' ||
+              existing?.status === 'failed') {
             continue;
           }
 

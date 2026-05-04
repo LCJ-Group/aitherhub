@@ -174,12 +174,14 @@ export default function MomentClips({ videoData, onRequestClip, clipStates = {},
       for (const clip of (cat.clips || [])) {
         const clipKey = `moment_${cat.category}_${clip.id}`;
         const existing = clipStates[clipKey];
-        // Skip if already completed, processing, or requesting
+        // Skip if already completed, processing, requesting, or permanently failed
         if (existing?.status === 'completed' ||
             existing?.status === 'requesting' ||
             existing?.status === 'pending' ||
             existing?.status === 'processing' ||
-            existing?.status === 'generating_subtitles') {
+            existing?.status === 'generating_subtitles' ||
+            existing?.status === 'dead' ||
+            existing?.status === 'failed') {
           continue;
         }
         allClips.push({
@@ -540,6 +542,21 @@ export default function MomentClips({ videoData, onRequestClip, clipStates = {},
                                 </div>
                               );
                             })()
+                          ) : clipState?.status === "dead" || clipState?.status === "failed" ? (
+                            <div className="flex items-center gap-2">
+                              <span className="text-red-500 text-xs font-medium">{window.__t('clip_failed', '生成失敗')}</span>
+                              <button
+                                type="button"
+                                onClick={() => handleClipRequest(clip, activeCategory.category)}
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-gray-600 to-gray-700 text-white text-xs font-medium hover:from-gray-700 hover:to-gray-800 transition-all shadow-sm"
+                              >
+                                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <polyline points="1 4 1 10 7 10"/>
+                                  <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+                                </svg>
+                                {window.__t('clip_retry', '再生成')}
+                              </button>
+                            </div>
                           ) : (
                             <button
                               type="button"

@@ -121,7 +121,7 @@ export default function SalesMomentClips({ videoData, onRequestClip, clipStates 
 
     const toGenerate = data.candidates.filter((candidate) => {
       const existing = clipStates[candidate.phase_index];
-      return !existing || !['completed', 'requesting', 'pending', 'processing', 'generating_subtitles'].includes(existing.status);
+      return !existing || !['completed', 'requesting', 'pending', 'processing', 'generating_subtitles', 'dead', 'failed'].includes(existing.status);
     });
 
     if (toGenerate.length === 0) {
@@ -370,6 +370,21 @@ export default function SalesMomentClips({ videoData, onRequestClip, clipStates 
                               </div>
                             );
                           })()
+                        ) : clipState?.status === "dead" || clipState?.status === "failed" ? (
+                          <div className="flex items-center gap-2">
+                            <span className="text-red-500 text-xs font-medium">生成失敗</span>
+                            <button
+                              type="button"
+                              onClick={() => handleClipRequest(candidate)}
+                              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-gray-600 to-gray-700 text-white text-xs font-medium hover:from-gray-700 hover:to-gray-800 transition-all shadow-sm"
+                            >
+                              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <polyline points="1 4 1 10 7 10"/>
+                                <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+                              </svg>
+                              再生成
+                            </button>
+                          </div>
                         ) : (
                           <button
                             type="button"
