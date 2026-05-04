@@ -3014,6 +3014,10 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
         except Exception:
             logger.debug("processing_logs column not available yet, skipping reset")
     _reset_loop.run_until_complete(_reset_logs())
+    # Add metadata to processing_logs for AI Editor Monitor UI
+    _clip_meta_msg = (f"\U0001f4cb Clip metadata: source={time_start:.1f}s-{time_end:.1f}s "
+                      f"(duration={time_end - time_start:.1f}s), phase_index={phase_index}")
+    update_clip_progress(clip_id, 2, "initializing", log_message=_clip_meta_msg)
     update_clip_progress(clip_id, 5, "downloading", log_message="\u2b07\ufe0f Starting source video download...")
 
     work_dir = tempfile.mkdtemp(prefix=f"clip_{clip_id}_")
@@ -3210,6 +3214,11 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
             _emph_count = sum(1 for s in segments if s.get('emphasis'))
             _hw_count = sum(len(s.get('highlight_words', [])) for s in segments)
             update_clip_progress(clip_id, 72, "refining_subtitles", log_message=f"\u2705 GPT refinement done: {len(segments)} segments, {_emph_count} emphasis, {_hw_count} highlight words")
+            # Log subtitle preview for AI Editor Monitor (first 3 segments)
+            for _si, _seg in enumerate(segments[:3]):
+                _seg_text = _seg.get('text', '')[:50]
+                update_clip_progress(clip_id, 73, "subtitle_preview",
+                                    log_message=f"\U0001f4ac [{_seg.get('start', 0):.1f}s] {_seg_text}")
 
             # Post-GPT dictionary replacement fallback (ensures dictionary is always applied)
             if dict_entries:
