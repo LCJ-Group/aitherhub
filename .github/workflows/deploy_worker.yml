@@ -163,6 +163,8 @@ jobs:
             echo "Before: $(git rev-parse HEAD)"
             git remote set-url origin https://github.com/LCJ-Group/aitherhub.git
             git fetch origin master --force
+            # Fix permission issues on model files (owned by root from pip/training)
+            sudo chown -R $(whoami):$(whoami) /opt/aitherhub 2>/dev/null || true
             git reset --hard origin/master
             echo "After:  $(git rev-parse HEAD)"
 
