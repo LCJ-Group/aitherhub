@@ -81,7 +81,7 @@ AZURE_DEAD_LETTER_QUEUE_NAME: str = os.getenv("AZURE_DEAD_LETTER_QUEUE_NAME", "v
 # =============================================================================
 
 WORKER_MAX_CONCURRENT: int = int(os.getenv("WORKER_MAX_CONCURRENT", "2"))  # Heavy jobs (video_analysis, video_pipeline). VM has 27GB RAM, 2 concurrent is safe.
-WORKER_CLIP_CONCURRENT: int = int(os.getenv("WORKER_CLIP_CONCURRENT", "4"))  # Clip generation is lightweight (FFmpeg cut), runs on dedicated executor
+WORKER_CLIP_CONCURRENT: int = int(os.getenv("WORKER_CLIP_CONCURRENT", "6"))  # Increased from 4→6: VM has 27GB RAM (each ~1-2GB), short clips benefit from more slots
 WORKER_MAX_RETRIES: int = int(os.getenv("WORKER_MAX_RETRIES", "10"))  # Increased from 6: visibility renewal failures cause extra dequeues
 WORKER_VIDEO_TIMEOUT: int = int(os.getenv("WORKER_VIDEO_TIMEOUT", str(720 * 60)))  # 12h default (reduced from 24h to free worker capacity sooner)
 WORKER_CLIP_TIMEOUT: int = int(os.getenv("WORKER_CLIP_TIMEOUT", str(30 * 60)))

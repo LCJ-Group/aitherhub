@@ -93,9 +93,11 @@ async def request_clip_generation(
                     "message": "Clip already generated",
                 }
             elif existing_row.status in ("pending", "processing"):
-                # Check if stuck (pending/processing for > 5 minutes)
+                # Check if stuck (pending/processing for > 30 minutes)
+                # Previously 5min caused infinite loop: frontend polls → stuck → delete → new record → repeat
+                # With queue congestion (800+ pending clips), 5min is far too short
                 from datetime import datetime, timedelta, timezone
-                stuck_threshold = datetime.now(timezone.utc) - timedelta(minutes=5)
+                stuck_threshold = datetime.now(timezone.utc) - timedelta(minutes=30)
                 check_stuck_sql = text("""
                     SELECT id, created_at, updated_at FROM video_clips
                     WHERE id = :clip_id
@@ -107,14 +109,22 @@ async def request_clip_generation(
                 })
                 stuck_row = stuck_result.fetchone()
                 if stuck_row:
-                    # Stuck clip - delete old record and create new one
-                    logger.warning(f"Clip {existing_row.id} stuck in {existing_row.status} for >5min, retrying")
-                    delete_sql = text("DELETE FROM video_clips WHERE id = :clip_id")
-                    await db.execute(delete_sql, {"clip_id": str(existing_row.id)})
+                    # Stuck clip - reset status to pending and boost priority instead of deleting
+                    # This avoids creating duplicate records that waste queue capacity
+                    logger.warning(f"Clip {existing_row.id} stuck in {existing_row.status} for >30min, resetting to pending")
+                    reset_sql = text(
+                        "UPDATE video_clips SET status = 'pending', progress_step = 'auto_retry', "
+                        "updated_at = '2020-01-01 00:00:00+00' WHERE id = :clip_id"
+                    )
+                    await db.execute(reset_sql, {"clip_id": str(existing_row.id)})
                     await db.commit()
-                    # Fall through to create new clip
+                    return {
+                        "clip_id": str(existing_row.id),
+                        "status": "pending",
+                        "message": "Clip generation re-queued with priority boost",
+                    }
                 else:
-                    # Recently created, still in progress
+                    # Recently created or updated, still in progress
                     return {
                         "clip_id": str(existing_row.id),
                         "status": existing_row.status,

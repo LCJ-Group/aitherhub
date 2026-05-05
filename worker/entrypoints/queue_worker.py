@@ -1662,13 +1662,19 @@ def poll_pending_clips_from_db():
         async def _fetch_pending():
             async with factory() as session:
                 try:
-                    # Per-user round-robin: pick 1 clip per video (fairness),
+                    # Per-user round-robin: pick up to 2 clips per video (fairness),
                     # exclude clips that already have a completed version (dedup),
-                    # ordered by oldest updated_at first (priority boost support)
+                    # prioritize SHORT clips first (better UX - users see results faster),
+                    # then by oldest updated_at (priority boost support)
                     sql = text(f"""
                         WITH ranked AS (
                             SELECT vc.id, vc.job_payload, vc.video_id,
-                                   ROW_NUMBER() OVER (PARTITION BY vc.video_id ORDER BY COALESCE(vc.updated_at, vc.created_at) ASC) as rn
+                                   (vc.time_end - vc.time_start) as clip_duration,
+                                   ROW_NUMBER() OVER (
+                                       PARTITION BY vc.video_id
+                                       ORDER BY (vc.time_end - vc.time_start) ASC,
+                                              COALESCE(vc.updated_at, vc.created_at) ASC
+                                   ) as rn
                             FROM video_clips vc
                             WHERE vc.status IN ('pending', 'retrying')
                             AND COALESCE(vc.updated_at, vc.created_at) < NOW() - INTERVAL '{CLIP_FALLBACK_AGE} seconds'
@@ -1682,8 +1688,8 @@ def poll_pending_clips_from_db():
                                 AND vc2.id != vc.id
                             )
                         )
-                        SELECT id, job_payload FROM ranked WHERE rn = 1
-                        ORDER BY (SELECT MIN(COALESCE(updated_at, created_at)) FROM video_clips v2 WHERE v2.video_id = ranked.video_id AND v2.status IN ('pending', 'retrying')) ASC
+                        SELECT id, job_payload FROM ranked WHERE rn <= 2
+                        ORDER BY clip_duration ASC, rn ASC
                         LIMIT 8
                     """)
                     result = await session.execute(sql)
