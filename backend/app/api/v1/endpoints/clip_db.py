@@ -221,7 +221,7 @@ async def search_clips(
     language: Optional[str] = Query(None, description="Filter by detected language: ja, zh-TW, zh-CN, en, ko, th"),
     ai_version: Optional[str] = Query(None, description="Filter by AI model version (e.g. v7.20260501, pre-ai for no version)"),
     # Sorting
-    sort_by: str = Query("created_at", description="Sort field: created_at, gmv, cta_score, importance_score, duration_sec"),
+    sort_by: str = Query("uploaded_at", description="Sort field: uploaded_at, created_at, gmv, cta_score, importance_score, duration_sec"),
     sort_order: str = Query("desc", description="Sort order: asc or desc"),
     # Pagination
     page: int = Query(1, ge=1),
@@ -364,14 +364,25 @@ async def search_clips(
 
     # Validate sort
     allowed_sorts = {
+        "uploaded_at": "v.created_at",
         "created_at": "vc.created_at",
         "gmv": "COALESCE(vc.gmv, 0)",
         "cta_score": "COALESCE(vc.cta_score, 0)",
         "importance_score": "COALESCE(vc.importance_score, 0)",
         "duration_sec": "COALESCE(vc.duration_sec, 0)",
     }
-    sort_col = allowed_sorts.get(sort_by, "vc.created_at")
+    sort_col = allowed_sorts.get(sort_by, "v.created_at")
     sort_dir = "DESC" if sort_order.lower() == "desc" else "ASC"
+    # For the outer ORDER BY after subquery, map to alias
+    outer_sort_map = {
+        "uploaded_at": "video_uploaded_at",
+        "created_at": "created_at",
+        "gmv": "sort_gmv",
+        "cta_score": "sort_cta_score",
+        "importance_score": "sort_importance_score",
+        "duration_sec": "sort_duration_sec",
+    }
+    outer_sort_col = outer_sort_map.get(sort_by, "video_uploaded_at")
 
     # Count query
     count_sql = text(f"""
@@ -393,68 +404,76 @@ async def search_clips(
     params["offset"] = offset
 
     main_sql = text(f"""
-        SELECT DISTINCT ON (vc.id)
-            vc.id as clip_id,
-            vc.video_id,
-            vc.phase_index,
-            vc.time_start,
-            vc.time_end,
-            vc.duration_sec,
-            vc.clip_url,
-            vc.sas_token,
-            vc.sas_expireddate,
-            vc.thumbnail_url,
-            vc.transcript_text,
-            vc.product_name,
-            vc.product_category,
-            vc.tags,
-            vc.is_sold,
-            vc.gmv,
-            vc.viewer_count,
-            vc.liver_name,
-            vc.stream_date,
-            vc.phase_description,
-            vc.cta_score,
-            vc.importance_score,
-            vc.created_at,
-            vc.captions,
-            vc.subtitle_style,
-            vc.subtitle_font_size,
-            vc.caption_offset,
-            vc.trim_data,
-            vc.subtitle_language,
-            vc.subtitle_position_x,
-            vc.subtitle_position_y,
-            vp.sales_psychology_tags,
-            vp.human_sales_tags,
-            vp.product_names as vp_product_names,
-            COALESCE(vp.gmv, 0) as vp_gmv,
-            COALESCE(vp.viewer_count, 0) as vp_viewer_count,
-            cf.rating,
-            v.original_filename as video_filename,
-            vc.exported_url,
-            COALESCE(cdl.download_count, 0) as download_count,
-            COALESCE(vc.is_unusable, FALSE) as is_unusable,
-            vc.unusable_reason,
-            vc.unusable_comment,
-            vc.detected_language,
-            vc.ml_model_version
-        FROM video_clips vc
-        LEFT JOIN video_phases vp ON vp.video_id = vc.video_id
-            AND vp.phase_index = CASE
-                WHEN vc.phase_index ~ '^[0-9]+$' THEN CAST(vc.phase_index AS INTEGER)
-                ELSE -1
-            END
-        LEFT JOIN clip_feedback cf ON cf.video_id = vc.video_id
-            AND cf.phase_index = vc.phase_index
-        LEFT JOIN videos v ON v.id = vc.video_id
-        LEFT JOIN (
-            SELECT clip_id, COUNT(*) as download_count
-            FROM clip_download_log
-            GROUP BY clip_id
-        ) cdl ON cdl.clip_id = vc.id
-        WHERE {where_clause}
-        ORDER BY vc.id, {sort_col} {sort_dir}
+        SELECT * FROM (
+            SELECT DISTINCT ON (vc.id)
+                vc.id as clip_id,
+                vc.video_id,
+                vc.phase_index,
+                vc.time_start,
+                vc.time_end,
+                vc.duration_sec,
+                vc.clip_url,
+                vc.sas_token,
+                vc.sas_expireddate,
+                vc.thumbnail_url,
+                vc.transcript_text,
+                vc.product_name,
+                vc.product_category,
+                vc.tags,
+                vc.is_sold,
+                vc.gmv,
+                vc.viewer_count,
+                vc.liver_name,
+                vc.stream_date,
+                vc.phase_description,
+                vc.cta_score,
+                vc.importance_score,
+                vc.created_at,
+                vc.captions,
+                vc.subtitle_style,
+                vc.subtitle_font_size,
+                vc.caption_offset,
+                vc.trim_data,
+                vc.subtitle_language,
+                vc.subtitle_position_x,
+                vc.subtitle_position_y,
+                vp.sales_psychology_tags,
+                vp.human_sales_tags,
+                vp.product_names as vp_product_names,
+                COALESCE(vp.gmv, 0) as vp_gmv,
+                COALESCE(vp.viewer_count, 0) as vp_viewer_count,
+                cf.rating,
+                v.original_filename as video_filename,
+                v.created_at as video_uploaded_at,
+                vc.exported_url,
+                COALESCE(cdl.download_count, 0) as download_count,
+                COALESCE(vc.is_unusable, FALSE) as is_unusable,
+                vc.unusable_reason,
+                vc.unusable_comment,
+                vc.detected_language,
+                vc.ml_model_version,
+                COALESCE(vc.gmv, 0) as sort_gmv,
+                COALESCE(vc.cta_score, 0) as sort_cta_score,
+                COALESCE(vc.importance_score, 0) as sort_importance_score,
+                COALESCE(vc.duration_sec, 0) as sort_duration_sec
+            FROM video_clips vc
+            LEFT JOIN video_phases vp ON vp.video_id = vc.video_id
+                AND vp.phase_index = CASE
+                    WHEN vc.phase_index ~ '^[0-9]+$' THEN CAST(vc.phase_index AS INTEGER)
+                    ELSE -1
+                END
+            LEFT JOIN clip_feedback cf ON cf.video_id = vc.video_id
+                AND cf.phase_index = vc.phase_index
+            LEFT JOIN videos v ON v.id = vc.video_id
+            LEFT JOIN (
+                SELECT clip_id, COUNT(*) as download_count
+                FROM clip_download_log
+                GROUP BY clip_id
+            ) cdl ON cdl.clip_id = vc.id
+            WHERE {where_clause}
+            ORDER BY vc.id
+        ) sub
+        ORDER BY {outer_sort_col} {sort_dir} NULLS LAST
         LIMIT :limit OFFSET :offset
     """)
 

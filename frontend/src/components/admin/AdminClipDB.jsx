@@ -1241,7 +1241,7 @@ export default function AdminClipDB({ adminKey }) {
   const [hasTrimFilter, setHasTrimFilter] = useState(null);
   const [languageFilter, setLanguageFilter] = useState("");
   const [aiVersionFilter, setAiVersionFilter] = useState("");
-  const [sortBy, setSortBy] = useState("created_at");
+  const [sortBy, setSortBy] = useState("uploaded_at");
   const [sortOrder, setSortOrder] = useState("desc");
   const [page, setPage] = useState(1);
   const [showFilters, setShowFilters] = useState(false);
@@ -1625,6 +1625,7 @@ export default function AdminClipDB({ adminKey }) {
               onChange={(e) => { setSortBy(e.target.value); setPage(1); }}
               className="px-3 py-1.5 rounded-lg border border-gray-300 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-purple-500"
             >
+              <option value="uploaded_at">アップロード日順</option>
               <option value="created_at">作成日順</option>
               <option value="gmv">GMV順</option>
               <option value="cta_score">CTAスコア順</option>

@@ -1601,6 +1601,11 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
           <p className="text-[10px] text-gray-400 mt-1">
             {fb.user_email || fb.user_id}
           </p>
+          {fb.video_uploaded_at && (
+            <p className="text-[10px] text-green-600 mt-0.5">
+              アップロード: {formatDate(fb.video_uploaded_at)}
+            </p>
+          )}
           {fb.rated_at && localRating === fb.user_rating && (
             <p className="text-[10px] text-gray-400 mt-0.5">
               {formatDate(fb.rated_at)}
