@@ -1668,6 +1668,7 @@ def poll_pending_clips_from_db():
                         WHERE status IN ('pending', 'retrying')
                         AND COALESCE(updated_at, created_at) < NOW() - INTERVAL '{CLIP_FALLBACK_AGE} seconds'
                         AND job_payload IS NOT NULL
+                        ORDER BY COALESCE(updated_at, created_at) ASC
                         LIMIT 5
                     """)
                     result = await session.execute(sql)
