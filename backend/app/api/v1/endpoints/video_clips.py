@@ -259,7 +259,11 @@ async def get_clip_status(
                    COALESCE(processing_logs, '[]'::jsonb) as processing_logs
             FROM video_clips
             WHERE video_id = :video_id AND phase_index = CAST(:phase_index AS text)
-            ORDER BY created_at DESC
+            ORDER BY CASE WHEN status = 'completed' THEN 0
+                          WHEN status = 'processing' THEN 1
+                          WHEN status = 'pending' THEN 2
+                          ELSE 3 END ASC,
+                     created_at DESC
             LIMIT 1
         """)
         result = await db.execute(sql, {"video_id": video_id, "phase_index": str(phase_index)})
@@ -470,7 +474,12 @@ async def list_clips(
                    COALESCE(processing_logs, '[]'::jsonb) as processing_logs
             FROM video_clips
             WHERE video_id = :video_id
-            ORDER BY phase_index ASC, created_at DESC
+            ORDER BY phase_index ASC,
+                     CASE WHEN status = 'completed' THEN 0
+                          WHEN status = 'processing' THEN 1
+                          WHEN status = 'pending' THEN 2
+                          ELSE 3 END ASC,
+                     created_at DESC
         """)
         result = await db.execute(sql, {"video_id": video_id})
         rows = result.fetchall()
