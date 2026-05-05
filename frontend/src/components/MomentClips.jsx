@@ -516,6 +516,9 @@ export default function MomentClips({ videoData, onRequestClip, clipStates = {},
                             (() => {
                               const pct = clipState?.progress_pct || 0;
                               const step = clipState?.progress_step || '';
+                              const clipLogs = clipState?.processing_logs || [];
+                              // Determine if clip is queued (waiting) vs actively processing
+                              const isQueued = (clipState?.status === 'pending' || clipState?.status === 'requesting') && pct === 0 && clipLogs.length === 0;
                               const stepLabels = {
                                 downloading: window.__t('momentClips_downloading'),
                                 speech_boundary: window.__t('momentClips_speechBoundary'),
@@ -526,26 +529,34 @@ export default function MomentClips({ videoData, onRequestClip, clipStates = {},
                                 refining_subtitles: window.__t('momentClips_refiningSubtitles'),
                                 creating_clip: window.__t('momentClips_creatingClip'),
                                 uploading: window.__t('momentClips_uploading'),
+                                auto_retry: window.__t('momentClips_queued', '\u30AD\u30E5\u30FC\u5F85\u3061'),
                               };
-                              const label = stepLabels[step] || window.__t('momentClips_generating');
-                              const clipLogs = clipState?.processing_logs || [];
+                              const label = isQueued
+                                ? window.__t('momentClips_queued', '\u30AD\u30E5\u30FC\u5F85\u3061')
+                                : (stepLabels[step] || window.__t('momentClips_generating'));
                               return (
                                 <div className="flex-1 flex flex-col gap-1">
                                   <div className="flex items-center justify-between">
-                                    <span className="text-gray-600 text-xs font-medium">{label}...</span>
-                                    <span className="text-purple-600 text-xs font-bold">{pct}%</span>
+                                    <span className={`text-xs font-medium ${isQueued ? 'text-amber-600' : 'text-gray-600'}`}>{label}...</span>
+                                    <span className={`text-xs font-bold ${isQueued ? 'text-amber-500' : 'text-purple-600'}`}>{isQueued ? '\u2014' : `${pct}%`}</span>
                                   </div>
-                                  <div className="w-full h-1.5 bg-gray-200 rounded-full overflow-hidden">
-                                    <div
-                                      className="h-full bg-gradient-to-r from-purple-500 to-pink-500 rounded-full transition-all duration-700 ease-out"
-                                      style={{ width: `${Math.max(pct, 2)}%` }}
-                                    />
-                                  </div>
+                                  {isQueued ? (
+                                    <div className="w-full h-1.5 bg-amber-100 rounded-full overflow-hidden">
+                                      <div className="h-full bg-gradient-to-r from-amber-300 to-amber-400 rounded-full animate-pulse" style={{ width: '30%' }} />
+                                    </div>
+                                  ) : (
+                                    <div className="w-full h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                                      <div
+                                        className="h-full bg-gradient-to-r from-purple-500 to-pink-500 rounded-full transition-all duration-700 ease-out"
+                                        style={{ width: `${Math.max(pct, 2)}%` }}
+                                      />
+                                    </div>
+                                  )}
                                   <AIEditorMonitor
                                     logs={clipLogs}
                                     progressPct={pct}
                                     progressStep={step}
-                                    status={clipState?.status}
+                                    status={isQueued ? 'queued' : clipState?.status}
                                     compact={true}
                                     clipUrl={clipState?.clip_url}
                                   />

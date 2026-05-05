@@ -177,7 +177,8 @@ export default function AIEditorMonitor({ logs = [], progressPct = 0, progressSt
   const [showLogs, setShowLogs] = useState(false);
 
   const enrichedLogs = useMemo(() => calculateElapsed(logs), [logs]);
-  const isActive = ['processing', 'pending', 'requesting'].includes(status);
+  const isQueued = status === 'queued';
+  const isActive = ['processing', 'pending', 'requesting'].includes(status) || isQueued;
   const isCompleted = status === 'completed';
   const isFailed = status === 'failed' || status === 'dead';
 
@@ -360,6 +361,20 @@ export default function AIEditorMonitor({ logs = [], progressPct = 0, progressSt
                 </div>
               )}
             </div>
+          ) : isQueued ? (
+            /* Queued - waiting for executor slot */
+            <div className="flex flex-col items-center justify-center py-6 gap-2">
+              <div className="relative">
+                <div className="w-12 h-12 rounded-full border-2 border-gray-700 border-t-amber-400 animate-pulse" />
+                <span className="absolute inset-0 flex items-center justify-center text-lg">⏳</span>
+              </div>
+              <span className="text-[11px] font-mono text-amber-400">
+                Waiting in queue<PulsingDots />
+              </span>
+              <span className="text-[10px] font-mono text-gray-600">
+                Processing will begin shortly
+              </span>
+            </div>
           ) : isActive ? (
             /* Waiting for first preview */
             <div className="flex flex-col items-center justify-center py-6 gap-2">
@@ -417,8 +432,10 @@ export default function AIEditorMonitor({ logs = [], progressPct = 0, progressSt
             })}
             {isActive && enrichedLogs.length === 0 && (
               <div className="flex items-center gap-2 py-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
-                <span className="text-gray-500 text-[10px] font-mono">Waiting for processing to start...</span>
+                <span className={`w-1.5 h-1.5 rounded-full ${isQueued ? 'bg-amber-400' : 'bg-green-400'} animate-pulse`} />
+                <span className="text-gray-500 text-[10px] font-mono">
+                  {isQueued ? 'Waiting in queue for available worker...' : 'Waiting for processing to start...'}
+                </span>
               </div>
             )}
           </div>
@@ -433,7 +450,7 @@ export default function AIEditorMonitor({ logs = [], progressPct = 0, progressSt
           {enrichedLogs.length} steps
         </span>
         <span className="text-[9px] font-mono text-gray-600">
-          {isActive ? `${progressPct}%` : ''}
+          {isQueued ? 'Queued' : isActive ? `${progressPct}%` : ''}
           {(isCompleted || isFailed) && enrichedLogs.length > 1 
             ? `Total: ${formatElapsed(enrichedLogs.reduce((sum, l) => sum + (l.elapsed || 0), 0))}`
             : ''

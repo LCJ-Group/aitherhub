@@ -341,6 +341,11 @@ async def get_clip_status(
                         await db.commit()
                         clip_status = "failed"
 
+        # ── Normalize "dead" clips with auto_retry to "pending" for frontend ──
+        # Dead clips with progress_step='auto_retry' are in the retry queue.
+        # Frontend should treat them as pending (keep polling) not failed (stop polling).
+        if clip_status == "dead" and row.progress_step == "auto_retry":
+            clip_status = "pending"
         # Parse processing_logs
         _processing_logs = []
         try:
@@ -351,7 +356,6 @@ async def get_clip_status(
                 _processing_logs = _raw_logs
         except Exception:
             _processing_logs = []
-
         response = {
             "clip_id": str(row.id),
             "status": clip_status,
@@ -490,12 +494,16 @@ async def list_clips(
             except Exception:
                 _clip_logs = []
 
+            # Normalize dead+auto_retry to pending for frontend
+            _clip_status = row.status
+            if _clip_status == "dead" and (row.progress_step if hasattr(row, 'progress_step') else None) == "auto_retry":
+                _clip_status = "pending"
             clip = {
                 "clip_id": str(row.id),
                 "phase_index": row.phase_index,
                 "time_start": row.time_start,
                 "time_end": row.time_end,
-                "status": row.status,
+                "status": _clip_status,
                 "progress_pct": row.progress_pct if hasattr(row, 'progress_pct') else 0,
                 "progress_step": row.progress_step if hasattr(row, 'progress_step') else None,
                 "processing_logs": _clip_logs,
