@@ -707,13 +707,15 @@ export default function VideoDetail({ videoData, editorParams }) {
   };
 
   const handleClipGeneration = async (item, phaseIndex) => {
-    if (!videoData?.id) return;
+    console.log('[handleClipGeneration] CALLED with:', JSON.stringify({ videoId: videoData?.id, phaseIndex, time_start: item.time_start, time_end: item.time_end }));
+    if (!videoData?.id) { console.error('[handleClipGeneration] ABORT: no videoData.id'); return; }
     // Normalize phaseIndex to string for consistent clipStates keys
     phaseIndex = String(phaseIndex);
     const timeStart = Number(item.time_start);
     const timeEnd = Number(item.time_end);
-    if (isNaN(timeStart) || isNaN(timeEnd)) return;
+    if (isNaN(timeStart) || isNaN(timeEnd)) { console.error('[handleClipGeneration] ABORT: NaN times', { timeStart, timeEnd }); return; }
 
+    console.log('[handleClipGeneration] Setting requesting state for phase:', phaseIndex);
     // Set loading state
     setClipStates(prev => ({
       ...prev,
@@ -724,18 +726,27 @@ export default function VideoDetail({ videoData, editorParams }) {
       // Get user's UI language for subtitle generation
       const uiLang = (localStorage.getItem('aitherhub_language') || 'ja');
       const subtitleLang = uiLang === 'zh-TW' ? 'zh-TW' : uiLang === 'en' ? 'auto' : 'ja';
+      console.log('[handleClipGeneration] Calling API: requestClipGeneration', { phaseIndex, timeStart, timeEnd, subtitleLang });
       const res = await VideoService.requestClipGeneration(videoData.id, phaseIndex, timeStart, timeEnd, 1.2, subtitleLang);
+      console.log('[handleClipGeneration] API response:', JSON.stringify(res));
 
       if (res.status === 'completed' && res.clip_url) {
-        // Show subtitle generation status while transcribing
+        // If API says "already generated", skip subtitle re-generation and mark completed immediately
+        if (res.message === 'Clip already generated') {
+          console.log(`[handleClipGeneration] Clip already exists for phase ${phaseIndex}, skipping transcription`);
+          setClipStates(prev => ({
+            ...prev,
+            [phaseIndex]: { status: 'completed', clip_url: res.clip_url, clip_id: res.clip_id, time_start: timeStart, time_end: timeEnd },
+          }));
+          return;
+        }
+        // Newly completed clip - generate subtitles
         setClipStates(prev => ({
           ...prev,
           [phaseIndex]: { status: 'generating_subtitles', clip_url: res.clip_url, clip_id: res.clip_id, time_start: timeStart, time_end: timeEnd },
         }));
-        // Await subtitle generation before marking as completed
         try {
           console.log(`[AutoTranscribe] Clip immediately completed for phase ${phaseIndex}, triggering transcription`);
-          // target_language omitted: backend defaults to 'auto' (Whisper auto-detect)
           const transcribeRes = await VideoService.transcribeClip(videoData.id, {
             clip_url: res.clip_url,
             time_start: timeStart,
@@ -822,7 +833,7 @@ export default function VideoDetail({ videoData, editorParams }) {
             // Update progress (preserve time_start/time_end)
             setClipStates(prev => ({
               ...prev,
-              [phaseIndex]: { ...prev[phaseIndex], status: statusRes.status, progress_pct: statusRes.progress_pct || 0, progress_step: statusRes.progress_step || '', processing_logs: statusRes.processing_logs || prev[phaseIndex]?.processing_logs || [], time_start: statusRes.time_start ?? prev[phaseIndex]?.time_start ?? timeStart, time_end: statusRes.time_end ?? prev[phaseIndex]?.time_end ?? timeEnd },
+              [phaseIndex]: { ...prev[phaseIndex], status: statusRes.status, progress_pct: statusRes.progress_pct || 0, progress_step: statusRes.progress_step || '', processing_logs: statusRes.processing_logs || prev[phaseIndex]?.processing_logs || [], time_start: statusRes.time_start ?? prev[phaseIndex]?.time_start ?? timeStart, time_end: statusRes.time_end ?? prev[phaseIndex]?.time_end ?? timeEnd, queue_position: statusRes.queue_position ?? null, queue_estimated_seconds: statusRes.queue_estimated_seconds ?? null },
             }));
           }
         } catch (e) {
@@ -831,6 +842,7 @@ export default function VideoDetail({ videoData, editorParams }) {
       }, 5000); // Poll every 5 seconds
 
     } catch (e) {
+      console.error('[handleClipGeneration] ERROR for phase', phaseIndex, ':', e.message, e);
       setClipStates(prev => ({
         ...prev,
         [phaseIndex]: { status: 'failed', error: e.message },

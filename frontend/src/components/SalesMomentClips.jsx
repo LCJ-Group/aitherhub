@@ -49,6 +49,13 @@ export default function SalesMomentClips({ videoData, onRequestClip, clipStates 
   };
 
   const handleClipRequest = (candidate) => {
+    console.log('[SalesMomentClips] handleClipRequest called:', JSON.stringify({
+      phase_index: candidate.phase_index,
+      time_start: candidate.time_start,
+      time_end: candidate.time_end,
+      label: candidate.label,
+      hasOnRequestClip: !!onRequestClip,
+    }));
     if (onRequestClip) {
       onRequestClip({
         phase_index: candidate.phase_index,
@@ -56,6 +63,8 @@ export default function SalesMomentClips({ videoData, onRequestClip, clipStates 
         time_end: candidate.time_end,
         label: candidate.label,
       });
+    } else {
+      console.error('[SalesMomentClips] ERROR: onRequestClip is undefined!');
     }
   };
 
@@ -346,6 +355,9 @@ export default function SalesMomentClips({ videoData, onRequestClip, clipStates 
                           (() => {
                             const pct = clipState?.progress_pct || 0;
                             const step = clipState?.progress_step || '';
+                            const clipLogs = clipState?.processing_logs || [];
+                            // Determine if clip is queued (waiting) vs actively processing
+                            const isQueued = (clipState?.status === 'pending' || clipState?.status === 'requesting') && pct === 0 && clipLogs.length === 0;
                             const stepLabels = {
                               downloading: window.__t('momentClips_downloading', '取得中'),
                               speech_boundary: window.__t('momentClips_speechBoundary', '音声検出'),
@@ -357,8 +369,40 @@ export default function SalesMomentClips({ videoData, onRequestClip, clipStates 
                               creating_clip: window.__t('momentClips_creatingClip', '動画作成'),
                               uploading: window.__t('uploadButton', 'アップロード'),
                             };
+                            if (isQueued) {
+                              // Show queue waiting status with estimated time
+                              const qPos = clipState?.queue_position;
+                              const qEst = clipState?.queue_estimated_seconds;
+                              return (
+                                <div className="flex-1 flex flex-col gap-1">
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-amber-600 text-xs font-medium">
+                                      キュー待ち...
+                                      {qPos && <span className="ml-1 text-amber-500">(#{qPos})</span>}
+                                    </span>
+                                    {qEst && (
+                                      <span className="text-amber-500 text-xs font-bold">
+                                        ≈{qEst >= 60 ? `${Math.ceil(qEst / 60)}分` : `${qEst}秒`}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="w-full h-1.5 bg-amber-100 rounded-full overflow-hidden">
+                                    <div className="h-full bg-gradient-to-r from-amber-400 to-yellow-300 rounded-full animate-pulse" style={{ width: '40%' }} />
+                                  </div>
+                                  <AIEditorMonitor
+                                    logs={clipLogs}
+                                    progressPct={pct}
+                                    progressStep={step}
+                                    status="queued"
+                                    compact={true}
+                                    clipUrl={clipState?.clip_url}
+                                    queuePosition={clipState?.queue_position}
+                                    queueEstimatedSeconds={clipState?.queue_estimated_seconds}
+                                  />
+                                </div>
+                              );
+                            }
                             const label = stepLabels[step] || window.__t('momentClips_generating', '生成中');
-                            const clipLogs = clipState?.processing_logs || [];
                             return (
                               <div className="flex-1 flex flex-col gap-1">
                                 <div className="flex items-center justify-between">
