@@ -5767,13 +5767,13 @@ async def get_users_list(
             SELECT
                 u.id,
                 u.email,
-                u.username,
+                u.display_name,
                 u.created_at,
                 COUNT(v.id) as video_count,
                 MAX(v.created_at) as last_upload
             FROM users u
             LEFT JOIN videos v ON v.user_id = u.id
-            GROUP BY u.id, u.email, u.username, u.created_at
+            GROUP BY u.id, u.email, u.display_name, u.created_at
             ORDER BY video_count DESC, u.created_at DESC
         """)
     )
@@ -5783,7 +5783,7 @@ async def get_users_list(
         users.append({
             "id": str(r.id),
             "email": r.email or "",
-            "name": r.username or r.email or "",
+            "name": r.display_name or r.email or "",
             "video_count": r.video_count,
             "last_upload": r.last_upload.isoformat() if r.last_upload else None,
             "created_at": r.created_at.isoformat() if r.created_at else None,

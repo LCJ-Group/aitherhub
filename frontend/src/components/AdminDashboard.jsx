@@ -2045,14 +2045,30 @@ function formatSeconds(sec) {
 // ─── Daily Uploads Chart ───
 function DailyUploadsChart({ dailyUploads }) {
   if (!dailyUploads || dailyUploads.length === 0) return null;
-  const maxCount = Math.max(...dailyUploads.map(d => d.count), 1);
+
+  // Fill in missing dates with count=0 to create a complete 30-day range
+  const filledData = useMemo(() => {
+    const dataMap = {};
+    dailyUploads.forEach(d => { dataMap[d.date] = d.count; });
+    const result = [];
+    const today = new Date();
+    for (let i = 29; i >= 0; i--) {
+      const dt = new Date(today);
+      dt.setDate(dt.getDate() - i);
+      const key = dt.toISOString().split('T')[0];
+      result.push({ date: key, count: dataMap[key] || 0 });
+    }
+    return result;
+  }, [dailyUploads]);
+
+  const maxCount = Math.max(...filledData.map(d => d.count), 1);
   return (
     <div className="mt-4 bg-white rounded-xl border border-gray-200 p-4">
       <h3 className="text-sm font-semibold text-gray-600 mb-3">📅 毎日のアップロード数（過去30日）</h3>
-      <div className="flex items-end gap-1 h-24">
-        {dailyUploads.map((d, i) => {
+      <div className="flex items-end gap-[2px] h-24">
+        {filledData.map((d, i) => {
           const height = Math.max((d.count / maxCount) * 100, 4);
-          const dateLabel = new Date(d.date).toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' });
+          const dateLabel = new Date(d.date + 'T00:00:00').toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' });
           return (
             <div key={i} className="flex-1 flex flex-col items-center group relative">
               <div className="absolute -top-6 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-[9px] px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-10">
@@ -2060,7 +2076,7 @@ function DailyUploadsChart({ dailyUploads }) {
               </div>
               <div
                 className={`w-full rounded-t transition-all ${
-                  d.count > 0 ? 'bg-blue-400 hover:bg-blue-500' : 'bg-gray-200'
+                  d.count > 0 ? 'bg-blue-400 hover:bg-blue-500' : 'bg-gray-100'
                 }`}
                 style={{ height: `${height}%`, minHeight: d.count > 0 ? '4px' : '2px' }}
               />
@@ -2069,8 +2085,8 @@ function DailyUploadsChart({ dailyUploads }) {
         })}
       </div>
       <div className="flex justify-between mt-1">
-        <span className="text-[9px] text-gray-400">{dailyUploads.length > 0 ? new Date(dailyUploads[0].date).toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' }) : ''}</span>
-        <span className="text-[9px] text-gray-400">{dailyUploads.length > 0 ? new Date(dailyUploads[dailyUploads.length - 1].date).toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' }) : ''}</span>
+        <span className="text-[9px] text-gray-400">{filledData.length > 0 ? new Date(filledData[0].date + 'T00:00:00').toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' }) : ''}</span>
+        <span className="text-[9px] text-gray-400">{filledData.length > 0 ? new Date(filledData[filledData.length - 1].date + 'T00:00:00').toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' }) : ''}</span>
       </div>
     </div>
   );
