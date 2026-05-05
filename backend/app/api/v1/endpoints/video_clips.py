@@ -315,10 +315,11 @@ async def get_clip_status(
                             enqueue_result = await enqueue_job(job_payload)
                             if enqueue_result.success:
                                 logger.info(f"Clip {row.id} re-enqueued successfully")
-                                # Reset updated_at to prevent immediate re-enqueue
+                                # Keep updated_at OLD so DB fallback picks it up immediately
+                                # (DB fallback requires age > 120s since updated_at)
                                 reset_sql = text("""
                                     UPDATE video_clips
-                                    SET updated_at = NOW(), progress_step = 'auto_retry'
+                                    SET updated_at = '2020-01-01 00:00:00+00', progress_step = 'auto_retry'
                                     WHERE id = :clip_id
                                 """)
                                 await db.execute(reset_sql, {"clip_id": str(row.id)})
