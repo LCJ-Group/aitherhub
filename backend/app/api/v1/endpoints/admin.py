@@ -18,6 +18,17 @@ ADMIN_ID = "aither"
 ADMIN_PASS = "hub"
 
 
+def _feedback_order_clause(sort_by: str, sort_order: str) -> str:
+    """Build ORDER BY clause for feedback list."""
+    allowed = {
+        "rated_at": "vp.rated_at DESC NULLS LAST, vp.video_id, vp.phase_index",
+        "video_uploaded_at": "v.created_at {dir}, vp.video_id, vp.phase_index",
+    }
+    direction = "DESC" if sort_order.lower() == "desc" else "ASC"
+    template = allowed.get(sort_by, allowed["rated_at"])
+    return template.replace("{dir}", direction)
+
+
 async def _q(db: AsyncSession, sql: str, default=0):
     """Run a scalar query with rollback on failure to keep the session alive."""
     try:
@@ -149,6 +160,8 @@ async def get_all_feedbacks(
     filter_rating: int = 0,
     has_clip: Optional[str] = None,
     reviewer_id: Optional[int] = None,
+    sort_by: str = "rated_at",
+    sort_order: str = "desc",
     x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
     db: AsyncSession = Depends(get_db),
 ):
@@ -303,7 +316,7 @@ async def get_all_feedbacks(
             ) vc ON true
             {clip_join_sql}
             {where_clause}
-            ORDER BY vp.rated_at DESC NULLS LAST, vp.video_id, vp.phase_index
+            ORDER BY {_feedback_order_clause(sort_by, sort_order)}
             LIMIT :limit OFFSET :offset
         """)
         result = await db.execute(sql, {"limit": per_page, "offset": offset})

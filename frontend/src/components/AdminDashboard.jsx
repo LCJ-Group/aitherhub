@@ -43,6 +43,7 @@ export default function AdminDashboard() {
   const [feedbackPage, setFeedbackPage] = useState(1);
   const [feedbackFilterRating, setFeedbackFilterRating] = useState(0);
   const [feedbackClipFilter, setFeedbackClipFilter] = useState(null); // null=all, 'yes'=clip only, 'no'=no clip
+  const [feedbackSortBy, setFeedbackSortBy] = useState("rated_at"); // "rated_at" or "video_uploaded_at"
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   // Support ?tab= URL parameter for shareable links
@@ -185,6 +186,8 @@ export default function AdminDashboard() {
           page: feedbackPage,
           per_page: 50,
           filter_rating: feedbackFilterRating,
+          sort_by: feedbackSortBy,
+          sort_order: "desc",
           ...(feedbackClipFilter ? { has_clip: feedbackClipFilter } : {}),
         };
         // Retry up to 2 times on failure (cold start / timeout)
@@ -219,7 +222,7 @@ export default function AdminDashboard() {
       }
     })();
     return () => { cancelled = true; };
-  }, [authenticated, activeTab, feedbackIncludeUnrated, feedbackRefreshKey, feedbackPage, feedbackFilterRating, feedbackClipFilter]);
+  }, [authenticated, activeTab, feedbackIncludeUnrated, feedbackRefreshKey, feedbackPage, feedbackFilterRating, feedbackClipFilter, feedbackSortBy]);
 
   // Auto-refresh feedbacks when returning from editor tab (visibilitychange)
   useEffect(() => {
@@ -681,6 +684,8 @@ export default function AdminDashboard() {
             setFilterRating={(v) => { setFeedbackFilterRating(v); setFeedbackPage(1); setFeedbackData(null); }}
             clipFilter={feedbackClipFilter}
             setClipFilter={(v) => { setFeedbackClipFilter(v); setFeedbackPage(1); setFeedbackData(null); }}
+            sortBy={feedbackSortBy}
+            setSortBy={(v) => { setFeedbackSortBy(v); setFeedbackPage(1); setFeedbackData(null); }}
             page={feedbackPage}
             setPage={(p) => { setFeedbackPage(p); setFeedbackData(null); }}
             reviewerInfo={reviewerInfo}
@@ -1107,7 +1112,7 @@ function UploadHealthSection({ data, loading }) {
 }
 
 // ── Feedback Section ──
-function FeedbackSection({ data, loading, error, includeUnrated, setIncludeUnrated, onRefresh, filterRating, setFilterRating, clipFilter, setClipFilter, page, setPage, reviewerInfo, onReviewerStatsUpdate }) {
+function FeedbackSection({ data, loading, error, includeUnrated, setIncludeUnrated, onRefresh, filterRating, setFilterRating, clipFilter, setClipFilter, sortBy, setSortBy, page, setPage, reviewerInfo, onReviewerStatsUpdate }) {
   const { i18n } = useTranslation();
   const [expandedIdx, setExpandedIdx] = useState(-1);
 
@@ -1275,6 +1280,30 @@ function FeedbackSection({ data, loading, error, includeUnrated, setIncludeUnrat
           }`}
         >
           クリップなし ({(summary.without_clip_count || 0).toLocaleString()})
+        </button>
+
+        {/* Sort selector */}
+        <span className="text-gray-300 mx-1">|</span>
+        <span className="text-xs text-gray-500">並び替え:</span>
+        <button
+          onClick={() => setSortBy("rated_at")}
+          className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${
+            sortBy === "rated_at"
+              ? "bg-purple-500 text-white"
+              : "bg-purple-50 text-purple-600 hover:bg-purple-100 border border-purple-200"
+          }`}
+        >
+          採点日順
+        </button>
+        <button
+          onClick={() => setSortBy("video_uploaded_at")}
+          className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${
+            sortBy === "video_uploaded_at"
+              ? "bg-purple-500 text-white"
+              : "bg-purple-50 text-purple-600 hover:bg-purple-100 border border-purple-200"
+          }`}
+        >
+          アップロード日順
         </button>
       </div>
 

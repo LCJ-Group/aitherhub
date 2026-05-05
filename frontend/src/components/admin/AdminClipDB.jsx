@@ -1226,6 +1226,12 @@ function VideoPlayerModal({ clip, clips, onClose, brands, adminKey, onBrandChang
 // ─── Main AdminClipDB Component ───
 // ═══════════════════════════════════════════════
 export default function AdminClipDB({ adminKey }) {
+  // Read initial state from URL params
+  const urlParams = new URLSearchParams(window.location.search);
+  const initSort = urlParams.get("sort_by") || "uploaded_at";
+  const initOrder = urlParams.get("sort_order") || "desc";
+  const initPage = parseInt(urlParams.get("clip_page") || "1", 10) || 1;
+
   // Search state
   const [searchQuery, setSearchQuery] = useState("");
   const [searchMode, setSearchMode] = useState("structured");
@@ -1241,10 +1247,21 @@ export default function AdminClipDB({ adminKey }) {
   const [hasTrimFilter, setHasTrimFilter] = useState(null);
   const [languageFilter, setLanguageFilter] = useState("");
   const [aiVersionFilter, setAiVersionFilter] = useState("");
-  const [sortBy, setSortBy] = useState("uploaded_at");
-  const [sortOrder, setSortOrder] = useState("desc");
-  const [page, setPage] = useState(1);
+  const [sortBy, setSortBy] = useState(initSort);
+  const [sortOrder, setSortOrder] = useState(initOrder);
+  const [page, setPage] = useState(initPage);
   const [showFilters, setShowFilters] = useState(false);
+
+  // Sync sort/page state to URL params (without page reload)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    params.set("sort_by", sortBy);
+    params.set("sort_order", sortOrder);
+    if (page > 1) params.set("clip_page", String(page));
+    else params.delete("clip_page");
+    const newUrl = `${window.location.pathname}?${params.toString()}`;
+    window.history.replaceState({}, "", newUrl);
+  }, [sortBy, sortOrder, page]);
 
   // Data state
   const [clips, setClips] = useState([]);
@@ -1623,7 +1640,7 @@ export default function AdminClipDB({ adminKey }) {
             <select
               value={sortBy}
               onChange={(e) => { setSortBy(e.target.value); setPage(1); }}
-              className="px-3 py-1.5 rounded-lg border border-gray-300 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+              className="px-3 py-1.5 rounded-lg border border-purple-400 text-xs bg-purple-50 font-medium text-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-500"
             >
               <option value="uploaded_at">アップロード日順</option>
               <option value="created_at">作成日順</option>
@@ -1635,10 +1652,14 @@ export default function AdminClipDB({ adminKey }) {
 
             <button
               onClick={() => setSortOrder(sortOrder === "desc" ? "asc" : "desc")}
-              className="p-1.5 rounded-lg border border-gray-300 hover:bg-gray-50 text-xs text-gray-600"
+              className={`px-2 py-1.5 rounded-lg border text-xs font-medium transition-all ${
+                sortOrder === "desc"
+                  ? "border-purple-400 bg-purple-50 text-purple-700"
+                  : "border-orange-400 bg-orange-50 text-orange-700"
+              }`}
+              title={sortOrder === "desc" ? "降順（大きい/新しい順）" : "昇順（小さい/古い順）"}
             >
-              <ArrowUpDown className="w-3.5 h-3.5" />
-              {sortOrder === "desc" ? "↓" : "↑"}
+              {sortOrder === "desc" ? "↓ 新しい順" : "↑ 古い順"}
             </button>
 
             <input
