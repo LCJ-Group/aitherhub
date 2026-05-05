@@ -365,12 +365,18 @@ async def get_clip_status(
         queue_estimated_seconds = None
         if clip_status in ("pending", "requesting") and (row.progress_pct or 0) == 0:
             try:
+                # Only count ACTIVE queue items (not old stuck clips):
+                # - pending/requesting created within last 2 hours
+                # - processing clips updated within last 30 minutes (actively being worked on)
                 queue_sql = text("""
                     SELECT COUNT(*) as ahead
                     FROM video_clips
-                    WHERE status IN ('pending', 'processing', 'requesting')
+                    WHERE id != :clip_id
                       AND created_at < :created_at
-                      AND id != :clip_id
+                      AND (
+                        (status IN ('pending', 'requesting') AND created_at > NOW() - INTERVAL '2 hours')
+                        OR (status = 'processing' AND COALESCE(updated_at, created_at) > NOW() - INTERVAL '30 minutes')
+                      )
                 """)
                 queue_result = await db.execute(queue_sql, {
                     "created_at": row.created_at,
