@@ -93,7 +93,8 @@ export default function SalesMomentClips({ videoData, onRequestClip, clipStates 
   };
 
   const getClipState = (candidate) => {
-    return clipStates[candidate.phase_index] || null;
+    // phase_index may be int from sales-moment-clips API but clipStates keys are strings from listClips
+    return clipStates[String(candidate.phase_index)] || clipStates[candidate.phase_index] || null;
   };
 
   // Reset auto-gen trigger when video changes
@@ -122,7 +123,7 @@ export default function SalesMomentClips({ videoData, onRequestClip, clipStates 
     const CONCURRENCY = 2;
 
     const toGenerate = data.candidates.filter((candidate) => {
-      const existing = clipStates[candidate.phase_index];
+      const existing = clipStates[String(candidate.phase_index)] || clipStates[candidate.phase_index];
       return !existing || !['completed', 'requesting', 'pending', 'processing', 'generating_subtitles', 'dead', 'failed'].includes(existing.status);
     });
 

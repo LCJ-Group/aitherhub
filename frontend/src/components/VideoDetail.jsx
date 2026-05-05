@@ -247,7 +247,7 @@ export default function VideoDetail({ videoData, editorParams }) {
           const states = {};
           const pendingPhases = [];
           for (const clip of res.clips) {
-            states[clip.phase_index] = {
+            states[String(clip.phase_index)] = {
               status: clip.status,
               clip_url: clip.clip_url || null,
               clip_id: clip.id || clip.clip_id || null,
@@ -260,7 +260,7 @@ export default function VideoDetail({ videoData, editorParams }) {
             };
             // Track in-progress clips that need polling
             if (['pending', 'processing', 'requesting'].includes(clip.status)) {
-              pendingPhases.push(clip.phase_index);
+              pendingPhases.push(String(clip.phase_index));
             }
           }
           setClipStates(states);
@@ -481,7 +481,7 @@ export default function VideoDetail({ videoData, editorParams }) {
         for (let i = 0; i < videoData.reports_1.length; i++) {
           const phase = videoData.reports_1[i];
           // Use the actual phase_index from DB (1-based), not array index
-          const phaseIndex = phase.phase_index ?? (i + 1);
+          const phaseIndex = String(phase.phase_index ?? (i + 1));
           const existing = currentStates[phaseIndex];
 
           // Skip if already completed, processing, requesting, or permanently failed
@@ -708,6 +708,8 @@ export default function VideoDetail({ videoData, editorParams }) {
 
   const handleClipGeneration = async (item, phaseIndex) => {
     if (!videoData?.id) return;
+    // Normalize phaseIndex to string for consistent clipStates keys
+    phaseIndex = String(phaseIndex);
     const timeStart = Number(item.time_start);
     const timeEnd = Number(item.time_end);
     if (isNaN(timeStart) || isNaN(timeEnd)) return;
@@ -1501,7 +1503,7 @@ export default function VideoDetail({ videoData, editorParams }) {
                     {/* Report Section */}
                     <div className="pb-4">
                       {!timelineCollapsed && videoData?.reports_1 && videoData.reports_1.map((item, index) => {
-                        const itemKey = item.phase_index ?? index;
+                        const itemKey = String(item.phase_index ?? index);
                         return (
                           <div key={`timeline-${itemKey}`}>
                             <div className="mt-4 rounded-xl bg-white border border-gray-200 shadow-sm mx-5">
