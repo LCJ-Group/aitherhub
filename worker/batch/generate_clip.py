@@ -3075,6 +3075,33 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
     # Initialize DB
     init_db_sync()
 
+    # --- DEDUP CHECK: Skip if a completed version already exists ---
+    _dedup_loop = get_event_loop()
+    async def _check_dedup():
+        try:
+            async with get_session() as _s:
+                result = await _s.execute(text(
+                    "SELECT id FROM video_clips "
+                    "WHERE video_id = :vid AND time_start = :ts AND time_end = :te "
+                    "AND status = 'completed' AND id != :cid LIMIT 1"
+                ), {"vid": video_id, "ts": time_start, "te": time_end, "cid": clip_id})
+                return result.fetchone()
+        except Exception as e:
+            logger.warning(f"Dedup check failed (proceeding anyway): {e}")
+            return None
+    existing_completed = _dedup_loop.run_until_complete(_check_dedup())
+    if existing_completed:
+        logger.info(f"DEDUP: Completed clip already exists ({existing_completed[0]}), skipping {clip_id}")
+        update_clip_status(clip_id, "cancelled")
+        # Also set progress_step so UI shows reason
+        async def _mark_dedup():
+            async with get_session() as _s:
+                await _s.execute(text(
+                    "UPDATE video_clips SET progress_step = 'skipped_completed_exists' WHERE id = :cid"
+                ), {"cid": clip_id})
+        _dedup_loop.run_until_complete(_mark_dedup())
+        return
+
     # Ensure blob_url has a fresh SAS token (expired tokens cause download failures)
     blob_url = _ensure_fresh_sas_url(blob_url)
 

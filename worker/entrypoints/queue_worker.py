@@ -1662,14 +1662,29 @@ def poll_pending_clips_from_db():
         async def _fetch_pending():
             async with factory() as session:
                 try:
+                    # Per-user round-robin: pick 1 clip per video (fairness),
+                    # exclude clips that already have a completed version (dedup),
+                    # ordered by oldest updated_at first (priority boost support)
                     sql = text(f"""
-                        SELECT id, job_payload
-                        FROM video_clips
-                        WHERE status IN ('pending', 'retrying')
-                        AND COALESCE(updated_at, created_at) < NOW() - INTERVAL '{CLIP_FALLBACK_AGE} seconds'
-                        AND job_payload IS NOT NULL
-                        ORDER BY COALESCE(updated_at, created_at) ASC
-                        LIMIT 5
+                        WITH ranked AS (
+                            SELECT vc.id, vc.job_payload, vc.video_id,
+                                   ROW_NUMBER() OVER (PARTITION BY vc.video_id ORDER BY COALESCE(vc.updated_at, vc.created_at) ASC) as rn
+                            FROM video_clips vc
+                            WHERE vc.status IN ('pending', 'retrying')
+                            AND COALESCE(vc.updated_at, vc.created_at) < NOW() - INTERVAL '{CLIP_FALLBACK_AGE} seconds'
+                            AND vc.job_payload IS NOT NULL
+                            AND NOT EXISTS (
+                                SELECT 1 FROM video_clips vc2
+                                WHERE vc2.video_id = vc.video_id
+                                AND vc2.time_start = vc.time_start
+                                AND vc2.time_end = vc.time_end
+                                AND vc2.status = 'completed'
+                                AND vc2.id != vc.id
+                            )
+                        )
+                        SELECT id, job_payload FROM ranked WHERE rn = 1
+                        ORDER BY (SELECT MIN(COALESCE(updated_at, created_at)) FROM video_clips v2 WHERE v2.video_id = ranked.video_id AND v2.status IN ('pending', 'retrying')) ASC
+                        LIMIT 8
                     """)
                     result = await session.execute(sql)
                     return result.fetchall()
