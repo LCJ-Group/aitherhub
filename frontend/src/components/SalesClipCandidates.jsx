@@ -228,6 +228,8 @@ export default function SalesClipCandidates({ videoData, onRequestClip, clipStat
             status={clipState?.status}
             compact={true}
             clipUrl={clipState?.clip_url}
+            queuePosition={clipState?.queue_position}
+            queueEstimatedSeconds={clipState?.queue_estimated_seconds}
           />
         </div>
       );

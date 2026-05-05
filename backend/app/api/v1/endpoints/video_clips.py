@@ -360,6 +360,29 @@ async def get_clip_status(
                 _processing_logs = _raw_logs
         except Exception:
             _processing_logs = []
+        # ── Queue position & estimated wait time ──
+        queue_position = None
+        queue_estimated_seconds = None
+        if clip_status in ("pending", "requesting") and (row.progress_pct or 0) == 0:
+            try:
+                queue_sql = text("""
+                    SELECT COUNT(*) as ahead
+                    FROM video_clips
+                    WHERE status IN ('pending', 'processing', 'requesting')
+                      AND created_at < :created_at
+                      AND id != :clip_id
+                """)
+                queue_result = await db.execute(queue_sql, {
+                    "created_at": row.created_at,
+                    "clip_id": str(row.id),
+                })
+                queue_row = queue_result.fetchone()
+                queue_position = (queue_row.ahead if queue_row else 0) + 1
+                # Estimate: ~90 seconds per clip on average
+                queue_estimated_seconds = queue_position * 90
+            except Exception as qe:
+                logger.warning(f"Queue position query failed: {qe}")
+
         response = {
             "clip_id": str(row.id),
             "status": clip_status,
@@ -368,6 +391,8 @@ async def get_clip_status(
             "time_start": row.time_start if hasattr(row, 'time_start') else None,
             "time_end": row.time_end if hasattr(row, 'time_end') else None,
             "processing_logs": _processing_logs,
+            "queue_position": queue_position,
+            "queue_estimated_seconds": queue_estimated_seconds,
         }
 
         if clip_status == "completed" and row.clip_url:
@@ -516,6 +541,7 @@ async def list_clips(
                 "progress_pct": row.progress_pct if hasattr(row, 'progress_pct') else 0,
                 "progress_step": row.progress_step if hasattr(row, 'progress_step') else None,
                 "processing_logs": _clip_logs,
+                "created_at": row.created_at.isoformat() if hasattr(row, 'created_at') and row.created_at else None,
             }
             if row.status == "completed" and row.clip_url:
                 # Generate or reuse SAS download URL (same logic as get_clip_status)

@@ -537,8 +537,21 @@ export default function MomentClips({ videoData, onRequestClip, clipStates = {},
                               return (
                                 <div className="flex-1 flex flex-col gap-1">
                                   <div className="flex items-center justify-between">
-                                    <span className={`text-xs font-medium ${isQueued ? 'text-amber-600' : 'text-gray-600'}`}>{label}...</span>
-                                    <span className={`text-xs font-bold ${isQueued ? 'text-amber-500' : 'text-purple-600'}`}>{isQueued ? '\u2014' : `${pct}%`}</span>
+                                    <span className={`text-xs font-medium ${isQueued ? 'text-amber-600' : 'text-gray-600'}`}>
+                                      {label}...
+                                      {isQueued && clipState?.queue_position && (
+                                        <span className="ml-1 text-[10px] text-amber-500">(#{clipState.queue_position})</span>
+                                      )}
+                                    </span>
+                                    <span className={`text-xs font-bold ${isQueued ? 'text-amber-500' : 'text-purple-600'}`}>
+                                      {isQueued
+                                        ? (clipState?.queue_estimated_seconds
+                                            ? (clipState.queue_estimated_seconds >= 60
+                                                ? `\u2248${Math.ceil(clipState.queue_estimated_seconds / 60)}\u5206`
+                                                : `\u2248${clipState.queue_estimated_seconds}\u79d2`)
+                                            : '\u2014')
+                                        : `${pct}%`}
+                                    </span>
                                   </div>
                                   {isQueued ? (
                                     <div className="w-full h-1.5 bg-amber-100 rounded-full overflow-hidden">
@@ -559,6 +572,8 @@ export default function MomentClips({ videoData, onRequestClip, clipStates = {},
                                     status={isQueued ? 'queued' : clipState?.status}
                                     compact={true}
                                     clipUrl={clipState?.clip_url}
+                                    queuePosition={clipState?.queue_position}
+                                    queueEstimatedSeconds={clipState?.queue_estimated_seconds}
                                   />
                                 </div>
                               );

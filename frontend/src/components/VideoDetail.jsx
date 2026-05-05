@@ -311,7 +311,7 @@ export default function VideoDetail({ videoData, editorParams }) {
                   // Update progress in real-time
                   setClipStates(prev => ({
                     ...prev,
-                    [phaseIndex]: { ...prev[phaseIndex], status: statusRes.status, progress_pct: statusRes.progress_pct || 0, progress_step: statusRes.progress_step || '', processing_logs: statusRes.processing_logs || prev[phaseIndex]?.processing_logs || [], time_start: statusRes.time_start ?? prev[phaseIndex]?.time_start, time_end: statusRes.time_end ?? prev[phaseIndex]?.time_end },
+                    [phaseIndex]: { ...prev[phaseIndex], status: statusRes.status, progress_pct: statusRes.progress_pct || 0, progress_step: statusRes.progress_step || '', processing_logs: statusRes.processing_logs || prev[phaseIndex]?.processing_logs || [], time_start: statusRes.time_start ?? prev[phaseIndex]?.time_start, time_end: statusRes.time_end ?? prev[phaseIndex]?.time_end, queue_position: statusRes.queue_position ?? null, queue_estimated_seconds: statusRes.queue_estimated_seconds ?? null },
                   }));
                 }
               } catch (e) {
@@ -2131,6 +2131,8 @@ export default function VideoDetail({ videoData, editorParams }) {
                                                   status={clipState?.status}
                                                   compact={false}
                                                   clipUrl={clipState?.clip_url}
+                                                  queuePosition={clipState?.queue_position}
+                                                  queueEstimatedSeconds={clipState?.queue_estimated_seconds}
                                                 />
                                               )}
                                             </div>

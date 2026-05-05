@@ -346,7 +346,7 @@ function PreviewPlayer({ url, stepLabel, isLatest }) {
 }
 
 // ─── Main Component ───
-export default function AIEditorMonitor({ logs = [], progressPct = 0, progressStep = '', status = '', compact = false, clipUrl = '' }) {
+export default function AIEditorMonitor({ logs = [], progressPct = 0, progressStep = '', status = '', compact = false, clipUrl = '', queuePosition = null, queueEstimatedSeconds = null }) {
   const [isExpanded, setIsExpanded] = useState(true);
   const [selectedPreviewIdx, setSelectedPreviewIdx] = useState(-1);
 
@@ -480,9 +480,23 @@ export default function AIEditorMonitor({ logs = [], progressPct = 0, progressSt
               <span className="text-[11px] font-mono text-amber-400 animate-pulse">
                 Waiting in queue...
               </span>
-              <span className="text-[9px] font-mono text-gray-600">
-                AI Editor will start soon
-              </span>
+              {queuePosition && (
+                <span className="text-[10px] font-mono text-amber-300">
+                  Position: #{queuePosition}
+                </span>
+              )}
+              {queueEstimatedSeconds && (
+                <span className="text-[10px] font-mono text-gray-400">
+                  {queueEstimatedSeconds >= 60
+                    ? `≈ ${Math.ceil(queueEstimatedSeconds / 60)} min wait`
+                    : `≈ ${queueEstimatedSeconds}s wait`}
+                </span>
+              )}
+              {!queuePosition && !queueEstimatedSeconds && (
+                <span className="text-[9px] font-mono text-gray-600">
+                  AI Editor will start soon
+                </span>
+              )}
             </div>
           ) : isActive ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-2">
