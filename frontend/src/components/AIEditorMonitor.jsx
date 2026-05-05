@@ -1,42 +1,44 @@
 /**
- * AIEditorMonitor – Real-time AI video editing monitor.
+ * AIEditorMonitor – CapCut/Premiere Pro風 AI動画編集モニター
  *
- * Shows a "virtual monitor" experience where users can watch AI edit their video
- * in real-time, with intermediate preview videos at each processing step.
+ * まるで人間がCapCut/Premiere Proで編集しているかのような
+ * 「仮想編集画面」をリアルタイムで表示する。
  *
  * Features:
- *   - Video player that auto-switches as new intermediate previews arrive
- *   - Step timeline with icons, progress, and elapsed time
- *   - "AI is editing your video" status display
- *   - Smooth transitions between preview stages
+ *   - プレビューウィンドウ（動画再生 + 編集オーバーレイ）
+ *   - タイムライン（カット位置マーカー、再生ヘッド、ハサミアニメーション）
+ *   - 波形表示（無音除去ステップ）
+ *   - 字幕タイピングアニメーション
+ *   - ターミナル風AIログ（文字が流れる）
+ *   - 人物検出バウンディングボックス
  *
  * Props:
- *   logs            – Array of { ts, pct, step, msg, preview_url? } from processing_logs
+ *   logs            – Array of { ts, pct, step, msg, preview_url? }
  *   progressPct     – Current progress percentage (0-100)
  *   progressStep    – Current step name
  *   status          – Clip status (processing, completed, failed, etc.)
  *   compact         – If true, show a smaller version (for MomentClips)
  *   clipUrl         – Final clip URL (when completed)
  */
-import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
+import { useEffect, useRef, useState, useMemo } from 'react';
 
-// Step configuration with icons, colors, and human-readable labels
+// ─── Step Configuration ───
 const STEP_CONFIG = {
-  initializing:       { icon: '📋', color: 'text-blue-400',   bg: 'bg-blue-500/20',   label: 'Initializing' },
-  downloading:        { icon: '⬇️', color: 'text-cyan-400',   bg: 'bg-cyan-500/20',   label: 'Downloading' },
-  speech_boundary:    { icon: '🔊', color: 'text-yellow-400', bg: 'bg-yellow-500/20', label: 'Speech Detection' },
-  cutting:            { icon: '✂️', color: 'text-orange-400',  bg: 'bg-orange-500/20', label: 'Cutting' },
-  person_detection:   { icon: '🧑', color: 'text-pink-400',   bg: 'bg-pink-500/20',   label: 'Person Detection' },
-  silence_removal:    { icon: '🔇', color: 'text-gray-400',   bg: 'bg-gray-500/20',   label: 'Silence Removal' },
-  transcribing:       { icon: '🎤', color: 'text-green-400',  bg: 'bg-green-500/20',  label: 'Transcribing' },
-  refining_subtitles: { icon: '✨', color: 'text-purple-400', bg: 'bg-purple-500/20', label: 'Refining Subtitles' },
-  subtitle_preview:   { icon: '💬', color: 'text-indigo-400', bg: 'bg-indigo-500/20', label: 'Subtitle Preview' },
-  creating_clip:      { icon: '🎬', color: 'text-red-400',    bg: 'bg-red-500/20',    label: 'Creating Clip' },
-  hook_detection:     { icon: '🎯', color: 'text-amber-400',  bg: 'bg-amber-500/20',  label: 'Hook Detection' },
-  hook_insertion:     { icon: '🔥', color: 'text-orange-400', bg: 'bg-orange-500/20', label: 'Hook Insertion' },
-  sound_effects:      { icon: '🔊', color: 'text-teal-400',   bg: 'bg-teal-500/20',   label: 'Sound Effects' },
-  uploading:          { icon: '☁️', color: 'text-sky-400',    bg: 'bg-sky-500/20',    label: 'Uploading' },
-  completed:          { icon: '🎉', color: 'text-green-400',  bg: 'bg-green-500/20',  label: 'Completed' },
+  initializing:       { icon: '📋', color: '#60a5fa', label: 'Initializing',       phase: 'prep' },
+  downloading:        { icon: '⬇️', color: '#22d3ee', label: 'Downloading',        phase: 'prep' },
+  speech_boundary:    { icon: '🔊', color: '#facc15', label: 'Speech Detection',   phase: 'audio' },
+  cutting:            { icon: '✂️', color: '#fb923c', label: 'Scene Cut',           phase: 'edit' },
+  person_detection:   { icon: '🧑', color: '#f472b6', label: 'Person Detection',   phase: 'detect' },
+  silence_removal:    { icon: '🔇', color: '#94a3b8', label: 'Silence Removal',    phase: 'audio' },
+  transcribing:       { icon: '🎤', color: '#4ade80', label: 'Transcribing',       phase: 'subtitle' },
+  refining_subtitles: { icon: '✨', color: '#c084fc', label: 'Refining Subtitles', phase: 'subtitle' },
+  subtitle_preview:   { icon: '💬', color: '#818cf8', label: 'Subtitle Preview',   phase: 'subtitle' },
+  creating_clip:      { icon: '🎬', color: '#f87171', label: 'Creating Clip',      phase: 'render' },
+  hook_detection:     { icon: '🎯', color: '#fbbf24', label: 'Hook Detection',     phase: 'edit' },
+  hook_insertion:     { icon: '🔥', color: '#fb923c', label: 'Hook Insertion',     phase: 'edit' },
+  sound_effects:      { icon: '🔊', color: '#2dd4bf', label: 'Sound Effects',     phase: 'audio' },
+  uploading:          { icon: '☁️', color: '#38bdf8', label: 'Uploading',          phase: 'export' },
+  completed:          { icon: '✅', color: '#4ade80', label: 'Completed',          phase: 'done' },
 };
 
 const STEP_ORDER = [
@@ -47,7 +49,7 @@ const STEP_ORDER = [
 ];
 
 function getStepConfig(step) {
-  return STEP_CONFIG[step] || { icon: '⚙️', color: 'text-gray-400', bg: 'bg-gray-500/20', label: step };
+  return STEP_CONFIG[step] || { icon: '⚙️', color: '#94a3b8', label: step || 'Processing', phase: 'prep' };
 }
 
 function getStepIndex(step) {
@@ -55,40 +57,265 @@ function getStepIndex(step) {
   return idx >= 0 ? idx : 0;
 }
 
-function calculateElapsed(logs) {
-  if (!logs || logs.length === 0) return [];
-  return logs.map((log, idx) => {
-    if (idx === 0) return { ...log, elapsed: null };
-    const prevTs = logs[idx - 1].ts;
-    const curTs = log.ts;
-    if (!prevTs || !curTs) return { ...log, elapsed: null };
-    const [ph, pm, ps] = prevTs.split(':').map(Number);
-    const [ch, cm, cs] = curTs.split(':').map(Number);
-    if (isNaN(ph) || isNaN(ch)) return { ...log, elapsed: null };
-    const prevSec = ph * 3600 + pm * 60 + ps;
-    const curSec = ch * 3600 + cm * 60 + cs;
-    let diff = curSec - prevSec;
-    if (diff < 0) diff += 86400;
-    return { ...log, elapsed: diff };
-  });
-}
-
-function formatElapsed(seconds) {
-  if (seconds === null || seconds === undefined) return '';
-  if (seconds < 60) return `${seconds}s`;
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
-  return `${m}m${s > 0 ? `${s}s` : ''}`;
-}
-
-// ─── Animated dots for "AI is working" ───
-function PulsingDots() {
+// ─── Animated Waveform (for audio steps) ───
+function AudioWaveform({ isActive, isSilenceRemoval }) {
+  const bars = 32;
   return (
-    <span className="inline-flex gap-0.5 ml-1">
-      <span className="w-1 h-1 rounded-full bg-green-400 animate-bounce" style={{ animationDelay: '0ms' }} />
-      <span className="w-1 h-1 rounded-full bg-green-400 animate-bounce" style={{ animationDelay: '150ms' }} />
-      <span className="w-1 h-1 rounded-full bg-green-400 animate-bounce" style={{ animationDelay: '300ms' }} />
-    </span>
+    <div className="flex items-end gap-[1px] h-8 px-1">
+      {Array.from({ length: bars }).map((_, i) => {
+        const isSilent = isSilenceRemoval && (i >= 8 && i <= 12 || i >= 20 && i <= 24);
+        return (
+          <div
+            key={i}
+            className={`w-[3px] rounded-full transition-all duration-300 ${
+              isSilent
+                ? 'bg-red-500/40 opacity-30'
+                : isActive
+                  ? 'bg-emerald-400/80'
+                  : 'bg-gray-600/40'
+            }`}
+            style={{
+              height: isSilent ? '2px' : `${Math.random() * 70 + 30}%`,
+              animation: isActive && !isSilent ? `waveform ${0.4 + Math.random() * 0.6}s ease-in-out infinite alternate` : 'none',
+              animationDelay: `${i * 30}ms`,
+            }}
+          />
+        );
+      })}
+      {isSilenceRemoval && (
+        <>
+          <div className="absolute left-[25%] top-0 bottom-0 w-[2px] bg-red-500/60 animate-pulse" />
+          <div className="absolute left-[62%] top-0 bottom-0 w-[2px] bg-red-500/60 animate-pulse" />
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─── Timeline with Cut Markers ───
+function EditTimeline({ progressPct, currentStep, logs }) {
+  const cutPositions = useMemo(() => {
+    // Generate cut positions from logs that mention cutting
+    const cuts = [];
+    logs.forEach(log => {
+      if (log.step === 'cutting' || log.step === 'silence_removal') {
+        // Simulate cut positions based on progress
+        const pos = (log.pct || 0) / 100;
+        if (pos > 0 && pos < 1) cuts.push(pos);
+      }
+    });
+    // Add some visual cuts for demo
+    if (cuts.length === 0 && getStepIndex(currentStep) >= getStepIndex('cutting')) {
+      return [0.15, 0.32, 0.48, 0.67, 0.82];
+    }
+    return cuts.length > 0 ? cuts : [];
+  }, [logs, currentStep]);
+
+  const playheadPos = progressPct / 100;
+  const isCutting = currentStep === 'cutting' || currentStep === 'silence_removal';
+
+  return (
+    <div className="relative h-10 bg-gray-900/80 rounded-md overflow-hidden border border-gray-700/50">
+      {/* Track background with gradient segments */}
+      <div className="absolute inset-0 flex">
+        <div className="flex-1 bg-gradient-to-r from-blue-900/30 via-purple-900/20 to-blue-900/30" />
+      </div>
+
+      {/* Video track visualization */}
+      <div className="absolute top-1 bottom-1 left-0 right-0 mx-2">
+        {/* Clip segments */}
+        <div className="absolute inset-0 flex gap-[2px]">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div
+              key={i}
+              className={`flex-1 rounded-sm ${
+                i % 2 === 0 ? 'bg-indigo-600/40' : 'bg-purple-600/30'
+              } ${playheadPos * 8 > i ? 'opacity-100' : 'opacity-50'}`}
+              style={{
+                transition: 'opacity 0.5s ease',
+              }}
+            />
+          ))}
+        </div>
+
+        {/* Cut markers (scissors) */}
+        {cutPositions.map((pos, i) => (
+          <div
+            key={i}
+            className="absolute top-0 bottom-0 flex flex-col items-center justify-center z-10"
+            style={{ left: `${pos * 100}%`, transform: 'translateX(-50%)' }}
+          >
+            <div className={`w-[2px] h-full ${isCutting ? 'bg-yellow-400/80' : 'bg-orange-400/60'}`} />
+            <span
+              className={`absolute text-[8px] -top-0.5 ${isCutting ? 'animate-bounce' : ''}`}
+              style={{ fontSize: '10px' }}
+            >
+              ✂️
+            </span>
+          </div>
+        ))}
+
+        {/* Playhead */}
+        <div
+          className="absolute top-0 bottom-0 z-20 transition-all duration-700 ease-out"
+          style={{ left: `${playheadPos * 100}%` }}
+        >
+          <div className="w-[2px] h-full bg-white shadow-[0_0_6px_rgba(255,255,255,0.8)]" />
+          <div className="absolute -top-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-white rounded-full shadow-lg" />
+        </div>
+      </div>
+
+      {/* Time markers */}
+      <div className="absolute bottom-0 left-2 right-2 flex justify-between">
+        {['0:00', '', '', '', `${Math.floor(progressPct / 100 * 60)}s`].map((t, i) => (
+          <span key={i} className="text-[7px] font-mono text-gray-500">{t}</span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── Person Detection Overlay ───
+function PersonDetectionOverlay({ isActive }) {
+  if (!isActive) return null;
+
+  return (
+    <div className="absolute inset-0 pointer-events-none z-10">
+      {/* Scanning line */}
+      <div
+        className="absolute left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-cyan-400 to-transparent opacity-80"
+        style={{
+          animation: 'scanLine 2s ease-in-out infinite',
+        }}
+      />
+      {/* Detection boxes */}
+      <div
+        className="absolute border-2 border-cyan-400 rounded-sm"
+        style={{
+          top: '15%', left: '25%', width: '30%', height: '70%',
+          animation: 'fadeInBox 0.5s ease-out forwards',
+          boxShadow: '0 0 8px rgba(34, 211, 238, 0.4)',
+        }}
+      >
+        <div className="absolute -top-4 left-0 bg-cyan-500/90 px-1 rounded text-[8px] text-white font-mono">
+          Person 1 • 98%
+        </div>
+        {/* Corner markers */}
+        <div className="absolute top-0 left-0 w-2 h-2 border-t-2 border-l-2 border-cyan-400" />
+        <div className="absolute top-0 right-0 w-2 h-2 border-t-2 border-r-2 border-cyan-400" />
+        <div className="absolute bottom-0 left-0 w-2 h-2 border-b-2 border-l-2 border-cyan-400" />
+        <div className="absolute bottom-0 right-0 w-2 h-2 border-b-2 border-r-2 border-cyan-400" />
+      </div>
+    </div>
+  );
+}
+
+// ─── Subtitle Typing Animation ───
+function SubtitleTyping({ isActive, message }) {
+  const [displayText, setDisplayText] = useState('');
+  const [cursorVisible, setCursorVisible] = useState(true);
+
+  useEffect(() => {
+    if (!isActive) {
+      setDisplayText('');
+      return;
+    }
+    const text = message || 'AIが字幕を生成しています...';
+    let idx = 0;
+    setDisplayText('');
+    const interval = setInterval(() => {
+      if (idx < text.length) {
+        setDisplayText(text.slice(0, idx + 1));
+        idx++;
+      } else {
+        clearInterval(interval);
+      }
+    }, 60);
+    return () => clearInterval(interval);
+  }, [isActive, message]);
+
+  useEffect(() => {
+    const blink = setInterval(() => setCursorVisible(v => !v), 530);
+    return () => clearInterval(blink);
+  }, []);
+
+  if (!isActive && !displayText) return null;
+
+  return (
+    <div className="absolute bottom-4 left-4 right-4 z-10">
+      <div className="bg-black/80 backdrop-blur-sm rounded-md px-3 py-2 border border-gray-600/50">
+        <span className="text-white text-xs font-medium">
+          {displayText}
+          <span className={`inline-block w-[2px] h-3 bg-white ml-0.5 ${cursorVisible ? 'opacity-100' : 'opacity-0'}`} />
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// ─── Terminal-style AI Log ───
+function TerminalLog({ logs, isActive }) {
+  const scrollRef = useRef(null);
+  const [visibleLogs, setVisibleLogs] = useState([]);
+
+  useEffect(() => {
+    setVisibleLogs(logs.slice(-8));
+  }, [logs]);
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [visibleLogs]);
+
+  return (
+    <div className="bg-gray-950 rounded-md border border-gray-700/50 overflow-hidden">
+      {/* Terminal header */}
+      <div className="flex items-center gap-1.5 px-2 py-1 bg-gray-800/80 border-b border-gray-700/50">
+        <div className="flex gap-1">
+          <div className="w-2 h-2 rounded-full bg-red-500/80" />
+          <div className="w-2 h-2 rounded-full bg-yellow-500/80" />
+          <div className="w-2 h-2 rounded-full bg-green-500/80" />
+        </div>
+        <span className="text-[9px] font-mono text-gray-400 ml-1">AI Editor — Processing Log</span>
+        {isActive && <span className="ml-auto w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />}
+      </div>
+      {/* Log content */}
+      <div
+        ref={scrollRef}
+        className="px-2 py-1.5 max-h-24 overflow-y-auto font-mono text-[10px] leading-relaxed"
+        style={{ scrollbarWidth: 'thin', scrollbarColor: '#374151 #111827' }}
+      >
+        {visibleLogs.map((log, idx) => {
+          const config = getStepConfig(log.step);
+          const isLatest = idx === visibleLogs.length - 1 && isActive;
+          return (
+            <div
+              key={idx}
+              className={`flex items-start gap-1.5 py-0.5 ${isLatest ? 'animate-fadeIn' : ''}`}
+            >
+              <span className="text-gray-600 flex-shrink-0">{log.ts || '00:00'}</span>
+              <span className="flex-shrink-0" style={{ color: config.color }}>{config.icon}</span>
+              <span className={`flex-1 ${isLatest ? 'text-gray-200' : 'text-gray-400'}`}>
+                {log.msg || config.label}
+              </span>
+              {log.preview_url && <span className="text-blue-400 flex-shrink-0">▶</span>}
+            </div>
+          );
+        })}
+        {isActive && visibleLogs.length === 0 && (
+          <div className="text-gray-500 py-1">
+            <span className="text-green-400">$</span> Initializing AI editor...
+          </div>
+        )}
+        {isActive && (
+          <div className="flex items-center gap-1 text-green-400 py-0.5">
+            <span>$</span>
+            <span className="animate-pulse">▊</span>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -106,123 +333,57 @@ function PreviewPlayer({ url, stepLabel, isLatest }) {
   if (!url) return null;
 
   return (
-    <div className={`relative rounded-lg overflow-hidden bg-black ${isLatest ? 'ring-2 ring-green-500/50' : 'ring-1 ring-gray-700/50'}`}>
-      {/* Step badge */}
-      <div className="absolute top-2 left-2 z-10 flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-black/70 backdrop-blur-sm">
-        <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
-        <span className="text-[10px] font-mono text-green-400 font-medium">{stepLabel}</span>
-      </div>
-      {/* LIVE badge when latest */}
-      {isLatest && (
-        <div className="absolute top-2 right-2 z-10 flex items-center gap-1 px-1.5 py-0.5 rounded bg-red-600/90 backdrop-blur-sm">
-          <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
-          <span className="text-[9px] font-bold text-white tracking-wider">LIVE</span>
-        </div>
-      )}
-      <video
-        ref={videoRef}
-        src={url}
-        className="w-full aspect-[9/16] max-h-[280px] object-contain bg-black"
-        controls
-        muted
-        loop
-        playsInline
-        preload="auto"
-      />
-    </div>
-  );
-}
-
-// ─── Step Timeline (mini) ───
-function StepTimeline({ currentStep, previewSteps }) {
-  const mainSteps = ['cutting', 'silence_removal', 'creating_clip', 'hook_insertion', 'sound_effects', 'uploading', 'completed'];
-  const currentIdx = getStepIndex(currentStep);
-
-  return (
-    <div className="flex items-center gap-0.5 px-1">
-      {mainSteps.map((step, i) => {
-        const config = getStepConfig(step);
-        const stepIdx = getStepIndex(step);
-        const isDone = currentIdx > stepIdx;
-        const isCurrent = currentStep === step || (currentIdx >= stepIdx && currentIdx < getStepIndex(mainSteps[i + 1] || 'completed'));
-        const hasPreview = previewSteps.has(step);
-
-        return (
-          <div key={step} className="flex items-center gap-0.5">
-            <div className={`relative flex items-center justify-center w-5 h-5 rounded-full text-[9px] transition-all duration-300 ${
-              isDone ? 'bg-green-500/30 text-green-400' :
-              isCurrent ? `${config.bg} ${config.color} ring-1 ring-current` :
-              'bg-gray-800 text-gray-600'
-            }`}>
-              {isDone ? '✓' : config.icon}
-              {hasPreview && (
-                <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-blue-500 border border-gray-950" />
-              )}
-            </div>
-            {i < mainSteps.length - 1 && (
-              <div className={`w-3 h-px ${isDone ? 'bg-green-500/50' : 'bg-gray-700'}`} />
-            )}
-          </div>
-        );
-      })}
-    </div>
+    <video
+      ref={videoRef}
+      src={url}
+      className="w-full h-full object-contain"
+      muted
+      loop
+      playsInline
+      preload="auto"
+    />
   );
 }
 
 // ─── Main Component ───
 export default function AIEditorMonitor({ logs = [], progressPct = 0, progressStep = '', status = '', compact = false, clipUrl = '' }) {
-  const scrollRef = useRef(null);
-  const [isExpanded, setIsExpanded] = useState(true); // Always start expanded
-  const [selectedPreviewIdx, setSelectedPreviewIdx] = useState(-1); // -1 = auto (latest)
-  const [showLogs, setShowLogs] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(true);
+  const [selectedPreviewIdx, setSelectedPreviewIdx] = useState(-1);
 
-  const enrichedLogs = useMemo(() => calculateElapsed(logs), [logs]);
   const isQueued = status === 'queued';
   const isActive = ['processing', 'pending', 'requesting'].includes(status) || isQueued;
   const isCompleted = status === 'completed';
   const isFailed = status === 'failed' || status === 'dead';
 
-  // Extract preview entries from logs
   const previewEntries = useMemo(() => {
-    return logs
-      .map((log, idx) => ({ ...log, logIdx: idx }))
-      .filter(log => log.preview_url);
+    return logs.filter(log => log.preview_url);
   }, [logs]);
 
-  // Set of steps that have previews
-  const previewSteps = useMemo(() => {
-    return new Set(previewEntries.map(e => e.step));
-  }, [previewEntries]);
-
-  // Current preview to show (auto = latest, or user-selected)
   const currentPreview = useMemo(() => {
     if (previewEntries.length === 0) return null;
     if (selectedPreviewIdx >= 0 && selectedPreviewIdx < previewEntries.length) {
       return previewEntries[selectedPreviewIdx];
     }
-    return previewEntries[previewEntries.length - 1]; // latest
+    return previewEntries[previewEntries.length - 1];
   }, [previewEntries, selectedPreviewIdx]);
 
-  // Auto-select latest preview when new ones arrive
-  useEffect(() => {
-    if (selectedPreviewIdx === -1 || selectedPreviewIdx >= previewEntries.length) {
-      // Keep on auto (latest)
-    }
-  }, [previewEntries.length]);
-
-  // Auto-scroll log panel
-  useEffect(() => {
-    if (scrollRef.current && showLogs) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [logs, showLogs]);
-
   const stepConfig = getStepConfig(progressStep);
+  const isPersonDetection = progressStep === 'person_detection';
+  const isSubtitleStep = ['transcribing', 'refining_subtitles', 'subtitle_preview'].includes(progressStep);
+  const isAudioStep = ['speech_boundary', 'silence_removal', 'sound_effects'].includes(progressStep);
+  const isCutStep = ['cutting', 'hook_detection', 'hook_insertion'].includes(progressStep);
 
-  // Compact collapsed state - always show the monitor button when active
+  // Get latest subtitle message
+  const subtitleMessage = useMemo(() => {
+    const subtitleLogs = logs.filter(l =>
+      ['transcribing', 'refining_subtitles', 'subtitle_preview'].includes(l.step)
+    );
+    return subtitleLogs.length > 0 ? subtitleLogs[subtitleLogs.length - 1].msg : '';
+  }, [logs]);
+
+  // Compact collapsed state
   if (compact && !isExpanded) {
-    if (!isActive && logs.length === 0) return null; // Nothing to show
-    const hasPreview = previewEntries.length > 0;
+    if (!isActive && logs.length === 0) return null;
     return (
       <button
         type="button"
@@ -230,233 +391,225 @@ export default function AIEditorMonitor({ logs = [], progressPct = 0, progressSt
         className="w-full mt-1 flex items-center gap-2 px-2 py-1.5 rounded-lg bg-gray-900/90 border border-gray-700/50 hover:border-green-600/50 transition-all group"
       >
         <span className={`w-2 h-2 rounded-full ${isActive ? 'bg-green-400 animate-pulse' : 'bg-gray-500'}`} />
-        <span className="text-[10px] font-mono text-green-400 font-medium">
-          {hasPreview ? '🖥️ AI Editor Monitor' : '🖥️ AI Editor Monitor'}
-        </span>
+        <span className="text-[10px] font-mono text-green-400 font-medium">🖥️ AI Editor</span>
         <span className="text-[10px] font-mono text-gray-500 ml-auto">
-          {progressPct > 0 ? `${progressPct}% • ` : ''}{stepConfig.icon} {getStepConfig(progressStep).label}
+          {progressPct > 0 ? `${progressPct}%` : ''} {stepConfig.icon} {stepConfig.label}
         </span>
-        <svg className="w-3 h-3 text-gray-500 group-hover:text-green-400 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <svg className="w-3 h-3 text-gray-500 group-hover:text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
         </svg>
       </button>
     );
   }
 
-  // Always show when active (even with empty logs) or when there are logs
-  if (logs.length === 0 && !isActive && !isCompleted) return null;
+  if (!isActive && logs.length === 0 && !isCompleted && !isFailed) return null;
 
   return (
     <div className={`rounded-xl overflow-hidden transition-all duration-300 ${
-      isFailed ? 'bg-gray-950 border border-red-700/50' :
-      isCompleted ? 'bg-gray-950 border border-green-700/50' :
-      'bg-gray-950 border border-gray-700/50'
+      isFailed ? 'bg-[#0d0d0d] border border-red-700/40' :
+      isCompleted ? 'bg-[#0d0d0d] border border-green-700/40' :
+      'bg-[#0d0d0d] border border-gray-700/40'
     }`}>
-      {/* ─── Header ─── */}
-      <div className="flex items-center gap-2 px-3 py-2 bg-gray-900/80 border-b border-gray-800">
-        <div className="flex items-center gap-2 flex-1 min-w-0">
-          {isActive && <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse flex-shrink-0" />}
-          {isCompleted && <span className="w-2 h-2 rounded-full bg-green-400 flex-shrink-0" />}
-          {isFailed && <span className="w-2 h-2 rounded-full bg-red-400 flex-shrink-0" />}
-          <span className="text-xs font-semibold text-white tracking-wide">
-            🖥️ AI Editor Monitor
+      {/* ─── Title Bar (macOS style) ─── */}
+      <div className="flex items-center gap-2 px-3 py-1.5 bg-[#1a1a1a] border-b border-gray-800/80">
+        <div className="flex gap-1.5">
+          <div className="w-2.5 h-2.5 rounded-full bg-[#ff5f57]" />
+          <div className="w-2.5 h-2.5 rounded-full bg-[#febc2e]" />
+          <div className="w-2.5 h-2.5 rounded-full bg-[#28c840]" />
+        </div>
+        <div className="flex-1 flex items-center justify-center gap-2">
+          <span className="text-[10px] font-medium text-gray-300 tracking-wide">
+            AI Editor Pro
           </span>
           {isActive && (
-            <span className="text-[10px] font-mono text-gray-400 truncate">
-              {stepConfig.icon} {getStepConfig(progressStep).label}
-              <PulsingDots />
+            <span className="flex items-center gap-1 text-[9px] text-green-400 font-mono">
+              <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+              EDITING
             </span>
           )}
-        </div>
-        <div className="flex items-center gap-1.5 flex-shrink-0">
-          {/* Log toggle */}
-          <button
-            type="button"
-            onClick={() => setShowLogs(!showLogs)}
-            className={`text-[9px] font-mono px-1.5 py-0.5 rounded transition-colors ${
-              showLogs ? 'bg-gray-700 text-gray-200' : 'text-gray-500 hover:text-gray-300'
-            }`}
-          >
-            {showLogs ? 'Hide Log' : 'Log'}
-          </button>
-          {/* Collapse button (compact mode) */}
-          {compact && (
-            <button
-              type="button"
-              onClick={() => setIsExpanded(false)}
-              className="text-gray-500 hover:text-gray-300 transition-colors"
-            >
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
-              </svg>
-            </button>
+          {isCompleted && (
+            <span className="text-[9px] text-green-400 font-mono">✓ DONE</span>
           )}
         </div>
+        {compact && (
+          <button
+            type="button"
+            onClick={() => setIsExpanded(false)}
+            className="text-gray-500 hover:text-gray-300"
+          >
+            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+            </svg>
+          </button>
+        )}
       </div>
 
-      {/* ─── Progress bar ─── */}
-      <div className="h-1 bg-gray-800">
-        <div
-          className={`h-full transition-all duration-700 ease-out ${
-            isFailed ? 'bg-red-500' :
-            isCompleted ? 'bg-green-500' :
-            'bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500'
-          }`}
-          style={{ width: `${Math.max(progressPct, 1)}%` }}
-        />
-      </div>
-
-      {/* ─── Step Timeline ─── */}
-      <div className="px-3 py-1.5 bg-gray-900/50 border-b border-gray-800/50">
-        <StepTimeline currentStep={progressStep} previewSteps={previewSteps} />
-      </div>
-
-      {/* ─── Video Preview Area ─── */}
-      {(previewEntries.length > 0 || isActive) && (
-        <div className="p-3">
+      {/* ─── Main Content ─── */}
+      <div className="flex flex-col">
+        {/* ─── Preview Window ─── */}
+        <div className="relative bg-black aspect-video max-h-[200px] overflow-hidden">
           {currentPreview ? (
-            <div className="space-y-2">
-              {/* Preview player */}
+            <>
               <PreviewPlayer
                 url={currentPreview.preview_url}
                 stepLabel={getStepConfig(currentPreview.step).label}
-                isLatest={currentPreview === previewEntries[previewEntries.length - 1] && isActive}
+                isLatest={true}
               />
-
-              {/* Preview step selector (when multiple previews exist) */}
-              {previewEntries.length > 1 && (
-                <div className="flex items-center gap-1 overflow-x-auto pb-1" style={{ scrollbarWidth: 'thin' }}>
-                  {previewEntries.map((entry, idx) => {
-                    const config = getStepConfig(entry.step);
-                    const isSelected = currentPreview === entry;
-                    return (
-                      <button
-                        key={idx}
-                        type="button"
-                        onClick={() => setSelectedPreviewIdx(idx)}
-                        className={`flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-mono whitespace-nowrap transition-all ${
-                          isSelected
-                            ? `${config.bg} ${config.color} ring-1 ring-current`
-                            : 'bg-gray-800/50 text-gray-500 hover:text-gray-300 hover:bg-gray-800'
-                        }`}
-                      >
-                        <span>{config.icon}</span>
-                        <span>{config.label}</span>
-                      </button>
-                    );
-                  })}
-                  {/* Auto (latest) button */}
-                  <button
-                    type="button"
-                    onClick={() => setSelectedPreviewIdx(-1)}
-                    className={`flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-mono whitespace-nowrap transition-all ${
-                      selectedPreviewIdx === -1
-                        ? 'bg-green-500/20 text-green-400 ring-1 ring-green-500/50'
-                        : 'bg-gray-800/50 text-gray-500 hover:text-gray-300 hover:bg-gray-800'
-                    }`}
-                  >
-                    <span>📡</span>
-                    <span>Latest</span>
-                  </button>
+              {/* Overlays */}
+              <PersonDetectionOverlay isActive={isPersonDetection} />
+              <SubtitleTyping isActive={isSubtitleStep} message={subtitleMessage} />
+              {/* Step badge */}
+              <div className="absolute top-2 left-2 z-20 flex items-center gap-1.5 px-2 py-0.5 rounded bg-black/70 backdrop-blur-sm">
+                <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+                <span className="text-[9px] font-mono text-green-400">{getStepConfig(currentPreview.step).label}</span>
+              </div>
+              {/* LIVE badge */}
+              {isActive && (
+                <div className="absolute top-2 right-2 z-20 flex items-center gap-1 px-1.5 py-0.5 rounded bg-red-600/90">
+                  <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                  <span className="text-[8px] font-bold text-white tracking-wider">LIVE</span>
                 </div>
               )}
-            </div>
+            </>
           ) : isQueued ? (
-            /* Queued - waiting for executor slot */
-            <div className="flex flex-col items-center justify-center py-6 gap-2">
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2">
               <div className="relative">
-                <div className="w-12 h-12 rounded-full border-2 border-gray-700 border-t-amber-400 animate-pulse" />
-                <span className="absolute inset-0 flex items-center justify-center text-lg">⏳</span>
+                <div className="w-14 h-14 rounded-full border-2 border-gray-700 border-t-amber-400 animate-spin" style={{ animationDuration: '3s' }} />
+                <span className="absolute inset-0 flex items-center justify-center text-xl">⏳</span>
               </div>
-              <span className="text-[11px] font-mono text-amber-400">
-                Waiting in queue<PulsingDots />
+              <span className="text-[11px] font-mono text-amber-400 animate-pulse">
+                Waiting in queue...
               </span>
-              <span className="text-[10px] font-mono text-gray-600">
-                Processing will begin shortly
+              <span className="text-[9px] font-mono text-gray-600">
+                AI Editor will start soon
               </span>
             </div>
           ) : isActive ? (
-            /* Waiting for first preview */
-            <div className="flex flex-col items-center justify-center py-6 gap-2">
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2">
               <div className="relative">
-                <div className="w-12 h-12 rounded-full border-2 border-gray-700 border-t-green-400 animate-spin" />
-                <span className="absolute inset-0 flex items-center justify-center text-lg">🎬</span>
+                <div className="w-14 h-14 rounded-full border-2 border-gray-700 border-t-blue-400 animate-spin" />
+                <span className="absolute inset-0 flex items-center justify-center text-xl">🎬</span>
               </div>
-              <span className="text-[11px] font-mono text-gray-400">
-                AI is preparing your video<PulsingDots />
-              </span>
-              <span className="text-[10px] font-mono text-gray-600">
-                Preview will appear when editing begins
+              <span className="text-[11px] font-mono text-blue-400">
+                Preparing workspace...
               </span>
             </div>
           ) : null}
         </div>
-      )}
 
-      {/* ─── Log entries (toggleable) ─── */}
-      {showLogs && (
-        <div className="border-t border-gray-800">
-          <div
-            ref={scrollRef}
-            className={`px-3 py-2 overflow-y-auto ${compact ? 'max-h-24' : 'max-h-32'}`}
-            style={{ scrollbarWidth: 'thin', scrollbarColor: '#4B5563 #111827' }}
-          >
-            {enrichedLogs.map((log, idx) => {
-              const config = getStepConfig(log.step);
-              const isLatest = idx === enrichedLogs.length - 1 && isActive;
-              const hasPreview = !!log.preview_url;
+        {/* ─── Audio Waveform (for audio steps) ─── */}
+        {(isAudioStep || getStepIndex(progressStep) >= getStepIndex('speech_boundary')) && isActive && (
+          <div className="relative px-3 py-1.5 bg-[#111] border-t border-gray-800/50">
+            <div className="flex items-center gap-2">
+              <span className="text-[8px] font-mono text-gray-500 w-8">🎵 Audio</span>
+              <div className="flex-1 relative">
+                <AudioWaveform
+                  isActive={isAudioStep}
+                  isSilenceRemoval={progressStep === 'silence_removal'}
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ─── Timeline ─── */}
+        <div className="px-3 py-2 bg-[#111] border-t border-gray-800/50">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-[8px] font-mono text-gray-500">Timeline</span>
+            <div className="flex-1 h-px bg-gray-800" />
+            <span className="text-[8px] font-mono text-gray-500">{progressPct}%</span>
+          </div>
+          <EditTimeline progressPct={progressPct} currentStep={progressStep} logs={logs} />
+        </div>
+
+        {/* ─── Step Progress Indicator ─── */}
+        <div className="px-3 py-1.5 bg-[#0f0f0f] border-t border-gray-800/50">
+          <div className="flex items-center gap-1 overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
+            {['cutting', 'person_detection', 'silence_removal', 'transcribing', 'creating_clip', 'uploading'].map((step, i) => {
+              const cfg = getStepConfig(step);
+              const stepIdx = getStepIndex(step);
+              const currentIdx = getStepIndex(progressStep);
+              const isDone = currentIdx > stepIdx;
+              const isCurrent = progressStep === step;
               return (
-                <div
-                  key={idx}
-                  className={`flex items-start gap-1.5 py-0.5 ${isLatest ? 'animate-fadeIn' : ''} ${
-                    hasPreview ? 'cursor-pointer hover:bg-gray-800/50 rounded px-1 -mx-1' : ''
-                  }`}
-                  onClick={hasPreview ? () => {
-                    const previewIdx = previewEntries.findIndex(e => e.logIdx === idx);
-                    if (previewIdx >= 0) setSelectedPreviewIdx(previewIdx);
-                  } : undefined}
-                >
-                  <span className="text-gray-600 text-[9px] font-mono flex-shrink-0 mt-px w-12">{log.ts || ''}</span>
-                  <span className={`text-[9px] flex-shrink-0 mt-px ${config.color}`}>{config.icon}</span>
-                  <span className={`text-[10px] font-mono leading-relaxed flex-1 ${
-                    isLatest ? 'text-gray-200' : 'text-gray-400'
-                  }`}>
-                    {log.msg || ''}
-                    {hasPreview && <span className="ml-1 text-blue-400">▶</span>}
-                  </span>
-                  {log.elapsed !== null && log.elapsed > 0 && (
-                    <span className="text-[8px] font-mono text-gray-600 flex-shrink-0 mt-px">+{formatElapsed(log.elapsed)}</span>
-                  )}
+                <div key={step} className="flex items-center gap-0.5">
+                  <div
+                    className={`flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[8px] font-mono transition-all ${
+                      isDone ? 'bg-green-900/30 text-green-400' :
+                      isCurrent ? 'bg-gray-700/50 text-white ring-1 ring-gray-500' :
+                      'bg-gray-800/30 text-gray-600'
+                    }`}
+                  >
+                    <span className="text-[9px]">{isDone ? '✓' : cfg.icon}</span>
+                    <span className="hidden sm:inline">{cfg.label.split(' ')[0]}</span>
+                  </div>
+                  {i < 5 && <span className="text-gray-700 text-[8px]">→</span>}
                 </div>
               );
             })}
-            {isActive && enrichedLogs.length === 0 && (
-              <div className="flex items-center gap-2 py-1">
-                <span className={`w-1.5 h-1.5 rounded-full ${isQueued ? 'bg-amber-400' : 'bg-green-400'} animate-pulse`} />
-                <span className="text-gray-500 text-[10px] font-mono">
-                  {isQueued ? 'Waiting in queue for available worker...' : 'Waiting for processing to start...'}
-                </span>
-              </div>
-            )}
           </div>
         </div>
-      )}
 
-      {/* ─── Footer ─── */}
-      <div className="px-3 py-1.5 bg-gray-900/50 border-t border-gray-800/50 flex items-center justify-between">
-        <span className="text-[9px] font-mono text-gray-600">
-          {previewEntries.length > 0 ? `${previewEntries.length} previews` : ''} 
-          {previewEntries.length > 0 && enrichedLogs.length > 0 ? ' • ' : ''}
-          {enrichedLogs.length} steps
-        </span>
-        <span className="text-[9px] font-mono text-gray-600">
-          {isQueued ? 'Queued' : isActive ? `${progressPct}%` : ''}
-          {(isCompleted || isFailed) && enrichedLogs.length > 1 
-            ? `Total: ${formatElapsed(enrichedLogs.reduce((sum, l) => sum + (l.elapsed || 0), 0))}`
-            : ''
-          }
-        </span>
+        {/* ─── Terminal Log ─── */}
+        <div className="px-3 py-2 border-t border-gray-800/50">
+          <TerminalLog logs={logs} isActive={isActive} />
+        </div>
+
+        {/* ─── Footer Status Bar ─── */}
+        <div className="flex items-center justify-between px-3 py-1 bg-[#1a1a1a] border-t border-gray-800/80">
+          <div className="flex items-center gap-2">
+            <span className="text-[8px] font-mono text-gray-500">
+              {isQueued ? '⏳ Queued' : isActive ? `⚡ ${stepConfig.label}` : isCompleted ? '✅ Done' : isFailed ? '❌ Failed' : ''}
+            </span>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-[8px] font-mono text-gray-500">
+              {logs.length} steps
+            </span>
+            <span className="text-[8px] font-mono text-gray-500">
+              {previewEntries.length} previews
+            </span>
+            {/* Progress bar mini */}
+            <div className="flex items-center gap-1">
+              <div className="w-16 h-1 bg-gray-800 rounded-full overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all duration-700 ${
+                    isFailed ? 'bg-red-500' :
+                    isCompleted ? 'bg-green-500' :
+                    'bg-gradient-to-r from-blue-500 to-purple-500'
+                  }`}
+                  style={{ width: `${Math.max(progressPct, 2)}%` }}
+                />
+              </div>
+              <span className="text-[8px] font-mono text-gray-400">{progressPct}%</span>
+            </div>
+          </div>
+        </div>
       </div>
+
+      {/* ─── CSS Animations ─── */}
+      <style>{`
+        @keyframes waveform {
+          0% { height: 20%; }
+          100% { height: 80%; }
+        }
+        @keyframes scanLine {
+          0% { top: 0%; }
+          50% { top: 100%; }
+          100% { top: 0%; }
+        }
+        @keyframes fadeInBox {
+          from { opacity: 0; transform: scale(0.9); }
+          to { opacity: 1; transform: scale(1); }
+        }
+        @keyframes fadeIn {
+          from { opacity: 0; transform: translateY(4px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fadeIn {
+          animation: fadeIn 0.3s ease-out forwards;
+        }
+      `}</style>
     </div>
   );
 }
