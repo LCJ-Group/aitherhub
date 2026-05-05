@@ -378,6 +378,25 @@ def _get_video_duration_sec(path: str) -> float | None:
         return None
 
 
+def _get_video_stream_duration_sec(path: str) -> float | None:
+    """Return the video stream duration (seconds) via ffprobe, or None on failure."""
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                path,
+            ],
+            capture_output=True, text=True, timeout=30,
+        )
+        val = result.stdout.strip()
+        return float(val) if val else None
+    except Exception:
+        return None
+
+
 def cut_segment(input_path: str, output_path: str, start_sec: float, end_sec: float) -> bool:
     """Cut a segment from the video with audio.
 
@@ -1818,6 +1837,7 @@ def _concat_via_segments(video_path: str, intervals: list, output_path: str, wor
             "-t", f"{duration:.3f}",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
             "-c:a", "aac", "-b:a", "128k",
+            "-shortest",  # Ensure video/audio streams match in duration
             "-movflags", "+faststart",
             seg_path,
         ]
@@ -2583,24 +2603,32 @@ def insert_hook_intro(clip_path: str, hook_start: float, hook_end: float,
     if not clip_duration:
         return False
 
+    # Get video stream duration to detect video/audio mismatch
+    video_stream_dur = _get_video_stream_duration_sec(clip_path)
+    # Use the shorter of video stream and format duration as the effective clip length
+    # This prevents xfade/acrossfade from producing mismatched output durations
+    effective_dur = min(clip_duration, video_stream_dur) if video_stream_dur else clip_duration
+
     logger.info(f"[HOOK] Inserting hook intro: {hook_start:.1f}-{hook_end:.1f}s "
-                f"({hook_duration:.1f}s) at start of {clip_duration:.1f}s clip")
+                f"({hook_duration:.1f}s) at start of {effective_dur:.1f}s clip "
+                f"(format_dur={clip_duration:.1f}s, video_stream={video_stream_dur})")
 
     # Strategy: Use filter_complex to:
     # 1. Extract hook segment (trim)
-    # 2. Keep full original clip
-    # 3. Concatenate with xfade transition
+    # 2. Trim both video and audio to effective_dur to ensure matching lengths
+    # 3. Concatenate with xfade/acrossfade transition
     xfade_dur = min(crossfade_sec, hook_duration * 0.3, 0.5)
 
-    # Video filter: trim hook, then xfade into full clip
+    # Trim both main video and audio to effective_dur to prevent duration mismatch
+    # This is critical when input has video/audio stream length discrepancy
     filter_complex = (
         f"[0:v]trim=start={hook_start:.3f}:end={hook_end:.3f},setpts=PTS-STARTPTS[hookv];"
-        f"[0:v]setpts=PTS-STARTPTS[mainv];"
+        f"[0:v]trim=duration={effective_dur:.3f},setpts=PTS-STARTPTS[mainv];"
         f"[hookv][mainv]xfade=transition=fadewhite:duration={xfade_dur:.2f}:"
         f"offset={hook_duration - xfade_dur:.3f}[outv];"
-        # Audio: trim hook, then acrossfade into full clip
+        # Audio: trim both hook and main to same durations as video
         f"[0:a]atrim=start={hook_start:.3f}:end={hook_end:.3f},asetpts=PTS-STARTPTS[hooka];"
-        f"[0:a]asetpts=PTS-STARTPTS[maina];"
+        f"[0:a]atrim=duration={effective_dur:.3f},asetpts=PTS-STARTPTS[maina];"
         f"[hooka][maina]acrossfade=d={xfade_dur:.2f}:c1=tri:c2=tri[outa]"
     )
 
@@ -2612,6 +2640,7 @@ def insert_hook_intro(clip_path: str, hook_start: float, hook_end: float,
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
         "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
         "-movflags", "+faststart", "-r", "30",
+        "-shortest",  # Ensure video and audio streams have matching duration
         output_path,
     ]
 

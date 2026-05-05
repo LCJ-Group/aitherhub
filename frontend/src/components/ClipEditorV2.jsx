@@ -1073,10 +1073,28 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
 
   const onMeta = useCallback(() => {
     if (videoRef.current) {
-      setDuration(videoRef.current.duration);
+      const rawDur = videoRef.current.duration;
+      const expectedDur = (origEnd - origStart) || 0;
+      // If browser reports a duration that is significantly shorter than expected
+      // (e.g., due to corrupt MP4, video/audio stream mismatch, or partial download),
+      // use the expected duration from the API as authoritative value.
+      if (rawDur && isFinite(rawDur) && rawDur > 0) {
+        if (expectedDur > 0 && rawDur < expectedDur * 0.3) {
+          console.warn(
+            `[ClipEditor] Browser reported duration (${rawDur.toFixed(1)}s) is much shorter than expected (${expectedDur.toFixed(1)}s). Using expected duration.`
+          );
+          setDuration(expectedDur);
+        } else {
+          setDuration(rawDur);
+        }
+      } else if (expectedDur > 0) {
+        // duration is Infinity, NaN, or 0 - use expected
+        console.warn(`[ClipEditor] Browser duration invalid (${rawDur}), using expected: ${expectedDur.toFixed(1)}s`);
+        setDuration(expectedDur);
+      }
       setVideoReady(true);
     }
-  }, []);
+  }, [origEnd, origStart]);
 
   const toggle = useCallback(() => {
     if (!videoRef.current) return;
@@ -2262,6 +2280,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                 src={videoUrl}
                 onTimeUpdate={onTimeUpdate}
                 onLoadedMetadata={onMeta}
+                onDurationChange={onMeta}
                 onPlay={() => setIsPlaying(true)}
                 onPause={() => setIsPlaying(false)}
                 onClick={toggle}
