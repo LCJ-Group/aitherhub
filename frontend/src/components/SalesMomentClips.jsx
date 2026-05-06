@@ -398,6 +398,9 @@ export default function SalesMomentClips({ videoData, onRequestClip, clipStates 
                                     clipUrl={clipState?.clip_url}
                                     queuePosition={clipState?.queue_position}
                                     queueEstimatedSeconds={clipState?.queue_estimated_seconds}
+                                    sourceVideoUrl={videoData?.preview_url || null}
+                                    clipTimeStart={candidate?.time_start || 0}
+                                    clipTimeEnd={candidate?.time_end || null}
                                   />
                                 </div>
                               );
@@ -424,6 +427,9 @@ export default function SalesMomentClips({ videoData, onRequestClip, clipStates 
                                   clipUrl={clipState?.clip_url}
                                   queuePosition={clipState?.queue_position}
                                   queueEstimatedSeconds={clipState?.queue_estimated_seconds}
+                                  sourceVideoUrl={videoData?.preview_url || null}
+                                  clipTimeStart={candidate?.time_start || 0}
+                                  clipTimeEnd={candidate?.time_end || null}
                                 />
                               </div>
                             );

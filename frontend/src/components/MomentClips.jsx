@@ -574,6 +574,9 @@ export default function MomentClips({ videoData, onRequestClip, clipStates = {},
                                     clipUrl={clipState?.clip_url}
                                     queuePosition={clipState?.queue_position}
                                     queueEstimatedSeconds={clipState?.queue_estimated_seconds}
+                                    sourceVideoUrl={videoData?.preview_url || null}
+                                    clipTimeStart={clip?.time_start || 0}
+                                    clipTimeEnd={clip?.time_end || null}
                                   />
                                 </div>
                               );

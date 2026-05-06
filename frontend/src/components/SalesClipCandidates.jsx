@@ -230,6 +230,9 @@ export default function SalesClipCandidates({ videoData, onRequestClip, clipStat
             clipUrl={clipState?.clip_url}
             queuePosition={clipState?.queue_position}
             queueEstimatedSeconds={clipState?.queue_estimated_seconds}
+            sourceVideoUrl={videoData?.preview_url || null}
+            clipTimeStart={candidate?.time_start || 0}
+            clipTimeEnd={candidate?.time_end || null}
           />
         </div>
       );

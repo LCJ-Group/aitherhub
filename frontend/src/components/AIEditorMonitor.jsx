@@ -11,6 +11,7 @@
  *   - 字幕タイピングアニメーション
  *   - ターミナル風AIログ（文字が流れる）
  *   - 人物検出バウンディングボックス
+ *   - 元動画のリアルタイム再生（sourceVideoUrl指定時）
  *
  * Props:
  *   logs            – Array of { ts, pct, step, msg, preview_url? }
@@ -19,8 +20,11 @@
  *   status          – Clip status (processing, completed, failed, etc.)
  *   compact         – If true, show a smaller version (for MomentClips)
  *   clipUrl         – Final clip URL (when completed)
+ *   sourceVideoUrl  – Source video URL (Azure Blob SAS URL) for live preview
+ *   clipTimeStart   – Clip start time in seconds (for seeking source video)
+ *   clipTimeEnd     – Clip end time in seconds
  */
-import { useEffect, useRef, useState, useMemo } from 'react';
+import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 
 // ─── Step Configuration ───
 const STEP_CONFIG = {
@@ -210,6 +214,44 @@ function PersonDetectionOverlay({ isActive }) {
   );
 }
 
+// ─── Cut Line Animation Overlay ───
+function CutLineOverlay({ isActive, progressPct }) {
+  if (!isActive) return null;
+
+  return (
+    <div className="absolute inset-0 pointer-events-none z-10">
+      {/* Vertical cut line sweeping across */}
+      <div
+        className="absolute top-0 bottom-0 w-[2px] bg-gradient-to-b from-yellow-400 via-orange-400 to-yellow-400"
+        style={{
+          left: `${(progressPct % 50) * 2}%`,
+          boxShadow: '0 0 8px rgba(251, 146, 60, 0.6), 0 0 16px rgba(251, 146, 60, 0.3)',
+          animation: 'cutSweep 3s ease-in-out infinite',
+        }}
+      />
+      {/* Scissors icon at cut position */}
+      <div
+        className="absolute text-lg"
+        style={{
+          left: `${(progressPct % 50) * 2}%`,
+          top: '45%',
+          transform: 'translate(-50%, -50%)',
+          animation: 'cutSweep 3s ease-in-out infinite',
+        }}
+      >
+        ✂️
+      </div>
+      {/* Flash effect on cut */}
+      <div
+        className="absolute inset-0 bg-white/5"
+        style={{
+          animation: 'cutFlash 2s ease-in-out infinite',
+        }}
+      />
+    </div>
+  );
+}
+
 // ─── Subtitle Typing Animation ───
 function SubtitleTyping({ isActive, message }) {
   const [displayText, setDisplayText] = useState('');
@@ -319,7 +361,7 @@ function TerminalLog({ logs, isActive }) {
   );
 }
 
-// ─── Video Preview Player ───
+// ─── Video Preview Player (for log preview_url) ───
 function PreviewPlayer({ url, stepLabel, isLatest }) {
   const videoRef = useRef(null);
 
@@ -345,8 +387,80 @@ function PreviewPlayer({ url, stepLabel, isLatest }) {
   );
 }
 
+// ─── Source Video Player (plays source video from clipTimeStart) ───
+function SourceVideoPlayer({ url, timeStart = 0, timeEnd = null, isActive }) {
+  const videoRef = useRef(null);
+  const [isLoaded, setIsLoaded] = useState(false);
+  const [hasError, setHasError] = useState(false);
+
+  const handleLoadedMetadata = useCallback(() => {
+    if (videoRef.current) {
+      videoRef.current.currentTime = timeStart || 0;
+      setIsLoaded(true);
+      if (isActive) {
+        videoRef.current.play().catch(() => {});
+      }
+    }
+  }, [timeStart, isActive]);
+
+  const handleTimeUpdate = useCallback(() => {
+    // Loop within the clip range
+    if (videoRef.current && timeEnd && videoRef.current.currentTime >= timeEnd) {
+      videoRef.current.currentTime = timeStart || 0;
+    }
+  }, [timeStart, timeEnd]);
+
+  const handleError = useCallback(() => {
+    setHasError(true);
+  }, []);
+
+  useEffect(() => {
+    if (videoRef.current && isLoaded && isActive) {
+      videoRef.current.play().catch(() => {});
+    } else if (videoRef.current && !isActive) {
+      videoRef.current.pause();
+    }
+  }, [isActive, isLoaded]);
+
+  if (!url || hasError) return null;
+
+  return (
+    <>
+      <video
+        ref={videoRef}
+        src={url}
+        className="w-full h-full object-contain"
+        muted
+        playsInline
+        preload="metadata"
+        onLoadedMetadata={handleLoadedMetadata}
+        onTimeUpdate={handleTimeUpdate}
+        onError={handleError}
+      />
+      {/* Loading indicator while video loads */}
+      {!isLoaded && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/50">
+          <div className="w-8 h-8 rounded-full border-2 border-gray-600 border-t-blue-400 animate-spin" />
+        </div>
+      )}
+    </>
+  );
+}
+
 // ─── Main Component ───
-export default function AIEditorMonitor({ logs = [], progressPct = 0, progressStep = '', status = '', compact = false, clipUrl = '', queuePosition = null, queueEstimatedSeconds = null }) {
+export default function AIEditorMonitor({
+  logs = [],
+  progressPct = 0,
+  progressStep = '',
+  status = '',
+  compact = false,
+  clipUrl = '',
+  queuePosition = null,
+  queueEstimatedSeconds = null,
+  sourceVideoUrl = null,
+  clipTimeStart = 0,
+  clipTimeEnd = null,
+}) {
   const [isExpanded, setIsExpanded] = useState(true);
   const [selectedPreviewIdx, setSelectedPreviewIdx] = useState(-1);
 
@@ -372,6 +486,9 @@ export default function AIEditorMonitor({ logs = [], progressPct = 0, progressSt
   const isSubtitleStep = ['transcribing', 'refining_subtitles', 'subtitle_preview'].includes(progressStep);
   const isAudioStep = ['speech_boundary', 'silence_removal', 'sound_effects'].includes(progressStep);
   const isCutStep = ['cutting', 'hook_detection', 'hook_insertion'].includes(progressStep);
+
+  // Determine if we should show source video (when no log preview is available but sourceVideoUrl exists)
+  const showSourceVideo = !currentPreview && sourceVideoUrl && isActive;
 
   // Get latest subtitle message
   const subtitleMessage = useMemo(() => {
@@ -470,6 +587,44 @@ export default function AIEditorMonitor({ logs = [], progressPct = 0, progressSt
                   <span className="text-[8px] font-bold text-white tracking-wider">LIVE</span>
                 </div>
               )}
+            </>
+          ) : showSourceVideo ? (
+            <>
+              {/* Source video playing from clip start time */}
+              <SourceVideoPlayer
+                url={sourceVideoUrl}
+                timeStart={clipTimeStart}
+                timeEnd={clipTimeEnd}
+                isActive={isActive}
+              />
+              {/* AI Edit Overlays on top of source video */}
+              <PersonDetectionOverlay isActive={isPersonDetection} />
+              <CutLineOverlay isActive={isCutStep} progressPct={progressPct} />
+              <SubtitleTyping isActive={isSubtitleStep} message={subtitleMessage} />
+              {/* Step badge */}
+              <div className="absolute top-2 left-2 z-20 flex items-center gap-1.5 px-2 py-0.5 rounded bg-black/70 backdrop-blur-sm">
+                <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
+                <span className="text-[9px] font-mono text-blue-400">{stepConfig.label}</span>
+              </div>
+              {/* LIVE badge */}
+              <div className="absolute top-2 right-2 z-20 flex items-center gap-1 px-1.5 py-0.5 rounded bg-red-600/90">
+                <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                <span className="text-[8px] font-bold text-white tracking-wider">LIVE</span>
+              </div>
+              {/* Source indicator */}
+              <div className="absolute bottom-2 left-2 z-20 flex items-center gap-1 px-1.5 py-0.5 rounded bg-black/60 backdrop-blur-sm">
+                <span className="text-[8px] font-mono text-gray-300">
+                  📹 Source • {Math.floor(clipTimeStart / 60)}:{String(Math.floor(clipTimeStart % 60)).padStart(2, '0')}
+                  {clipTimeEnd ? ` → ${Math.floor(clipTimeEnd / 60)}:${String(Math.floor(clipTimeEnd % 60)).padStart(2, '0')}` : ''}
+                </span>
+              </div>
+              {/* Progress overlay bar at bottom */}
+              <div className="absolute bottom-0 left-0 right-0 h-1 z-20 bg-gray-900/50">
+                <div
+                  className="h-full bg-gradient-to-r from-blue-500 to-purple-500 transition-all duration-700"
+                  style={{ width: `${Math.max(progressPct, 2)}%` }}
+                />
+              </div>
             </>
           ) : isQueued ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-2">
@@ -619,6 +774,15 @@ export default function AIEditorMonitor({ logs = [], progressPct = 0, progressSt
         @keyframes fadeIn {
           from { opacity: 0; transform: translateY(4px); }
           to { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes cutSweep {
+          0% { left: 10%; }
+          50% { left: 90%; }
+          100% { left: 10%; }
+        }
+        @keyframes cutFlash {
+          0%, 90%, 100% { opacity: 0; }
+          95% { opacity: 1; }
         }
         .animate-fadeIn {
           animation: fadeIn 0.3s ease-out forwards;
