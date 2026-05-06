@@ -605,6 +605,35 @@ async def run_all_ddl_migrations():
         except Exception as e:
             logger.warning(f"[DDL] ml_model_version: {e}")
 
+            # ── upload_event_log table + upload stage columns on videos ──
+        try:
+            await conn.execute(_text("""
+                CREATE TABLE IF NOT EXISTS upload_event_log (
+                    id BIGSERIAL PRIMARY KEY,
+                    video_id VARCHAR(36) NOT NULL,
+                    upload_id VARCHAR(36),
+                    user_id INTEGER,
+                    stage VARCHAR(50) NOT NULL,
+                    status VARCHAR(20) NOT NULL,
+                    duration_ms INTEGER,
+                    error_message TEXT,
+                    error_type VARCHAR(100),
+                    metadata_json JSON,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+            await conn.execute(_text("CREATE INDEX IF NOT EXISTS idx_upload_event_video ON upload_event_log(video_id)"))
+            await conn.execute(_text("CREATE INDEX IF NOT EXISTS idx_upload_event_user ON upload_event_log(user_id)"))
+            for col_sql in [
+                "ALTER TABLE videos ADD COLUMN IF NOT EXISTS upload_last_stage VARCHAR(50)",
+                "ALTER TABLE videos ADD COLUMN IF NOT EXISTS upload_error_stage VARCHAR(50)",
+                "ALTER TABLE videos ADD COLUMN IF NOT EXISTS upload_error_message TEXT",
+            ]:
+                await conn.execute(_text(col_sql))
+            logger.info("[DDL] upload_event_log + upload stage columns \u2713")
+        except Exception as e:
+            logger.warning(f"[DDL] upload_event_log: {e}")
+
             # ── videos.processing_logs (realtime AI log panel) ──
         try:
             await conn.execute(_text(

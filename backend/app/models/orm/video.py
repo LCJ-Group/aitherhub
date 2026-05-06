@@ -50,5 +50,10 @@ class Video(Base, UUIDMixin, TimestampMixin):
     # Language for AI analysis output (ja, zh-TW, etc.)
     language: Mapped[Optional[str]] = mapped_column(String(10), nullable=True, default="ja", server_default="ja")
 
+    # Upload pipeline stage tracking
+    upload_last_stage: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    upload_error_stage: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    upload_error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     # Real-time processing logs (JSONB array of log entries for live UI display)
     processing_logs = mapped_column(JSON, nullable=True)
