@@ -2096,23 +2096,43 @@ function DailyUploadsChart({ dailyUploads }) {
 function UserScaleSection({ userScale }) {
   const [showDetail, setShowDetail] = useState(false);
   const [users, setUsers] = useState([]);
+  const [filteredUsers, setFilteredUsers] = useState([]);
   const [loadingUsers, setLoadingUsers] = useState(false);
+  const [filterMode, setFilterMode] = useState('all'); // 'all' | 'streamers' | 'this_month'
 
-  const fetchUsers = async () => {
-    if (users.length > 0) { setShowDetail(true); return; }
-    setLoadingUsers(true);
+  const fetchAndShow = async (mode) => {
+    setFilterMode(mode);
     setShowDetail(true);
+    if (users.length > 0) {
+      applyFilter(users, mode);
+      return;
+    }
+    setLoadingUsers(true);
     try {
       const baseURL = import.meta.env.VITE_API_BASE_URL;
       const res = await axios.get(`${baseURL}/api/v1/admin/users-list`, {
         headers: { "X-Admin-Key": "aither:hub" },
         timeout: 30000,
       });
-      setUsers(res.data.users || []);
+      const allUsers = res.data.users || [];
+      setUsers(allUsers);
+      applyFilter(allUsers, mode);
     } catch (e) {
       console.error("Failed to fetch users:", e);
     } finally {
       setLoadingUsers(false);
+    }
+  };
+
+  const applyFilter = (allUsers, mode) => {
+    if (mode === 'streamers') {
+      setFilteredUsers(allUsers.filter(u => u.video_count > 0));
+    } else if (mode === 'this_month') {
+      const now = new Date();
+      const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+      setFilteredUsers(allUsers.filter(u => u.last_upload && u.last_upload >= thisMonthStart));
+    } else {
+      setFilteredUsers(allUsers);
     }
   };
 
@@ -2126,13 +2146,13 @@ function UserScaleSection({ userScale }) {
         <span className="text-xs text-gray-400 ml-1">{window.__t('adminDashboard_7c37c3', '母数')}</span>
       </div>
       <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-        <div onClick={fetchUsers} className="cursor-pointer hover:scale-[1.02] transition-transform">
+        <div onClick={() => fetchAndShow('all')} className="cursor-pointer hover:scale-[1.02] transition-transform">
           <StatCard label={window.__t('adminDashboard_0acdd7', '総ユーザー')} value={userScale.total_users} unit={window.__t('analytics_personUnit', '人')} color="orange" />
         </div>
-        <div onClick={fetchUsers} className="cursor-pointer hover:scale-[1.02] transition-transform">
+        <div onClick={() => fetchAndShow('streamers')} className="cursor-pointer hover:scale-[1.02] transition-transform">
           <StatCard label={window.__t('adminDashboard_114cea', '配信者数')} value={userScale.total_streamers} unit={window.__t('analytics_personUnit', '人')} color="red" />
         </div>
-        <div onClick={fetchUsers} className="cursor-pointer hover:scale-[1.02] transition-transform">
+        <div onClick={() => fetchAndShow('this_month')} className="cursor-pointer hover:scale-[1.02] transition-transform">
           <StatCard label={window.__t('adminDashboard_ed0dea', '今月アップ人数')} value={userScale.this_month_uploaders} unit={window.__t('analytics_personUnit', '人')} color="teal" />
         </div>
       </div>
@@ -2143,13 +2163,13 @@ function UserScaleSection({ userScale }) {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setShowDetail(false)}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[80vh] overflow-hidden" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
-              <h3 className="text-lg font-bold text-gray-800">👥 ユーザー一覧</h3>
+              <h3 className="text-lg font-bold text-gray-800">👥 {filterMode === 'this_month' ? '今月アップしたユーザー' : filterMode === 'streamers' ? '配信者一覧' : 'ユーザー一覧'}</h3>
               <button onClick={() => setShowDetail(false)} className="text-gray-400 hover:text-gray-600 text-xl">&times;</button>
             </div>
             <div className="overflow-y-auto max-h-[65vh] px-6 py-4">
               {loadingUsers ? (
                 <div className="text-center py-8 text-gray-400">読み込み中...</div>
-              ) : users.length === 0 ? (
+              ) : filteredUsers.length === 0 ? (
                 <div className="text-center py-8 text-gray-400">ユーザーが見つかりません</div>
               ) : (
                 <table className="w-full text-sm">
@@ -2163,7 +2183,7 @@ function UserScaleSection({ userScale }) {
                     </tr>
                   </thead>
                   <tbody>
-                    {users.map((u, i) => (
+                    {filteredUsers.map((u, i) => (
                       <tr key={u.id || i} className="border-b border-gray-100 hover:bg-gray-50">
                         <td className="py-2 px-2 font-medium text-gray-800">{u.name || u.username || '-'}</td>
                         <td className="py-2 px-2 text-gray-500 text-xs">{u.email || '-'}</td>
