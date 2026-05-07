@@ -186,6 +186,8 @@ class ClipStatsResponse(BaseModel):
     no_brand_clips: Optional[int] = 0
     subtitle_clips: Optional[int] = 0
     trimmed_clips: Optional[int] = 0
+    downloaded_clips: Optional[int] = 0
+    not_downloaded_clips: Optional[int] = 0
     ng_by_reason: Optional[list] = None  # [{reason: str, count: int}]
     language_stats: Optional[list] = None  # [{language: str, count: int}]
 
@@ -218,6 +220,7 @@ async def search_clips(
     no_brand: Optional[bool] = Query(None, description="Filter clips with no brand assigned"),
     has_subtitle: Optional[bool] = Query(None, description="Filter clips with/without subtitle export"),
     has_trim: Optional[bool] = Query(None, description="Filter clips with/without trim data"),
+    not_downloaded: Optional[bool] = Query(None, description="Filter clips never downloaded (download_count=0)"),
     language: Optional[str] = Query(None, description="Filter by detected language: ja, zh-TW, zh-CN, en, ko, th"),
     ai_version: Optional[str] = Query(None, description="Filter by AI model version (e.g. v7.20260501, pre-ai for no version)"),
     # Sorting
@@ -346,6 +349,12 @@ async def search_clips(
         conditions.append("vc.trim_data IS NOT NULL")
     elif has_trim is False:
         conditions.append("vc.trim_data IS NULL")
+
+    # Not downloaded filter (clips with zero downloads)
+    if not_downloaded is True:
+        conditions.append("vc.id::text NOT IN (SELECT DISTINCT clip_id::text FROM clip_download_log WHERE clip_id IS NOT NULL)")
+    elif not_downloaded is False:
+        conditions.append("vc.id::text IN (SELECT DISTINCT clip_id::text FROM clip_download_log WHERE clip_id IS NOT NULL)")
 
     # Language filter
     if language:
@@ -718,7 +727,10 @@ async def get_clip_stats(
                 COUNT(*) FILTER (WHERE COALESCE(vc.is_unusable, FALSE) = FALSE AND vc.trim_data IS NOT NULL) as trimmed_count,
                 COUNT(*) FILTER (WHERE COALESCE(vc.is_unusable, FALSE) = FALSE AND vc.id::text NOT IN (
                     SELECT wca.clip_id FROM widget_clip_assignments wca WHERE wca.is_active = TRUE
-                )) as no_brand_count
+                )) as no_brand_count,
+                COUNT(*) FILTER (WHERE COALESCE(vc.is_unusable, FALSE) = FALSE AND vc.id::text IN (
+                    SELECT DISTINCT clip_id::text FROM clip_download_log WHERE clip_id IS NOT NULL
+                )) as downloaded_count
             FROM video_clips vc
             WHERE vc.status = 'completed' AND vc.clip_url IS NOT NULL
         """)
@@ -772,6 +784,8 @@ async def get_clip_stats(
             no_brand_clips=ng_stats_row.no_brand_count or 0,
             subtitle_clips=ng_stats_row.subtitle_count or 0,
             trimmed_clips=ng_stats_row.trimmed_count or 0,
+            downloaded_clips=ng_stats_row.downloaded_count or 0,
+            not_downloaded_clips=(stats_row.total or 0) - (ng_stats_row.ng_count or 0) - (ng_stats_row.downloaded_count or 0),
             ng_by_reason=ng_by_reason,
             language_stats=language_stats,
         )

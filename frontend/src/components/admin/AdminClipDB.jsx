@@ -1245,6 +1245,7 @@ export default function AdminClipDB({ adminKey }) {
   const [noBrandFilter, setNoBrandFilter] = useState(null);
   const [hasSubtitleFilter, setHasSubtitleFilter] = useState(null);
   const [hasTrimFilter, setHasTrimFilter] = useState(null);
+  const [notDownloadedFilter, setNotDownloadedFilter] = useState(null);
   const [languageFilter, setLanguageFilter] = useState("");
   const [aiVersionFilter, setAiVersionFilter] = useState("");
   const [sortBy, setSortBy] = useState(initSort);
@@ -1297,7 +1298,7 @@ export default function AdminClipDB({ adminKey }) {
     if (searchMode === "structured" && enrichTriggered.current) {
       loadClips();
     }
-  }, [page, sortBy, sortOrder, selectedTag, soldFilter, ratingFilter, selectedBrand, unusableFilter, noBrandFilter, hasSubtitleFilter, hasTrimFilter, languageFilter, aiVersionFilter]);
+  }, [page, sortBy, sortOrder, selectedTag, soldFilter, ratingFilter, selectedBrand, unusableFilter, noBrandFilter, hasSubtitleFilter, hasTrimFilter, notDownloadedFilter, languageFilter, aiVersionFilter]);
 
   async function autoEnrichAndLoad() {
     // 1. Auto enrich (non-blocking for already-enriched clips)
@@ -1371,6 +1372,7 @@ export default function AdminClipDB({ adminKey }) {
       if (noBrandFilter !== null) params.no_brand = noBrandFilter;
       if (hasSubtitleFilter !== null) params.has_subtitle = hasSubtitleFilter;
       if (hasTrimFilter !== null) params.has_trim = hasTrimFilter;
+      if (notDownloadedFilter !== null) params.not_downloaded = notDownloadedFilter;
       if (languageFilter) params.language = languageFilter;
       if (aiVersionFilter) params.ai_version = aiVersionFilter;
 
@@ -1456,7 +1458,7 @@ export default function AdminClipDB({ adminKey }) {
     // Reload clips and brands after brand assignment change
     loadClips();
     loadBrands();
-  }, [searchQuery, selectedTag, selectedProduct, selectedLiver, selectedBrand, soldFilter, ratingFilter, unusableFilter, noBrandFilter, hasSubtitleFilter, hasTrimFilter, page, sortBy, sortOrder]);
+  }, [searchQuery, selectedTag, selectedProduct, selectedLiver, selectedBrand, soldFilter, ratingFilter, unusableFilter, noBrandFilter, hasSubtitleFilter, hasTrimFilter, notDownloadedFilter, page, sortBy, sortOrder]);
 
   return (
     <div>
@@ -1680,12 +1682,12 @@ export default function AdminClipDB({ adminKey }) {
               className="px-3 py-1.5 rounded-lg border border-gray-300 text-xs w-32 focus:outline-none focus:ring-2 focus:ring-purple-500"
             />
 
-            {(selectedTag || selectedProduct || selectedLiver || selectedBrand || soldFilter !== null || ratingFilter || unusableFilter !== null || noBrandFilter !== null || hasSubtitleFilter !== null || hasTrimFilter !== null) && (
+            {(selectedTag || selectedProduct || selectedLiver || selectedBrand || soldFilter !== null || ratingFilter || unusableFilter !== null || noBrandFilter !== null || hasSubtitleFilter !== null || hasTrimFilter !== null || notDownloadedFilter !== null) && (
               <button
                 onClick={() => {
                   setSelectedTag(""); setSelectedProduct(""); setSelectedLiver("");
                   setSelectedBrand(""); setSoldFilter(null); setRatingFilter(""); setUnusableFilter(null);
-                  setNoBrandFilter(null); setHasSubtitleFilter(null); setHasTrimFilter(null); setPage(1);
+                  setNoBrandFilter(null); setHasSubtitleFilter(null); setHasTrimFilter(null); setNotDownloadedFilter(null); setPage(1);
                 }}
                 className="px-2 py-1.5 rounded-lg text-xs text-red-500 hover:bg-red-50 border border-red-200"
               >
@@ -2146,6 +2148,40 @@ export default function AdminClipDB({ adminKey }) {
               カット済 {stats.trimmed_clips > 0 && <span className="ml-0.5 font-bold">{stats.trimmed_clips}</span>}
             </button>
 
+            {/* Not downloaded */}
+            <button
+              onClick={() => {
+                if (notDownloadedFilter === true) { setNotDownloadedFilter(null); }
+                else { setNotDownloadedFilter(true); }
+                setPage(1);
+              }}
+              className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${
+                notDownloadedFilter === true
+                  ? "bg-orange-100 border-orange-400 text-orange-700 shadow-sm"
+                  : "bg-white border-gray-200 text-gray-600 hover:border-orange-300 hover:bg-orange-50"
+              }`}
+            >
+              <Download className="w-3 h-3 inline mr-1" />
+              未DL {stats.not_downloaded_clips > 0 && <span className="ml-0.5 font-bold">{stats.not_downloaded_clips}</span>}
+            </button>
+
+            {/* Downloaded */}
+            <button
+              onClick={() => {
+                if (notDownloadedFilter === false) { setNotDownloadedFilter(null); }
+                else { setNotDownloadedFilter(false); }
+                setPage(1);
+              }}
+              className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${
+                notDownloadedFilter === false
+                  ? "bg-green-100 border-green-400 text-green-700 shadow-sm"
+                  : "bg-white border-gray-200 text-gray-600 hover:border-green-300 hover:bg-green-50"
+              }`}
+            >
+              <Download className="w-3 h-3 inline mr-1" />
+              DL済 {stats.downloaded_clips > 0 && <span className="ml-0.5 font-bold">{stats.downloaded_clips}</span>}
+            </button>
+
             {/* NG by reason breakdown */}
             {stats.ng_by_reason && stats.ng_by_reason.length > 0 && unusableFilter === true && (
               <div className="flex gap-1.5 ml-2 pl-2 border-l border-gray-200">
@@ -2158,11 +2194,12 @@ export default function AdminClipDB({ adminKey }) {
             )}
 
             {/* Clear all status filters */}
-            {(unusableFilter !== null || noBrandFilter !== null || hasSubtitleFilter !== null || hasTrimFilter !== null) && (
+            {(unusableFilter !== null || noBrandFilter !== null || hasSubtitleFilter !== null || hasTrimFilter !== null || notDownloadedFilter !== null) && (
               <button
                 onClick={() => {
                   setUnusableFilter(null); setNoBrandFilter(null);
                   setHasSubtitleFilter(null); setHasTrimFilter(null);
+                  setNotDownloadedFilter(null);
                   setPage(1);
                 }}
                 className="px-2 py-1.5 rounded-full text-xs text-gray-400 hover:text-red-500 hover:bg-red-50 border border-gray-200"
