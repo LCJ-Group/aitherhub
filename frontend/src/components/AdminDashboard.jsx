@@ -13,6 +13,7 @@ import AdminWidgetManager from "./admin/AdminWidgetManager";
 import SubtitleDictionary from "./SubtitleDictionary";
 import AdminReviewerManager from "./AdminReviewerManager";
 import MLTrainingDashboard from "./admin/MLTrainingDashboard";
+import VideoPerformancePanel from "./admin/VideoPerformancePanel";
 import { useTranslation } from 'react-i18next';
 import { changeLanguage } from '../i18n';
 import ClipFeedbackPanel from './ClipFeedbackPanel';
@@ -625,6 +626,16 @@ export default function AdminDashboard() {
               >
                 🧠 AI学習
               </button>
+              <button
+                onClick={() => setActiveTab("performance")}
+                className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                  activeTab === "performance"
+                    ? "bg-white text-blue-600 shadow-sm"
+                    : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                📊 パフォーマンス
+              </button>
             </>
           )}
         </div>
@@ -742,6 +753,9 @@ export default function AdminDashboard() {
         )}
         {activeTab === "ml-training" && (
           <MLTrainingDashboard adminKey={`${ADMIN_ID}:${ADMIN_PASS}`} />
+        )}
+        {activeTab === "performance" && (
+          <VideoPerformancePanel adminKey={`${ADMIN_ID}:${ADMIN_PASS}`} />
         )}
       </div>
     </div>

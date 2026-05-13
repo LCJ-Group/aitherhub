@@ -6,6 +6,8 @@
   ③ event × sales_moment は window ±90s で結合、距離減衰 weight
   ④ 正例:負例 = 1:3 サンプリング
   ⑤ 情報リーク防止: GMV/注文数/クリック数は特徴量に入れない
+  ⑥ video_performanceテーブルから実績データ(views, engagement_rate等)を取得し
+     動画レベルの特徴量として統合 (v9)
 
 v8 変更点 (ML精度向上 - 7つの改善):
   1. レビュー済みデータの重み付け強化:
@@ -432,6 +434,61 @@ async def fetch_video_durations(session, video_ids: list):
         return {}
 
 
+async def fetch_video_performance(session, video_ids: list) -> dict:
+    """v9: Fetch video performance data from video_performance table.
+    Returns {video_id: {views, likes, comments, shares, saves, purchases,
+                        engagement_rate, conversion_rate, avg_watch_time_seconds}}
+    Uses the LATEST record per video (most recent recorded_at).
+    """
+    if not video_ids:
+        return {}
+    sql = text("""
+        SELECT DISTINCT ON (video_id)
+            video_id, views, likes, comments, shares, saves,
+            purchases, revenue, engagement_rate, conversion_rate,
+            avg_watch_time_seconds
+        FROM video_performance
+        WHERE video_id = ANY(:ids)
+        ORDER BY video_id, recorded_at DESC
+    """)
+    try:
+        result = await session.execute(sql, {"ids": video_ids})
+        perf = {}
+        for r in result.fetchall():
+            perf[str(r.video_id)] = {
+                "perf_views": r.views or 0,
+                "perf_likes": r.likes or 0,
+                "perf_comments": r.comments or 0,
+                "perf_shares": r.shares or 0,
+                "perf_saves": r.saves or 0,
+                "perf_purchases": r.purchases or 0,
+                "perf_revenue": float(r.revenue or 0),
+                "perf_engagement_rate": float(r.engagement_rate or 0),
+                "perf_conversion_rate": float(r.conversion_rate or 0),
+                "perf_avg_watch_time": float(r.avg_watch_time_seconds or 0),
+                "has_performance_data": 1,
+            }
+        return perf
+    except Exception as e:
+        print(f"[dataset] Warning: fetch_video_performance error: {e}")
+        return {}
+
+
+_EMPTY_PERF = {
+    "perf_views": 0,
+    "perf_likes": 0,
+    "perf_comments": 0,
+    "perf_shares": 0,
+    "perf_saves": 0,
+    "perf_purchases": 0,
+    "perf_revenue": 0.0,
+    "perf_engagement_rate": 0.0,
+    "perf_conversion_rate": 0.0,
+    "perf_avg_watch_time": 0.0,
+    "has_performance_data": 0,
+}
+
+
 # ── Index Builders ──
 
 def build_moments_index(moments_rows):
@@ -823,11 +880,21 @@ async def generate(output_dir: str, video_id=None, user_id=None, use_embeddings=
         print("[dataset] Fetching video durations...")
         durations = await fetch_video_durations(session, video_ids)
 
+        # v9: Fetch video performance data (TikTok OCR metrics)
+        print("[dataset] Fetching video performance data...")
+        try:
+            perf_data = await fetch_video_performance(session, video_ids)
+            print(f"[dataset] Found performance data for {len(perf_data)} videos")
+        except Exception as e:
+            print(f"[dataset] Warning: Could not fetch video performance: {e}")
+            perf_data = {}
+
     await engine.dispose()
 
     # Build indexes
     moments_idx = build_moments_index(moments_rows)
     products_idx = build_product_names_index(product_rows)
+    perf_idx = perf_data  # video_id -> performance dict
 
     # ── v8: Compute reviewer statistics for bias correction ──
     print("[dataset] Computing reviewer statistics...")
@@ -983,6 +1050,9 @@ async def generate(output_dir: str, video_id=None, user_id=None, use_embeddings=
 
             # ── TEXT EMBEDDING FEATURES (v8) ──
             **emb_feats,
+
+            # ── VIDEO PERFORMANCE FEATURES (v9) ──
+            **perf_idx.get(vid, _EMPTY_PERF),
 
             # ── METADATA (not used as features in training) ──
             "tags": tags,
