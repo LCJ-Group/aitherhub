@@ -498,56 +498,60 @@ async def list_performance(
     """List performance records with optional video_id filter."""
     verify_admin(x_admin_key)
 
-    where = ""
-    params: dict = {"limit": limit, "offset": offset}
+    try:
+        where = ""
+        params: dict = {"limit": limit, "offset": offset}
 
-    if video_id:
-        where = "WHERE vp.video_id = :video_id"
-        params["video_id"] = video_id
+        if video_id:
+            where = "WHERE vp.video_id = :video_id"
+            params["video_id"] = video_id
 
-    query = text(f"""
-        SELECT vp.id, vp.video_id, vp.platform, vp.views, vp.likes,
-               vp.comments, vp.shares, vp.saves, vp.purchases, vp.revenue,
-               vp.engagement_rate, vp.conversion_rate, vp.caption,
-               vp.hashtags, vp.recorded_at, vp.created_at,
-               v.original_filename
-        FROM video_performance vp
-        LEFT JOIN videos v ON v.id = vp.video_id
-        {where}
-        ORDER BY vp.recorded_at DESC
-        LIMIT :limit OFFSET :offset
-    """)
+        query = text(f"""
+            SELECT vp.id, vp.video_id, vp.platform, vp.views, vp.likes,
+                   vp.comments, vp.shares, vp.saves, vp.purchases, vp.revenue,
+                   vp.engagement_rate, vp.conversion_rate, vp.caption,
+                   vp.hashtags, vp.recorded_at, vp.created_at,
+                   v.original_filename
+            FROM video_performance vp
+            LEFT JOIN videos v ON v.id = vp.video_id
+            {where}
+            ORDER BY vp.recorded_at DESC
+            LIMIT :limit OFFSET :offset
+        """)
 
-    async with get_session() as session:
-        result = await session.execute(text(f"SELECT COUNT(*) FROM video_performance {'WHERE video_id = :video_id' if video_id else ''}"), params if video_id else {})
-        total = result.scalar()
+        async with get_session() as session:
+            result = await session.execute(text(f"SELECT COUNT(*) FROM video_performance {'WHERE video_id = :video_id' if video_id else ''}"), params if video_id else {})
+            total = result.scalar()
 
-        result = await session.execute(query, params)
-        rows = result.fetchall()
+            result = await session.execute(query, params)
+            rows = result.fetchall()
 
-    records = []
-    for row in rows:
-        records.append({
-            "id": str(row[0]),
-            "video_id": str(row[1]),
-            "platform": row[2],
-            "views": row[3],
-            "likes": row[4],
-            "comments": row[5],
-            "shares": row[6],
-            "saves": row[7],
-            "purchases": row[8],
-            "revenue": row[9],
-            "engagement_rate": row[10],
-            "conversion_rate": row[11],
-            "caption": row[12],
-            "hashtags": row[13],
-            "recorded_at": row[14].isoformat() if row[14] else None,
-            "created_at": row[15].isoformat() if row[15] else None,
-            "original_filename": row[16],
-        })
+        records = []
+        for row in rows:
+            records.append({
+                "id": str(row[0]),
+                "video_id": str(row[1]),
+                "platform": row[2],
+                "views": row[3],
+                "likes": row[4],
+                "comments": row[5],
+                "shares": row[6],
+                "saves": row[7],
+                "purchases": row[8],
+                "revenue": row[9],
+                "engagement_rate": row[10],
+                "conversion_rate": row[11],
+                "caption": row[12],
+                "hashtags": row[13],
+                "recorded_at": row[14].isoformat() if row[14] else None,
+                "created_at": row[15].isoformat() if row[15] else None,
+                "original_filename": row[16],
+            })
 
-    return {"records": records, "total": total, "limit": limit, "offset": offset}
+        return {"records": records, "total": total, "limit": limit, "offset": offset}
+    except Exception as e:
+        logger.warning(f"list_performance error (table may not exist): {e}")
+        return {"records": [], "total": 0, "limit": limit, "offset": offset}
 
 
 @router.get("/video/{video_id}")
@@ -683,28 +687,41 @@ async def performance_stats(
     """Get overall performance statistics."""
     verify_admin(x_admin_key)
 
-    async with get_session() as session:
-        result = await session.execute(text("""
-            SELECT 
-                COUNT(*) as total_records,
-                COUNT(DISTINCT video_id) as unique_videos,
-                AVG(engagement_rate) as avg_engagement,
-                AVG(conversion_rate) as avg_conversion,
-                AVG(views) as avg_views,
-                SUM(views) as total_views,
-                SUM(purchases) as total_purchases,
-                SUM(revenue) as total_revenue
-            FROM video_performance
-        """))
-        row = result.fetchone()
+    try:
+        async with get_session() as session:
+            result = await session.execute(text("""
+                SELECT 
+                    COUNT(*) as total_records,
+                    COUNT(DISTINCT video_id) as unique_videos,
+                    AVG(engagement_rate) as avg_engagement,
+                    AVG(conversion_rate) as avg_conversion,
+                    AVG(views) as avg_views,
+                    SUM(views) as total_views,
+                    SUM(purchases) as total_purchases,
+                    SUM(revenue) as total_revenue
+                FROM video_performance
+            """))
+            row = result.fetchone()
 
-    return {
-        "total_records": row[0],
-        "unique_videos": row[1],
-        "avg_engagement_rate": float(row[2]) if row[2] else None,
-        "avg_conversion_rate": float(row[3]) if row[3] else None,
-        "avg_views": float(row[4]) if row[4] else None,
-        "total_views": row[5],
-        "total_purchases": row[6],
-        "total_revenue": float(row[7]) if row[7] else None,
-    }
+        return {
+            "total_records": row[0],
+            "unique_videos": row[1],
+            "avg_engagement_rate": float(row[2]) if row[2] else None,
+            "avg_conversion_rate": float(row[3]) if row[3] else None,
+            "avg_views": float(row[4]) if row[4] else None,
+            "total_views": row[5],
+            "total_purchases": row[6],
+            "total_revenue": float(row[7]) if row[7] else None,
+        }
+    except Exception as e:
+        logger.warning(f"performance_stats error (table may not exist): {e}")
+        return {
+            "total_records": 0,
+            "unique_videos": 0,
+            "avg_engagement_rate": None,
+            "avg_conversion_rate": None,
+            "avg_views": None,
+            "total_views": 0,
+            "total_purchases": 0,
+            "total_revenue": None,
+        }
