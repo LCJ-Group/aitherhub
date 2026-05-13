@@ -494,10 +494,10 @@ async def get_uncertain_phases(
                 vp.reviewer_name,
                 vp.frame_quality,
                 vp.audio_features,
-                v.title as video_title,
+                v.original_filename as video_title,
                 v.created_at as video_created_at
             FROM video_phases vp
-            LEFT JOIN videos v ON v.video_id = vp.video_id
+            LEFT JOIN videos v ON v.id = vp.video_id
             {where}
             ORDER BY vp.video_id, vp.phase_index
             LIMIT 500
