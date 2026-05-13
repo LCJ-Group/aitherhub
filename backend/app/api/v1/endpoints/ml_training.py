@@ -446,3 +446,254 @@ async def get_effectiveness_by_version(
         "version_best_phase_stats": best_phase_versions,
         "auc_history": auc_history,
     }
+
+
+# ── Active Learning Endpoints (v8) ──
+
+@router.get("/active-learning/uncertain-phases")
+async def get_uncertain_phases(
+    limit: int = 20,
+    video_id: Optional[str] = None,
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """v8: アクティブラーニング - 不確実なフェーズ一覧を取得
+
+    MLスコアが0.4〜0.6の「不確実領域」にあるフェーズを返す。
+    これらのフェーズを人間がレビューすることで、モデル精度が最も効率的に向上する。
+
+    Returns:
+        phases: レビュー優先度順にソートされたフェーズ一覧
+        stats: 不確実フェーズの統計情報
+    """
+    _check_admin(x_admin_key)
+
+    # Fetch phases with their features
+    conditions = ["vp.user_rating IS NULL OR vp.user_rating = 0"]  # 未レビュー優先
+    params = {"limit": limit}
+    if video_id:
+        conditions.append("vp.video_id = :video_id")
+        params["video_id"] = video_id
+
+    where = "WHERE " + " AND ".join(conditions)
+
+    query = f"""
+        SELECT 
+            vp.video_id,
+            vp.phase_index,
+            vp.phase_description,
+            vp.time_start,
+            vp.time_end,
+            vp.cta_score,
+            vp.importance_score,
+            vp.sales_psychology_tags,
+            vp.human_sales_tags,
+            vp.user_rating,
+            vp.user_comment,
+            vp.reviewer_name,
+            vp.frame_quality,
+            vp.audio_features,
+            v.title as video_title,
+            v.created_at as video_created_at
+        FROM video_phases vp
+        LEFT JOIN videos v ON v.video_id = vp.video_id
+        {where}
+        ORDER BY vp.video_id, vp.phase_index
+        LIMIT 500
+    """
+
+    async with get_session() as session:
+        result = await session.execute(text(query), params)
+        rows = result.fetchall()
+
+    if not rows:
+        return {"phases": [], "stats": {"total_uncertain": 0, "total_scanned": 0}}
+
+    # Try to use ml_scorer for uncertainty detection
+    try:
+        import sys
+        import os
+        worker_path = os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "..", "worker", "batch")
+        worker_path = os.path.abspath(worker_path)
+        if worker_path not in sys.path:
+            sys.path.insert(0, worker_path)
+
+        from ml_scorer import get_ml_scorer, extract_phase_features_for_ml
+
+        scorer = get_ml_scorer()
+        if scorer:
+            phases_with_scores = []
+            for row in rows:
+                # Build phase dict for feature extraction
+                phase_dict = {
+                    "video_id": str(row[0]),
+                    "phase_index": row[1],
+                    "text": row[2] or "",
+                    "time_range": {
+                        "start_sec": float(row[3]) if row[3] else 0,
+                        "end_sec": float(row[4]) if row[4] else 0,
+                    },
+                    "cta_score": row[5] or 0,
+                    "importance_score": float(row[6]) if row[6] else 0,
+                    "tags": _parse_json_safe(row[7]),
+                    "human_sales_tags": _parse_json_safe(row[8]),
+                    "user_rating": row[9] or 0,
+                    "user_comment": row[10] or "",
+                    "frame_quality": _parse_json_safe(row[12]),
+                    "audio_features": _parse_json_safe(row[13]),
+                }
+
+                features = extract_phase_features_for_ml(phase_dict)
+                prediction = scorer.predict_with_uncertainty(features)
+
+                if prediction["is_uncertain"]:
+                    phases_with_scores.append({
+                        "video_id": str(row[0]),
+                        "phase_index": row[1],
+                        "phase_description": (row[2] or "")[:200],
+                        "time_start": float(row[3]) if row[3] else 0,
+                        "time_end": float(row[4]) if row[4] else 0,
+                        "video_title": row[14] or "",
+                        "ml_score": prediction["score"],
+                        "click_score": prediction["click_score"],
+                        "order_score": prediction["order_score"],
+                        "uncertainty": prediction["uncertainty"],
+                        "review_priority": prediction["review_priority"],
+                        "has_human_review": 1 if row[9] and row[9] > 0 else 0,
+                        "user_rating": row[9] or 0,
+                    })
+
+            # Sort by review priority
+            priority_order = {"high": 0, "medium": 1, "low": 2}
+            phases_with_scores.sort(
+                key=lambda x: (priority_order.get(x["review_priority"], 3), x["uncertainty"])
+            )
+
+            return {
+                "phases": phases_with_scores[:limit],
+                "stats": {
+                    "total_uncertain": len(phases_with_scores),
+                    "total_scanned": len(rows),
+                    "uncertainty_rate": round(len(phases_with_scores) / max(len(rows), 1) * 100, 1),
+                    "model_version": scorer.get_model_version(),
+                },
+            }
+        else:
+            return {
+                "phases": [],
+                "stats": {
+                    "total_uncertain": 0,
+                    "total_scanned": len(rows),
+                    "error": "ML scorer not available (no model loaded)",
+                },
+            }
+
+    except Exception as e:
+        logger.error(f"[active-learning] Error: {e}")
+        return {
+            "phases": [],
+            "stats": {
+                "total_uncertain": 0,
+                "total_scanned": len(rows),
+                "error": str(e),
+            },
+        }
+
+
+@router.get("/active-learning/stats")
+async def get_active_learning_stats(
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """v8: アクティブラーニング統計情報
+
+    Returns:
+        review_coverage: レビュー済みフェーズの割合
+        rating_distribution: 評価分布
+        reviewer_stats: レビュアー別統計
+        uncertainty_estimate: 不確実フェーズの推定数
+    """
+    _check_admin(x_admin_key)
+
+    query = """
+        SELECT 
+            COUNT(*) as total_phases,
+            COUNT(CASE WHEN user_rating IS NOT NULL AND user_rating > 0 THEN 1 END) as rated_phases,
+            COUNT(CASE WHEN user_rating = 5 THEN 1 END) as rating_5,
+            COUNT(CASE WHEN user_rating = 4 THEN 1 END) as rating_4,
+            COUNT(CASE WHEN user_rating = 3 THEN 1 END) as rating_3,
+            COUNT(CASE WHEN user_rating = 2 THEN 1 END) as rating_2,
+            COUNT(CASE WHEN user_rating = 1 THEN 1 END) as rating_1
+        FROM video_phases
+    """
+
+    reviewer_query = """
+        SELECT 
+            reviewer_name,
+            COUNT(*) as review_count,
+            AVG(user_rating) as avg_rating,
+            STDDEV(user_rating) as std_rating,
+            MIN(user_rating) as min_rating,
+            MAX(user_rating) as max_rating
+        FROM video_phases
+        WHERE reviewer_name IS NOT NULL AND user_rating > 0
+        GROUP BY reviewer_name
+        ORDER BY review_count DESC
+    """
+
+    async with get_session() as session:
+        result = await session.execute(text(query))
+        row = result.fetchone()
+
+        reviewer_result = await session.execute(text(reviewer_query))
+        reviewer_rows = reviewer_result.fetchall()
+
+    total = row[0] if row else 0
+    rated = row[1] if row else 0
+
+    reviewers = []
+    for r in reviewer_rows:
+        reviewers.append({
+            "reviewer_name": r[0],
+            "review_count": r[1],
+            "avg_rating": round(float(r[2]), 2) if r[2] else None,
+            "std_rating": round(float(r[3]), 2) if r[3] else None,
+            "min_rating": r[4],
+            "max_rating": r[5],
+        })
+
+    return {
+        "review_coverage": {
+            "total_phases": total,
+            "rated_phases": rated,
+            "unrated_phases": total - rated,
+            "coverage_rate": round(rated / max(total, 1) * 100, 1),
+        },
+        "rating_distribution": {
+            "5": row[2] if row else 0,
+            "4": row[3] if row else 0,
+            "3": row[4] if row else 0,
+            "2": row[5] if row else 0,
+            "1": row[6] if row else 0,
+        },
+        "reviewer_stats": reviewers,
+        "recommendations": {
+            "target_coverage": 30.0,
+            "current_coverage": round(rated / max(total, 1) * 100, 1),
+            "phases_needed": max(0, int(total * 0.3) - rated),
+            "note": "30%以上のレビューカバレッジでモデル精度が大幅に向上します",
+        },
+    }
+
+
+def _parse_json_safe(val):
+    """Safely parse a JSON value."""
+    if val is None:
+        return []
+    if isinstance(val, (list, dict)):
+        return val
+    if isinstance(val, str):
+        try:
+            import json
+            return json.loads(val)
+        except (json.JSONDecodeError, TypeError):
+            return []
+    return []

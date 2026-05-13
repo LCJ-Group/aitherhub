@@ -1,8 +1,15 @@
 """
-ml_scorer.py – ML Model Scorer for Phase Selection
+ml_scorer.py – ML Model Scorer for Phase Selection v8
 ====================================================
 学習済みモデル（LightGBM/LogisticRegression）を使用して
 フェーズのクリック/注文予測スコアを計算する。
+
+v8 変更点:
+  - アクティブラーニング: uncertainty_zone検出 (スコア0.4〜0.6の不確実領域)
+  - get_uncertain_phases(): レビュー優先度の高いフェーズを返す
+  - user_rating_normalized 特徴量対応
+  - テキスト埋め込み特徴量 (emb_0〜emb_7) 対応
+  - predict_with_uncertainty(): スコアと不確実度を同時に返す
 
 best_phase_pipeline.py の compute_attention_score() と組み合わせて使用。
 MLスコアが利用可能な場合は、attention_score + ml_score の加重平均でランキング。
@@ -12,18 +19,24 @@ MLスコアが利用可能な場合は、attention_score + ml_score の加重平
     scorer = get_ml_scorer()  # モデルをロード（初回のみ）
     if scorer:
         ml_score = scorer.predict_phase(phase_features)
+        # アクティブラーニング: 不確実なフェーズを取得
+        uncertain = scorer.get_uncertain_phases(all_phases_features)
 """
 import os
 import json
 import pickle
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List, Tuple
 
 logger = logging.getLogger(__name__)
 
 # Model directory (relative to this file)
 MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
 LATEST_MODEL_DIR = os.path.join(MODELS_DIR, "latest")
+
+# Active Learning config
+UNCERTAINTY_LOW = 0.4
+UNCERTAINTY_HIGH = 0.6
 
 # Singleton scorer instance
 _scorer_instance = None
@@ -131,6 +144,103 @@ class MLScorer:
 
         return click_weight * click_score + order_weight * order_score
 
+    def predict_with_uncertainty(self, features: Dict[str, Any],
+                                  click_weight: float = 0.4,
+                                  order_weight: float = 0.6) -> Dict[str, Any]:
+        """
+        v8: Predict combined score with uncertainty information.
+
+        Returns dict with:
+          - score: combined ML score (0-1)
+          - click_score: click prediction (0-1)
+          - order_score: order prediction (0-1)
+          - is_uncertain: True if score is in uncertainty zone (0.4-0.6)
+          - uncertainty: distance from 0.5 (lower = more uncertain)
+          - review_priority: 'high' if uncertain and unreviewed, 'medium' if uncertain, 'low' otherwise
+        """
+        click_score = self.predict_click(features)
+        order_score = self.predict_order(features)
+
+        if click_score is None and order_score is None:
+            return {
+                "score": None,
+                "click_score": None,
+                "order_score": None,
+                "is_uncertain": False,
+                "uncertainty": 1.0,
+                "review_priority": "low",
+            }
+
+        if click_score is None:
+            combined = order_score
+        elif order_score is None:
+            combined = click_score
+        else:
+            combined = click_weight * click_score + order_weight * order_score
+
+        # Uncertainty: distance from 0.5 (0 = most uncertain, 0.5 = most certain)
+        uncertainty = abs(combined - 0.5)
+        is_uncertain = UNCERTAINTY_LOW <= combined <= UNCERTAINTY_HIGH
+
+        # Review priority
+        has_review = features.get("has_human_review", 0) == 1
+        if is_uncertain and not has_review:
+            review_priority = "high"
+        elif is_uncertain:
+            review_priority = "medium"
+        else:
+            review_priority = "low"
+
+        return {
+            "score": round(combined, 4) if combined is not None else None,
+            "click_score": round(click_score, 4) if click_score is not None else None,
+            "order_score": round(order_score, 4) if order_score is not None else None,
+            "is_uncertain": is_uncertain,
+            "uncertainty": round(uncertainty, 4),
+            "review_priority": review_priority,
+        }
+
+    def get_uncertain_phases(self, phases_features: List[Dict[str, Any]],
+                              max_results: int = 20,
+                              click_weight: float = 0.4,
+                              order_weight: float = 0.6) -> List[Dict[str, Any]]:
+        """
+        v8: Active Learning - Get phases that would benefit most from human review.
+
+        Returns phases sorted by review priority:
+        1. Uncertain (0.4-0.6) + unreviewed → highest priority
+        2. Uncertain (0.4-0.6) + reviewed → medium priority
+        3. All others → low priority
+
+        Each result includes the phase features + uncertainty metadata.
+        """
+        results = []
+
+        for i, features in enumerate(phases_features):
+            prediction = self.predict_with_uncertainty(features, click_weight, order_weight)
+
+            result = {
+                "index": i,
+                "video_id": features.get("video_id", ""),
+                "phase_index": features.get("phase_index", 0),
+                "score": prediction["score"],
+                "click_score": prediction["click_score"],
+                "order_score": prediction["order_score"],
+                "is_uncertain": prediction["is_uncertain"],
+                "uncertainty": prediction["uncertainty"],
+                "review_priority": prediction["review_priority"],
+                "has_human_review": features.get("has_human_review", 0),
+                "user_rating": features.get("user_rating", 0),
+                "text_preview": features.get("text", "")[:100],
+            }
+            results.append(result)
+
+        # Sort by review priority: high > medium > low, then by uncertainty (ascending)
+        priority_order = {"high": 0, "medium": 1, "low": 2}
+        results.sort(key=lambda x: (priority_order.get(x["review_priority"], 3), x["uncertainty"]))
+
+        return results[:max_results]
+
     def _predict(self, model_payload, features: Dict[str, Any]) -> Optional[float]:
         """Run prediction using the model payload (dict with 'model', 'scaler', 'feature_names')."""
         try:
@@ -181,6 +291,19 @@ class MLScorer:
             return self.manifest.get("model_version")
         return None
 
+    def get_model_info(self) -> Dict[str, Any]:
+        """Get comprehensive model information."""
+        if not self.manifest:
+            return {"loaded": False}
+        return {
+            "loaded": self._loaded,
+            "version": self.manifest.get("model_version"),
+            "n_features": len(self.feature_names) if self.feature_names else 0,
+            "has_click_model": self.click_model is not None,
+            "has_order_model": self.order_model is not None,
+            "notes": self.manifest.get("notes", {}),
+        }
+
 
 def get_ml_scorer() -> Optional[MLScorer]:
     """Get or create the singleton MLScorer instance."""
@@ -198,6 +321,7 @@ def extract_phase_features_for_ml(phase: dict) -> Dict[str, Any]:
     for ML model prediction.
     
     This maps the phase_unit structure to the feature names used in training.
+    v8: Added user_rating_normalized and text embedding features.
     """
     features = {}
 
@@ -239,12 +363,13 @@ def extract_phase_features_for_ml(phase: dict) -> Dict[str, Any]:
 
     # Human review features (may not be available at prediction time)
     features["user_rating"] = phase.get("user_rating", 0) or 0
+    features["user_rating_normalized"] = phase.get("user_rating_normalized", 0) or 0  # v8
     features["has_human_review"] = 1 if phase.get("user_rating") else 0
-    features["human_tag_count"] = 0
-    features["comment_length"] = 0
+    features["human_tag_count"] = len(phase.get("human_sales_tags", []) or [])
+    features["comment_length"] = len(phase.get("user_comment", "") or "")
 
     # Comment keyword features
-    comment = (phase.get("comment", "") or "").lower()
+    comment = (phase.get("user_comment", "") or phase.get("comment", "") or "").lower()
     features["comment_kw_price"] = 1 if any(w in comment for w in ["円", "¥", "値段", "安い"]) else 0
     features["comment_kw_cta"] = 1 if any(w in comment for w in ["買", "購入", "注文"]) else 0
     features["comment_kw_positive"] = 1 if any(w in comment for w in ["良い", "いい", "最高", "素晴"]) else 0
@@ -282,6 +407,12 @@ def extract_phase_features_for_ml(phase: dict) -> Dict[str, Any]:
     else:
         features["af_energy_trend"] = 0
 
+    # v8: Text embedding features (emb_0 ~ emb_7)
+    # These are pre-computed during dataset generation.
+    # At prediction time, they default to 0 unless provided.
+    for j in range(8):
+        features[f"emb_{j}"] = phase.get(f"emb_{j}", 0) or 0
+
     # Human tag features (htag_*)
     htag_list = [
         "HOOK", "CHAT", "PREP", "PHONE_OP", "LONG_GREET", "COMMENT_READ",
@@ -289,7 +420,7 @@ def extract_phase_features_for_ml(phase: dict) -> Dict[str, Any]:
         "DEMONSTRATION", "COMPARISON", "PROOF", "TRUST", "SOCIAL_PROOF",
         "OBJECTION_HANDLING", "URGENCY", "LIMITED_OFFER", "BONUS", "CTA"
     ]
-    phase_tags = phase.get("tags", []) or []
+    phase_tags = phase.get("human_sales_tags", phase.get("tags", [])) or []
     if isinstance(phase_tags, list):
         tag_set = set(t.upper() if isinstance(t, str) else "" for t in phase_tags)
     else:

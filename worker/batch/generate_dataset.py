@@ -1,56 +1,53 @@
-"""generate_dataset.py  –  AI学習用データセット生成ジョブ v7
+"""generate_dataset.py  –  AI学習用データセット生成ジョブ v8
 =====================================================
 仕様:
   ① 目的変数: y_click (click_spike窓重複), y_order (order_spike窓重複), y_strong
   ② 1行 = 1 event (phase)
-  ③ event × sales_moment は window ±150s で結合、距離減衰 weight
+  ③ event × sales_moment は window ±90s で結合、距離減衰 weight
   ④ 正例:負例 = 1:3 サンプリング
   ⑤ 情報リーク防止: GMV/注文数/クリック数は特徴量に入れない
+
+v8 変更点 (ML精度向上 - 7つの改善):
+  1. レビュー済みデータの重み付け強化:
+     - user_rating >= 4 → sample_weight *= 2.0 (高評価正例ブースト)
+     - user_rating <= 2 and > 0 → sample_weight *= 1.5 (低評価負例ブースト)
+  2. レビュアー間バイアス補正:
+     - reviewer_name別の平均・標準偏差を計算
+     - user_rating_normalized (z-score正規化) 特徴量を追加
+  3. アクティブラーニング用メタデータ:
+     - uncertainty_zone フラグ出力 (MLスコア0.4〜0.6の不確実領域)
+  4. MOMENT_WINDOW_SEC を150→90秒に縮小 (ラベルノイズ削減)
+  5. テキスト埋め込み特徴量:
+     - sentence-transformers で phase_description をベクトル化
+     - PCA で8次元に削減して特徴量に追加 (emb_0〜emb_7)
+  6. 時系列バリデーション用メタデータ:
+     - video_created_at を出力 (train.pyで時系列分割に使用)
+  7. reviewer_id 特徴量追加 (レビュアー識別)
+
 v7 変更点 (品質特徴量統合 - Level 2):
-  - frame_quality (JSONB) からフレーム品質特徴量5個を抽出:
-    fq_blur_score, fq_brightness_mean, fq_brightness_std, fq_color_saturation, fq_scene_change_count
-  - audio_features (JSONB) から音声品質特徴量7個を抽出:
-    af_energy_mean, af_energy_max, af_pitch_mean, af_pitch_std,
-    af_speech_rate, af_silence_ratio, af_energy_trend
+  - frame_quality (JSONB) からフレーム品質特徴量5個を抽出
+  - audio_features (JSONB) から音声品質特徴量7個を抽出
   - 合計 76 + 12 = 88 特徴量
-v6 変更点 (NGフィードバック統合)::
+
+v6 変更点 (NGフィードバック統合):
   - fetch_phases()にvideo_clips.is_unusable/unusable_reasonとclip_feedback.ratingをLEFT JOIN
-  - NG特徴量追加:
-    is_ng (is_unusable=TRUE OR feedback_rating='bad' → 1)
-    ng_source ('unusable' / 'feedback' / 'both' / 'none')
-    unusable_reason_* (6種 one-hot: irrelevant, too_short, too_long, no_product, audio_bad, low_quality)
-    has_ng_feedback (clip_feedbackにrating='bad'があれば1)
-    ng_reason_tag_count (reason_tagsの数)
-  - NGフェーズ強制負例化: is_ng=1のフェーズはy_click=0, y_order=0, y_strong=0に強制上書き
-  - dataset_stats.jsonにng_feedback集計追加
+  - NG特徴量追加
 
 v5 変更点 (confidence weight):
   - sample_weightにconfidence-based重みを反映
-    csv=1.0, purchase_popup=0.9, product_viewers_popup=0.75, viewer/comment_spike=0.5
-  - confidence_weightフィールド追加
 
 v4 変更点 (screen moment 統合):
-  - video_sales_momentsのsourceカラムに対応 (csv / screen)
-  - screen momentの教師信号をラベル計算に統合:
-    purchase_popup → y_strong + y_order (最強信号)
-    product_viewers_popup → y_click (興味信号)
-    viewer_spike → y_click
-    comment_spike → y_click
-  - moment_sourceメタデータ追加 ('csv' / 'screen' / 'both' / 'none')
-  - has_screen_moment, has_csv_moment フラグ追加
-  - screen_purchase_popup, screen_product_viewers フラグ追加
-  - dataset_stats.jsonにmoment_sources集計追加
+  - video_sales_momentsのsourceカラムに対応
 
 v3 変更点:
   - human_sales_tags を行動タグ(8) + 販売心理タグ(14) の one-hot 特徴量に展開
   - user_rating (1-5) を数値特徴量として追加
   - user_comment からキーワード特徴量 + テキスト長を抽出
-  - has_human_review フラグ追加（レビュー済みかどうか）
-  - reviewer_name は補助メタデータとして出力（特徴量には入れない）
+  - has_human_review フラグ追加
 
 出力: train_click.jsonl / train_order.jsonl
 
-特徴量 (v6):
+特徴量 (v8 = 88 + 1 normalized_rating + 8 embeddings = 97):
   テキスト系: keyword flags (円/¥/割引/今だけ/残り/リンク/カート/タップ etc.)
               数字出現フラグ, text_length
   構造系:     event_type, event_duration, event_position_min
@@ -58,6 +55,7 @@ v3 変更点:
   CTA系:      cta_score, importance_score (AI生成なのでリークではない)
   人間レビュー系:
     user_rating (1-5, 未評価=0)
+    user_rating_normalized (z-score正規化, 未評価=0) ← NEW v8
     has_human_review (0/1)
     human_tag_count (選択されたタグ数)
     htag_HOOK, htag_CHAT, ... (行動タグ one-hot × 8)
@@ -65,20 +63,18 @@ v3 変更点:
     comment_length (コメント文字数)
     comment_kw_price, comment_kw_cta, ... (コメントからのキーワードフラグ)
   NGフィードバック系 (v6):
-    is_ng (0/1: is_unusable OR feedback_rating='bad')
-    ng_source ('unusable'/'feedback'/'both'/'none')
-    has_ng_feedback (0/1)
-    ng_reason_tag_count (タグ数)
-    unusable_reason_irrelevant, unusable_reason_too_short, unusable_reason_too_long,
-    unusable_reason_no_product, unusable_reason_audio_bad, unusable_reason_low_quality (one-hot)
+    is_ng, ng_source, has_ng_feedback, ng_reason_tag_count, unusable_reason_*
   品質特徴量 (v7):
     fq_blur_score, fq_brightness_mean, fq_brightness_std, fq_color_saturation, fq_scene_change_count
     af_energy_mean, af_energy_max, af_pitch_mean, af_pitch_std,
     af_speech_rate, af_silence_ratio, af_energy_trend
+  テキスト埋め込み (v8): ← NEW
+    emb_0, emb_1, ..., emb_7 (PCA 8次元)
 
 使い方:
   python generate_dataset.py --output-dir /tmp/datasets
   python generate_dataset.py --video-id abc-123 --output-dir /tmp/datasets
+  python generate_dataset.py --output-dir /tmp/datasets --no-embeddings  # 埋め込み無効化
 """
 
 import argparse
@@ -142,10 +138,15 @@ def _init_db():
     AsyncSessionLocal = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 
 # ── Config ──
-MOMENT_WINDOW_SEC = 150       # ±150s window for label matching
-WEIGHT_DECAY_TAU = 60.0       # exp(-d/tau) decay constant
-NEG_RATIO = 3                 # negative:positive ratio
+# v8: MOMENT_WINDOW_SEC を150→90秒に縮小 (改善5: ラベルノイズ削減)
+MOMENT_WINDOW_SEC = 90            # ±90s window for label matching (was 150)
+WEIGHT_DECAY_TAU = 60.0           # exp(-d/tau) decay constant
+NEG_RATIO = 3                     # negative:positive ratio
 RANDOM_SEED = 42
+
+# ── Text Embedding Config (v8) ──
+EMBEDDING_DIM = 8                 # PCA output dimensions
+EMBEDDING_MODEL_NAME = "paraphrase-multilingual-MiniLM-L12-v2"
 
 # ── Human Sales Tags (must match frontend/backend definitions) ──
 # Behavior tags (行動タグ)
@@ -318,7 +319,9 @@ def extract_comment_features(comment: str) -> dict:
 # ── DB Fetch Functions ──
 
 async def fetch_phases(session, video_id=None, user_id=None):
-    """Fetch video_phases with safe columns only (no GMV/order/click)."""
+    """Fetch video_phases with safe columns only (no GMV/order/click).
+    v8: Also fetches videos.created_at for time-series validation.
+    """
     conditions = []
     params = {}
     if video_id:
@@ -352,7 +355,9 @@ async def fetch_phases(session, video_id=None, user_id=None):
             cf.reason_tags as feedback_reason_tags,
             -- Quality features (v7)
             vp.frame_quality,
-            vp.audio_features
+            vp.audio_features,
+            -- Time-series metadata (v8)
+            v.created_at as video_created_at
         FROM video_phases vp
         LEFT JOIN video_clips vc
             ON vc.video_id = vp.video_id
@@ -360,6 +365,8 @@ async def fetch_phases(session, video_id=None, user_id=None):
         LEFT JOIN clip_feedback cf
             ON cf.video_id = vp.video_id
             AND cf.phase_index = vp.phase_index::text
+        LEFT JOIN videos v
+            ON v.video_id = vp.video_id
         {where}
         ORDER BY vp.video_id, vp.phase_index
     """)
@@ -662,9 +669,122 @@ def extract_quality_features(frame_quality_raw, audio_features_raw) -> dict:
     return {**fq, **af}
 
 
+# ── Text Embedding (v8) ──
+
+def compute_text_embeddings(descriptions: list, n_components: int = EMBEDDING_DIM) -> list:
+    """Compute PCA-reduced text embeddings for phase descriptions.
+
+    Uses sentence-transformers for encoding, then PCA for dimensionality reduction.
+    Returns list of dicts with emb_0, emb_1, ..., emb_{n_components-1}.
+    Falls back to zeros if sentence-transformers is not available.
+    """
+    try:
+        from sentence_transformers import SentenceTransformer
+        from sklearn.decomposition import PCA
+        import numpy as np
+    except ImportError:
+        print("[dataset] WARNING: sentence-transformers not available. Using zero embeddings.")
+        return [_zero_embedding(n_components) for _ in descriptions]
+
+    if not descriptions:
+        return []
+
+    # Replace empty strings with a placeholder
+    texts = [d if d else "空白" for d in descriptions]
+
+    print(f"[dataset] Computing text embeddings for {len(texts)} descriptions...")
+    try:
+        model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+        embeddings = model.encode(texts, show_progress_bar=False, batch_size=128)
+
+        # PCA dimensionality reduction
+        n_samples = len(embeddings)
+        actual_components = min(n_components, n_samples, embeddings.shape[1])
+        if actual_components < 2:
+            print("[dataset] WARNING: Too few samples for PCA. Using zero embeddings.")
+            return [_zero_embedding(n_components) for _ in descriptions]
+
+        pca = PCA(n_components=actual_components, random_state=42)
+        reduced = pca.fit_transform(embeddings)
+
+        print(f"[dataset] PCA explained variance ratio: {pca.explained_variance_ratio_.sum():.4f}")
+
+        # Convert to list of dicts
+        results = []
+        for i in range(n_samples):
+            emb_dict = {}
+            for j in range(n_components):
+                if j < actual_components:
+                    emb_dict[f"emb_{j}"] = round(float(reduced[i, j]), 6)
+                else:
+                    emb_dict[f"emb_{j}"] = 0.0
+            results.append(emb_dict)
+        return results
+
+    except Exception as e:
+        print(f"[dataset] WARNING: Embedding computation failed: {e}. Using zero embeddings.")
+        return [_zero_embedding(n_components) for _ in descriptions]
+
+
+def _zero_embedding(n_components: int) -> dict:
+    """Return a zero embedding dict."""
+    return {f"emb_{j}": 0.0 for j in range(n_components)}
+
+
+# ── Reviewer Bias Correction (v8) ──
+
+def compute_reviewer_stats(phases) -> dict:
+    """Compute per-reviewer rating statistics for z-score normalization.
+
+    Returns: {reviewer_name: {"mean": float, "std": float, "count": int}}
+    """
+    reviewer_ratings = defaultdict(list)
+    for r in phases:
+        reviewer = r.reviewer_name or ""
+        rating = int(r.user_rating) if r.user_rating is not None else 0
+        if rating > 0 and reviewer:
+            reviewer_ratings[reviewer].append(rating)
+
+    stats = {}
+    for reviewer, ratings in reviewer_ratings.items():
+        if len(ratings) >= 3:  # Need at least 3 ratings for meaningful stats
+            import numpy as np
+            arr = np.array(ratings, dtype=float)
+            stats[reviewer] = {
+                "mean": float(arr.mean()),
+                "std": float(arr.std()) if arr.std() > 0 else 1.0,
+                "count": len(ratings),
+            }
+        else:
+            stats[reviewer] = {
+                "mean": float(sum(ratings)) / len(ratings) if ratings else 0,
+                "std": 1.0,
+                "count": len(ratings),
+            }
+
+    return stats
+
+
+def normalize_rating(user_rating: int, reviewer_name: str, reviewer_stats: dict) -> float:
+    """Normalize user_rating using reviewer-specific z-score.
+
+    Returns 0.0 if no rating or reviewer stats not available.
+    """
+    if user_rating <= 0 or not reviewer_name:
+        return 0.0
+
+    stats = reviewer_stats.get(reviewer_name)
+    if not stats or stats["count"] < 3:
+        # Fallback: use global mean if reviewer has too few ratings
+        return 0.0
+
+    z_score = (user_rating - stats["mean"]) / stats["std"]
+    return round(z_score, 4)
+
+
 # ── Main Generation ──
 
-async def generate(output_dir: str, video_id=None, user_id=None):
+async def generate(output_dir: str, video_id=None, user_id=None, use_embeddings=True):
     """Main dataset generation."""
     _init_db()
     random.seed(RANDOM_SEED)
@@ -709,13 +829,31 @@ async def generate(output_dir: str, video_id=None, user_id=None):
     moments_idx = build_moments_index(moments_rows)
     products_idx = build_product_names_index(product_rows)
 
+    # ── v8: Compute reviewer statistics for bias correction ──
+    print("[dataset] Computing reviewer statistics...")
+    reviewer_stats = compute_reviewer_stats(phases)
+    if reviewer_stats:
+        print(f"[dataset] Reviewer stats: {len(reviewer_stats)} reviewers")
+        for rname, rstats in reviewer_stats.items():
+            print(f"    {rname}: mean={rstats['mean']:.2f}, std={rstats['std']:.2f}, count={rstats['count']}")
+    else:
+        print("[dataset] No reviewer stats available (no reviewed phases)")
+
+    # ── v8: Compute text embeddings ──
+    if use_embeddings:
+        descriptions = [r.phase_description or "" for r in phases]
+        embeddings = compute_text_embeddings(descriptions, n_components=EMBEDDING_DIM)
+    else:
+        embeddings = [_zero_embedding(EMBEDDING_DIM) for _ in phases]
+        print("[dataset] Text embeddings disabled (--no-embeddings)")
+
     # ── Build all records ──
     all_records = []
     n_reviewed = 0
     n_ng_phases = 0
     n_ng_forced_negative = 0
 
-    for r in phases:
+    for idx, r in enumerate(phases):
         vid = str(r.video_id)
         phase_start = float(r.time_start) if r.time_start is not None else 0.0
         phase_end = float(r.time_end) if r.time_end is not None else 0.0
@@ -737,6 +875,9 @@ async def generate(output_dir: str, video_id=None, user_id=None):
 
         if has_human_review:
             n_reviewed += 1
+
+        # v8: Reviewer bias correction - normalized rating
+        user_rating_normalized = normalize_rating(user_rating, reviewer_name, reviewer_stats)
 
         # NG feedback features (v6)
         ng_feats = extract_ng_features(
@@ -788,6 +929,9 @@ async def generate(output_dir: str, video_id=None, user_id=None):
         event_position_min = round(phase_start / 60.0, 1)
         event_position_pct = round(phase_start / video_duration, 3) if video_duration > 0 else 0.0
 
+        # v8: Text embedding features
+        emb_feats = embeddings[idx] if idx < len(embeddings) else _zero_embedding(EMBEDDING_DIM)
+
         record = {
             # Identity (not features)
             "video_id": vid,
@@ -818,6 +962,7 @@ async def generate(output_dir: str, video_id=None, user_id=None):
 
             # ── HUMAN REVIEW FEATURES (v3) ──
             "user_rating": user_rating,
+            "user_rating_normalized": user_rating_normalized,  # v8: z-score正規化
             "has_human_review": has_human_review,
             "human_tag_count": len(human_tags),
 
@@ -836,12 +981,17 @@ async def generate(output_dir: str, video_id=None, user_id=None):
                 getattr(r, 'audio_features', None),
             ),
 
+            # ── TEXT EMBEDDING FEATURES (v8) ──
+            **emb_feats,
+
             # ── METADATA (not used as features in training) ──
             "tags": tags,
             "human_tags": human_tags,
             "reviewer_name": reviewer_name,
             "text": desc[:200],  # truncated for reference
             "comment_text": user_comment[:200] if user_comment else "",
+            # v8: Time-series metadata for train.py
+            "video_created_at": str(r.video_created_at) if getattr(r, 'video_created_at', None) else None,
 
             # ── LABELS ──
             **labels,
@@ -914,6 +1064,16 @@ async def generate(output_dir: str, video_id=None, user_id=None):
                 else:
                     rec["sample_weight"] = 1.0
                     rec["confidence_weight"] = 1.0
+
+                # ── v8: レビュー済みデータの重み付け強化 (改善1) ──
+                # 高評価 (★4-5) → 正例として重要 → weight boost
+                # 低評価 (★1-2) → 負例として重要 → weight boost
+                rec_rating = rec.get("user_rating", 0)
+                if rec_rating >= 4:
+                    rec["sample_weight"] *= 2.0
+                elif 0 < rec_rating <= 2:
+                    rec["sample_weight"] *= 1.5
+
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
         stats[target] = {
@@ -970,6 +1130,26 @@ async def generate(output_dir: str, video_id=None, user_id=None):
         "frame_quality_features": [f"fq_{k}" for k in FRAME_QUALITY_KEYS],
         "audio_feature_names": [f"af_{k}" for k in AUDIO_FEATURE_KEYS],
     }
+    # v8: Reviewer bias stats
+    stats["reviewer_bias_correction"] = {
+        "reviewer_stats": {k: v for k, v in reviewer_stats.items()},
+        "n_reviewers": len(reviewer_stats),
+    }
+    # v8: Embedding stats
+    stats["text_embeddings"] = {
+        "enabled": use_embeddings,
+        "model": EMBEDDING_MODEL_NAME if use_embeddings else None,
+        "n_components": EMBEDDING_DIM,
+        "feature_names": [f"emb_{j}" for j in range(EMBEDDING_DIM)],
+    }
+    # v8: Config changes
+    stats["config"] = {
+        "moment_window_sec": MOMENT_WINDOW_SEC,
+        "weight_decay_tau": WEIGHT_DECAY_TAU,
+        "neg_ratio": NEG_RATIO,
+        "version": "v8",
+    }
+
     print(f"[dataset] Quality features: frame_quality={n_with_fq}/{len(all_records)} "
           f"({n_with_fq / max(len(all_records), 1) * 100:.1f}%), "
           f"audio_features={n_with_af}/{len(all_records)} "
@@ -983,16 +1163,23 @@ async def generate(output_dir: str, video_id=None, user_id=None):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate AI training dataset v7")
+    parser = argparse.ArgumentParser(description="Generate AI training dataset v8")
     parser.add_argument("--output-dir", "-o", default="/tmp/datasets",
                         help="Output directory for JSONL files")
     parser.add_argument("--video-id", default=None,
                         help="Filter by specific video ID")
     parser.add_argument("--user-id", type=int, default=None,
                         help="Filter by specific user ID")
+    parser.add_argument("--no-embeddings", action="store_true",
+                        help="Disable text embedding computation (faster, fewer features)")
     args = parser.parse_args()
 
-    count = asyncio.run(generate(args.output_dir, video_id=args.video_id, user_id=args.user_id))
+    count = asyncio.run(generate(
+        args.output_dir,
+        video_id=args.video_id,
+        user_id=args.user_id,
+        use_embeddings=not args.no_embeddings,
+    ))
     if count == 0:
         print("[dataset] WARNING: No records generated.")
         sys.exit(1)

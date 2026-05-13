@@ -1,36 +1,36 @@
 """
-train.py  –  LCJ AI 学習パイプライン v7
+train.py  –  LCJ AI 学習パイプライン v8
 ========================================
+変更点 (v8 - ML精度向上 7つの改善):
+  - Optunaハイパーパラメータチューニング追加 (改善4)
+  - 正則化強化: reg_alpha, reg_lambda, min_child_samples増加 (改善5)
+  - 時系列バリデーション: video_created_atでソートし最新20%をHoldout (改善7)
+  - user_rating_normalized 特徴量追加 (改善3)
+  - テキスト埋め込み特徴量 emb_0〜emb_7 追加 (改善6)
+  - MOMENT_WINDOW_SEC=90対応 (改善5)
+  - 合計 88 + 1 + 8 = 97 特徴量
+
 変更点 (v7 - Level 2 品質特徴量):
-  - フレーム品質特徴量5個追加 (fq_blur_score, fq_brightness_mean, fq_brightness_std,
-    fq_color_saturation, fq_scene_change_count)
-  - 音声品質特徴量7個追加 (af_energy_mean, af_energy_max, af_pitch_mean, af_pitch_std,
-    af_speech_rate, af_silence_ratio, af_energy_trend)
+  - フレーム品質特徴量5個追加
+  - 音声品質特徴量7個追加
   - 合計 76 + 12 = 88 特徴量
-  - generate_dataset.py v7 との整合性確保
 
 変更点 (v6):
-  - NG feedback 特徴量追加 (is_ng, has_ng_feedback, ng_reason_tag_count)
-  - unusable_reason one-hot (6特徴量) 追加
-  - generate_dataset.py v6 との整合性確保
+  - NG feedback 特徴量追加
 
 変更点 (v5):
-  - human_sales_tags one-hot (行動8 + 販売心理14 = 22特徴量) 追加
+  - human_sales_tags one-hot 追加
   - user_rating, has_human_review, human_tag_count 追加
-  - comment_length + comment_kw_* (6特徴量) 追加
-  - generate_dataset.py v3 との整合性確保
+  - comment_length + comment_kw_* 追加
 
 変更点 (v4):
   - Repeated GroupKFold (5fold × 3回 = 15評価) → mean±std
   - GroupStratified 自作 (greedy均等分割で正例率を均等化)
   - Holdout (直近20%の動画) → 最終判定
-  - Precision@5, @10, AUC, F1 全て mean±std
-  - Foldごとのメトリクス保存
-  - manifest.json 完全版 (dataset_version, dataset_hash, features_used, label_def, fold_metrics)
-  - GroupKFold = 採用値 (realistic), StratifiedKFold = 参考値 (optimistic)
 
 使い方:
   python train.py --input-dir /tmp/datasets --output-dir /tmp/models/
+  python train.py --input-dir /tmp/datasets --output-dir /tmp/models/ --no-optuna
 """
 
 import argparse
@@ -60,6 +60,7 @@ NUMERIC_FEATURES = [
     "exclamation_count",
     # ── Human review features (v5) ──
     "user_rating",
+    "user_rating_normalized",  # v8: z-score正規化
     "has_human_review",
     "human_tag_count",
     "comment_length",
@@ -138,20 +139,24 @@ AUDIO_QUALITY_FEATURES = [
     "af_energy_trend",
 ]
 
+# ── Text embedding features (v8) ──
+EMBEDDING_DIM = 8
+EMBEDDING_FEATURES = [f"emb_{j}" for j in range(EMBEDDING_DIM)]
+
 KNOWN_EVENT_TYPES = [
     "HOOK", "GREETING", "INTRO", "DEMONSTRATION", "PRICE",
     "CTA", "OBJECTION", "SOCIAL_PROOF", "URGENCY",
     "EMPATHY", "EDUCATION", "CHAT", "TRANSITION", "CLOSING", "UNKNOWN",
 ]
-MODEL_VERSION = 7
+MODEL_VERSION = 8
 DATE_TAG = datetime.now().strftime("%Y%m%d")
 
 # ── Label definition (for manifest traceability) ──
 LABEL_DEFINITION = {
-    "window_seconds": 150,
-    "y_click": "event overlaps with click_spike moment ±150s",
-    "y_order": "event overlaps with order_spike moment ±150s",
-    "y_strong": "event overlaps with strong moment ±150s",
+    "window_seconds": 90,  # v8: reduced from 150 to 90
+    "y_click": "event overlaps with click_spike moment ±90s",
+    "y_order": "event overlaps with order_spike moment ±90s",
+    "y_strong": "event overlaps with strong moment ±90s",
     "weight": "exp(-distance/60) decay from moment center",
     "sampling": "positive:negative = 1:3",
 }
@@ -207,17 +212,19 @@ def extract_features(records, target="click"):
     feature_names.extend(UNUSABLE_REASON_FEATURES)
     feature_names.extend(FRAME_QUALITY_FEATURES)
     feature_names.extend(AUDIO_QUALITY_FEATURES)
+    feature_names.extend(EMBEDDING_FEATURES)  # v8: text embeddings
     feature_names.extend([f"event_{et}" for et in KNOWN_EVENT_TYPES])
 
     X = np.zeros((len(records), len(feature_names)), dtype=np.float32)
     y = np.zeros(len(records), dtype=np.int32)
     w = np.ones(len(records), dtype=np.float32)
     video_ids_raw = []  # raw video_id strings
+    video_created_ats = []  # v8: for time-series holdout
 
     for i, rec in enumerate(records):
         col = 0
 
-        # Numeric features (includes user_rating, has_human_review, human_tag_count, comment_length)
+        # Numeric features (includes user_rating, user_rating_normalized, has_human_review, etc.)
         for feat in NUMERIC_FEATURES:
             val = rec.get(feat)
             X[i, col] = float(val) if val is not None else 0.0
@@ -267,6 +274,12 @@ def extract_features(records, target="click"):
             X[i, col] = float(val) if val is not None else 0.0
             col += 1
 
+        # Text embedding features (v8)
+        for feat in EMBEDDING_FEATURES:
+            val = rec.get(feat)
+            X[i, col] = float(val) if val is not None else 0.0
+            col += 1
+
         # Event type one-hot
         event_type = rec.get("event_type", "UNKNOWN")
         for et in KNOWN_EVENT_TYPES:
@@ -283,12 +296,15 @@ def extract_features(records, target="click"):
         # Video ID
         video_ids_raw.append(rec.get("video_id", f"unknown_{i}"))
 
+        # v8: video_created_at for time-series holdout
+        video_created_ats.append(rec.get("video_created_at"))
+
     # Convert video_id strings to integer group IDs
     unique_vids = sorted(set(video_ids_raw))
     vid_to_gid = {v: i for i, v in enumerate(unique_vids)}
     group_ids = np.array([vid_to_gid[g] for g in video_ids_raw], dtype=np.int32)
 
-    return X, y, w, group_ids, feature_names, unique_vids, video_ids_raw
+    return X, y, w, group_ids, feature_names, unique_vids, video_ids_raw, video_created_ats
 
 
 def precision_at_k(y_true, y_scores, k=5):
@@ -333,8 +349,8 @@ def group_stratified_split(y, group_ids, n_splits=5, random_state=42):
     fold_groups = [[] for _ in range(n_splits)]
 
     for g in groups_sorted:
-        # Find fold with minimum positive count
-        min_fold = int(np.argmin(fold_pos_counts))
+        # Find fold with fewest positives
+        min_fold = fold_pos_counts.index(min(fold_pos_counts))
         fold_groups[min_fold].append(g)
         fold_pos_counts[min_fold] += group_pos[g]
 
@@ -448,19 +464,52 @@ def repeated_group_cv(X, y, w, group_ids, model_class, model_params,
     return agg, all_fold_metrics
 
 
-def holdout_evaluate(X, y, w, group_ids, video_ids_raw, unique_vids,
-                     model_class, model_params, holdout_ratio=0.2,
-                     use_scaler=False, use_sample_weight=True):
+def holdout_evaluate_timeseries(X, y, w, group_ids, video_ids_raw, unique_vids,
+                                video_created_ats, model_class, model_params,
+                                holdout_ratio=0.2, use_scaler=False, use_sample_weight=True):
     """
-    Holdout evaluation: last N% of videos as test set.
-    Videos are sorted by their first appearance order (proxy for time).
+    v8: Time-series Holdout evaluation.
+    Videos are sorted by created_at timestamp (true chronological order).
+    Falls back to first-appearance order if created_at is not available.
     """
-    # Sort videos by first appearance index (proxy for chronological order)
+    from datetime import datetime as dt
+
+    # Build video → created_at mapping
+    vid_created_at = {}
+    for i, vid in enumerate(video_ids_raw):
+        if vid not in vid_created_at and video_created_ats[i]:
+            try:
+                # Parse the datetime string
+                ts = video_created_ats[i]
+                if isinstance(ts, str):
+                    # Try common formats
+                    for fmt in ["%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S",
+                                "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S"]:
+                        try:
+                            vid_created_at[vid] = dt.strptime(ts[:26], fmt)
+                            break
+                        except ValueError:
+                            continue
+                elif hasattr(ts, 'timestamp'):
+                    vid_created_at[vid] = ts
+            except Exception:
+                pass
+
+    # Sort videos by created_at (or fallback to first appearance)
     vid_first_idx = {}
     for i, vid in enumerate(video_ids_raw):
         if vid not in vid_first_idx:
             vid_first_idx[vid] = i
-    vids_ordered = sorted(vid_first_idx.keys(), key=lambda v: vid_first_idx[v])
+
+    if len(vid_created_at) >= len(unique_vids) * 0.5:
+        # Use time-series ordering (at least 50% have timestamps)
+        vids_ordered = sorted(unique_vids,
+                              key=lambda v: vid_created_at.get(v, dt(2020, 1, 1)))
+        ordering_method = "created_at"
+    else:
+        # Fallback to first appearance order
+        vids_ordered = sorted(vid_first_idx.keys(), key=lambda v: vid_first_idx[v])
+        ordering_method = "first_appearance"
 
     n_holdout = max(1, int(len(vids_ordered) * holdout_ratio))
     holdout_vids = set(vids_ordered[-n_holdout:])
@@ -486,13 +535,93 @@ def holdout_evaluate(X, y, w, group_ids, video_ids_raw, unique_vids,
     fold_m["train_videos"] = list(train_vids)
     fold_m["n_holdout_videos"] = len(holdout_vids)
     fold_m["n_train_videos"] = len(train_vids)
+    fold_m["ordering_method"] = ordering_method
 
-    return fold_m, {"holdout_vids": list(holdout_vids), "train_vids": list(train_vids)}
+    return fold_m, {"holdout_vids": list(holdout_vids), "train_vids": list(train_vids),
+                    "ordering_method": ordering_method}
+
+
+# ── Optuna Hyperparameter Tuning (v8) ──
+
+def optuna_tune_lgbm(X, y, w, group_ids, n_trials=30, n_splits=5, timeout=300):
+    """
+    Use Optuna to find optimal LightGBM hyperparameters.
+    Uses GroupStratified CV for evaluation.
+
+    Returns: best_params dict
+    """
+    try:
+        import optuna
+        optuna.logging.set_verbosity(optuna.logging.WARNING)
+    except ImportError:
+        print("[train] WARNING: Optuna not installed. Using default parameters.")
+        return None
+
+    import lightgbm as lgb
+    from sklearn.metrics import roc_auc_score
+
+    n_positive = int(y.sum())
+    n_total = len(y)
+    n_neg = n_total - n_positive
+
+    def objective(trial):
+        params = {
+            "objective": "binary",
+            "metric": "auc",
+            "verbosity": -1,
+            "n_estimators": trial.suggest_int("n_estimators", 100, 500),
+            "max_depth": trial.suggest_int("max_depth", 3, 8),
+            "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.1, log=True),
+            "num_leaves": trial.suggest_int("num_leaves", 8, 64),
+            "min_child_samples": trial.suggest_int("min_child_samples", 5, 50),
+            "scale_pos_weight": n_neg / max(n_positive, 1),
+            "random_state": 42,
+            "n_jobs": 1,
+            # v8: Regularization parameters (改善5)
+            "reg_alpha": trial.suggest_float("reg_alpha", 1e-4, 10.0, log=True),
+            "reg_lambda": trial.suggest_float("reg_lambda", 1e-4, 10.0, log=True),
+            "subsample": trial.suggest_float("subsample", 0.6, 1.0),
+            "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
+            "min_split_gain": trial.suggest_float("min_split_gain", 0.0, 1.0),
+        }
+
+        # Evaluate with GroupStratified CV
+        splits = group_stratified_split(y, group_ids, n_splits=n_splits, random_state=42)
+        aucs = []
+        for train_idx, val_idx in splits:
+            model = lgb.LGBMClassifier(**params)
+            model.fit(X[train_idx], y[train_idx], sample_weight=w[train_idx])
+            y_pred = model.predict_proba(X[val_idx])[:, 1]
+            try:
+                auc = roc_auc_score(y[val_idx], y_pred)
+                aucs.append(auc)
+            except ValueError:
+                pass
+
+        return np.mean(aucs) if aucs else 0.0
+
+    print(f"[train] Starting Optuna tuning ({n_trials} trials, timeout={timeout}s)...")
+    study = optuna.create_study(direction="maximize",
+                                 sampler=optuna.samplers.TPESampler(seed=42))
+    study.optimize(objective, n_trials=n_trials, timeout=timeout, show_progress_bar=False)
+
+    best_params = study.best_params
+    best_params["objective"] = "binary"
+    best_params["metric"] = "auc"
+    best_params["verbosity"] = -1
+    best_params["scale_pos_weight"] = n_neg / max(n_positive, 1)
+    best_params["random_state"] = 42
+    best_params["n_jobs"] = 1
+
+    print(f"[train] Optuna best AUC: {study.best_value:.4f}")
+    print(f"[train] Optuna best params: {json.dumps(best_params, indent=2)}")
+
+    return best_params
 
 
 def train_and_evaluate(X, y, w, group_ids, feature_names, unique_vids, video_ids_raw,
-                       target, output_dir, dataset_path):
-    """Train models with Repeated GroupKFold + Holdout, compare with StratifiedKFold."""
+                       video_created_ats, target, output_dir, dataset_path, use_optuna=True):
+    """Train models with Repeated GroupKFold + Time-series Holdout, compare with StratifiedKFold."""
     from sklearn.model_selection import StratifiedKFold
     from sklearn.linear_model import LogisticRegression
     from sklearn.preprocessing import StandardScaler
@@ -514,6 +643,7 @@ def train_and_evaluate(X, y, w, group_ids, feature_names, unique_vids, video_ids
     print(f"\n[train] Target: {target}")
     print(f"[train] Dataset: {n_total} samples, {n_positive} positive ({n_positive/max(n_total,1)*100:.1f}%)")
     print(f"[train] Videos: {n_videos} unique")
+    print(f"[train] Features: {len(feature_names)}")
 
     if n_positive < 3 or (n_total - n_positive) < 3:
         print("[train] WARNING: Too few samples for meaningful training.")
@@ -536,19 +666,41 @@ def train_and_evaluate(X, y, w, group_ids, feature_names, unique_vids, video_ids
     }
 
     n_neg = n_total - n_positive
+
+    # v8: Default LightGBM params with regularization (改善5)
     lgbm_params = {
         "objective": "binary",
         "metric": "auc",
         "verbosity": -1,
         "n_estimators": 200,
-        "max_depth": 4,
+        "max_depth": 5,
         "learning_rate": 0.05,
-        "num_leaves": 15,
-        "min_child_samples": max(3, n_positive // 5),
+        "num_leaves": 31,
+        "min_child_samples": max(10, n_positive // 5),  # v8: increased from 3
         "scale_pos_weight": n_neg / max(n_positive, 1),
         "random_state": 42,
         "n_jobs": 1,
+        # v8: Regularization (改善5)
+        "reg_alpha": 0.1,
+        "reg_lambda": 1.0,
+        "subsample": 0.8,
+        "colsample_bytree": 0.8,
     }
+
+    # v8: Optuna hyperparameter tuning (改善4)
+    optuna_params = None
+    if has_lgbm and use_optuna:
+        optuna_params = optuna_tune_lgbm(
+            X, y, w, group_ids,
+            n_trials=30,
+            n_splits=min(5, n_videos),
+            timeout=300,
+        )
+        if optuna_params:
+            lgbm_params = optuna_params
+            print(f"[train] Using Optuna-tuned parameters")
+        else:
+            print(f"[train] Using default parameters (Optuna failed/unavailable)")
 
     # ── CV config ──
     n_group_splits = min(5, n_videos)
@@ -652,32 +804,34 @@ def train_and_evaluate(X, y, w, group_ids, feature_names, unique_vids, video_ids
             m_lgbm_strat_agg = {"error": str(e)}
 
     # ═══════════════════════════════════════════════════
-    # 3. Holdout (last 20% of videos = final judgment)
+    # 3. Time-series Holdout (v8: last 20% of videos by created_at)
     # ═══════════════════════════════════════════════════
-    print(f"\n[train] === Holdout (last 20% of videos) ===")
-    print(f"[train] (FINAL JUDGMENT: one-time evaluation)")
+    print(f"\n[train] === Time-series Holdout (last 20% of videos by created_at) ===")
+    print(f"[train] (FINAL JUDGMENT: one-time evaluation, chronological split)")
 
-    m_lr_holdout, holdout_info = holdout_evaluate(
-        X, y, w, group_ids, video_ids_raw, unique_vids,
+    m_lr_holdout, holdout_info = holdout_evaluate_timeseries(
+        X, y, w, group_ids, video_ids_raw, unique_vids, video_created_ats,
         LogisticRegression, lr_params, holdout_ratio=0.2, use_scaler=True
     )
     if m_lr_holdout:
         print(f"  LR Holdout: AUC={m_lr_holdout.get('auc', '?')}"
               f"  P@5={m_lr_holdout.get('precision_at_5', '?')}"
-              f"  ({m_lr_holdout['n_holdout_videos']} test videos, {m_lr_holdout['n_val']} events)")
+              f"  ({m_lr_holdout['n_holdout_videos']} test videos, {m_lr_holdout['n_val']} events)"
+              f"  [ordering: {m_lr_holdout.get('ordering_method', '?')}]")
     else:
         print(f"  LR Holdout: skipped (insufficient data)")
 
     m_lgbm_holdout = None
     if has_lgbm:
-        m_lgbm_holdout, _ = holdout_evaluate(
-            X, y, w, group_ids, video_ids_raw, unique_vids,
+        m_lgbm_holdout, _ = holdout_evaluate_timeseries(
+            X, y, w, group_ids, video_ids_raw, unique_vids, video_created_ats,
             lgb.LGBMClassifier, lgbm_params, holdout_ratio=0.2, use_scaler=False
         )
         if m_lgbm_holdout:
             print(f"  LGBM Holdout: AUC={m_lgbm_holdout.get('auc', '?')}"
                   f"  P@5={m_lgbm_holdout.get('precision_at_5', '?')}"
-                  f"  ({m_lgbm_holdout['n_holdout_videos']} test videos, {m_lgbm_holdout['n_val']} events)")
+                  f"  ({m_lgbm_holdout['n_holdout_videos']} test videos, {m_lgbm_holdout['n_val']} events)"
+                  f"  [ordering: {m_lgbm_holdout.get('ordering_method', '?')}]")
         else:
             print(f"  LGBM Holdout: skipped (insufficient data)")
 
@@ -741,6 +895,7 @@ def train_and_evaluate(X, y, w, group_ids, feature_names, unique_vids, video_ids
             "model": lgbm_final, "target": target,
             "version": MODEL_VERSION, "date": DATE_TAG,
             "feature_names": feature_names,
+            "optuna_params": optuna_params,  # v8: save tuned params
         }
         with open(os.path.join(output_dir, lgbm_filename), "wb") as f:
             pickle.dump(model_payload_lgbm, f)
@@ -754,8 +909,8 @@ def train_and_evaluate(X, y, w, group_ids, feature_names, unique_vids, video_ids
             zip(feature_names, importances.tolist()),
             key=lambda x: x[1], reverse=True
         )
-        print("\n  Top 10 features:")
-        for fname, imp in feat_imp_list[:10]:
+        print("\n  Top 15 features:")
+        for fname, imp in feat_imp_list[:15]:
             print(f"    {fname:30s} {imp:6.0f}")
 
     # ── Determine best model (based on GroupKFold mean AUC) ──
@@ -803,9 +958,10 @@ def train_and_evaluate(X, y, w, group_ids, feature_names, unique_vids, video_ids
             "lr_fold_details": m_lr_strat_folds,
         },
         "holdout": {
-            "label": "FINAL JUDGMENT",
+            "label": "FINAL JUDGMENT (time-series)",
             "holdout_ratio": 0.2,
             "lr": m_lr_holdout,
+            "ordering_method": holdout_info.get("ordering_method") if holdout_info else None,
         },
     }
     if m_lgbm_group_agg is not None:
@@ -817,9 +973,16 @@ def train_and_evaluate(X, y, w, group_ids, feature_names, unique_vids, video_ids
     if m_lgbm_holdout is not None:
         metrics["evaluation"]["holdout"]["lgbm"] = m_lgbm_holdout
 
+    # v8: Optuna results
+    if optuna_params:
+        metrics["optuna"] = {
+            "best_params": optuna_params,
+            "n_trials": 30,
+        }
+
     if feat_imp_list:
         metrics["feature_importance"] = [
-            {"feature": fn, "importance": imp} for fn, imp in feat_imp_list[:20]
+            {"feature": fn, "importance": imp} for fn, imp in feat_imp_list[:30]
         ]
 
     # Save metrics
@@ -871,7 +1034,13 @@ def build_manifest(all_metrics, output_dir, feature_names, dataset_paths):
             "cv_method": "repeated_group_stratified_kfold",
             "cv_adopted": "GroupKFold (realistic)",
             "cv_reference": "StratifiedKFold (optimistic)",
-            "holdout_method": "last 20% videos by appearance order",
+            "holdout_method": "last 20% videos by created_at (time-series)",
+            "optuna_tuning": True,
+            "regularization": "reg_alpha + reg_lambda + subsample + colsample_bytree",
+            "moment_window_sec": 90,
+            "text_embeddings": "paraphrase-multilingual-MiniLM-L12-v2 + PCA(8)",
+            "reviewer_bias_correction": "z-score normalization",
+            "review_weight_boost": "rating>=4: 2x, rating<=2: 1.5x",
         },
         "models": {},
     }
@@ -932,9 +1101,7 @@ def filter_records_by_source(records, source_filter):
     source_filter:
       'all'    → use all records (default, mixed training)
       'csv'    → only records where moment_source is 'csv' or 'both' or 'none'
-                 (i.e., include all, but positives must come from csv)
       'screen' → only records where moment_source is 'screen' or 'both' or 'none'
-                 (i.e., include all, but positives must come from screen)
       'csv_only'    → strict: positive only from csv source
       'screen_only' → strict: positive only from screen source
     """
@@ -968,7 +1135,7 @@ def filter_records_by_source(records, source_filter):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Train LCJ AI prediction model v5")
+    parser = argparse.ArgumentParser(description="Train LCJ AI prediction model v8")
     parser.add_argument("--input", "-i", default=None,
                         help="Input JSONL dataset file (single target)")
     parser.add_argument("--input-dir", default=None,
@@ -981,9 +1148,12 @@ def main():
     parser.add_argument("--source-filter", default="all",
                         choices=["all", "csv", "screen", "csv_only", "screen_only"],
                         help="Filter training data by moment source (default: all = mixed)")
+    parser.add_argument("--no-optuna", action="store_true",
+                        help="Disable Optuna hyperparameter tuning (faster, uses defaults)")
     args = parser.parse_args()
 
     print(f"[train] Source filter: {args.source_filter}")
+    print(f"[train] Optuna: {'disabled' if args.no_optuna else 'enabled'}")
 
     all_results = {}
     feature_names_final = None
@@ -1005,14 +1175,15 @@ def main():
             records = filter_records_by_source(records, args.source_filter)
             print(f"[train] After source filter '{args.source_filter}': {len(records)} records")
 
-            X, y, w, group_ids, feature_names, unique_vids, video_ids_raw = extract_features(records, target=target)
+            X, y, w, group_ids, feature_names, unique_vids, video_ids_raw, video_created_ats = extract_features(records, target=target)
             feature_names_final = feature_names
             dataset_paths[target] = input_path
             print(f"[train] Feature matrix: {X.shape}, {len(unique_vids)} videos")
 
             result = train_and_evaluate(
                 X, y, w, group_ids, feature_names, unique_vids, video_ids_raw,
-                target, args.output_dir, input_path
+                video_created_ats, target, args.output_dir, input_path,
+                use_optuna=not args.no_optuna,
             )
             all_results[target] = result
 
@@ -1027,13 +1198,14 @@ def main():
         records = filter_records_by_source(records, args.source_filter)
         print(f"[train] After source filter '{args.source_filter}': {len(records)} records")
 
-        X, y, w, group_ids, feature_names, unique_vids, video_ids_raw = extract_features(records, target=args.target)
+        X, y, w, group_ids, feature_names, unique_vids, video_ids_raw, video_created_ats = extract_features(records, target=args.target)
         feature_names_final = feature_names
         dataset_paths[args.target] = args.input
 
         result = train_and_evaluate(
             X, y, w, group_ids, feature_names, unique_vids, video_ids_raw,
-            args.target, args.output_dir, args.input
+            video_created_ats, args.target, args.output_dir, args.input,
+            use_optuna=not args.no_optuna,
         )
         all_results[args.target] = result
 
