@@ -645,6 +645,41 @@ async def run_all_ddl_migrations():
         except Exception as e:
             logger.warning(f"[DDL] videos.processing_logs: {e}")
 
+        # ── video_performance (TikTok performance data from OCR screenshots) ──
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(_text("""
+                    CREATE TABLE IF NOT EXISTS video_performance (
+                        id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+                        video_id UUID NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+                        platform VARCHAR(50) DEFAULT 'tiktok',
+                        views INTEGER,
+                        likes INTEGER,
+                        comments INTEGER,
+                        shares INTEGER,
+                        saves INTEGER,
+                        purchases INTEGER,
+                        revenue NUMERIC(12,2),
+                        engagement_rate FLOAT,
+                        conversion_rate FLOAT,
+                        avg_watch_time_seconds FLOAT,
+                        caption TEXT,
+                        hashtags JSONB,
+                        posted_date DATE,
+                        ocr_raw JSONB,
+                        retention_curve JSONB,
+                        recorded_at TIMESTAMPTZ DEFAULT NOW(),
+                        created_at TIMESTAMPTZ DEFAULT NOW(),
+                        updated_at TIMESTAMPTZ DEFAULT NOW()
+                    )
+                """))
+                await conn.execute(_text("CREATE INDEX IF NOT EXISTS idx_video_performance_video_id ON video_performance(video_id)"))
+                await conn.execute(_text("CREATE INDEX IF NOT EXISTS idx_video_performance_recorded_at ON video_performance(recorded_at DESC)"))
+                await conn.execute(_text("CREATE INDEX IF NOT EXISTS idx_video_performance_platform ON video_performance(platform)"))
+                logger.info("[DDL] video_performance \u2713")
+        except Exception as e:
+            logger.warning(f"[DDL] video_performance: {e}")
+
         elapsed = time.time() - ddl_start
         logger.info(f"[DDL] All migrations completed in {elapsed:.1f}s")
 
