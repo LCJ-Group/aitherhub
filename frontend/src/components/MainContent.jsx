@@ -1745,7 +1745,7 @@ export default function MainContent({
                                 >
                                   <option value="">{window.__t('noBrand') || '指定なし'}</option>
                                   {brands.map((b) => (
-                                    <option key={b.client_id} value={b.client_id}>{b.brand_name}</option>
+                                    <option key={b.client_id} value={b.client_id}>{b.name}</option>
                                   ))}
                                 </select>
                               </div>
@@ -1969,7 +1969,7 @@ export default function MainContent({
                                 >
                                   <option value="">{window.__t('noBrand') || '指定なし'}</option>
                                   {brands.map((b) => (
-                                    <option key={b.client_id} value={b.client_id}>{b.brand_name}</option>
+                                    <option key={b.client_id} value={b.client_id}>{b.name}</option>
                                   ))}
                                 </select>
                               </div>
