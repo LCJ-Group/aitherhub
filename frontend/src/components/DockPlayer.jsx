@@ -119,30 +119,50 @@ export default function DockPlayer({
   salesMoments = [],
   eventScores = [],
   productExposures = [],
-  externalPause = false, // When true, pause video (e.g., ClipEditorV2 is open)
+  externalPause = false, // When true, pause & mute video (e.g., ClipEditorV2 is open)
 }) {
   useTranslation(); // triggers re-render on language change
   const videoRef = useRef(null);
 
   // ── External pause control (e.g., when ClipEditorV2 modal is open) ──
+  // Use ref so ALL play() calls can check synchronously without stale closures
+  const externalPauseRef = useRef(externalPause);
+  externalPauseRef.current = externalPause;
+
   const wasPlayingBeforeExternalPause = useRef(false);
   useEffect(() => {
     const vid = videoRef.current;
     if (!vid) return;
     if (externalPause) {
-      // Pause and remember state
+      // Remember state, then pause AND mute (belt-and-suspenders)
       wasPlayingBeforeExternalPause.current = !vid.paused;
-      if (!vid.paused) {
-        vid.pause();
-      }
+      vid.pause();
+      vid.muted = true;
     } else {
-      // Resume if was playing before
+      // Unmute and resume if was playing before
+      vid.muted = false;
       if (wasPlayingBeforeExternalPause.current) {
         vid.play().catch(() => {});
         wasPlayingBeforeExternalPause.current = false;
       }
     }
   }, [externalPause]);
+
+  /**
+   * guardedPlay – wrapper around vid.play() that respects externalPause.
+   * ALL play() calls in DockPlayer MUST go through this function.
+   * Returns a resolved promise when blocked so callers don't throw.
+   */
+  const guardedPlay = useCallback((vid) => {
+    if (!vid) return Promise.resolve();
+    if (externalPauseRef.current) {
+      // Ensure video stays paused & muted when ClipEditorV2 is open
+      vid.pause();
+      vid.muted = true;
+      return Promise.resolve();
+    }
+    return vid.play().catch(() => {});
+  }, []);
   const hasSetupRef = useRef(false);
   const prevVideoUrlRef = useRef(null);
   const prevTimeStartRef = useRef(null);
@@ -274,7 +294,7 @@ export default function DockPlayer({
       try {
         vid.currentTime = t;
         vid.playbackRate = playbackRate;
-        if (vid.paused) vid.play().catch(() => {});
+        if (vid.paused) guardedPlay(vid);
       } catch (e) {
         console.warn('seekTo failed:', e);
       }
@@ -292,7 +312,7 @@ export default function DockPlayer({
       // Fallback: retry after 300ms in case event doesn't fire
       setTimeout(doSeek, 300);
     }
-  }, [playbackRate]);
+  }, [playbackRate, guardedPlay]);
 
   // ── Find current phase based on video currentTime ─────────
   const findPhaseIndex = useCallback(
@@ -395,8 +415,8 @@ export default function DockPlayer({
 
     const seekAndPlay = async () => {
       try {
-        vid.defaultMuted = false;
-        vid.muted = false;
+        vid.defaultMuted = externalPauseRef.current;
+        vid.muted = externalPauseRef.current;
         vid.playbackRate = playbackRate;
 
         // For clip preview (initial load), start from 0
@@ -420,15 +440,10 @@ export default function DockPlayer({
         });
 
         try {
-          vid.muted = false;
-          await vid.play();
+          vid.muted = externalPauseRef.current ? true : false;
+          await guardedPlay(vid);
         } catch {
-          try {
-            vid.muted = true;
-            await vid.play();
-          } catch {
-            // silent
-          }
+          // silent
         }
 
         setIsLoading(false);
@@ -486,7 +501,7 @@ export default function DockPlayer({
           } else {
             vid.currentTime = 0;
           }
-          if (vid.paused) vid.play().catch(() => {});
+          if (vid.paused) guardedPlay(vid);
           return; // Don't update phase index after loop
         }
 
@@ -498,7 +513,7 @@ export default function DockPlayer({
           } else {
             vid.currentTime = 0;
           }
-          if (vid.paused) vid.play().catch(() => {});
+          if (vid.paused) guardedPlay(vid);
           return;
         }
       }
@@ -535,7 +550,7 @@ export default function DockPlayer({
       if (target < phaseStart - 0.5 || target > phaseEnd + 0.5) {
         // Snap back to phase start when user seeks outside phase
         vid.currentTime = phaseStart - baseOffset;
-        if (vid.paused) vid.play().catch(() => {});
+        if (vid.paused) guardedPlay(vid);
       }
     };
 
@@ -574,7 +589,7 @@ export default function DockPlayer({
           e.preventDefault();
           if (videoRef.current) {
             if (videoRef.current.paused) {
-              videoRef.current.play().catch(() => {});
+              guardedPlay(videoRef.current);
               setIsPaused(false);
             } else {
               videoRef.current.pause();
@@ -663,7 +678,7 @@ export default function DockPlayer({
             try {
               vid.currentTime = targetTime;
               vid.playbackRate = playbackRate;
-              if (vid.paused) vid.play().catch(() => {});
+              if (vid.paused) guardedPlay(vid);
             } catch (e) {
               console.warn('navigatePhase switch seek failed:', e);
             }
@@ -700,7 +715,7 @@ export default function DockPlayer({
             try {
               vid.currentTime = targetTime;
               vid.playbackRate = playbackRate;
-              if (vid.paused) vid.play().catch(() => {});
+              if (vid.paused) guardedPlay(vid);
             } catch (e) {
               console.warn('navigatePhase seek failed:', e);
             }
@@ -904,8 +919,8 @@ export default function DockPlayer({
               <video
                 ref={videoRef}
                 src={activeVideoUrl}
-                autoPlay
                 playsInline
+                muted={externalPause}
                 preload="metadata"
                 className="h-full object-contain cursor-pointer"
                 style={{
@@ -917,7 +932,7 @@ export default function DockPlayer({
                   const vid = videoRef.current;
                   if (!vid) return;
                   if (vid.paused) {
-                    vid.play().catch(() => {});
+                    guardedPlay(vid);
                     setIsPaused(false);
                   } else {
                     vid.pause();
@@ -937,7 +952,7 @@ export default function DockPlayer({
                   onClick={() => {
                     const vid = videoRef.current;
                     if (vid) {
-                      vid.play().catch(() => {});
+                      guardedPlay(vid);
                       setIsPaused(false);
                     }
                   }}
@@ -975,7 +990,7 @@ export default function DockPlayer({
                       } else {
                         vid.currentTime = pct * phaseDuration;
                       }
-                      if (vid.paused) vid.play().catch(() => {});
+                      if (vid.paused) guardedPlay(vid);
                     }}
                   >
                     <div
@@ -1081,7 +1096,7 @@ export default function DockPlayer({
                     targetTime = Math.max(phaseStart, Math.min(phaseEnd - 0.1, targetTime));
                   }
                   vid.currentTime = targetTime;
-                  if (vid.paused) vid.play().catch(() => {});
+                  if (vid.paused) guardedPlay(vid);
                 }}
               >
                 {/* Background track */}
@@ -1115,7 +1130,7 @@ export default function DockPlayer({
                             seekTime = Math.max(phaseStart, Math.min(phaseEnd - 0.1, seekTime));
                           }
                           v.currentTime = seekTime;
-                          if (v.paused) v.play().catch(() => {});
+                          if (v.paused) guardedPlay(v);
                         }
                       }}
                     />
@@ -1262,7 +1277,7 @@ export default function DockPlayer({
                                 seekTime = Math.max(phaseStart, Math.min(phaseEnd - 0.1, seekTime));
                               }
                               v.currentTime = seekTime;
-                              if (v.paused) v.play().catch(() => {});
+                              if (v.paused) guardedPlay(v);
                             }
                           }}
                           className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium border transition-all duration-150 cursor-pointer ${btnColor}`}
