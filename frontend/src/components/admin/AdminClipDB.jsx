@@ -1344,12 +1344,53 @@ export default function AdminClipDB({ adminKey }) {
   }
 
   async function loadBrands() {
-    try {
-      const data = await clipDbFetch("/brands", {}, adminKey);
-      setBrands(data.brands || []);
-    } catch (e) {
-      console.warn("[ClipDB] Failed to load brands:", e);
+    const CACHE_KEY = "aitherhub_brands_cache";
+    const MAX_RETRIES = 3;
+    let lastError = null;
+
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const data = await clipDbFetch("/brands", {}, adminKey);
+        const brandsList = data.brands || [];
+        if (brandsList.length > 0) {
+          // Save to localStorage as backup cache
+          try {
+            localStorage.setItem(CACHE_KEY, JSON.stringify({
+              brands: brandsList,
+              timestamp: Date.now(),
+              count: brandsList.length,
+            }));
+          } catch (cacheErr) {
+            // localStorage might be full, ignore
+          }
+          setBrands(brandsList);
+          return;
+        }
+      } catch (e) {
+        lastError = e;
+        console.warn(`[ClipDB] Brand load attempt ${attempt}/${MAX_RETRIES} failed:`, e);
+        if (attempt < MAX_RETRIES) {
+          await new Promise(r => setTimeout(r, 1000 * attempt)); // exponential backoff
+        }
+      }
     }
+
+    // All retries failed - try localStorage cache
+    console.warn("[ClipDB] All brand load retries failed, trying cache...", lastError);
+    try {
+      const cached = localStorage.getItem(CACHE_KEY);
+      if (cached) {
+        const { brands: cachedBrands, timestamp, count } = JSON.parse(cached);
+        const ageMinutes = Math.round((Date.now() - timestamp) / 60000);
+        console.info(`[ClipDB] Using cached brands: ${count} brands, ${ageMinutes}min old`);
+        setBrands(cachedBrands);
+        return;
+      }
+    } catch (cacheErr) {
+      console.warn("[ClipDB] Cache read failed:", cacheErr);
+    }
+
+    console.error("[ClipDB] CRITICAL: Failed to load brands from API and cache");
   }
 
   async function loadClips() {

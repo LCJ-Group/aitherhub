@@ -1038,8 +1038,9 @@ async def unassign_clip_from_client(
     if not _check_admin(x_admin_key):
         raise HTTPException(status_code=403, detail="Admin access required")
 
+    # Soft-delete instead of hard delete for data protection
     result = await db.execute(
-        text("DELETE FROM widget_clip_assignments WHERE client_id = :cid AND clip_id = :clip_id"),
+        text("UPDATE widget_clip_assignments SET is_active = FALSE WHERE client_id = :cid AND clip_id = :clip_id AND is_active = TRUE"),
         {"cid": client_id, "clip_id": clip_id},
     )
     await db.commit()
@@ -1079,9 +1080,9 @@ async def reassign_clip_to_client(
             )
             existing = row.mappings().first()
 
-            # Remove from old client
+            # Soft-delete from old client (data protection)
             await db.execute(
-                text("DELETE FROM widget_clip_assignments WHERE client_id = :cid AND clip_id = :clip_id"),
+                text("UPDATE widget_clip_assignments SET is_active = FALSE WHERE client_id = :cid AND clip_id = :clip_id"),
                 {"cid": from_client_id, "clip_id": clip_id},
             )
 

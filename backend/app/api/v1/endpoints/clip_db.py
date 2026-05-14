@@ -15,7 +15,9 @@ Endpoints:
 
 import json
 import logging
+import os
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional, List
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
@@ -1801,3 +1803,152 @@ async def merge_brands(
         await db.rollback()
         logger.error(f"[clip-db] Brand merge failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Brand merge failed: {str(e)}")
+
+
+# ─── Brand Protection: Backup & Restore ───
+
+BRANDS_BACKUP_PATH = Path(__file__).parent.parent.parent.parent / "data" / "brands_backup.json"
+
+
+@router.post("/brands/backup")
+async def backup_brands(
+    db: AsyncSession = Depends(get_db),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """Save current brand data to backup JSON file. Admin only."""
+    if not _check_admin_or_user(x_admin_key=x_admin_key):
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    result = await db.execute(
+        text("""
+            SELECT client_id, name, logo_url, theme_color, company_name,
+                   name_ja, lcj_brand_id, brand_keywords, source, is_active
+            FROM widget_clients
+            WHERE is_active = TRUE
+            ORDER BY name
+        """)
+    )
+    brands = [dict(r) for r in result.mappings().all()]
+
+    BRANDS_BACKUP_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(BRANDS_BACKUP_PATH, "w", encoding="utf-8") as f:
+        json.dump(brands, f, indent=2, ensure_ascii=False)
+
+    logger.info(f"[clip-db] Brand backup saved: {len(brands)} brands to {BRANDS_BACKUP_PATH}")
+    return {"status": "backed_up", "count": len(brands), "path": str(BRANDS_BACKUP_PATH)}
+
+
+@router.post("/brands/restore")
+async def restore_brands(
+    db: AsyncSession = Depends(get_db),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """Restore brands from backup JSON file. Only restores missing/deactivated brands. Admin only."""
+    if not _check_admin_or_user(x_admin_key=x_admin_key):
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    if not BRANDS_BACKUP_PATH.exists():
+        raise HTTPException(status_code=404, detail="No backup file found")
+
+    with open(BRANDS_BACKUP_PATH, "r", encoding="utf-8") as f:
+        backup_brands = json.load(f)
+
+    restored = 0
+    skipped = 0
+    for brand in backup_brands:
+        # Check if brand exists
+        existing = await db.execute(
+            text("SELECT client_id, is_active FROM widget_clients WHERE client_id = :cid"),
+            {"cid": brand["client_id"]},
+        )
+        row = existing.first()
+        if row and row.is_active:
+            skipped += 1
+            continue
+        elif row and not row.is_active:
+            # Reactivate
+            await db.execute(
+                text("UPDATE widget_clients SET is_active = TRUE WHERE client_id = :cid"),
+                {"cid": brand["client_id"]},
+            )
+            restored += 1
+        else:
+            # Insert new
+            await db.execute(
+                text("""
+                    INSERT INTO widget_clients (client_id, name, logo_url, theme_color,
+                        company_name, name_ja, lcj_brand_id, brand_keywords, source, is_active)
+                    VALUES (:client_id, :name, :logo_url, :theme_color,
+                        :company_name, :name_ja, :lcj_brand_id, :brand_keywords, :source, TRUE)
+                """),
+                {
+                    "client_id": brand["client_id"],
+                    "name": brand["name"],
+                    "logo_url": brand.get("logo_url", ""),
+                    "theme_color": brand.get("theme_color", "#FF2D55"),
+                    "company_name": brand.get("company_name", ""),
+                    "name_ja": brand.get("name_ja", ""),
+                    "lcj_brand_id": brand.get("lcj_brand_id"),
+                    "brand_keywords": brand.get("brand_keywords", ""),
+                    "source": brand.get("source", ""),
+                },
+            )
+            restored += 1
+
+    await db.commit()
+    logger.info(f"[clip-db] Brand restore: {restored} restored, {skipped} already active")
+    return {"status": "restored", "restored": restored, "skipped": skipped, "total_in_backup": len(backup_brands)}
+
+
+# ─── Brand Protection: Bulk Delete Guard ───
+
+@router.delete("/brands/delete")
+async def delete_brand(
+    client_id: str = Query(..., description="Brand client_id to deactivate"),
+    db: AsyncSession = Depends(get_db),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """Soft-delete a brand (set is_active=FALSE). NEVER hard-deletes. Admin only.
+    Also automatically backs up before deactivation."""
+    if not _check_admin_or_user(x_admin_key=x_admin_key):
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    # Safety: check clip count before deactivation
+    clip_check = await db.execute(
+        text("""
+            SELECT COUNT(*) as cnt FROM widget_clip_assignments
+            WHERE client_id = :cid AND is_active = TRUE
+        """),
+        {"cid": client_id},
+    )
+    clip_count = clip_check.scalar() or 0
+
+    if clip_count > 0:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot deactivate brand with {clip_count} active clip assignments. "
+                   f"Unassign all clips first or use /brands/merge to move them."
+        )
+
+    # Soft delete only
+    await db.execute(
+        text("UPDATE widget_clients SET is_active = FALSE WHERE client_id = :cid"),
+        {"cid": client_id},
+    )
+    await db.commit()
+
+    logger.info(f"[clip-db] Brand soft-deleted: {client_id}")
+    return {"status": "deactivated", "client_id": client_id}
+
+
+@router.post("/brands/bulk-delete-guard")
+async def bulk_delete_guard(
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """This endpoint exists to BLOCK any bulk delete attempts.
+    Bulk deletion of brands is NEVER allowed."""
+    raise HTTPException(
+        status_code=403,
+        detail="BLOCKED: Bulk deletion of brands is permanently disabled. "
+               "Use /brands/merge or individual /brands/delete (soft-delete) instead."
+    )
