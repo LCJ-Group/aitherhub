@@ -2,6 +2,7 @@ import React, { useState, useRef, useCallback, useEffect, useMemo } from "react"
 import VideoService from "../base/services/videoService";
 import ClipFeedbackPanel from "./ClipFeedbackPanel";
 import { useTranslation } from 'react-i18next';
+import audioManager from '../lib/audioManager';
 
 /**
  * ClipEditorV2 — Sales Intelligence Player style Clip Editor
@@ -190,6 +191,16 @@ const SUBTITLE_PRESET_ORDER = ['simple', 'box', 'outline', 'pop', 'gradient', 'k
 const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
   useTranslation(); // triggers re-render on language change
   const videoRef = useRef(null);
+
+  // ══ AUDIO PROTECTION: Acquire exclusive audio lock on mount, release on unmount ══
+  useEffect(() => {
+    // Lock out DockPlayer immediately when ClipEditorV2 opens
+    audioManager.acquire('clipEditor');
+    return () => {
+      // Release lock when ClipEditorV2 closes
+      audioManager.release('clipEditor');
+    };
+  }, []);
   const timelineRef = useRef(null);
   const waveformCanvasRef = useRef(null);
   const waveformContainerRef = useRef(null);

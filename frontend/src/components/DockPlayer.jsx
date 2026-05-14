@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useTranslation } from 'react-i18next';
+import audioManager from '../lib/audioManager';
 
 /**
  * DockPlayer – Sales Intelligence Player (方法2: LCJ分析ツール型)
@@ -124,23 +125,63 @@ export default function DockPlayer({
   useTranslation(); // triggers re-render on language change
   const videoRef = useRef(null);
 
-  // ── External pause control (e.g., when ClipEditorV2 modal is open) ──
-  // Use ref so ALL play() calls can check synchronously without stale closures
+  // ══════════════════════════════════════════════════════════════════════════════
+  // ── AUDIO PROTECTION LAYER (Code-level exclusive playback control) ──────────
+  // ══════════════════════════════════════════════════════════════════════════════
+  //
+  // THREE layers of protection against audio double-play:
+  //   1. externalPauseRef (React state → ref sync) — blocks guardedPlay()
+  //   2. AudioManager singleton — physical "playing" event guard on <video>
+  //   3. MutationObserver-like "playing" event auto-pause (inside AudioManager)
+  //
+  // Even if a stale closure calls vid.play() directly, the AudioManager's
+  // event listener on the <video> element will catch it and pause immediately.
+  // ══════════════════════════════════════════════════════════════════════════════
+
   const externalPauseRef = useRef(externalPause);
   externalPauseRef.current = externalPause;
+
+  // Register video element with AudioManager on mount/change
+  useEffect(() => {
+    const vid = videoRef.current;
+    if (vid) {
+      audioManager.registerPlayer('dock', vid);
+    }
+    return () => {
+      audioManager.unregisterPlayer('dock');
+    };
+  }, []);
+
+  // Re-register when video element might change (src change triggers React reconciliation)
+  const reRegisterTriggerRef = useRef(0);
+  const triggerAudioReRegister = useCallback(() => {
+    reRegisterTriggerRef.current += 1;
+    const vid = videoRef.current;
+    if (vid) {
+      audioManager.registerPlayer('dock', vid);
+    }
+  }, []);
 
   const wasPlayingBeforeExternalPause = useRef(false);
   useEffect(() => {
     const vid = videoRef.current;
     if (!vid) return;
     if (externalPause) {
-      // Remember state, then pause AND mute (belt-and-suspenders)
+      // ── LOCK: ClipEditorV2 opened ──
+      // 1. Remember playback state
       wasPlayingBeforeExternalPause.current = !vid.paused;
+      // 2. Physically pause and mute
       vid.pause();
       vid.muted = true;
+      // 3. Tell AudioManager to lock out DockPlayer
+      audioManager.acquire('clipEditor');
     } else {
-      // Unmute and resume if was playing before
+      // ── UNLOCK: ClipEditorV2 closed ──
+      // 1. Release AudioManager lock
+      audioManager.release('clipEditor');
+      // 2. Unmute
       vid.muted = false;
+      // 3. Resume if was playing before
       if (wasPlayingBeforeExternalPause.current) {
         vid.play().catch(() => {});
         wasPlayingBeforeExternalPause.current = false;
@@ -149,18 +190,30 @@ export default function DockPlayer({
   }, [externalPause]);
 
   /**
-   * guardedPlay – wrapper around vid.play() that respects externalPause.
-   * ALL play() calls in DockPlayer MUST go through this function.
+   * guardedPlay – THE ONLY WAY to play video in DockPlayer.
+   *
+   * Checks TWO independent guards:
+   *   1. externalPauseRef (React prop, synced to ref for closure safety)
+   *   2. audioManager.canPlay('dock') (global singleton, event-level guard)
+   *
+   * If either guard blocks, the video is forcibly paused+muted.
    * Returns a resolved promise when blocked so callers don't throw.
    */
   const guardedPlay = useCallback((vid) => {
     if (!vid) return Promise.resolve();
+    // Guard 1: React-level prop check
     if (externalPauseRef.current) {
-      // Ensure video stays paused & muted when ClipEditorV2 is open
       vid.pause();
       vid.muted = true;
       return Promise.resolve();
     }
+    // Guard 2: AudioManager global lock check
+    if (!audioManager.canPlay('dock')) {
+      vid.pause();
+      vid.muted = true;
+      return Promise.resolve();
+    }
+    // Both guards passed — safe to play
     return vid.play().catch(() => {});
   }, []);
   const hasSetupRef = useRef(false);
@@ -779,6 +832,13 @@ export default function DockPlayer({
   // ── Buffering handlers ────────────────────────────────
   const handleWaiting = useCallback(() => setIsBuffering(true), []);
   const handlePlaying = useCallback(() => {
+    // ── FINAL GUARD: If AudioManager says we shouldn't play, pause immediately ──
+    const vid = videoRef.current;
+    if (vid && (externalPauseRef.current || !audioManager.canPlay('dock'))) {
+      vid.pause();
+      vid.muted = true;
+      return; // Don't update UI state — we're not actually playing
+    }
     setIsBuffering(false);
     setIsLoading(false);
     setShowCustomLoading(false);
@@ -920,7 +980,7 @@ export default function DockPlayer({
                 ref={videoRef}
                 src={activeVideoUrl}
                 playsInline
-                muted={externalPause}
+                muted={externalPause || !audioManager.canPlay('dock')}
                 preload="metadata"
                 className="h-full object-contain cursor-pointer"
                 style={{
@@ -938,6 +998,10 @@ export default function DockPlayer({
                     vid.pause();
                     setIsPaused(true);
                   }
+                }}
+                onLoadedData={() => {
+                  // Re-register with AudioManager after video source loads
+                  triggerAudioReRegister();
                 }}
                 onWaiting={handleWaiting}
                 onPlaying={handlePlaying}
