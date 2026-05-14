@@ -57,3 +57,6 @@ class Video(Base, UUIDMixin, TimestampMixin):
 
     # Real-time processing logs (JSONB array of log entries for live UI display)
     processing_logs = mapped_column(JSON, nullable=True)
+
+    # Brand (widget_clients.client_id) selected at upload time — optional, 1 video = 1 brand
+    brand_client_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)

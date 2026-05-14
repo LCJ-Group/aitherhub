@@ -219,6 +219,7 @@ class UploadPipelineService:
         excel_trend_blob_url: Optional[str] = None,
         time_offset_seconds: float = 0.0,
         language: str = "ja",
+        brand_client_id: Optional[str] = None,
     ) -> UploadPipelineResult:
         """
         Execute the upload completion pipeline.
@@ -281,6 +282,7 @@ class UploadPipelineService:
                 excel_trend_blob_url=excel_trend_blob_url,
                 time_offset_seconds=time_offset_seconds,
                 language=language,
+                brand_client_id=brand_client_id,
             )
             evt = StageEvent(
                 stage=UploadStage.DB_RECORD, status="ok",
@@ -542,6 +544,7 @@ class UploadPipelineService:
         excel_trend_blob_url: Optional[str],
         time_offset_seconds: float,
         language: str = "ja",
+        brand_client_id: Optional[str] = None,
     ) -> Video:
         """Step 2: Persist video record to DB (status = 'uploaded')."""
         return await self._repo.create_video(
@@ -554,6 +557,7 @@ class UploadPipelineService:
             excel_trend_blob_url=excel_trend_blob_url,
             time_offset_seconds=time_offset_seconds,
             language=language,
+            brand_client_id=brand_client_id,
         )
 
     @staticmethod

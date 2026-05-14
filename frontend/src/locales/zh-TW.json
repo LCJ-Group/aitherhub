@@ -1380,5 +1380,7 @@
   "cfp_bad_clip": "需改進的片段",
   "cfp_sales_question": "這個片段是促成銷售的部分嗎？",
   "cfp_sales_yes": "✅ YES — 銷售瞬間",
-  "cfp_sales_no": "❌ NO — 不是"
+  "cfp_sales_no": "❌ NO — 不是",
+  "brandLabel": "品牌（可選）",
+  "noBrand": "未指定"
 }

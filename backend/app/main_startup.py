@@ -645,6 +645,16 @@ async def run_all_ddl_migrations():
         except Exception as e:
             logger.warning(f"[DDL] videos.processing_logs: {e}")
 
+        # ── videos.brand_client_id (brand selection at upload time) ──
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(_text(
+                    "ALTER TABLE videos ADD COLUMN IF NOT EXISTS brand_client_id VARCHAR(255)"
+                ))
+                logger.info("[DDL] videos.brand_client_id \u2713")
+        except Exception as e:
+            logger.warning(f"[DDL] videos.brand_client_id: {e}")
+
         # ── video_performance (TikTok performance data from OCR screenshots) ──
         try:
             async with engine.begin() as conn:

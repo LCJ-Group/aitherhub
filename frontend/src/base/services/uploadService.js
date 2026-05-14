@@ -339,13 +339,15 @@ class UploadService extends BaseApiService {
     }
   }
 
-  async uploadComplete(email, video_id, filename, upload_id, language = 'ja') {
+  async uploadComplete(email, video_id, filename, upload_id, language = 'ja', brand_client_id = null) {
     const token = TokenManager.getToken();
     if (!token) throw new UploadStageError(UPLOAD_STAGES.AUTH, window.__t('authTokenNotFound') || 'Auth token not found');
     if (TokenManager.isTokenExpired(token)) throw new UploadStageError(UPLOAD_STAGES.AUTH, window.__t('sessionExpired') || 'Session expired');
     try {
+      const body = { email, video_id, filename, upload_id, language };
+      if (brand_client_id) body.brand_client_id = brand_client_id;
       return await this.retryWithBackoff(
-        () => this.post(URL_CONSTANTS.UPLOAD_COMPLETE, { email, video_id, filename, upload_id, language }),
+        () => this.post(URL_CONSTANTS.UPLOAD_COMPLETE, body),
         MAX_RETRIES,
         'uploadComplete'
       );
@@ -381,16 +383,18 @@ class UploadService extends BaseApiService {
     }
   }
 
-  async uploadCompleteWithType(email, video_id, filename, upload_id, upload_type = 'screen_recording', excel_product_blob_url = null, excel_trend_blob_url = null, language = 'ja') {
+  async uploadCompleteWithType(email, video_id, filename, upload_id, upload_type = 'screen_recording', excel_product_blob_url = null, excel_trend_blob_url = null, language = 'ja', brand_client_id = null) {
     const token = TokenManager.getToken();
     if (!token) throw new UploadStageError(UPLOAD_STAGES.AUTH, window.__t('authTokenNotFound') || 'Auth token not found');
     if (TokenManager.isTokenExpired(token)) throw new UploadStageError(UPLOAD_STAGES.AUTH, window.__t('sessionExpired') || 'Session expired');
     try {
+      const body = {
+        email, video_id, filename, upload_id, upload_type,
+        excel_product_blob_url, excel_trend_blob_url, language,
+      };
+      if (brand_client_id) body.brand_client_id = brand_client_id;
       return await this.retryWithBackoff(
-        () => this.post(URL_CONSTANTS.UPLOAD_COMPLETE, {
-          email, video_id, filename, upload_id, upload_type,
-          excel_product_blob_url, excel_trend_blob_url, language,
-        }),
+        () => this.post(URL_CONSTANTS.UPLOAD_COMPLETE, body),
         MAX_RETRIES,
         'uploadCompleteWithType'
       );
@@ -611,7 +615,7 @@ class UploadService extends BaseApiService {
 
   // ── High-level upload workflows ──
 
-  async uploadFile(file, email, onProgress, onUploadInit, language = 'ja') {
+  async uploadFile(file, email, onProgress, onUploadInit, language = 'ja', brand_client_id = null) {
     const { video_id, upload_id, upload_url } = await this.generateUploadUrl(email, file.name);
     if (onUploadInit) onUploadInit({ uploadId: upload_id, videoId: video_id });
     this.cacheFileHandle(upload_id, file);
@@ -622,11 +626,11 @@ class UploadService extends BaseApiService {
       contentType: 'video/mp4', timestamp: Date.now(),
     });
     await this.uploadToAzure(file, upload_url, upload_id, onProgress);
-    await this.uploadComplete(email, video_id, file.name, upload_id, language);
+    await this.uploadComplete(email, video_id, file.name, upload_id, language, brand_client_id);
     return video_id;
   }
 
-  async uploadCleanVideo(videoFile, productExcel, trendExcel, email, onProgress, onUploadInit, language = 'ja') {
+  async uploadCleanVideo(videoFile, productExcel, trendExcel, email, onProgress, onUploadInit, language = 'ja', brand_client_id = null) {
     const { video_id, upload_id, upload_url } = await this.generateUploadUrl(email, videoFile.name);
     if (onUploadInit) onUploadInit({ uploadId: upload_id, videoId: video_id });
     this.cacheFileHandle(upload_id, videoFile);
@@ -665,12 +669,12 @@ class UploadService extends BaseApiService {
       });
     }
 
-    await this.uploadCompleteWithType(email, video_id, videoFile.name, upload_id, 'clean_video', product_blob_url, trend_blob_url, language);
+    await this.uploadCompleteWithType(email, video_id, videoFile.name, upload_id, 'clean_video', product_blob_url, trend_blob_url, language, brand_client_id);
     if (onProgress) onProgress(100);
     return video_id;
   }
 
-  async batchUploadCleanVideos(videoItems, productExcel, trendExcel, email, onProgress, onUploadInit, language = 'ja') {
+  async batchUploadCleanVideos(videoItems, productExcel, trendExcel, email, onProgress, onUploadInit, language = 'ja', brand_client_id = null) {
     const totalVideos = videoItems.length;
     const videoProgressShare = 75;
     const excelProgressShare = 15;
@@ -721,6 +725,7 @@ class UploadService extends BaseApiService {
       excel_trend_blob_url: trend_blob_url,
       language,
     };
+    if (brand_client_id) batchPayload.brand_client_id = brand_client_id;
 
     try {
       await this.retryWithBackoff(

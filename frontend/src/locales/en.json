@@ -1380,5 +1380,7 @@
   "cfp_bad_clip": "Needs Improvement",
   "cfp_sales_question": "Is this clip a sales-driving moment?",
   "cfp_sales_yes": "\u2705 YES \u2014 Sales Moment",
-  "cfp_sales_no": "\u274c NO \u2014 Not a Sales Moment"
+  "cfp_sales_no": "\u2714 NO \u2014 Not a Sales Moment",
+  "brandLabel": "Brand (optional)",
+  "noBrand": "None"
 }

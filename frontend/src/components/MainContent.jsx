@@ -240,6 +240,10 @@ export default function MainContent({
   const [csvValidating, setCsvValidating] = useState(false);
   const [csvValidationResult, setCsvValidationResult] = useState(null);
   const [showCsvValidationGate, setShowCsvValidationGate] = useState(false);
+  // Brand selection states (optional, 1 video = 1 brand)
+  const [brands, setBrands] = useState([]);
+  const [selectedBrandId, setSelectedBrandId] = useState('');  // '' = no brand selected
+  const [brandsLoading, setBrandsLoading] = useState(false);
 
   useEffect(() => {
     console.log("[MainContent] user", user);
@@ -252,6 +256,39 @@ export default function MainContent({
       setShowLoginModal(true);
     }
   }, [selectedVideoId, isLoggedIn]);
+
+  // Load brands for upload brand selector
+  useEffect(() => {
+    if (!isLoggedIn) return;
+    const CACHE_KEY = 'aitherhub_brands_cache';
+    const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
+    let cancelled = false;
+    (async () => {
+      setBrandsLoading(true);
+      try {
+        const res = await fetch(`${API_BASE}/api/v1/clip-db/brands`, {
+          headers: { 'X-Admin-Key': import.meta.env.VITE_ADMIN_KEY || '' },
+        });
+        if (!res.ok) throw new Error(`brands fetch ${res.status}`);
+        const data = await res.json();
+        const list = data.brands || [];
+        if (!cancelled) setBrands(list);
+        try { localStorage.setItem(CACHE_KEY, JSON.stringify({ brands: list, timestamp: Date.now() })); } catch (_) {}
+      } catch (err) {
+        console.warn('[MainContent] Brand load failed, trying cache', err);
+        try {
+          const cached = localStorage.getItem(CACHE_KEY);
+          if (cached) {
+            const { brands: cachedBrands } = JSON.parse(cached);
+            if (!cancelled) setBrands(cachedBrands || []);
+          }
+        } catch (_) {}
+      } finally {
+        if (!cancelled) setBrandsLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isLoggedIn]);
 
   const normalizeVideoData = (data, fallbackVideoId) => {
     const r1 = Array.isArray(data.reports_1) ? data.reports_1 : (data.reports_1 ? [data.reports_1] : []);
@@ -526,12 +563,14 @@ export default function MainContent({
     const userEmail = user.email;
     const analysisLang = i18n.language === 'zh-TW' ? 'zh-TW' : i18n.language === 'en' ? 'en' : 'ja';
     const userId = user?.id;
+    const capturedBrandId = selectedBrandId || null;
 
     // Reset UI immediately
     setCleanVideoFile(null);
     setCleanVideoFiles([]);
     setProductExcelFile(null);
     setTrendExcelFile(null);
+    setSelectedBrandId('');
     setUploadMode(null);
     setResumeUploadId(null);
     setUploadedVideoId(null);
@@ -570,6 +609,7 @@ export default function MainContent({
               if (storageKey) localStorage.setItem(storageKey, "active");
             },
             analysisLang,
+            capturedBrandId,
           );
           onVideoId(video_id);
           return video_id;
@@ -589,6 +629,7 @@ export default function MainContent({
               if (storageKey) localStorage.setItem(storageKey, "active");
             },
             analysisLang,
+            capturedBrandId,
           );
           if (videoIds.length > 0) onVideoId(videoIds[0]);
           return videoIds[0];
@@ -892,9 +933,11 @@ export default function MainContent({
     const userEmail = user.email;
     const analysisLang = i18n.language === 'zh-TW' ? 'zh-TW' : i18n.language === 'en' ? 'en' : 'ja';
     const userId = user?.id;
+    const capturedBrandId = selectedBrandId || null;
 
     // Reset UI immediately so user can start next upload
     setSelectedFile(null);
+    setSelectedBrandId('');
     setResumeUploadId(null);
     setUploadedVideoId(null);
     setVideoData(null);
@@ -928,6 +971,7 @@ export default function MainContent({
             }
           },
           analysisLang,
+          capturedBrandId,
         );
         onVideoId(video_id);
         return video_id;
@@ -1676,8 +1720,7 @@ export default function MainContent({
                               </button>
                             </div>
                           </div>
-                        </>
-                      ) : selectedFile ? (
+                        </>                      ) : selectedFile ? (
                         <>
                           <div className="flex flex-col items-center text-center space-y-6">
                             <div className="text-4xl">🎬</div>
@@ -1689,6 +1732,24 @@ export default function MainContent({
                                 {(selectedFile.size / 1024 / 1024).toFixed(2)} MB
                               </p>
                             </div>
+                            {/* Brand selector (optional) */}
+                            {brands.length > 0 && (
+                              <div className="w-full max-w-xs">
+                                <label className="block text-xs text-gray-500 mb-1">
+                                  {window.__t('brandLabel') || 'ブランド（任意）'}
+                                </label>
+                                <select
+                                  value={selectedBrandId}
+                                  onChange={(e) => setSelectedBrandId(e.target.value)}
+                                  className="w-full h-[36px] px-3 text-sm border border-gray-300 rounded-md bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#7D01FF]/30 focus:border-[#7D01FF]"
+                                >
+                                  <option value="">{window.__t('noBrand') || '指定なし'}</option>
+                                  {brands.map((b) => (
+                                    <option key={b.client_id} value={b.client_id}>{b.brand_name}</option>
+                                  ))}
+                                </select>
+                              </div>
+                            )}
                             <div className="flex gap-2">
                               <button
                                 onClick={handleUpload}
@@ -1893,6 +1954,25 @@ export default function MainContent({
                               <p className="text-xs text-gray-400">
                                 {window.__t("sameExcelApplied")}{cleanVideoFiles.length}{window.__t("videosApplied")}
                               </p>
+                            )}
+
+                            {/* Brand selector (optional) */}
+                            {brands.length > 0 && (
+                              <div className="w-full">
+                                <label className="block text-left text-xs text-gray-400 mb-1">
+                                  {window.__t('brandLabel') || 'ブランド（任意）'}
+                                </label>
+                                <select
+                                  value={selectedBrandId}
+                                  onChange={(e) => setSelectedBrandId(e.target.value)}
+                                  className="w-full h-[38px] px-3 text-sm border border-gray-300 rounded-md bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#7D01FF]/30 focus:border-[#7D01FF]"
+                                >
+                                  <option value="">{window.__t('noBrand') || '指定なし'}</option>
+                                  {brands.map((b) => (
+                                    <option key={b.client_id} value={b.client_id}>{b.brand_name}</option>
+                                  ))}
+                                </select>
+                              </div>
                             )}
 
                             <div className="flex gap-2 pt-2">

@@ -1380,5 +1380,7 @@
   "cfp_bad_clip": "微妙なクリップ",
   "cfp_sales_question": "このクリップは売れた理由の部分ですか？",
   "cfp_sales_yes": "✅ YES — 売れた瞬間",
-  "cfp_sales_no": "❌ NO — 違う部分"
+  "cfp_sales_no": "❌ NO — 違う部分",
+  "brandLabel": "ブランド（任意）",
+  "noBrand": "指定なし"
 }

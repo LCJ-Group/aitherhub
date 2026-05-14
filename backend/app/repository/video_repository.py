@@ -26,6 +26,7 @@ class VideoRepository(BaseRepository):
         excel_trend_blob_url: Optional[str] = None,
         time_offset_seconds: float = 0,
         language: str = "ja",
+        brand_client_id: Optional[str] = None,
     ) -> Video:
         """Create a new video record"""
         session = self.session_factory()
@@ -40,6 +41,7 @@ class VideoRepository(BaseRepository):
                 excel_trend_blob_url=excel_trend_blob_url,
                 time_offset_seconds=time_offset_seconds,
                 language=language,
+                brand_client_id=brand_client_id,
             )
             session.add(video)
             await session.commit()

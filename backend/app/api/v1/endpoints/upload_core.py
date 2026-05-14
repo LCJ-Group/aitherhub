@@ -151,6 +151,7 @@ async def upload_complete(
             excel_trend_blob_url=payload.excel_trend_blob_url,
             time_offset_seconds=payload.time_offset_seconds or 0,
             language=payload.language or "ja",
+            brand_client_id=payload.brand_client_id,
         )
         return UploadCompleteResponse(**result.to_dict())
     except HTTPException:
@@ -225,6 +226,7 @@ async def batch_upload_complete(
                     excel_trend_blob_url=payload.excel_trend_blob_url,
                     time_offset_seconds=v.time_offset_seconds or 0,
                     language=payload.language or "ja",
+                    brand_client_id=payload.brand_client_id,
                 )
                 video_ids.append(result.video_id)
         except Exception as exc:

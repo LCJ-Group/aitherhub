@@ -3728,6 +3728,47 @@ def _enrich_clip_after_generation(clip_id: str, video_id: str, phase_index, capt
 
             logger.info(f"[ClipDB] Enriched clip {clip_id} with {len(set_parts)} fields")
 
+            # 6. Auto-assign brand if video has brand_client_id
+            try:
+                brand_sql = text("SELECT brand_client_id FROM videos WHERE id = :vid")
+                brand_result = await session.execute(brand_sql, {"vid": video_id})
+                brand_row = brand_result.fetchone()
+                if brand_row and brand_row.brand_client_id:
+                    brand_cid = brand_row.brand_client_id
+                    # Verify brand exists and is active
+                    brand_check = await session.execute(
+                        text("SELECT client_id FROM widget_clients WHERE client_id = :bid AND is_active = TRUE"),
+                        {"bid": brand_cid},
+                    )
+                    if brand_check.fetchone():
+                        import uuid as _uuid_mod
+                        # Get next sort order
+                        max_order_result = await session.execute(
+                            text("SELECT COALESCE(MAX(sort_order), -1) + 1 FROM widget_clip_assignments WHERE client_id = :cid"),
+                            {"cid": brand_cid},
+                        )
+                        next_order = max_order_result.scalar() or 0
+                        # INSERT or reactivate (same logic as assign-brand API)
+                        await session.execute(
+                            text("""
+                                INSERT INTO widget_clip_assignments (id, client_id, clip_id, sort_order, is_active, created_at)
+                                VALUES (:id, :client_id, :clip_id, :sort_order, TRUE, NOW())
+                                ON CONFLICT (client_id, clip_id) DO UPDATE
+                                SET is_active = TRUE, sort_order = :sort_order
+                            """),
+                            {
+                                "id": str(_uuid_mod.uuid4()),
+                                "client_id": brand_cid,
+                                "clip_id": clip_id,
+                                "sort_order": next_order,
+                            },
+                        )
+                        logger.info(f"[ClipDB] Auto-assigned clip {clip_id} to brand {brand_cid}")
+                    else:
+                        logger.warning(f"[ClipDB] Brand {brand_cid} not found or inactive, skipping auto-assign")
+            except Exception as brand_err:
+                logger.warning(f"[ClipDB] Auto brand assignment failed (non-fatal): {brand_err}")
+
     loop.run_until_complete(_do_enrich())
 
 
