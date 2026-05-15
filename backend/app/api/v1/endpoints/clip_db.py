@@ -226,7 +226,7 @@ async def search_clips(
     language: Optional[str] = Query(None, description="Filter by detected language: ja, zh-TW, zh-CN, en, ko, th"),
     ai_version: Optional[str] = Query(None, description="Filter by AI model version (e.g. v7.20260501, pre-ai for no version)"),
     # Sorting
-    sort_by: str = Query("uploaded_at", description="Sort field: uploaded_at, created_at, gmv, cta_score, importance_score, duration_sec"),
+    sort_by: str = Query("uploaded_at", description="Sort field: uploaded_at, created_at, gmv, cta_score, importance_score, duration_sec, rating, stream_date"),
     sort_order: str = Query("desc", description="Sort order: asc or desc"),
     # Pagination
     page: int = Query(1, ge=1),
@@ -400,6 +400,8 @@ async def search_clips(
         "cta_score": "COALESCE(vc.cta_score, 0)",
         "importance_score": "COALESCE(vc.importance_score, 0)",
         "duration_sec": "COALESCE(vc.duration_sec, 0)",
+        "rating": "cf.rating",
+        "stream_date": "vc.stream_date",
     }
     sort_col = allowed_sorts.get(sort_by, "v.created_at")
     sort_dir = "DESC" if sort_order.lower() == "desc" else "ASC"
@@ -411,6 +413,8 @@ async def search_clips(
         "cta_score": "sort_cta_score",
         "importance_score": "sort_importance_score",
         "duration_sec": "sort_duration_sec",
+        "rating": "rating",
+        "stream_date": "stream_date",
     }
     outer_sort_col = outer_sort_map.get(sort_by, "video_uploaded_at")
 
@@ -1171,10 +1175,10 @@ async def list_brands_for_clips(
             SELECT wc.client_id, wc.name, wc.logo_url, wc.theme_color,
                    wc.company_name, wc.name_ja, wc.lcj_brand_id, wc.brand_keywords,
                    wc.source,
-                   COUNT(wca.id) FILTER (WHERE wca.is_active = TRUE) as clip_count,
-                   COUNT(wca.id) FILTER (WHERE wca.is_active = TRUE AND vc.is_sold = TRUE) as sold_count,
-                   COALESCE(SUM(vc.gmv) FILTER (WHERE wca.is_active = TRUE), 0) as total_gmv,
-                   COUNT(wca.id) FILTER (WHERE wca.is_active = TRUE AND vc.exported_url IS NOT NULL) as subtitle_count
+                   COUNT(wca.id) FILTER (WHERE wca.is_active = TRUE AND vc.id IS NOT NULL AND COALESCE(vc.is_unusable, FALSE) = FALSE) as clip_count,
+                   COUNT(wca.id) FILTER (WHERE wca.is_active = TRUE AND vc.id IS NOT NULL AND COALESCE(vc.is_unusable, FALSE) = FALSE AND vc.is_sold = TRUE) as sold_count,
+                   COALESCE(SUM(vc.gmv) FILTER (WHERE wca.is_active = TRUE AND vc.id IS NOT NULL AND COALESCE(vc.is_unusable, FALSE) = FALSE), 0) as total_gmv,
+                   COUNT(wca.id) FILTER (WHERE wca.is_active = TRUE AND vc.id IS NOT NULL AND COALESCE(vc.is_unusable, FALSE) = FALSE AND vc.exported_url IS NOT NULL) as subtitle_count
             FROM widget_clients wc
             LEFT JOIN widget_clip_assignments wca ON wca.client_id = wc.client_id
             LEFT JOIN video_clips vc ON vc.id::text = wca.clip_id AND wca.is_active = TRUE

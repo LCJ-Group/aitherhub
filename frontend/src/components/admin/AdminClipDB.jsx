@@ -1687,10 +1687,12 @@ export default function AdminClipDB({ adminKey }) {
             >
               <option value="uploaded_at">アップロード日順</option>
               <option value="created_at">作成日順</option>
+              <option value="stream_date">配信日順</option>
               <option value="gmv">GMV順</option>
               <option value="cta_score">CTAスコア順</option>
               <option value="importance_score">重要度順</option>
               <option value="duration_sec">長さ順</option>
+              <option value="rating">評価順</option>
             </select>
 
             <button
