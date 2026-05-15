@@ -68,7 +68,7 @@ class BackgroundUploadManager {
       fileName: t.fileName,
       fileSize: t.fileSize,
       progress: t.progress,
-      status: t.status, // 'uploading' | 'completing' | 'retrying' | 'done' | 'error' | 'pending_resume'
+      status: t.status, // 'uploading' | 'completing' | 'retrying' | 'done' | 'error' | 'pending_resume' | 'cancelled'
       error: t.error,
       videoId: t.videoId,
       startTime: t.startTime,
@@ -283,6 +283,7 @@ class BackgroundUploadManager {
    */
   startUpload({ fileName, fileSize, uploadMode, executeFn, onComplete, onError }) {
     const id = this._nextId();
+    const abortController = new AbortController();
     const task = {
       id,
       fileName,
@@ -295,6 +296,7 @@ class BackgroundUploadManager {
       uploadMode: uploadMode || 'screen_recording',
       retryCount: 0,
       uploadId: null,
+      _abortController: abortController,
       _executeFn: executeFn,
       _onComplete: onComplete,
       _onError: onError,
@@ -312,6 +314,7 @@ class BackgroundUploadManager {
     try {
       const videoId = await task._executeFn({
         onProgress: (pct) => {
+          if (task.status === 'cancelled') return;
           task.progress = pct;
           task.status = 'uploading';
           this._notify();
@@ -319,6 +322,7 @@ class BackgroundUploadManager {
         onVideoId: (vid) => {
           task.videoId = vid;
         },
+        abortSignal: task._abortController?.signal,
       });
 
       task.status = 'done';
@@ -337,6 +341,9 @@ class BackgroundUploadManager {
 
     } catch (err) {
       console.error(`[BGUpload] Task ${task.id} failed (attempt ${task.retryCount + 1}):`, err);
+
+      // Skip retry if task was cancelled
+      if (task.status === 'cancelled') return;
 
       // Auto-retry for transient errors
       if (this._isTransientError(err) && task.retryCount < AUTO_RETRY_LIMIT) {
@@ -382,6 +389,35 @@ class BackgroundUploadManager {
     task.startTime = Date.now();
     this._notify();
     this._runTask(task);
+    return true;
+  }
+
+  /**
+   * Cancel an active upload task
+   * @param {string} taskId
+   * @returns {boolean} true if the task was cancelled
+   */
+  cancelTask(taskId) {
+    const task = this.tasks.get(taskId);
+    if (!task) return false;
+    if (task.status === 'uploading' || task.status === 'retrying') {
+      // Abort the underlying fetch/upload
+      if (task._abortController) {
+        task._abortController.abort();
+      }
+      task.status = 'cancelled';
+      task.error = 'Cancelled by user';
+      this._notify();
+      // Remove after a short delay so the UI can show the cancelled state
+      setTimeout(() => {
+        this.tasks.delete(taskId);
+        this._notify();
+      }, 2000);
+      return true;
+    }
+    // For non-active tasks, just remove
+    this.tasks.delete(taskId);
+    this._notify();
     return true;
   }
 

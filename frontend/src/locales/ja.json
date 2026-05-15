@@ -1382,5 +1382,7 @@
   "cfp_sales_yes": "✅ YES — 売れた瞬間",
   "cfp_sales_no": "❌ NO — 違う部分",
   "brandLabel": "ブランド（任意）",
-  "noBrand": "指定なし"
+  "noBrand": "指定なし",
+  "sidebar_cancelUpload": "キャンセル",
+  "sidebar_cancelled": "キャンセルしました"
 }

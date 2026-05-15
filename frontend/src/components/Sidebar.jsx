@@ -953,6 +953,9 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
                                 </span>
                               </div>
                             )}
+                            {task.status === 'cancelled' && (
+                              <span className="text-[10px] text-gray-500 mt-1 block">{window.__t('sidebar_cancelled') || 'キャンセルしました'}</span>
+                            )}
                             {task.status === 'uploading' && (
                               <div className="mt-1.5">
                                 <div className="w-full h-1.5 bg-blue-100 rounded-full overflow-hidden">
@@ -966,6 +969,15 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
                                   <span className="text-[10px] text-gray-400">
                                     {task.fileSize ? (task.fileSize / (1024*1024) >= 1024 ? `${(task.fileSize / (1024*1024*1024)).toFixed(1)}GB` : `${(task.fileSize / (1024*1024)).toFixed(0)}MB`) : ''}
                                   </span>
+                                </div>
+                                <div className="mt-1.5 flex justify-end">
+                                  <button
+                                    className="text-[10px] px-2 py-1 rounded bg-red-100 text-red-600 hover:bg-red-200 transition-colors flex items-center gap-1"
+                                    onClick={(e) => { e.stopPropagation(); backgroundUploadManager.cancelTask(task.id); }}
+                                    title={window.__t('sidebar_cancelUpload') || 'アップロードをキャンセル'}
+                                  >
+                                    ✕ {window.__t('sidebar_cancelUpload') || 'キャンセル'}
+                                  </button>
                                 </div>
                               </div>
                             )}

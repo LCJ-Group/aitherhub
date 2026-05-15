@@ -1382,5 +1382,7 @@
   "cfp_sales_yes": "✅ YES — 銷售瞬間",
   "cfp_sales_no": "❌ NO — 不是",
   "brandLabel": "品牌（可選）",
-  "noBrand": "未指定"
+  "noBrand": "未指定",
+  "sidebar_cancelUpload": "取消",
+  "sidebar_cancelled": "已取消"
 }

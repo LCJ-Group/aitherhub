@@ -1382,5 +1382,7 @@
   "cfp_sales_yes": "\u2705 YES \u2014 Sales Moment",
   "cfp_sales_no": "\u2714 NO \u2014 Not a Sales Moment",
   "brandLabel": "Brand (optional)",
-  "noBrand": "None"
+  "noBrand": "None",
+  "sidebar_cancelUpload": "Cancel",
+  "sidebar_cancelled": "Cancelled"
 }
