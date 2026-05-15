@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 import MenuIcon from "../../assets/icons/menu.png";
 import LoginModal from "../modals/LoginModal";
 import RegisterModal from "../modals/RegisterModal";
@@ -25,10 +26,12 @@ export default function Header({
   setUser: setPropUser,
 }) {
   const { t, i18n } = useTranslation();
+  const navigate = useNavigate();
   const [openLogin, setOpenLogin] = useState(false);
   const [openRegister, setOpenRegister] = useState(false);
   const [localUser, setLocalUser] = useState(null);
   const [openLCJLinking, setOpenLCJLinking] = useState(false);
+  const loginModalOpenedByEventRef = useRef(false);
 
   useEffect(() => {
     if (propUser) return;
@@ -48,16 +51,17 @@ export default function Header({
     }
   }, []);
 
-  // Listen for custom event to open login modal
+  // Listen for custom event to open login modal (single source of truth for LoginModal)
   useEffect(() => {
     const handleOpenLoginModal = () => {
+      // Prevent duplicate opens - if already open, skip
+      if (openLogin) return;
       // First, ensure user state is updated to reflect logout
-      // Clear user from localStorage (already done by AuthService.logout)
-      // Update local user state
       setLocalUser({ isLoggedIn: false });
       if (setPropUser) {
         setPropUser({ isLoggedIn: false });
       }
+      loginModalOpenedByEventRef.current = true;
       // Then open login modal
       setOpenLogin(true);
     };
@@ -65,7 +69,7 @@ export default function Header({
     return () => {
       window.removeEventListener('openLoginModal', handleOpenLoginModal);
     };
-  }, [setPropUser]);
+  }, [setPropUser, openLogin]);
 
 
   const user = propUser ?? localUser;
@@ -75,8 +79,25 @@ export default function Header({
   const handleLoginOpenChange = (nextOpen) => {
     setOpenLogin(nextOpen);
     if (!nextOpen) {
-      const storedUser = localStorage.getItem("user");
-      if (storedUser) setUser(JSON.parse(storedUser));
+      // Login modal closed - check if user logged in successfully
+      try {
+        const storedUser = localStorage.getItem("user");
+        if (storedUser) {
+          const parsedUser = JSON.parse(storedUser);
+          setUser(parsedUser);
+          // Handle postLoginRedirect (moved from MainContent.jsx)
+          if (parsedUser?.isLoggedIn) {
+            const redirectTo = sessionStorage.getItem('postLoginRedirect');
+            if (redirectTo) {
+              sessionStorage.removeItem('postLoginRedirect');
+              navigate(redirectTo);
+            }
+          }
+        }
+      } catch {
+        // ignore JSON/localStorage errors
+      }
+      loginModalOpenedByEventRef.current = false;
     }
   };
 

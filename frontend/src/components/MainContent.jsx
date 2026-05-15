@@ -6,7 +6,7 @@ import backgroundUploadManager, { MAX_CONCURRENT_UPLOADS } from "../base/service
 import VideoService from "../base/services/videoService";
 import { formatUploadError, logUploadError } from "../base/services/uploadErrors";
 import { toast } from "../hooks/use-toast";
-import LoginModal from "./modals/LoginModal";
+// LoginModal removed from MainContent - using Header.jsx's LoginModal only (prevents duplicate overlay grey screen)
 import ProcessingSteps from "./ProcessingSteps";
 import VideoDetail from "./VideoDetail";
 import FeedbackPage from "./FeedbackPage";
@@ -211,7 +211,11 @@ export default function MainContent({
   const videoLoadTimeoutRef = useRef(null);
   const [message, setMessage] = useState("");
   const [messageType, setMessageType] = useState("");
-  const [showLoginModal, setShowLoginModal] = useState(false);
+  // showLoginModal state removed - LoginModal is now managed solely by Header.jsx
+  // Use openLoginModal event to trigger login modal from anywhere
+  const triggerLoginModal = useCallback(() => {
+    window.dispatchEvent(new CustomEvent('openLoginModal'));
+  }, []);
   const [resumeUploadId, setResumeUploadId] = useState(null);
   const [resumeInfo, setResumeInfo] = useState(null); // {fileName, fileSize, progress, createdAt, hasFileHandle}
   // Clean video upload states
@@ -253,9 +257,9 @@ export default function MainContent({
   useEffect(() => {
     if (selectedVideoId && !isLoggedIn) {
       sessionStorage.setItem(postLoginRedirectKey, `/video/${selectedVideoId}`);
-      setShowLoginModal(true);
+      triggerLoginModal();
     }
-  }, [selectedVideoId, isLoggedIn]);
+  }, [selectedVideoId, isLoggedIn, triggerLoginModal]);
 
   // Load brands for upload brand selector
   useEffect(() => {
@@ -427,10 +431,9 @@ export default function MainContent({
 
   const handleFileSelect = async (e) => {
     if (!isLoggedIn) {
-      setShowLoginModal(true);
+       triggerLoginModal();
       return;
     }
-
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -909,11 +912,10 @@ export default function MainContent({
 
   const handleUpload = async () => {
     if (!isLoggedIn) {
-      setShowLoginModal(true);
+      triggerLoginModal();
       return;
     }
-
-    if (!selectedFile) {
+    if (!selectedFile) {{
       toast.error(window.__t('selectFileFirstError'));
       return;
     }
@@ -1077,11 +1079,10 @@ export default function MainContent({
     e.stopPropagation();
 
     if (!isLoggedIn) {
-      setShowLoginModal(true);
+      triggerLoginModal();
       return;
     }
-
-    const files = e.dataTransfer.files;
+    const files = e.dataTransfer.files;;
     if (files.length > 0) {
       const file = files[0];
       if (!file.type.startsWith("video/")) {
@@ -1361,31 +1362,7 @@ export default function MainContent({
       {/* LiveDashboard is now at /live/:sessionId route - no overlay here */}
       <Header onOpenSidebar={onOpenSidebar} user={user} setUser={setUser} />
 
-      <LoginModal
-        open={showLoginModal}
-        onOpenChange={(nextOpen) => {
-          setShowLoginModal(nextOpen);
-          if (!nextOpen) {
-            try {
-              const storedUser = localStorage.getItem("user");
-              if (storedUser && setUser) {
-                const parsedUser = JSON.parse(storedUser);
-                setUser(parsedUser);
-                if (parsedUser?.isLoggedIn) {
-                  const redirectTo = sessionStorage.getItem(postLoginRedirectKey);
-                  if (redirectTo) {
-                    sessionStorage.removeItem(postLoginRedirectKey);
-                    navigate(redirectTo);
-                  }
-                }
-              }
-            } catch {
-              // ignore JSON/localStorage errors
-            }
-          }
-        }}
-        onSwitchToRegister={() => setShowLoginModal(false)}
-      />
+      {/* LoginModal removed - now managed solely by Header.jsx to prevent duplicate overlay grey screen */}
 
       {/* CSV Date/Time Validation Gate */}
       {showCsvValidationGate && (
@@ -2122,7 +2099,7 @@ export default function MainContent({
                                 onMouseDown={(e) => {
                                   if (!isLoggedIn || checkingResume) {
                                     e.preventDefault();
-                                    if (!isLoggedIn) setShowLoginModal(true);
+                                    if (!isLoggedIn) triggerLoginModal();
                                   }
                                 }}
                               >
@@ -2165,7 +2142,7 @@ export default function MainContent({
                                 "
                                 onClick={() => {
                                   if (!isLoggedIn) {
-                                    setShowLoginModal(true);
+                                    triggerLoginModal();
                                     return;
                                   }
                                   setUploadMode('clean_video');
@@ -2190,7 +2167,7 @@ export default function MainContent({
                                 "
                                 onClick={() => {
                                   if (!isLoggedIn) {
-                                    setShowLoginModal(true);
+                                    triggerLoginModal();
                                     return;
                                   }
                                   setUploadMode('live_capture');

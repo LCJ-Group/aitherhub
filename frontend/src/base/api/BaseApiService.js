@@ -204,6 +204,13 @@ export default class BaseApiService {
     const handleAutoLogout = () => {
       // First, perform logout (clear tokens and user data)
       AuthService.logout();
+      // Save current video page URL for post-login redirect
+      const currentPath = window.location.pathname;
+      if (currentPath.startsWith('/video/') || currentPath.startsWith('/live/')) {
+        try {
+          sessionStorage.setItem('postLoginRedirect', currentPath);
+        } catch { /* ignore */ }
+      }
       // Then dispatch event to open login modal
       // Use setTimeout to ensure logout completes before opening modal
       setTimeout(() => {
