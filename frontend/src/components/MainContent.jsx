@@ -267,7 +267,7 @@ export default function MainContent({
       setBrandsLoading(true);
       try {
         const res = await fetch(`${API_BASE}/api/v1/clip-db/brands`, {
-          headers: { 'X-Admin-Key': import.meta.env.VITE_ADMIN_KEY || '' },
+          headers: { 'X-Admin-Key': import.meta.env.VITE_ADMIN_KEY || 'aither:hub' },
         });
         if (!res.ok) throw new Error(`brands fetch ${res.status}`);
         const data = await res.json();
@@ -2085,6 +2085,24 @@ export default function MainContent({
                             <h5 className="hidden md:inline text-gray-600 text-lg font-cabin text-center">
                               {window.__t('dragDropText')}
                             </h5>
+                            {/* Brand selector (shown before file selection) */}
+                            {brands.length > 0 && (
+                              <div className="w-full max-w-xs mb-2">
+                                <label className="block text-xs text-gray-500 mb-1">
+                                  {window.__t('brandLabel') || 'ブランド（任意）'}
+                                </label>
+                                <select
+                                  value={selectedBrandId}
+                                  onChange={(e) => setSelectedBrandId(e.target.value)}
+                                  className="w-full h-[36px] px-3 text-sm border border-gray-300 rounded-md bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#7D01FF]/30 focus:border-[#7D01FF]"
+                                >
+                                  <option value="">{window.__t('noBrand') || '指定なし'}</option>
+                                  {brands.map((b) => (
+                                    <option key={b.client_id} value={b.client_id}>{b.name}</option>
+                                  ))}
+                                </select>
+                              </div>
+                            )}
                             <div className="flex flex-col sm:flex-row gap-3">
                               <label
                                 className="
