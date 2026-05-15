@@ -2063,44 +2063,105 @@ function DailyUploadsChart({ dailyUploads }) {
   // Fill in missing dates with count=0 to create a complete 30-day range
   const filledData = useMemo(() => {
     const dataMap = {};
-    dailyUploads.forEach(d => { dataMap[d.date] = d.count; });
+    dailyUploads.forEach(d => { dataMap[d.date] = { count: d.count, duration_seconds: d.duration_seconds || 0 }; });
     const result = [];
     const today = new Date();
     for (let i = 29; i >= 0; i--) {
       const dt = new Date(today);
       dt.setDate(dt.getDate() - i);
       const key = dt.toISOString().split('T')[0];
-      result.push({ date: key, count: dataMap[key] || 0 });
+      const entry = dataMap[key] || { count: 0, duration_seconds: 0 };
+      result.push({ date: key, count: entry.count, duration_seconds: entry.duration_seconds });
     }
     return result;
   }, [dailyUploads]);
 
   const maxCount = Math.max(...filledData.map(d => d.count), 1);
+  const totalCount = filledData.reduce((sum, d) => sum + d.count, 0);
+  const totalDuration = filledData.reduce((sum, d) => sum + d.duration_seconds, 0);
+
+  const formatDuration = (seconds) => {
+    if (seconds < 60) return `${seconds}秒`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}分`;
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    return m > 0 ? `${h}時間${m}分` : `${h}時間`;
+  };
+
   return (
-    <div className="mt-4 bg-white rounded-xl border border-gray-200 p-4">
-      <h3 className="text-sm font-semibold text-gray-600 mb-3">📅 毎日のアップロード数（過去30日）</h3>
-      <div className="flex items-end gap-[2px] h-24">
-        {filledData.map((d, i) => {
-          const height = Math.max((d.count / maxCount) * 100, 4);
-          const dateLabel = new Date(d.date + 'T00:00:00').toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' });
-          return (
-            <div key={i} className="flex-1 flex flex-col items-center group relative">
-              <div className="absolute -top-6 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-[9px] px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-10">
-                {dateLabel}: {d.count}本
-              </div>
-              <div
-                className={`w-full rounded-t transition-all ${
-                  d.count > 0 ? 'bg-blue-400 hover:bg-blue-500' : 'bg-gray-100'
-                }`}
-                style={{ height: `${height}%`, minHeight: d.count > 0 ? '4px' : '2px' }}
-              />
-            </div>
-          );
-        })}
+    <div className="mt-4 bg-white rounded-xl border border-gray-200 p-5">
+      {/* Header with title and summary stats */}
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-sm font-bold text-gray-700">📅 毎日のアップロード（過去30日）</h3>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1.5 bg-blue-50 px-2.5 py-1 rounded-lg">
+            <span className="text-blue-500 text-xs">🎥</span>
+            <span className="text-xs font-bold text-blue-700">{totalCount}本</span>
+          </div>
+          <div className="flex items-center gap-1.5 bg-purple-50 px-2.5 py-1 rounded-lg">
+            <span className="text-purple-500 text-xs">⏱️</span>
+            <span className="text-xs font-bold text-purple-700">{formatDuration(totalDuration)}</span>
+          </div>
+        </div>
       </div>
-      <div className="flex justify-between mt-1">
-        <span className="text-[9px] text-gray-400">{filledData.length > 0 ? new Date(filledData[0].date + 'T00:00:00').toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' }) : ''}</span>
-        <span className="text-[9px] text-gray-400">{filledData.length > 0 ? new Date(filledData[filledData.length - 1].date + 'T00:00:00').toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' }) : ''}</span>
+
+      {/* Y-axis labels + Chart */}
+      <div className="flex gap-2">
+        {/* Y-axis */}
+        <div className="flex flex-col justify-between h-36 text-[9px] text-gray-400 font-mono py-0.5">
+          <span>{maxCount}</span>
+          <span>{Math.round(maxCount / 2)}</span>
+          <span>0</span>
+        </div>
+
+        {/* Chart area */}
+        <div className="flex-1">
+          <div className="flex items-end gap-[3px] h-36 border-b border-l border-gray-200 pb-0.5 pl-0.5 relative">
+            {/* Grid lines */}
+            <div className="absolute inset-0 flex flex-col justify-between pointer-events-none">
+              <div className="border-b border-dashed border-gray-100 w-full" />
+              <div className="border-b border-dashed border-gray-100 w-full" />
+              <div />
+            </div>
+
+            {filledData.map((d, i) => {
+              const height = d.count > 0 ? Math.max((d.count / maxCount) * 100, 6) : 2;
+              const dateLabel = new Date(d.date + 'T00:00:00').toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' });
+              const dayDuration = formatDuration(d.duration_seconds);
+              return (
+                <div key={i} className="flex-1 flex flex-col items-center group relative">
+                  {/* Tooltip */}
+                  <div className="absolute -top-14 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-[10px] px-2 py-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-10 shadow-lg">
+                    <div className="font-bold">{dateLabel}</div>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <span>🎥 {d.count}本</span>
+                      {d.duration_seconds > 0 && <span>⏱ {dayDuration}</span>}
+                    </div>
+                    <div className="absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-1/2 w-2 h-2 bg-gray-800 rotate-45" />
+                  </div>
+                  {/* Bar */}
+                  <div
+                    className={`w-full rounded-t-sm transition-all duration-200 cursor-pointer ${
+                      d.count > 0
+                        ? 'bg-gradient-to-t from-blue-500 to-blue-400 hover:from-blue-600 hover:to-blue-500 shadow-sm'
+                        : 'bg-gray-100'
+                    }`}
+                    style={{ height: `${height}%`, minHeight: d.count > 0 ? '6px' : '2px' }}
+                  />
+                </div>
+              );
+            })}
+          </div>
+
+          {/* X-axis date labels */}
+          <div className="flex justify-between mt-1.5 px-0.5">
+            {filledData.filter((_, i) => i % 7 === 0 || i === filledData.length - 1).map((d, i) => (
+              <span key={i} className="text-[9px] text-gray-400 font-mono">
+                {new Date(d.date + 'T00:00:00').toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' })}
+              </span>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   );
