@@ -1384,5 +1384,7 @@
   "brandLabel": "ブランド（任意）",
   "noBrand": "指定なし",
   "sidebar_cancelUpload": "キャンセル",
-  "sidebar_cancelled": "キャンセルしました"
+  "sidebar_cancelled": "キャンセルしました",
+  "brandAssigned": "ブランド設定完了",
+  "brandAssignFailed": "ブランド設定に失敗しました"
 }

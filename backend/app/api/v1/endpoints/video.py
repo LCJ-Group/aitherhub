@@ -736,6 +736,7 @@ async def get_video_detail(
             SELECT v.id, v.original_filename, v.status, v.user_id,
                    v.upload_type, v.excel_product_blob_url, v.excel_trend_blob_url,
                    v.compressed_blob_url, v.time_offset_seconds,
+                   v.brand_client_id,
                    u.email
             FROM videos v
             JOIN users u ON v.user_id = u.id
@@ -1103,6 +1104,7 @@ async def get_video_detail(
             "excel_trend_blob_url": video_row.excel_trend_blob_url,
             "compressed_blob_url": compressed_blob,
             "preview_url": preview_url,
+            "brand_client_id": getattr(video_row, 'brand_client_id', None),
             "reports_1": report1_items,
             "report3": report3,
             "_perf": _perf,
@@ -2078,6 +2080,107 @@ async def get_video_winning_patterns(
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================
+# Brand assignment for video + all its clips
+# ============================================================
+
+from fastapi import Header, Query as FastQuery
+
+@router.patch("/{video_id}/brand")
+async def assign_brand_to_video(
+    video_id: str,
+    client_id: str = FastQuery(..., description="Brand client_id to assign (empty string to unassign)"),
+    db: AsyncSession = Depends(get_db),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """
+    Assign (or unassign) a brand to a video AND all its clips at once.
+    - Updates videos.brand_client_id
+    - Creates/updates widget_clip_assignments for every clip of this video
+    """
+    # Auth check (reuse same pattern as clip_db)
+    _ADMIN_ID = os.getenv("ADMIN_ID", "aither")
+    _ADMIN_PASS = os.getenv("ADMIN_PASS", "hub")
+    valid_key = f"{_ADMIN_ID}:{_ADMIN_PASS}"
+    if x_admin_key != valid_key:
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    # Check video exists
+    vid_row = await db.execute(
+        text("SELECT id FROM videos WHERE id = :vid"),
+        {"vid": video_id},
+    )
+    if not vid_row.first():
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    effective_brand = client_id if client_id else None
+
+    # Update video's brand_client_id
+    await db.execute(
+        text("UPDATE videos SET brand_client_id = :bid WHERE id = :vid"),
+        {"bid": effective_brand, "vid": video_id},
+    )
+
+    # Get all clips for this video
+    clips_result = await db.execute(
+        text("SELECT id FROM video_clips WHERE video_id = :vid"),
+        {"vid": video_id},
+    )
+    clip_ids = [row[0] for row in clips_result.fetchall()]
+
+    assigned_count = 0
+    if effective_brand and clip_ids:
+        # Check brand exists
+        brand_check = await db.execute(
+            text("SELECT client_id FROM widget_clients WHERE client_id = :bid AND is_active = TRUE"),
+            {"bid": effective_brand},
+        )
+        if not brand_check.first():
+            raise HTTPException(status_code=404, detail="Brand not found")
+
+        # Get next sort order
+        max_order_row = await db.execute(
+            text("SELECT COALESCE(MAX(sort_order), -1) + 1 FROM widget_clip_assignments WHERE client_id = :cid"),
+            {"cid": effective_brand},
+        )
+        next_order = max_order_row.scalar() or 0
+
+        for clip_id in clip_ids:
+            await db.execute(
+                text("""
+                    INSERT INTO widget_clip_assignments (id, client_id, clip_id, sort_order, is_active, created_at)
+                    VALUES (:id, :client_id, :clip_id, :sort_order, TRUE, NOW())
+                    ON CONFLICT (client_id, clip_id) DO UPDATE
+                    SET is_active = TRUE, sort_order = :sort_order
+                """),
+                {
+                    "id": str(uuid_module.uuid4()),
+                    "client_id": effective_brand,
+                    "clip_id": clip_id,
+                    "sort_order": next_order,
+                },
+            )
+            next_order += 1
+            assigned_count += 1
+    elif not effective_brand and clip_ids:
+        # Unassign: deactivate all clip assignments for this video's clips
+        # (We don't know which brand was previously assigned, so deactivate all)
+        for clip_id in clip_ids:
+            await db.execute(
+                text("UPDATE widget_clip_assignments SET is_active = FALSE WHERE clip_id = :cid"),
+                {"cid": clip_id},
+            )
+
+    await db.commit()
+
+    return {
+        "status": "assigned" if effective_brand else "unassigned",
+        "video_id": video_id,
+        "brand_client_id": effective_brand,
+        "clips_affected": assigned_count if effective_brand else len(clip_ids),
+    }
 
 
 # ============================================================

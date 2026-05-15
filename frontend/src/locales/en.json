@@ -1384,5 +1384,7 @@
   "brandLabel": "Brand (optional)",
   "noBrand": "None",
   "sidebar_cancelUpload": "Cancel",
-  "sidebar_cancelled": "Cancelled"
+  "sidebar_cancelled": "Cancelled",
+  "brandAssigned": "Brand assigned",
+  "brandAssignFailed": "Failed to assign brand"
 }

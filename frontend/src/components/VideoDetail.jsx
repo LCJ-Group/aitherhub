@@ -148,6 +148,41 @@ export default function VideoDetail({ videoData, editorParams }) {
   // Product Exposures state (product exposure timeline data)
   const [productExposures, setProductExposures] = useState([]);
 
+  // Brand assignment state
+  const [videoBrandId, setVideoBrandId] = useState(videoData?.brand_client_id || '');
+  const [videoBrandList, setVideoBrandList] = useState([]);
+  const [brandSaving, setBrandSaving] = useState(false);
+
+  // Load brands for video detail brand selector
+  useEffect(() => {
+    const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
+    const CACHE_KEY = 'aitherhub_brands_cache';
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/v1/clip-db/brands`, {
+          headers: { 'X-Admin-Key': import.meta.env.VITE_ADMIN_KEY || 'aither:hub' },
+        });
+        if (!res.ok) throw new Error(`brands ${res.status}`);
+        const data = await res.json();
+        setVideoBrandList(data.brands || []);
+        try { localStorage.setItem(CACHE_KEY, JSON.stringify({ brands: data.brands || [], timestamp: Date.now() })); } catch (_) {}
+      } catch (err) {
+        console.warn('[VideoDetail] Brand load failed, trying cache', err);
+        try {
+          const cached = localStorage.getItem(CACHE_KEY);
+          if (cached) setVideoBrandList(JSON.parse(cached).brands || []);
+        } catch (_) {}
+      }
+    })();
+  }, []);
+
+  // Sync videoBrandId when videoData changes
+  useEffect(() => {
+    if (videoData?.brand_client_id !== undefined) {
+      setVideoBrandId(videoData.brand_client_id || '');
+    }
+  }, [videoData?.brand_client_id]);
+
   // Initialize ratings from existing data
   useEffect(() => {
     try {
@@ -1271,6 +1306,48 @@ export default function VideoDetail({ videoData, editorParams }) {
                 </span>
               );
             })()}
+          </div>
+        </div>
+        {/* Brand selector for video */}
+        <div className="flex justify-center mt-2">
+          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-gray-200 bg-white text-xs">
+            <span className="text-gray-500 whitespace-nowrap">{window.__t?.('brandLabel') || 'ブランド'}</span>
+            <select
+              value={videoBrandId}
+              onChange={async (e) => {
+                const newBrandId = e.target.value;
+                setVideoBrandId(newBrandId);
+                setBrandSaving(true);
+                try {
+                  const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
+                  const res = await fetch(
+                    `${API_BASE}/api/v1/videos/${videoData.id}/brand?client_id=${encodeURIComponent(newBrandId)}`,
+                    {
+                      method: 'PATCH',
+                      headers: { 'X-Admin-Key': import.meta.env.VITE_ADMIN_KEY || 'aither:hub' },
+                    }
+                  );
+                  if (!res.ok) throw new Error(`brand assign ${res.status}`);
+                  const data = await res.json();
+                  setToast({ type: 'success', message: `${window.__t?.('brandAssigned') || 'ブランド設定完了'} (${data.clips_affected} clips)` });
+                  setTimeout(() => setToast(null), 3000);
+                } catch (err) {
+                  console.error('[VideoDetail] Brand assign failed:', err);
+                  setToast({ type: 'error', message: window.__t?.('brandAssignFailed') || 'ブランド設定に失敗しました' });
+                  setTimeout(() => setToast(null), 3000);
+                } finally {
+                  setBrandSaving(false);
+                }
+              }}
+              disabled={brandSaving || videoBrandList.length === 0}
+              className="h-[28px] px-2 text-xs border border-gray-200 rounded-md bg-white text-gray-700 focus:outline-none focus:ring-1 focus:ring-[#7D01FF]/30 focus:border-[#7D01FF] min-w-[120px] max-w-[200px]"
+            >
+              <option value="">{window.__t?.('noBrand') || '指定なし'}</option>
+              {videoBrandList.map((b) => (
+                <option key={b.client_id} value={b.client_id}>{b.name}</option>
+              ))}
+            </select>
+            {brandSaving && <span className="text-gray-400 animate-pulse">...</span>}
           </div>
         </div>
         {/* Partial Error Warning Banner */}
