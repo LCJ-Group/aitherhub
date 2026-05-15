@@ -26,7 +26,7 @@ echo "${LOG_PREFIX} === Starting daily retrain ==="
 
 # Step 1: Generate dataset
 echo "${LOG_PREFIX} Step 1: Generating dataset..."
-rm -rf ${DATASET_DIR}
+sudo rm -rf ${DATASET_DIR} 2>/dev/null || rm -rf ${DATASET_DIR}
 mkdir -p ${DATASET_DIR}
 ${VENV_PYTHON} -u ${AITHERHUB_DIR}/worker/batch/generate_dataset.py --output-dir ${DATASET_DIR}
 if [ $? -ne 0 ]; then
@@ -37,7 +37,7 @@ echo "${LOG_PREFIX} Step 1: Dataset generated"
 
 # Step 2: Train models (--input-dir processes both click and order internally)
 echo "${LOG_PREFIX} Step 2: Training models (click + order)..."
-rm -rf ${MODELS_DIR}
+sudo rm -rf ${MODELS_DIR} 2>/dev/null || rm -rf ${MODELS_DIR}
 mkdir -p ${MODELS_DIR}
 ${VENV_PYTHON} -u ${AITHERHUB_DIR}/worker/batch/train.py --input-dir ${DATASET_DIR} --output-dir ${MODELS_DIR}
 if [ $? -ne 0 ]; then

@@ -174,7 +174,7 @@ function ModelCard({ title, model, icon }) {
         <span className="text-xl">{icon}</span>
         <h4 className="font-semibold text-gray-700">{title}</h4>
         <span className="ml-auto text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">
-          v{model.model_version || "?"}
+          {model.model_version || "v?"}
         </span>
       </div>
       <div className="grid grid-cols-3 gap-3 text-center">
@@ -296,7 +296,7 @@ function FeatureImportanceChart({ data }) {
       ))}
       {data.trained_at && (
         <div className="text-xs text-gray-400 mt-2">
-          モデル: v{data.model_version} | 学習日: {new Date(data.trained_at).toLocaleString("ja-JP")}
+          モデル: {data.model_version} | 学習日: {new Date(data.trained_at).toLocaleString("ja-JP")}
         </div>
       )}
     </div>

@@ -260,7 +260,20 @@ jobs:
             done
 
             # ============================================================
-            # 6. VERIFY
+            # 6. SETUP CRON FOR DAILY RETRAIN
+            # ============================================================
+            echo ""
+            echo "=== Setting up daily retrain cron ==="
+            # Remove old cron entries for retrain
+            crontab -l 2>/dev/null | grep -v 'cron_retrain' > /tmp/crontab_clean || true
+            # Add new cron entry: daily at 3:00 AM JST (18:00 UTC)
+            echo '0 18 * * * /opt/aitherhub/worker/batch/cron_retrain.sh >> /var/log/aitherhub_retrain.log 2>&1' >> /tmp/crontab_clean
+            crontab /tmp/crontab_clean
+            rm -f /tmp/crontab_clean
+            echo "Cron installed: $(crontab -l | grep retrain)"
+
+            # ============================================================
+            # 7. VERIFY
             # ============================================================
             echo ""
             echo "=== Disk status (final) ==="

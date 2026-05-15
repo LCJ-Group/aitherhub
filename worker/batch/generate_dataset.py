@@ -368,7 +368,7 @@ async def fetch_phases(session, video_id=None, user_id=None):
             ON cf.video_id = vp.video_id
             AND cf.phase_index = vp.phase_index::text
         LEFT JOIN videos v
-            ON v.video_id = vp.video_id
+            ON v.id = vp.video_id
         {where}
         ORDER BY vp.video_id, vp.phase_index
     """)
