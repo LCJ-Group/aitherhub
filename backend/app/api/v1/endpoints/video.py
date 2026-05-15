@@ -2107,80 +2107,86 @@ async def assign_brand_to_video(
     if x_admin_key != valid_key:
         raise HTTPException(status_code=403, detail="Admin only")
 
-    # Check video exists
-    vid_row = await db.execute(
-        text("SELECT id FROM videos WHERE id = :vid"),
-        {"vid": video_id},
-    )
-    if not vid_row.first():
-        raise HTTPException(status_code=404, detail="Video not found")
-
-    effective_brand = client_id if client_id else None
-
-    # Update video's brand_client_id
-    await db.execute(
-        text("UPDATE videos SET brand_client_id = :bid WHERE id = :vid"),
-        {"bid": effective_brand, "vid": video_id},
-    )
-
-    # Get all clips for this video
-    clips_result = await db.execute(
-        text("SELECT id FROM video_clips WHERE video_id = :vid"),
-        {"vid": video_id},
-    )
-    clip_ids = [row[0] for row in clips_result.fetchall()]
-
-    assigned_count = 0
-    if effective_brand and clip_ids:
-        # Check brand exists
-        brand_check = await db.execute(
-            text("SELECT client_id FROM widget_clients WHERE client_id = :bid AND is_active = TRUE"),
-            {"bid": effective_brand},
+    try:
+        # Check video exists
+        vid_row = await db.execute(
+            text("SELECT id FROM videos WHERE id = :vid"),
+            {"vid": video_id},
         )
-        if not brand_check.first():
-            raise HTTPException(status_code=404, detail="Brand not found")
+        if not vid_row.first():
+            raise HTTPException(status_code=404, detail="Video not found")
 
-        # Get next sort order
-        max_order_row = await db.execute(
-            text("SELECT COALESCE(MAX(sort_order), -1) + 1 FROM widget_clip_assignments WHERE client_id = :cid"),
-            {"cid": effective_brand},
+        effective_brand = client_id if client_id else None
+
+        # Update video's brand_client_id
+        await db.execute(
+            text("UPDATE videos SET brand_client_id = :bid WHERE id = :vid"),
+            {"bid": effective_brand, "vid": video_id},
         )
-        next_order = max_order_row.scalar() or 0
 
-        for clip_id in clip_ids:
-            await db.execute(
-                text("""
-                    INSERT INTO widget_clip_assignments (id, client_id, clip_id, sort_order, is_active, created_at)
-                    VALUES (:id, :client_id, :clip_id, :sort_order, TRUE, NOW())
-                    ON CONFLICT (client_id, clip_id) DO UPDATE
-                    SET is_active = TRUE, sort_order = :sort_order
-                """),
-                {
-                    "id": str(uuid_module.uuid4()),
-                    "client_id": effective_brand,
-                    "clip_id": clip_id,
-                    "sort_order": next_order,
-                },
+        # Get all clips for this video
+        clips_result = await db.execute(
+            text("SELECT id FROM video_clips WHERE video_id = :vid"),
+            {"vid": video_id},
+        )
+        clip_ids = [row[0] for row in clips_result.fetchall()]
+
+        assigned_count = 0
+        if effective_brand and clip_ids:
+            # Check brand exists
+            brand_check = await db.execute(
+                text("SELECT client_id FROM widget_clients WHERE client_id = :bid AND is_active = TRUE"),
+                {"bid": effective_brand},
             )
-            next_order += 1
-            assigned_count += 1
-    elif not effective_brand and clip_ids:
-        # Unassign: deactivate all clip assignments for this video's clips
-        # (We don't know which brand was previously assigned, so deactivate all)
-        for clip_id in clip_ids:
-            await db.execute(
-                text("UPDATE widget_clip_assignments SET is_active = FALSE WHERE clip_id = :cid"),
-                {"cid": clip_id},
+            if not brand_check.first():
+                raise HTTPException(status_code=404, detail="Brand not found")
+
+            # Get next sort order
+            max_order_row = await db.execute(
+                text("SELECT COALESCE(MAX(sort_order), -1) + 1 FROM widget_clip_assignments WHERE client_id = :cid"),
+                {"cid": effective_brand},
             )
+            next_order = max_order_row.scalar() or 0
 
-    await db.commit()
+            for clip_id in clip_ids:
+                await db.execute(
+                    text("""
+                        INSERT INTO widget_clip_assignments (id, client_id, clip_id, sort_order, is_active, created_at)
+                        VALUES (:id, :client_id, :clip_id, :sort_order, TRUE, NOW())
+                        ON CONFLICT (client_id, clip_id) DO UPDATE
+                        SET is_active = TRUE, sort_order = :sort_order
+                    """),
+                    {
+                        "id": str(uuid_module.uuid4()),
+                        "client_id": effective_brand,
+                        "clip_id": clip_id,
+                        "sort_order": next_order,
+                    },
+                )
+                next_order += 1
+                assigned_count += 1
+        elif not effective_brand and clip_ids:
+            # Unassign: deactivate all clip assignments for this video's clips
+            # (We don't know which brand was previously assigned, so deactivate all)
+            for clip_id in clip_ids:
+                await db.execute(
+                    text("UPDATE widget_clip_assignments SET is_active = FALSE WHERE clip_id = :cid"),
+                    {"cid": clip_id},
+                )
 
-    return {
-        "status": "assigned" if effective_brand else "unassigned",
-        "video_id": video_id,
-        "brand_client_id": effective_brand,
-        "clips_affected": assigned_count if effective_brand else len(clip_ids),
-    }
+        await db.commit()
+
+        return {
+            "status": "assigned" if effective_brand else "unassigned",
+            "video_id": video_id,
+            "brand_client_id": effective_brand,
+            "clips_affected": assigned_count if effective_brand else len(clip_ids),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(f"Brand assign failed for video {video_id}: {exc}")
+        raise HTTPException(status_code=500, detail=f"Brand assign failed: {exc}")
 
 
 # ============================================================
