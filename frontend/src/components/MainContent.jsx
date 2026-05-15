@@ -915,7 +915,7 @@ export default function MainContent({
       triggerLoginModal();
       return;
     }
-    if (!selectedFile) {{
+    if (!selectedFile) {
       toast.error(window.__t('selectFileFirstError'));
       return;
     }
@@ -1082,7 +1082,7 @@ export default function MainContent({
       triggerLoginModal();
       return;
     }
-    const files = e.dataTransfer.files;;
+    const files = e.dataTransfer.files;
     if (files.length > 0) {
       const file = files[0];
       if (!file.type.startsWith("video/")) {
