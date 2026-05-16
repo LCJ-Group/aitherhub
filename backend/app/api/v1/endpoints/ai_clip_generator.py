@@ -202,8 +202,8 @@ def verify_admin(x_admin_key: Optional[str] = Header(None)):
 
 # ─── Job Management (DB-persistent) ──────────────────────────────────────────
 
-def _save_job(job_id: str, data: dict):
-    """Save job to DB (sync wrapper using asyncio)"""
+async def _save_job(job_id: str, data: dict):
+    """Save job to file + DB (async, awaits DB save)"""
     # Also save to file as fallback
     try:
         path = os.path.join(_AI_CLIP_JOB_DIR, f"{job_id}.json")
@@ -211,15 +211,8 @@ def _save_job(job_id: str, data: dict):
             json.dump(data, f, default=str)
     except Exception:
         pass
-    # Save to DB via sync wrapper
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            asyncio.ensure_future(_save_job_db(job_id, data))
-        else:
-            loop.run_until_complete(_save_job_db(job_id, data))
-    except Exception as e:
-        logger.warning(f"[ai-clip] DB save failed for {job_id}: {e}")
+    # Save to DB directly (await ensures completion)
+    await _save_job_db(job_id, data)
 
 
 async def _save_job_db(job_id: str, data: dict):
@@ -316,8 +309,8 @@ async def _load_job_db(job_id: str) -> dict | None:
         return None
 
 
-def _update_job(job_id: str, **kwargs):
-    """Update job - updates both file and DB"""
+async def _update_job(job_id: str, **kwargs):
+    """Update job - updates both file and DB (async, awaits DB save)"""
     if "progress_pct" in kwargs:
         try:
             kwargs["progress_pct"] = max(0, min(100, int(kwargs["progress_pct"])))
@@ -341,13 +334,8 @@ def _update_job(job_id: str, **kwargs):
             json.dump(data, f, default=str)
     except Exception:
         pass
-    # Also update DB
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            asyncio.ensure_future(_save_job_db(job_id, data))
-    except Exception as e:
-        logger.warning(f"[ai-clip] DB update failed for {job_id}: {e}")
+    # Save to DB directly (await ensures completion)
+    await _save_job_db(job_id, data)
 
 
 async def _list_jobs_db(limit: int = 50) -> list:
@@ -1514,7 +1502,7 @@ async def generate_ai_clip_from_clip(
             "duration_sec": row.duration_sec,
         },
     }
-    _save_job(job_id, job_data)
+    await _save_job(job_id, job_data)
     background_tasks.add_task(_run_single_clip_generation, job_id, gen_req, clip_data)
     return {
         "job_id": job_id,
@@ -1529,11 +1517,11 @@ async def _run_single_clip_generation(job_id: str, req: GenerateRequest, clip_da
     try:
         async with _AI_CLIP_SEMAPHORE:
             clip_id = str(clip_data["clip_id"])
-            _update_job(job_id, status="processing", progress_pct=2,
+            await _update_job(job_id, status="processing", progress_pct=2,
                         current_step=f"クリップ {clip_id[:8]}... 処理開始...")
 
             result = await _process_single_clip_v2(job_id, clip_data, req, 0, 1)
-            _update_job(
+            await _update_job(
                 job_id, status="done", progress_pct=100,
                 current_step="完了: 1/1件成功",
                 clips_completed=1, results=[result],
@@ -1541,7 +1529,7 @@ async def _run_single_clip_generation(job_id: str, req: GenerateRequest, clip_da
             logger.info(f"[ai-clip {job_id}] Single clip generation complete: {clip_id}")
     except Exception as e:
         logger.error(f"[ai-clip {job_id}] Single clip generation failed: {e}", exc_info=True)
-        _update_job(job_id, status="failed", error=str(e)[:500],
+        await _update_job(job_id, status="failed", error=str(e)[:500],
                     current_step=f"エラー: {str(e)[:200]}")
 
 
@@ -1567,7 +1555,7 @@ async def generate_ai_clip(
         "updated_at": now,
         "config": req.dict(),
     }
-    _save_job(job_id, job_data)
+    await _save_job(job_id, job_data)
     background_tasks.add_task(_run_ai_clip_generation, job_id, req)
     return {"job_id": job_id, "status": "queued", "message": "全自動AIクリップ生成ジョブを開始しました (V2)"}
 
@@ -1683,22 +1671,22 @@ async def _run_ai_clip_generation(job_id: str, req: GenerateRequest):
             await _run_ai_clip_generation_inner(job_id, req)
     except Exception as e:
         logger.error(f"[ai-clip {job_id}] Fatal error: {e}", exc_info=True)
-        _update_job(job_id, status="failed", error=str(e)[:500])
+        await _update_job(job_id, status="failed", error=str(e)[:500])
 
 
 async def _run_ai_clip_generation_inner(job_id: str, req: GenerateRequest):
     import httpx
 
     logger.info(f"[ai-clip {job_id}] Starting V2 generation pipeline")
-    _update_job(job_id, status="selecting", progress_pct=5, current_step="候補クリップ選定中...")
+    await _update_job(job_id, status="selecting", progress_pct=5, current_step="候補クリップ選定中...")
 
     candidates = await _select_candidates(req)
     if not candidates:
-        _update_job(job_id, status="failed", error="条件に合うクリップが見つかりませんでした")
+        await _update_job(job_id, status="failed", error="条件に合うクリップが見つかりませんでした")
         return
 
     clips_total = min(len(candidates), req.max_clips)
-    _update_job(job_id, clips_total=clips_total, progress_pct=8,
+    await _update_job(job_id, clips_total=clips_total, progress_pct=8,
                 current_step=f"{clips_total}件のクリップを選定完了")
 
     results = []
@@ -1707,20 +1695,20 @@ async def _run_ai_clip_generation_inner(job_id: str, req: GenerateRequest):
         step_base_pct = 10 + int((idx / clips_total) * 80)
 
         try:
-            _update_job(job_id, status="processing", progress_pct=step_base_pct,
+            await _update_job(job_id, status="processing", progress_pct=step_base_pct,
                         current_step=f"クリップ {idx+1}/{clips_total} 処理中...",
                         clips_completed=idx)
             result = await _process_single_clip_v2(job_id, clip, req, idx, clips_total)
             results.append(result)
-            _update_job(job_id, clips_completed=idx + 1, results=results)
+            await _update_job(job_id, clips_completed=idx + 1, results=results)
             logger.info(f"[ai-clip {job_id}] Clip {idx+1}/{clips_total} done: {clip_id}")
         except Exception as e:
             logger.error(f"[ai-clip {job_id}] Clip {idx+1} failed: {e}", exc_info=True)
             results.append({"clip_id": clip_id, "status": "failed", "error": str(e)[:200]})
-            _update_job(job_id, clips_completed=idx + 1, results=results)
+            await _update_job(job_id, clips_completed=idx + 1, results=results)
 
     success_count = sum(1 for r in results if r.get("status") == "done")
-    _update_job(
+    await _update_job(
         job_id, status="done", progress_pct=100,
         current_step=f"完了: {success_count}/{clips_total}件成功",
         clips_completed=clips_total, results=results,
@@ -1811,7 +1799,7 @@ async def _process_single_clip_v2(job_id: str, clip: dict, req: GenerateRequest,
 
     try:
         # ── 1. Download clip ── (5%)
-        _update_job(job_id, progress_pct=5, current_step=f"クリップ {idx+1}/{total}: ダウンロード中...")
+        await _update_job(job_id, progress_pct=5, current_step=f"クリップ {idx+1}/{total}: ダウンロード中...")
         video_path = os.path.join(tmp_dir, "input.mp4")
 
         download_url = clip_url
@@ -1860,18 +1848,18 @@ async def _process_single_clip_v2(job_id: str, clip: dict, req: GenerateRequest,
         keep_segments = [(0, duration)]
 
         if req.enable_zoom_pulse:
-            _update_job(job_id, progress_pct=15, current_step=f"クリップ {idx+1}/{total}: 音声分析中（ズームポイント検出）...")
+            await _update_job(job_id, progress_pct=15, current_step=f"クリップ {idx+1}/{total}: 音声分析中（ズームポイント検出）...")
             volume_peaks = _detect_volume_peaks(video_path)
 
         if req.enable_silence_cut:
-            _update_job(job_id, progress_pct=20, current_step=f"クリップ {idx+1}/{total}: 無音区間検出中...")
+            await _update_job(job_id, progress_pct=20, current_step=f"クリップ {idx+1}/{total}: 無音区間検出中...")
             silence_periods = _detect_silence_periods(
                 video_path, noise_db=req.silence_threshold_db
             )
 
         # ── 4. Transcribe ── (25%)
         if not captions:
-            _update_job(job_id, progress_pct=25, current_step=f"クリップ {idx+1}/{total}: 字幕生成中 (Whisper)...")
+            await _update_job(job_id, progress_pct=25, current_step=f"クリップ {idx+1}/{total}: 字幕生成中 (Whisper)...")
             captions = await _transcribe_clip(video_path, req.target_language)
 
         if isinstance(captions, str):
@@ -1896,21 +1884,21 @@ async def _process_single_clip_v2(job_id: str, clip: dict, req: GenerateRequest,
         # ── 6. Hook generation ── (40%)
         hook_text = None
         if req.enable_hook:
-            _update_job(job_id, progress_pct=40, current_step=f"クリップ {idx+1}/{total}: フック生成中...")
+            await _update_job(job_id, progress_pct=40, current_step=f"クリップ {idx+1}/{total}: フック生成中...")
             hook_text = await _generate_hook(captions, clip, req)
 
         # ── 7. CTA generation (V2) ── (45%)
         cta_text = None
         if req.enable_cta:
-            _update_job(job_id, progress_pct=45, current_step=f"クリップ {idx+1}/{total}: CTA生成中...")
+            await _update_job(job_id, progress_pct=45, current_step=f"クリップ {idx+1}/{total}: CTA生成中...")
             cta_text = _generate_cta_text(captions, clip)
 
         # ── 8. Scene classification & style assignment ── (50%)
-        _update_job(job_id, progress_pct=50, current_step=f"クリップ {idx+1}/{total}: シーン分析中...")
+        await _update_job(job_id, progress_pct=50, current_step=f"クリップ {idx+1}/{total}: シーン分析中...")
         styled_captions = _assign_scene_styles(captions, duration, req.subtitle_style)
 
         # ── 9. Generate enhanced ASS subtitle file (V2) ── (55%)
-        _update_job(job_id, progress_pct=55, current_step=f"クリップ {idx+1}/{total}: 字幕ファイル生成中...")
+        await _update_job(job_id, progress_pct=55, current_step=f"クリップ {idx+1}/{total}: 字幕ファイル生成中...")
         ass_path = os.path.join(tmp_dir, "subtitles.ass")
         _generate_enhanced_ass(
             styled_captions, hook_text, cta_text, ass_path,
@@ -1921,7 +1909,7 @@ async def _process_single_clip_v2(job_id: str, clip: dict, req: GenerateRequest,
         )
 
         # ── 10. Build advanced ffmpeg command (V2) ── (60%)
-        _update_job(job_id, progress_pct=60, current_step=f"クリップ {idx+1}/{total}: エンコード中（V2フィルタ適用）...")
+        await _update_job(job_id, progress_pct=60, current_step=f"クリップ {idx+1}/{total}: エンコード中（V2フィルタ適用）...")
         output_path = os.path.join(tmp_dir, "output.mp4")
         ffmpeg_cmd = _build_advanced_ffmpeg_command(
             video_path, ass_path, output_path,
@@ -1966,18 +1954,18 @@ async def _process_single_clip_v2(job_id: str, clip: dict, req: GenerateRequest,
         # ── 11. Enhanced thumbnail (V2) ── (85%)
         thumbnail_url = None
         if req.enable_thumbnail:
-            _update_job(job_id, progress_pct=85, current_step=f"クリップ {idx+1}/{total}: サムネイル生成中...")
+            await _update_job(job_id, progress_pct=85, current_step=f"クリップ {idx+1}/{total}: サムネイル生成中...")
             thumbnail_url = await _generate_enhanced_thumbnail(
                 output_path, tmp_dir, clip_id,
                 hook_text=hook_text or "", product_name=product_name,
             )
 
         # ── 12. Upload to Azure Blob Storage ── (90%)
-        _update_job(job_id, progress_pct=90, current_step=f"クリップ {idx+1}/{total}: アップロード中...")
+        await _update_job(job_id, progress_pct=90, current_step=f"クリップ {idx+1}/{total}: アップロード中...")
         download_url, blob_url = await _upload_to_blob(output_path, clip_id, job_id)
 
         # ── 13. Save to DB ── (95%)
-        _update_job(job_id, progress_pct=95, current_step=f"クリップ {idx+1}/{total}: DB保存中...")
+        await _update_job(job_id, progress_pct=95, current_step=f"クリップ {idx+1}/{total}: DB保存中...")
         await _save_export_record(clip_id, blob_url, thumbnail_url)
 
         return {
