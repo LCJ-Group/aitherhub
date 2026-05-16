@@ -931,23 +931,44 @@ async def _transcribe_clip(video_path: str, target_language: str = "auto") -> li
 
             response = await openai_client.audio.transcriptions.create(**whisper_kwargs)
 
+        # Debug: log response attributes
+        logger.info(f"[ai-clip] Whisper response type: {type(response).__name__}")
+        logger.info(f"[ai-clip] Whisper response attrs: {[a for a in dir(response) if not a.startswith('_')]}")
+        if hasattr(response, 'text'):
+            logger.info(f"[ai-clip] Whisper response.text: {(response.text or '')[:200]}")
+        if hasattr(response, 'segments'):
+            seg_count = len(response.segments) if response.segments else 0
+            logger.info(f"[ai-clip] Whisper response.segments count: {seg_count}")
+
         segments = []
         if hasattr(response, "segments") and response.segments:
             for seg in response.segments:
-                segments.append({
-                    "start": seg.get("start", seg.start) if hasattr(seg, "start") else seg.get("start", 0),
-                    "end": seg.get("end", seg.end) if hasattr(seg, "end") else seg.get("end", 0),
-                    "text": seg.get("text", seg.text) if hasattr(seg, "text") else seg.get("text", ""),
-                })
+                s = getattr(seg, "start", 0) if hasattr(seg, "start") else (seg.get("start", 0) if isinstance(seg, dict) else 0)
+                e = getattr(seg, "end", 0) if hasattr(seg, "end") else (seg.get("end", 0) if isinstance(seg, dict) else 0)
+                t = getattr(seg, "text", "") if hasattr(seg, "text") else (seg.get("text", "") if isinstance(seg, dict) else "")
+                segments.append({"start": float(s), "end": float(e), "text": str(t).strip()})
         elif hasattr(response, "text") and response.text:
-            # Fallback: single segment
-            segments.append({"start": 0, "end": 30, "text": response.text})
+            # Fallback: single segment with full text
+            # Estimate duration from audio file
+            try:
+                probe_res = subprocess.run(
+                    ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", whisper_file],
+                    capture_output=True, text=True, timeout=10
+                )
+                if probe_res.returncode == 0:
+                    pdata = json.loads(probe_res.stdout)
+                    est_dur = float(pdata.get("format", {}).get("duration", 30))
+                else:
+                    est_dur = 30.0
+            except Exception:
+                est_dur = 30.0
+            segments.append({"start": 0, "end": est_dur, "text": response.text.strip()})
 
         logger.info(f"[ai-clip] Transcribed: {len(segments)} segments")
         return segments
 
     except Exception as e:
-        logger.error(f"[ai-clip] Whisper failed: {e}")
+        logger.error(f"[ai-clip] Whisper failed: {e}", exc_info=True)
         return []
 
 
@@ -968,6 +989,10 @@ async def _generate_hook(captions: list, clip: dict, req: GenerateRequest) -> st
     # Fallback: Generate hook using GPT
     transcript = " ".join(c.get("text", "") for c in (captions or []))[:500]
     product_name = clip.get("product_name") or ""
+
+    # If no transcript available, use simple hook directly (GPT can't generate good hooks without content)
+    if not transcript.strip():
+        return _generate_simple_hook(product_name, transcript)
 
     try:
         import openai
