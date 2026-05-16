@@ -485,97 +485,90 @@ def _build_advanced_ffmpeg_command(
     5. 進行バー（drawbox）
     6. ループ感フェードアウト（fade filter）
     """
-    filter_parts = []
+    # ── Strategy: use -filter_complex with semicolons to avoid comma escaping ──
+    # This is more robust than -vf because semicolons separate filter chains,
+    # allowing commas inside expressions without escaping.
+    
+    # Build video filter chain parts (will be joined with commas)
+    vf_parts = []
+    
+    # ── 1. Silence trimming (select filter) ──
+    use_silence_trim = len(keep_segments) > 1 and len(keep_segments) <= 20
+    af_chain = None
+    if use_silence_trim:
+        select_parts = [f"between(t,{s:.3f},{e:.3f})" for s, e in keep_segments]
+        select_expr = "+".join(select_parts)
+        vf_parts.append(f"select='{select_expr}'")
+        vf_parts.append("setpts=N/FRAME_RATE/TB")
+        af_chain = f"aselect='{select_expr}',asetpts=N/SR/TB"
 
-    # ── 1. Zoom Pulse via crop+scale ──
-    # We use the crop filter to simulate zoom: crop a slightly smaller area, then scale back up
-    # This is more reliable than zoompan for short pulses
+    # ── 2. Zoom Pulse via crop+scale ──
+    # Use simple per-keyframe approach: each zoom is a short crop pulse
     if zoom_keyframes:
-        # Build a complex expression for crop that zooms at specific times
-        # zoom_factor at time t: interpolate between 1.0 and max_zoom
-        # Each zoom lasts ~0.4s (0.2s in, 0.2s out)
-        # IMPORTANT: commas in expressions MUST be escaped as \, to avoid
-        # being interpreted as ffmpeg filter separators in the -vf chain
-        zoom_expr_parts = []
+        # Build a nested if() expression for zoom factor
+        # Inside crop filter params, commas are parameter separators
+        # so we use the single-string form: crop=w:h:x:y
+        parts = []
         for t, zf in zoom_keyframes:
-            # Triangular pulse: rises from 1.0 to zf over 0.2s, falls back over 0.2s
-            zoom_expr_parts.append(
-                f"if(between(t\\,{t:.2f}\\,{t+0.4:.2f})\\,"
-                f"{zf:.3f}*sin((t-{t:.2f})*{math.pi/0.4:.4f})+"
-                f"(1-sin((t-{t:.2f})*{math.pi/0.4:.4f}))\\,"
+            # sin((t-t0)*pi/0.4) goes 0→1→0 over 0.4s window
+            freq = math.pi / 0.4
+            parts.append(
+                f"if(between(t,{t:.2f},{t+0.4:.2f}),"
+                f"{zf:.3f}*sin((t-{t:.2f})*{freq:.4f})+"
+                f"(1-sin((t-{t:.2f})*{freq:.4f})),"
             )
+        # Build nested expression with fallback 1.0
+        zoom_expr = "1.0"
+        for part in reversed(parts):
+            zoom_expr = part + zoom_expr + ")"
 
-        if zoom_expr_parts:
-            # Build nested if expression
-            # Fallback to 1.0 (no zoom)
-            zoom_expr = "1.0"
-            for part in reversed(zoom_expr_parts):
-                zoom_expr = part + zoom_expr + ")"
+        # Use crop=w:h:x:y positional form (no named params, no colons in values)
+        # crop filter: crop=out_w:out_h:x:y
+        crop_f = (
+            f"crop="
+            f"'iw/({zoom_expr})':"
+            f"'ih/({zoom_expr})':"
+            f"'(iw-iw/({zoom_expr}))/2':"
+            f"'(ih-ih/({zoom_expr}))/2'"
+        )
+        vf_parts.append(crop_f)
+        vf_parts.append(f"scale={video_width}:{video_height}")
 
-            # crop width = iw/zoom, crop height = ih/zoom, centered
-            cw = f"iw/({zoom_expr})"
-            ch = f"ih/({zoom_expr})"
-            cx = f"(iw-{cw})/2"
-            cy = f"(ih-{ch})/2"
-
-            filter_parts.append(f"crop=w={cw}:h={ch}:x={cx}:y={cy}")
-            filter_parts.append(f"scale={video_width}:{video_height}")
-
-    # ── 2. Flash intro (first 0.5s brightness boost) ──
+    # ── 3. Flash intro (first 0.3s brightness boost) ──
     if enable_flash_intro:
-        # Use curves filter for a visible white flash: boost all channels for first 0.3s
-        # eq brightness range is -1.0 to 1.0, so use 0.4 (quite visible)
-        flash_expr = "if(lt(t\\,0.3)\\,0.4*(1-t/0.3)\\,0)"
-        filter_parts.append(f"eq=brightness='{flash_expr}':eval=frame")
+        flash_expr = "if(lt(t,0.3),0.4*(1-t/0.3),0)"
+        vf_parts.append(f"eq=brightness='{flash_expr}':eval=frame")
 
-    # ── 3. ASS subtitles ──
-    # Escape the path for ffmpeg filter
-    escaped_ass = ass_path.replace("'", "'\\''").replace(":", "\\:")
-    filter_parts.append(f"ass='{escaped_ass}'")
+    # ── 4. ASS subtitles ──
+    escaped_ass = ass_path.replace(":", "\\:").replace("'", "'\\''")
+    vf_parts.append(f"ass='{escaped_ass}'")
 
-    # ── 4. Progress bar at bottom ──
+    # ── 5. Progress bar at bottom ──
     if enable_progress_bar:
         bar_height = 8
         bar_y = video_height - bar_height
-        # Background bar (dark) - drawn first
-        bg_bar = f"drawbox=x=0:y={bar_y}:w=iw:h={bar_height}:color=black@0.5:t=fill"
-        filter_parts.append(bg_bar)
-        # Progress bar: red bar that grows from left to right over duration
-        # Use enable=1 to ensure it's always active
+        vf_parts.append(f"drawbox=x=0:y={bar_y}:w=iw:h={bar_height}:color=black@0.5:t=fill")
         bar_w_expr = f"t/{duration:.2f}*iw"
-        bar_expr = f"drawbox=x=0:y={bar_y}:w='{bar_w_expr}':h={bar_height}:color=red@0.9:t=fill"
-        filter_parts.append(bar_expr)
+        vf_parts.append(f"drawbox=x=0:y={bar_y}:w='{bar_w_expr}':h={bar_height}:color=red@0.9:t=fill")
 
-    # ── 5. Loop fade (last 1s fade out to black) ──
+    # ── 6. Loop fade (last 1.5s fade to black) ──
     if enable_loop_fade and duration > 5:
         fade_start = max(0, duration - 1.5)
-        filter_parts.append(f"fade=t=out:st={fade_start:.2f}:d=1.5")
+        vf_parts.append(f"fade=t=out:st={fade_start:.2f}:d=1.5")
 
-    video_filter = ",".join(filter_parts) if filter_parts else "null"
-
-    # ── Build concat demuxer file for silence trimming ──
-    use_concat = len(keep_segments) > 1 and len(keep_segments) <= 20
-
-    if use_concat:
-        # Create a temporary concat filter script
-        # We'll use the select+concat approach within filtergraph
-        select_parts = []
-        for seg_start, seg_end in keep_segments:
-            select_parts.append(f"between(t,{seg_start:.3f},{seg_end:.3f})")
-
-        select_expr = "+".join(select_parts)
-        # Prepend select filter before other video filters
-        silence_vf = f"select='{select_expr}',setpts=N/FRAME_RATE/TB"
-        silence_af = f"aselect='{select_expr}',asetpts=N/SR/TB"
-
-        full_vf = silence_vf + "," + video_filter if video_filter != "null" else silence_vf
-        full_af = silence_af
-
+    # ── Assemble -filter_complex ──
+    # Use -filter_complex with [0:v] and [0:a] labels
+    # Semicolons separate video and audio chains
+    video_chain = ",".join(vf_parts) if vf_parts else "null"
+    
+    if af_chain:
+        # Both video and audio filter chains
+        fc = f"[0:v]{video_chain}[vout];[0:a]{af_chain}[aout]"
         cmd = [
             "ffmpeg", "-y",
             "-i", video_path,
-            "-vf", full_vf,
-            "-af", full_af,
+            "-filter_complex", fc,
+            "-map", "[vout]", "-map", "[aout]",
             "-c:v", "libx264",
             "-preset", "fast",
             "-crf", "22",
@@ -586,11 +579,13 @@ def _build_advanced_ffmpeg_command(
             output_path,
         ]
     else:
-        # No silence trimming, just apply video filters
+        # Video filter only, pass audio through
+        fc = f"[0:v]{video_chain}[vout]"
         cmd = [
             "ffmpeg", "-y",
             "-i", video_path,
-            "-vf", video_filter,
+            "-filter_complex", fc,
+            "-map", "[vout]", "-map", "0:a",
             "-c:v", "libx264",
             "-preset", "fast",
             "-crf", "22",
