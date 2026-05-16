@@ -1394,8 +1394,22 @@ async def diagnostics(x_admin_key: Optional[str] = Header(None)):
     except Exception:
         ffmpeg_ok = False
         ffprobe_ok = False
+    # DB table check
+    db_status = {"table_exists": False, "job_count": 0, "error": None}
+    try:
+        await _ensure_jobs_table()
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(text(
+                "SELECT COUNT(*) as cnt FROM ai_clip_jobs"
+            ))
+            row = result.fetchone()
+            db_status["table_exists"] = True
+            db_status["job_count"] = row.cnt if row else 0
+    except Exception as e:
+        db_status["error"] = str(e)[:200]
+
     return {
-        "version": "2.0",
+        "version": "2.1",
         "azure_openai_key_set": bool(azure_key),
         "azure_openai_endpoint": azure_endpoint or "NOT SET",
         "gpt_model": gpt_model,
@@ -1404,6 +1418,7 @@ async def diagnostics(x_admin_key: Optional[str] = Header(None)):
         "ffprobe_available": ffprobe_ok,
         "job_dir": _AI_CLIP_JOB_DIR,
         "job_storage": "DB (ai_clip_jobs) + file fallback",
+        "db_status": db_status,
         "features": {
             "silence_cut": True,
             "zoom_pulse": True,
