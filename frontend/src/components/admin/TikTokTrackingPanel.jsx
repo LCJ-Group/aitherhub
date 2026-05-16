@@ -496,6 +496,7 @@ export default function TikTokTrackingPanel({ adminKey }) {
     return sum + (snap?.digg_count || 0);
   }, 0);
   const matchedCount = videos.filter(v => v.clip_db_id).length;
+  const ahEditedCount = videos.filter(v => v.clip_db_id && v.is_aitherhub_edited).length;
 
   // ── Filter videos by account ──
   const filteredVideos = accountFilter
@@ -616,7 +617,7 @@ export default function TikTokTrackingPanel({ adminKey }) {
 
       {/* Summary stats bar */}
       {!loading && videos.length > 0 && (
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
           <div className="bg-white rounded-xl border border-gray-200 p-3 text-center">
             <div className="text-[10px] text-gray-400 mb-1">追跡動画数</div>
             <div className="text-lg font-bold text-gray-800">{filteredVideos.length}{accountFilter ? `/${videos.length}` : ""}</div>
@@ -630,8 +631,12 @@ export default function TikTokTrackingPanel({ adminKey }) {
             <div className="text-lg font-bold text-pink-500">{fmtNum(totalDigg)}</div>
           </div>
           <div className="bg-white rounded-xl border border-gray-200 p-3 text-center">
-            <div className="text-[10px] text-gray-400 mb-1">ClipDB紐付け</div>
-            <div className="text-lg font-bold text-indigo-500">{matchedCount}/{videos.length}</div>
+            <div className="text-[10px] text-gray-400 mb-1">AH編集済</div>
+            <div className="text-lg font-bold text-emerald-500">{ahEditedCount}/{videos.length}</div>
+          </div>
+          <div className="bg-white rounded-xl border border-gray-200 p-3 text-center">
+            <div className="text-[10px] text-gray-400 mb-1">対象外</div>
+            <div className="text-lg font-bold text-gray-400">{matchedCount - ahEditedCount}</div>
           </div>
           <div className="bg-white rounded-xl border border-gray-200 p-3 text-center">
             <div className="text-[10px] text-gray-400 mb-1">アクティブ</div>
@@ -1031,7 +1036,7 @@ export default function TikTokTrackingPanel({ adminKey }) {
                               <span className="ml-2 text-indigo-500">🔗 Clip: {selectedVideo.clip_db_id.slice(0, 8)}...</span>
                               {selectedVideo.is_aitherhub_edited
                                 ? <span className="ml-1 px-1.5 py-0.5 rounded text-[9px] font-medium bg-emerald-100 text-emerald-700">✅ AH編集済</span>
-                                : <span className="ml-1 px-1.5 py-0.5 rounded text-[9px] font-medium bg-amber-100 text-amber-700">⚠️ 未編集</span>
+                                : <span className="ml-1 px-1.5 py-0.5 rounded text-[9px] font-medium bg-gray-100 text-gray-400">📎 対象外</span>
                               }
                             </>
                           )}
@@ -1141,15 +1146,15 @@ export default function TikTokTrackingPanel({ adminKey }) {
                         }`}>
                           {video.status === "active" ? "追跡中" : "停止"}
                         </span>
-                        {video.clip_db_id && (
-                          <span className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-indigo-100 text-indigo-600">
-                            🔗 紐付済
+                        {video.clip_db_id && video.is_aitherhub_edited && (
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-emerald-100 text-emerald-700">
+                            ✅ AH編集済
                           </span>
                         )}
-                        {video.clip_db_id && (
-                          video.is_aitherhub_edited
-                            ? <span className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-emerald-100 text-emerald-700">✅ AH編集済</span>
-                            : <span className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-amber-100 text-amber-700">⚠️ 未編集</span>
+                        {video.clip_db_id && !video.is_aitherhub_edited && (
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-gray-100 text-gray-400">
+                            📎 対象外
+                          </span>
                         )}
                       </div>
                     </div>
