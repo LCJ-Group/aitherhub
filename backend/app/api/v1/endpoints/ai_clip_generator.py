@@ -494,13 +494,15 @@ def _build_advanced_ffmpeg_command(
         # Build a complex expression for crop that zooms at specific times
         # zoom_factor at time t: interpolate between 1.0 and max_zoom
         # Each zoom lasts ~0.4s (0.2s in, 0.2s out)
+        # IMPORTANT: commas in expressions MUST be escaped as \, to avoid
+        # being interpreted as ffmpeg filter separators in the -vf chain
         zoom_expr_parts = []
         for t, zf in zoom_keyframes:
             # Triangular pulse: rises from 1.0 to zf over 0.2s, falls back over 0.2s
             zoom_expr_parts.append(
-                f"if(between(t,{t:.2f},{t+0.4:.2f}),"
+                f"if(between(t\\,{t:.2f}\\,{t+0.4:.2f})\\,"
                 f"{zf:.3f}*sin((t-{t:.2f})*{math.pi/0.4:.4f})+"
-                f"(1-sin((t-{t:.2f})*{math.pi/0.4:.4f})),"
+                f"(1-sin((t-{t:.2f})*{math.pi/0.4:.4f}))\\,"
             )
 
         if zoom_expr_parts:
