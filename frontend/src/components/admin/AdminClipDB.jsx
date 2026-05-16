@@ -597,6 +597,21 @@ function ClipCard({ clip, onPlay, brands, adminKey, onBrandChange }) {
           </a>
         )}
 
+        {/* AI Clip generation button */}
+        {clip.clip_url && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              if (typeof window.__openAiClipModal === 'function') {
+                window.__openAiClipModal(clip);
+              }
+            }}
+            className="flex items-center justify-center gap-1.5 w-full py-1.5 rounded-lg text-[11px] font-medium text-emerald-600 bg-emerald-50 hover:bg-emerald-100 transition-colors"
+          >
+            <Zap className="w-3 h-3" /> AIクリップ生成
+          </button>
+        )}
+
         {/* TikTok tracking button */}
         <TikTokUrlRegisterButton clipId={clip.id} adminKey={adminKey} />
 
@@ -1279,6 +1294,67 @@ export default function AdminClipDB({ adminKey }) {
   const [enriching, setEnriching] = useState(false);
   const [enrichStatus, setEnrichStatus] = useState(null);
   const [showStats, setShowStats] = useState(true);
+
+  // AI Clip generation state
+  const [aiClipModalClip, setAiClipModalClip] = useState(null);
+  const [aiClipJobId, setAiClipJobId] = useState(null);
+  const [aiClipJobStatus, setAiClipJobStatus] = useState(null);
+  const [aiClipGenerating, setAiClipGenerating] = useState(false);
+
+  // Register global callback for ClipCard AI clip button
+  useEffect(() => {
+    window.__openAiClipModal = (clip) => setAiClipModalClip(clip);
+    return () => { delete window.__openAiClipModal; };
+  }, []);
+
+  // Poll AI clip job status
+  useEffect(() => {
+    if (!aiClipJobId) return;
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/v1/ai-clip/status/${aiClipJobId}`, {
+          headers: { "X-Admin-Key": adminKey },
+        });
+        const data = await res.json();
+        setAiClipJobStatus(data);
+        if (data.status === "done" || data.status === "failed") {
+          clearInterval(interval);
+          setAiClipGenerating(false);
+        }
+      } catch (e) {
+        console.warn("[AI Clip] Poll failed:", e);
+      }
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [aiClipJobId]);
+
+  async function startAiClipGeneration(clip, options = {}) {
+    setAiClipGenerating(true);
+    setAiClipJobStatus(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/ai-clip/generate-from-clip`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Admin-Key": adminKey,
+        },
+        body: JSON.stringify({
+          clip_id: clip.clip_id || clip.id,
+          ...options,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `API error ${res.status}`);
+      }
+      const data = await res.json();
+      setAiClipJobId(data.job_id);
+      setAiClipJobStatus({ status: "queued", progress_pct: 0, current_step: "ジョブをキューに追加しました" });
+    } catch (e) {
+      alert(`AIクリップ生成エラー: ${e.message}`);
+      setAiClipGenerating(false);
+    }
+  }
 
   // Analytics state
   const [showAnalytics, setShowAnalytics] = useState(false);
@@ -2447,6 +2523,287 @@ export default function AdminClipDB({ adminKey }) {
           onNavigate={setPlayerClip}
         />
       )}
+
+      {/* AI Clip Generation Modal */}
+      {aiClipModalClip && (
+        <AiClipGenerationModal
+          clip={aiClipModalClip}
+          onClose={() => {
+            setAiClipModalClip(null);
+            if (!aiClipGenerating) {
+              setAiClipJobId(null);
+              setAiClipJobStatus(null);
+            }
+          }}
+          onGenerate={(options) => startAiClipGeneration(aiClipModalClip, options)}
+          generating={aiClipGenerating}
+          jobStatus={aiClipJobStatus}
+        />
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════
+// ─── AI Clip Generation Modal ───
+// ═══════════════════════════════════════════════
+function AiClipGenerationModal({ clip, onClose, onGenerate, generating, jobStatus }) {
+  const [options, setOptions] = useState({
+    subtitle_style: "auto",
+    enable_sfx: true,
+    enable_transitions: true,
+    enable_hook: true,
+    hook_text: "",
+    enable_silence_cut: true,
+    enable_zoom_pulse: true,
+    enable_progress_bar: true,
+    enable_flash_intro: true,
+    enable_loop_fade: true,
+    enable_cta: true,
+    enable_keyword_highlight: true,
+    enable_subtitle_animation: true,
+    zoom_intensity: 1.08,
+    target_language: "auto",
+  });
+
+  const isDone = jobStatus?.status === "done";
+  const isFailed = jobStatus?.status === "failed";
+  const isProcessing = generating || (jobStatus && !isDone && !isFailed);
+  const resultClip = isDone && jobStatus?.results?.[0];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
+      <div className="relative bg-white rounded-2xl shadow-2xl max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        {/* Header */}
+        <div className="sticky top-0 z-10 bg-white rounded-t-2xl border-b border-gray-100 px-5 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Zap className="w-5 h-5 text-emerald-500" />
+            <h3 className="text-base font-bold text-gray-800">AIクリップ生成</h3>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="px-5 py-4 space-y-4">
+          {/* Source clip info */}
+          <div className="flex gap-3 p-3 bg-gray-50 rounded-xl">
+            {clip.thumbnail_url && (
+              <img src={clip.thumbnail_url} alt="" className="w-16 h-24 object-cover rounded-lg" />
+            )}
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-gray-800 truncate">{clip.product_name || "不明な商品"}</p>
+              <p className="text-xs text-gray-500 mt-0.5">{clip.liver_name || "不明"}</p>
+              <p className="text-xs text-gray-400 mt-0.5">{clip.duration_sec ? `${Math.round(clip.duration_sec)}秒` : ""}</p>
+              {clip.transcript_text && (
+                <p className="text-[10px] text-gray-400 mt-1 line-clamp-2">{clip.transcript_text}</p>
+              )}
+            </div>
+          </div>
+
+          {/* Generation options */}
+          {!isProcessing && !isDone && (
+            <div className="space-y-3">
+              <h4 className="text-xs font-semibold text-gray-600 uppercase tracking-wide">エフェクト設定</h4>
+
+              {/* Subtitle style */}
+              <div className="flex items-center justify-between">
+                <label className="text-xs text-gray-600">字幕スタイル</label>
+                <select
+                  value={options.subtitle_style}
+                  onChange={(e) => setOptions({ ...options, subtitle_style: e.target.value })}
+                  className="text-xs border border-gray-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                >
+                  <option value="auto">自動</option>
+                  <option value="simple">シンプル</option>
+                  <option value="box">ボックス</option>
+                  <option value="outline">アウトライン</option>
+                  <option value="pop">ポップ</option>
+                  <option value="gradient">グラデーション</option>
+                  <option value="karaoke">カラオケ</option>
+                </select>
+              </div>
+
+              {/* Target language */}
+              <div className="flex items-center justify-between">
+                <label className="text-xs text-gray-600">字幕言語</label>
+                <select
+                  value={options.target_language}
+                  onChange={(e) => setOptions({ ...options, target_language: e.target.value })}
+                  className="text-xs border border-gray-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                >
+                  <option value="auto">自動検出</option>
+                  <option value="ja">日本語</option>
+                  <option value="zh">中文(簡体)</option>
+                  <option value="zh-tw">中文(繁体)</option>
+                </select>
+              </div>
+
+              {/* Hook text */}
+              <div>
+                <label className="text-xs text-gray-600 block mb-1">フックテキスト（空ならAI自動生成）</label>
+                <input
+                  type="text"
+                  value={options.hook_text}
+                  onChange={(e) => setOptions({ ...options, hook_text: e.target.value })}
+                  placeholder="例: これが話題のセラム！"
+                  className="w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+
+              {/* Zoom intensity */}
+              <div className="flex items-center justify-between">
+                <label className="text-xs text-gray-600">ズーム強度</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="range"
+                    min="1.0" max="1.3" step="0.02"
+                    value={options.zoom_intensity}
+                    onChange={(e) => setOptions({ ...options, zoom_intensity: parseFloat(e.target.value) })}
+                    className="w-24 accent-emerald-500"
+                  />
+                  <span className="text-xs text-gray-500 w-10 text-right">{options.zoom_intensity.toFixed(2)}x</span>
+                </div>
+              </div>
+
+              {/* Toggle switches */}
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  { key: "enable_silence_cut", label: "無音カット" },
+                  { key: "enable_zoom_pulse", label: "ズームパルス" },
+                  { key: "enable_progress_bar", label: "進行バー" },
+                  { key: "enable_flash_intro", label: "フラッシュイントロ" },
+                  { key: "enable_loop_fade", label: "ループフェード" },
+                  { key: "enable_cta", label: "CTAテキスト" },
+                  { key: "enable_keyword_highlight", label: "キーワードハイライト" },
+                  { key: "enable_subtitle_animation", label: "字幕アニメーション" },
+                  { key: "enable_hook", label: "フック" },
+                  { key: "enable_sfx", label: "効果音" },
+                ].map(({ key, label }) => (
+                  <label key={key} className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={options[key]}
+                      onChange={(e) => setOptions({ ...options, [key]: e.target.checked })}
+                      className="rounded border-gray-300 text-emerald-500 focus:ring-emerald-500"
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+
+              {/* Generate button */}
+              <button
+                onClick={() => onGenerate(options)}
+                className="w-full py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-semibold text-sm transition-colors flex items-center justify-center gap-2"
+              >
+                <Zap className="w-4 h-4" /> AIクリップを生成
+              </button>
+            </div>
+          )}
+
+          {/* Processing status */}
+          {isProcessing && (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <Loader2 className="w-5 h-5 animate-spin text-emerald-500" />
+                <span className="text-sm font-medium text-gray-700">生成中...</span>
+              </div>
+              <div className="w-full bg-gray-100 rounded-full h-2.5">
+                <div
+                  className="bg-emerald-500 h-2.5 rounded-full transition-all duration-500"
+                  style={{ width: `${jobStatus?.progress_pct || 0}%` }}
+                />
+              </div>
+              <p className="text-xs text-gray-500">{jobStatus?.current_step || "処理を開始しています..."}</p>
+              <p className="text-[10px] text-gray-400">※ 通常 2～5分かかります。このモーダルを閉じても生成は続行されます。</p>
+            </div>
+          )}
+
+          {/* Failed */}
+          {isFailed && (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 text-red-500">
+                <AlertTriangle className="w-5 h-5" />
+                <span className="text-sm font-medium">生成失敗</span>
+              </div>
+              <p className="text-xs text-red-400">{jobStatus?.error || "不明なエラー"}</p>
+              <button
+                onClick={() => onGenerate(options)}
+                className="w-full py-2 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 font-medium text-sm transition-colors flex items-center justify-center gap-2"
+              >
+                <RefreshCw className="w-4 h-4" /> 再試行
+              </button>
+            </div>
+          )}
+
+          {/* Success result */}
+          {isDone && resultClip && (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 text-emerald-600">
+                <CheckCircle className="w-5 h-5" />
+                <span className="text-sm font-bold">生成完了！</span>
+              </div>
+
+              {/* Video preview */}
+              {resultClip.download_url && (
+                <div className="rounded-xl overflow-hidden bg-black">
+                  <video
+                    src={resultClip.download_url}
+                    controls
+                    playsInline
+                    className="w-full aspect-[9/16] max-h-[50vh]"
+                  />
+                </div>
+              )}
+
+              {/* Result info */}
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                {resultClip.duration_sec && (
+                  <div className="bg-gray-50 rounded-lg p-2">
+                    <span className="text-gray-400">長さ</span>
+                    <p className="font-semibold text-gray-700">{Math.round(resultClip.duration_sec)}秒</p>
+                  </div>
+                )}
+                {resultClip.file_size_mb && (
+                  <div className="bg-gray-50 rounded-lg p-2">
+                    <span className="text-gray-400">サイズ</span>
+                    <p className="font-semibold text-gray-700">{resultClip.file_size_mb.toFixed(1)}MB</p>
+                  </div>
+                )}
+                {resultClip.hook_text && (
+                  <div className="bg-gray-50 rounded-lg p-2 col-span-2">
+                    <span className="text-gray-400">フック</span>
+                    <p className="font-semibold text-gray-700">{resultClip.hook_text}</p>
+                  </div>
+                )}
+                {resultClip.effects_applied && (
+                  <div className="bg-gray-50 rounded-lg p-2 col-span-2">
+                    <span className="text-gray-400">適用エフェクト</span>
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {resultClip.effects_applied.map((e, i) => (
+                        <span key={i} className="px-1.5 py-0.5 bg-emerald-50 text-emerald-600 rounded text-[10px] font-medium">{e}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Download button */}
+              {resultClip.download_url && (
+                <a
+                  href={resultClip.download_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-full py-2.5 rounded-xl bg-blue-500 hover:bg-blue-600 text-white font-semibold text-sm transition-colors flex items-center justify-center gap-2"
+                >
+                  <Download className="w-4 h-4" /> ダウンロード
+                </a>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

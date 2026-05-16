@@ -1002,6 +1002,31 @@ class GenerateRequest(BaseModel):
     silence_threshold_db: float = Field(-30.0, ge=-60.0, le=-10.0, description="無音検出閾値(dB)")
 
 
+class GenerateFromClipRequest(BaseModel):
+    """特定クリップIDを指定してAIクリップ生成するリクエスト"""
+    clip_id: str = Field(..., description="対象のクリップID (video_clips.id)")
+    subtitle_style: str = Field("auto", description="字幕スタイル (auto/simple/box/outline/pop/gradient/karaoke)")
+    enable_sfx: bool = Field(True, description="効果音を自動挿入するか")
+    enable_transitions: bool = Field(True, description="トランジションを追加するか")
+    transition_type: str = Field("fade", description="トランジション種類")
+    transition_duration: float = Field(0.5, ge=0.1, le=2.0, description="トランジション時間（秒）")
+    enable_hook: bool = Field(True, description="最初3秒のフックテキストを生成するか")
+    hook_text: Optional[str] = Field(None, description="カスタムフックテキスト（空の場合はAI生成）")
+    enable_thumbnail: bool = Field(True, description="サムネイルを自動生成するか")
+    target_language: str = Field("auto", description="字幕言語 (auto/ja/zh/zh-tw)")
+    position_y: float = Field(75.0, ge=0, le=100, description="字幕Y位置（%）")
+    enable_silence_cut: bool = Field(True, description="無音区間を自動カットするか")
+    enable_zoom_pulse: bool = Field(True, description="ズームパルスを有効にするか")
+    enable_progress_bar: bool = Field(True, description="進行バーを表示するか")
+    enable_flash_intro: bool = Field(True, description="最初0.5秒のフラッシュ演出")
+    enable_loop_fade: bool = Field(True, description="ループ感フェードアウト")
+    enable_cta: bool = Field(True, description="最後3秒にCTAテキストを表示")
+    enable_keyword_highlight: bool = Field(True, description="キーワードハイライト")
+    enable_subtitle_animation: bool = Field(True, description="字幕出現アニメーション")
+    zoom_intensity: float = Field(1.08, ge=1.0, le=1.3, description="ズーム倍率")
+    silence_threshold_db: float = Field(-30.0, ge=-60.0, le=-10.0, description="無音検出閾値(dB)")
+
+
 class JobStatusResponse(BaseModel):
     job_id: str
     status: str
@@ -1213,6 +1238,121 @@ async def diagnostics(x_admin_key: Optional[str] = Header(None)):
             "enhanced_thumbnail": True,
         },
     }
+
+
+@router.post("/generate-from-clip")
+async def generate_ai_clip_from_clip(
+    req: GenerateFromClipRequest,
+    background_tasks: BackgroundTasks,
+    x_admin_key: Optional[str] = Header(None),
+):
+    """特定のクリップIDを指定してAIクリップを生成する（クリップDBから直接）"""
+    verify_admin(x_admin_key)
+
+    # クリップ情報をDBから取得
+    async with get_session() as session:
+        result = await session.execute(text("""
+            SELECT vc.id as clip_id, vc.video_id, vc.phase_index,
+                   vc.time_start, vc.time_end, vc.duration_sec,
+                   vc.clip_url, vc.thumbnail_url, vc.transcript_text,
+                   vc.product_name, vc.cta_score, vc.importance_score,
+                   vc.captions, vc.subtitle_style, vc.liver_name
+            FROM video_clips vc
+            WHERE vc.id = :clip_id::uuid
+        """), {"clip_id": req.clip_id})
+        row = result.fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail=f"クリップが見つかりません: {req.clip_id}")
+    if not row.clip_url:
+        raise HTTPException(status_code=400, detail="このクリップにはclip_urlがありません")
+
+    clip_data = {
+        "clip_id": row.clip_id, "video_id": row.video_id,
+        "phase_index": row.phase_index, "time_start": row.time_start,
+        "time_end": row.time_end, "duration_sec": row.duration_sec,
+        "clip_url": row.clip_url, "thumbnail_url": row.thumbnail_url,
+        "transcript_text": row.transcript_text, "product_name": row.product_name,
+        "cta_score": row.cta_score, "importance_score": row.importance_score,
+        "captions": row.captions, "subtitle_style": row.subtitle_style,
+        "liver_name": row.liver_name,
+    }
+
+    # GenerateRequestに変換（_process_single_clip_v2が受け取る形式）
+    gen_req = GenerateRequest(
+        max_clips=1,
+        subtitle_style=req.subtitle_style,
+        enable_sfx=req.enable_sfx,
+        enable_transitions=req.enable_transitions,
+        transition_type=req.transition_type,
+        transition_duration=req.transition_duration,
+        enable_hook=req.enable_hook,
+        hook_text=req.hook_text,
+        enable_thumbnail=req.enable_thumbnail,
+        target_language=req.target_language,
+        position_y=req.position_y,
+        enable_silence_cut=req.enable_silence_cut,
+        enable_zoom_pulse=req.enable_zoom_pulse,
+        enable_progress_bar=req.enable_progress_bar,
+        enable_flash_intro=req.enable_flash_intro,
+        enable_loop_fade=req.enable_loop_fade,
+        enable_cta=req.enable_cta,
+        enable_keyword_highlight=req.enable_keyword_highlight,
+        enable_subtitle_animation=req.enable_subtitle_animation,
+        zoom_intensity=req.zoom_intensity,
+        silence_threshold_db=req.silence_threshold_db,
+    )
+
+    job_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    job_data = {
+        "job_id": job_id,
+        "status": "queued",
+        "progress_pct": 0,
+        "current_step": f"クリップ {req.clip_id[:8]}... の処理を開始します",
+        "clips_completed": 0,
+        "clips_total": 1,
+        "results": [],
+        "error": None,
+        "created_at": now,
+        "updated_at": now,
+        "config": {"clip_id": req.clip_id, "mode": "single_clip", **req.dict()},
+        "source_clip": {
+            "clip_id": str(row.clip_id),
+            "product_name": row.product_name,
+            "liver_name": row.liver_name,
+            "duration_sec": row.duration_sec,
+        },
+    }
+    _save_job(job_id, job_data)
+    background_tasks.add_task(_run_single_clip_generation, job_id, gen_req, clip_data)
+    return {
+        "job_id": job_id,
+        "status": "queued",
+        "clip_id": req.clip_id,
+        "message": f"クリップ {req.clip_id[:8]}... のAIクリップ生成を開始しました",
+    }
+
+
+async def _run_single_clip_generation(job_id: str, req: GenerateRequest, clip_data: dict):
+    """単一クリップのAIクリップ生成バックグラウンドタスク"""
+    try:
+        async with _AI_CLIP_SEMAPHORE:
+            clip_id = str(clip_data["clip_id"])
+            _update_job(job_id, status="processing", progress_pct=10,
+                        current_step=f"クリップ {clip_id[:8]}... 処理中...")
+
+            result = await _process_single_clip_v2(job_id, clip_data, req, 0, 1)
+            _update_job(
+                job_id, status="done", progress_pct=100,
+                current_step="完了: 1/1件成功",
+                clips_completed=1, results=[result],
+            )
+            logger.info(f"[ai-clip {job_id}] Single clip generation complete: {clip_id}")
+    except Exception as e:
+        logger.error(f"[ai-clip {job_id}] Single clip generation failed: {e}", exc_info=True)
+        _update_job(job_id, status="failed", error=str(e)[:500],
+                    current_step=f"エラー: {str(e)[:200]}")
 
 
 @router.post("/generate")
