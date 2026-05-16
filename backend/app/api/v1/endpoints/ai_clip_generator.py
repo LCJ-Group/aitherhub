@@ -1258,8 +1258,8 @@ async def generate_ai_clip_from_clip(
                    vc.product_name, vc.cta_score, vc.importance_score,
                    vc.captions, vc.subtitle_style, vc.liver_name
             FROM video_clips vc
-            WHERE vc.id = :clip_id::uuid
-        """), {"clip_id": req.clip_id})
+            WHERE vc.id = CAST(:clip_id AS uuid)
+        ""), {"clip_id": req.clip_id})
         row = result.fetchone()
 
     if not row:
@@ -2010,7 +2010,7 @@ async def _save_export_record(clip_id: str, blob_url: str, thumbnail_url: Option
                 UPDATE video_clips
                 SET exported_url = :exported_url,
                     exported_at = NOW()
-                WHERE id = :clip_id::uuid
+                WHERE id = CAST(:clip_id AS uuid)
             """), {"clip_id": clip_id, "exported_url": blob_url})
             logger.info(f"[ai-clip] Saved export record for clip {clip_id}")
     except Exception as e:
