@@ -34,7 +34,10 @@ export default function AutoAIClipPanel({ adminKey }) {
   const [templates, setTemplates] = useState([]);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
-  const [activeTab, setActiveTab] = useState("generate"); // generate, jobs, candidates
+  const [activeTab, setActiveTab] = useState("generate"); // generate, jobs, completed, candidates
+  const [completedClips, setCompletedClips] = useState([]);
+  const [completedLoading, setCompletedLoading] = useState(false);
+  const [completedTotal, setCompletedTotal] = useState(0);
 
   // ── Config (V2: new effect options) ──
   const [config, setConfig] = useState({
@@ -121,6 +124,27 @@ export default function AutoAIClipPanel({ adminKey }) {
       fetchCandidates();
     }
   }, [activeTab, fetchCandidates]);
+
+  // ── Fetch completed clips ──
+  const fetchCompletedClips = useCallback(async () => {
+    setCompletedLoading(true);
+    try {
+      const res = await axios.get(`${API_BASE}/api/v1/ai-clip/completed-clips?limit=100`, { headers });
+      setCompletedClips(res.data.clips || []);
+      setCompletedTotal(res.data.total || 0);
+    } catch (e) {
+      console.error("Completed clips fetch error:", e);
+      setCompletedClips([]);
+    } finally {
+      setCompletedLoading(false);
+    }
+  }, [adminKey]);
+
+  useEffect(() => {
+    if (activeTab === "completed") {
+      fetchCompletedClips();
+    }
+  }, [activeTab, fetchCompletedClips]);
 
   // ── Poll active job ──
   useEffect(() => {
@@ -219,7 +243,8 @@ export default function AutoAIClipPanel({ adminKey }) {
         {[
           { id: "generate", label: "⚡ 生成設定" },
           { id: "jobs", label: `📋 ジョブ一覧 (${jobs.length})` },
-          { id: "candidates", label: "🎬 候補プレビュー" },
+          { id: "completed", label: `🎬 完成動画 (${completedTotal})` },
+          { id: "candidates", label: "🎯 候補プレビュー" },
         ].map(tab => (
           <button
             key={tab.id}
@@ -888,6 +913,145 @@ export default function AutoAIClipPanel({ adminKey }) {
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* Completed Clips Tab */}
+      {activeTab === "completed" && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-gray-500">
+              完成したAIクリップ: <strong>{completedTotal}件</strong>
+            </p>
+            <button
+              onClick={fetchCompletedClips}
+              disabled={completedLoading}
+              className="px-3 py-1.5 text-sm bg-gray-100 hover:bg-gray-200 rounded-md disabled:opacity-50"
+            >
+              {completedLoading ? "読み込み中..." : "🔄 更新"}
+            </button>
+          </div>
+
+          {completedLoading && completedClips.length === 0 ? (
+            <div className="p-8 text-center text-gray-400 bg-white rounded-lg border">
+              <div className="animate-spin inline-block w-6 h-6 border-2 border-purple-500 border-t-transparent rounded-full mb-2"></div>
+              <p>読み込み中...</p>
+            </div>
+          ) : completedClips.length === 0 ? (
+            <div className="p-8 text-center text-gray-400 bg-white rounded-lg border">
+              <p className="text-4xl mb-2">🎬</p>
+              <p>まだ完成した動画がありません</p>
+              <p className="text-xs mt-1">AIクリップ生成を実行すると、ここに完成動画が表示されます</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {completedClips.map((clip, idx) => (
+                <div key={`${clip.job_id}-${clip.clip_id}-${idx}`} className="bg-white rounded-lg border overflow-hidden hover:shadow-md transition-shadow">
+                  {/* Video Preview */}
+                  <div className="relative bg-black aspect-video">
+                    {clip.blob_url ? (
+                      <video
+                        src={clip.blob_url}
+                        className="w-full h-full object-contain"
+                        controls
+                        preload="metadata"
+                        poster={clip.thumbnail_url || undefined}
+                      />
+                    ) : clip.thumbnail_url ? (
+                      <img src={clip.thumbnail_url} alt="" className="w-full h-full object-cover" />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-gray-500">
+                        <span className="text-3xl">🎬</span>
+                      </div>
+                    )}
+                    {/* Duration badge */}
+                    {clip.duration_sec && (
+                      <span className="absolute bottom-2 right-2 bg-black/70 text-white text-xs px-1.5 py-0.5 rounded">
+                        {Math.floor(clip.duration_sec / 60)}:{String(Math.floor(clip.duration_sec % 60)).padStart(2, '0')}
+                      </span>
+                    )}
+                  </div>
+                  {/* Info */}
+                  <div className="p-3 space-y-2">
+                    {/* Hook text */}
+                    {clip.hook_text && (
+                      <p className="text-sm font-medium text-gray-800 line-clamp-2">
+                        🪝 {clip.hook_text}
+                      </p>
+                    )}
+                    {/* CTA text */}
+                    {clip.cta_text && (
+                      <p className="text-xs text-orange-600 line-clamp-1">
+                        📢 {clip.cta_text}
+                      </p>
+                    )}
+                    {/* Meta info */}
+                    <div className="flex flex-wrap gap-1.5 text-xs">
+                      {clip.captions_count > 0 && (
+                        <span className="bg-green-100 text-green-700 px-1.5 py-0.5 rounded">
+                          字幕:{clip.captions_count}
+                        </span>
+                      )}
+                      {clip.effects_applied && Object.entries(clip.effects_applied)
+                        .filter(([, v]) => v)
+                        .slice(0, 3)
+                        .map(([k]) => (
+                          <span key={k} className="bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">
+                            {k === 'silence_cut' ? '無音カット' :
+                             k === 'zoom_pulse' ? 'ズーム' :
+                             k === 'progress_bar' ? '進行バー' :
+                             k === 'flash_intro' ? 'フラッシュ' :
+                             k === 'loop_fade' ? 'ループ' :
+                             k === 'cta' ? 'CTA' :
+                             k === 'keyword_highlight' ? 'キーワード' :
+                             k === 'subtitle_animation' ? '字幕アニメ' : k}
+                          </span>
+                        ))
+                      }
+                      {clip.file_size && (
+                        <span className="bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">
+                          {(clip.file_size / 1024 / 1024).toFixed(1)}MB
+                        </span>
+                      )}
+                    </div>
+                    {/* Source info */}
+                    {clip.source_clip && (
+                      <div className="text-xs text-gray-500 border-t pt-1">
+                        {clip.source_clip.product_name && <span>🏷️ {clip.source_clip.product_name}</span>}
+                        {clip.source_clip.liver_name && <span className="ml-2">👤 {clip.source_clip.liver_name}</span>}
+                      </div>
+                    )}
+                    {/* Date & Actions */}
+                    <div className="flex items-center justify-between text-xs text-gray-400 border-t pt-1">
+                      <span>{clip.created_at ? new Date(clip.created_at).toLocaleDateString('ja-JP') : ''}</span>
+                      <div className="flex gap-2">
+                        {clip.download_url && (
+                          <a
+                            href={clip.download_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-blue-500 hover:text-blue-700"
+                          >
+                            ⬇️ DL
+                          </a>
+                        )}
+                        {clip.blob_url && (
+                          <a
+                            href={clip.blob_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-purple-500 hover:text-purple-700"
+                          >
+                            🔗 URL
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

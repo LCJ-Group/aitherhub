@@ -58,9 +58,41 @@ router = APIRouter(prefix="/ai-clip", tags=["AI Clip Generator"])
 # ─── Configuration ────────────────────────────────────────────────────────────
 ADMIN_KEY = os.getenv("ADMIN_API_KEY", "aither:hub")
 
-# ─── Job Storage (file-based, same pattern as clip_editor_v2) ─────────────────
+# ─── Job Storage (DB-persistent) ─────────────────────────────────────────────
+# Legacy file-based dir kept for backward compat during transition
 _AI_CLIP_JOB_DIR = os.path.join(tempfile.gettempdir(), "aitherhub_ai_clip_jobs")
 os.makedirs(_AI_CLIP_JOB_DIR, exist_ok=True)
+
+_DB_TABLE_ENSURED = False
+
+async def _ensure_jobs_table():
+    """Create ai_clip_jobs table if not exists (idempotent)"""
+    global _DB_TABLE_ENSURED
+    if _DB_TABLE_ENSURED:
+        return
+    try:
+        async with AsyncSessionLocal() as session:
+            await session.execute(text("""
+                CREATE TABLE IF NOT EXISTS ai_clip_jobs (
+                    job_id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL DEFAULT 'queued',
+                    progress_pct INTEGER NOT NULL DEFAULT 0,
+                    current_step TEXT,
+                    clips_completed INTEGER NOT NULL DEFAULT 0,
+                    clips_total INTEGER NOT NULL DEFAULT 0,
+                    results JSONB DEFAULT '[]'::jsonb,
+                    error TEXT,
+                    config JSONB DEFAULT '{}'::jsonb,
+                    source_clip JSONB,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """))
+            await session.commit()
+        _DB_TABLE_ENSURED = True
+        logger.info("[ai-clip] ai_clip_jobs table ensured")
+    except Exception as e:
+        logger.warning(f"[ai-clip] Failed to ensure jobs table: {e}")
 
 # Concurrency limiter
 _AI_CLIP_SEMAPHORE = asyncio.Semaphore(1)
@@ -168,37 +200,194 @@ def verify_admin(x_admin_key: Optional[str] = Header(None)):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
-# ─── Job Management (file-based) ─────────────────────────────────────────────
+# ─── Job Management (DB-persistent) ──────────────────────────────────────────
+
 def _save_job(job_id: str, data: dict):
-    path = os.path.join(_AI_CLIP_JOB_DIR, f"{job_id}.json")
-    with open(path, "w") as f:
-        json.dump(data, f, default=str)
+    """Save job to DB (sync wrapper using asyncio)"""
+    # Also save to file as fallback
+    try:
+        path = os.path.join(_AI_CLIP_JOB_DIR, f"{job_id}.json")
+        with open(path, "w") as f:
+            json.dump(data, f, default=str)
+    except Exception:
+        pass
+    # Save to DB via sync wrapper
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.ensure_future(_save_job_db(job_id, data))
+        else:
+            loop.run_until_complete(_save_job_db(job_id, data))
+    except Exception as e:
+        logger.warning(f"[ai-clip] DB save failed for {job_id}: {e}")
+
+
+async def _save_job_db(job_id: str, data: dict):
+    """Save job to DB (async)"""
+    try:
+        await _ensure_jobs_table()
+        async with AsyncSessionLocal() as session:
+            await session.execute(text("""
+                INSERT INTO ai_clip_jobs (job_id, status, progress_pct, current_step,
+                    clips_completed, clips_total, results, error, config, source_clip, created_at, updated_at)
+                VALUES (:job_id, :status, :progress_pct, :current_step,
+                    :clips_completed, :clips_total, :results::jsonb, :error, :config::jsonb, :source_clip::jsonb,
+                    :created_at::timestamptz, :updated_at::timestamptz)
+                ON CONFLICT (job_id) DO UPDATE SET
+                    status = EXCLUDED.status,
+                    progress_pct = EXCLUDED.progress_pct,
+                    current_step = EXCLUDED.current_step,
+                    clips_completed = EXCLUDED.clips_completed,
+                    clips_total = EXCLUDED.clips_total,
+                    results = EXCLUDED.results,
+                    error = EXCLUDED.error,
+                    config = EXCLUDED.config,
+                    source_clip = EXCLUDED.source_clip,
+                    updated_at = EXCLUDED.updated_at
+            """), {
+                "job_id": data.get("job_id", job_id),
+                "status": data.get("status", "queued"),
+                "progress_pct": max(0, min(100, int(data.get("progress_pct", 0)))),
+                "current_step": data.get("current_step"),
+                "clips_completed": int(data.get("clips_completed", 0)),
+                "clips_total": int(data.get("clips_total", 0)),
+                "results": json.dumps(data.get("results", []), default=str),
+                "error": data.get("error"),
+                "config": json.dumps(data.get("config", {}), default=str),
+                "source_clip": json.dumps(data.get("source_clip"), default=str) if data.get("source_clip") else None,
+                "created_at": data.get("created_at", datetime.now(timezone.utc).isoformat()),
+                "updated_at": data.get("updated_at", datetime.now(timezone.utc).isoformat()),
+            })
+            await session.commit()
+    except Exception as e:
+        logger.warning(f"[ai-clip] DB save failed for {job_id}: {e}")
 
 
 def _load_job(job_id: str) -> dict | None:
+    """Load job - try file first (for in-progress jobs), then DB"""
+    # Try file first (faster for active jobs)
     path = os.path.join(_AI_CLIP_JOB_DIR, f"{job_id}.json")
-    if not os.path.exists(path):
-        return None
+    if os.path.exists(path):
+        try:
+            with open(path) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    # Fallback: try DB (sync wrapper)
     try:
-        with open(path) as f:
-            return json.load(f)
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            return None  # Can't block in async context, caller should use _load_job_db
+        return loop.run_until_complete(_load_job_db(job_id))
     except Exception:
         return None
 
 
+async def _load_job_db(job_id: str) -> dict | None:
+    """Load job from DB (async)"""
+    try:
+        await _ensure_jobs_table()
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(text("""
+                SELECT job_id, status, progress_pct, current_step,
+                       clips_completed, clips_total, results, error,
+                       config, source_clip, created_at, updated_at
+                FROM ai_clip_jobs WHERE job_id = :job_id
+            """), {"job_id": job_id})
+            row = result.fetchone()
+            if not row:
+                return None
+            return {
+                "job_id": row.job_id,
+                "status": row.status,
+                "progress_pct": row.progress_pct,
+                "current_step": row.current_step,
+                "clips_completed": row.clips_completed,
+                "clips_total": row.clips_total,
+                "results": row.results if isinstance(row.results, list) else json.loads(row.results or "[]"),
+                "error": row.error,
+                "config": row.config if isinstance(row.config, dict) else json.loads(row.config or "{}"),
+                "source_clip": row.source_clip if isinstance(row.source_clip, (dict, type(None))) else json.loads(row.source_clip or "null"),
+                "created_at": str(row.created_at) if row.created_at else None,
+                "updated_at": str(row.updated_at) if row.updated_at else None,
+            }
+    except Exception as e:
+        logger.warning(f"[ai-clip] DB load failed for {job_id}: {e}")
+        return None
+
+
 def _update_job(job_id: str, **kwargs):
+    """Update job - updates both file and DB"""
     if "progress_pct" in kwargs:
         try:
             kwargs["progress_pct"] = max(0, min(100, int(kwargs["progress_pct"])))
         except (TypeError, ValueError):
             kwargs["progress_pct"] = 0
-    data = _load_job(job_id) or {}
+    # Update file (for fast reads during processing)
+    data = None
+    path = os.path.join(_AI_CLIP_JOB_DIR, f"{job_id}.json")
+    if os.path.exists(path):
+        try:
+            with open(path) as f:
+                data = json.load(f)
+        except Exception:
+            pass
+    if data is None:
+        data = {"job_id": job_id}
     data.update(kwargs)
     data["updated_at"] = datetime.now(timezone.utc).isoformat()
-    _save_job(job_id, data)
+    try:
+        with open(path, "w") as f:
+            json.dump(data, f, default=str)
+    except Exception:
+        pass
+    # Also update DB
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.ensure_future(_save_job_db(job_id, data))
+    except Exception as e:
+        logger.warning(f"[ai-clip] DB update failed for {job_id}: {e}")
+
+
+async def _list_jobs_db(limit: int = 50) -> list:
+    """List jobs from DB (async)"""
+    try:
+        await _ensure_jobs_table()
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(text("""
+                SELECT job_id, status, progress_pct, current_step,
+                       clips_completed, clips_total, results, error,
+                       config, source_clip, created_at, updated_at
+                FROM ai_clip_jobs
+                ORDER BY created_at DESC
+                LIMIT :limit
+            """), {"limit": limit})
+            rows = result.fetchall()
+            jobs = []
+            for row in rows:
+                jobs.append({
+                    "job_id": row.job_id,
+                    "status": row.status,
+                    "progress_pct": row.progress_pct,
+                    "current_step": row.current_step,
+                    "clips_completed": row.clips_completed,
+                    "clips_total": row.clips_total,
+                    "results": row.results if isinstance(row.results, list) else json.loads(row.results or "[]"),
+                    "error": row.error,
+                    "config": row.config if isinstance(row.config, dict) else json.loads(row.config or "{}"),
+                    "source_clip": row.source_clip if isinstance(row.source_clip, (dict, type(None))) else json.loads(row.source_clip or "null"),
+                    "created_at": str(row.created_at) if row.created_at else None,
+                    "updated_at": str(row.updated_at) if row.updated_at else None,
+                })
+            return jobs
+    except Exception as e:
+        logger.warning(f"[ai-clip] DB list jobs failed: {e}")
+        return []
 
 
 def _list_jobs(limit: int = 50) -> list:
+    """List jobs from file (sync fallback)"""
     jobs = []
     if not os.path.exists(_AI_CLIP_JOB_DIR):
         return jobs
@@ -1226,6 +1415,7 @@ async def diagnostics(x_admin_key: Optional[str] = Header(None)):
         "ffmpeg_available": ffmpeg_ok,
         "ffprobe_available": ffprobe_ok,
         "job_dir": _AI_CLIP_JOB_DIR,
+        "job_storage": "DB (ai_clip_jobs) + file fallback",
         "features": {
             "silence_cut": True,
             "zoom_pulse": True,
@@ -1385,7 +1575,10 @@ async def generate_ai_clip(
 @router.get("/jobs/{job_id}")
 async def get_job_status(job_id: str, x_admin_key: Optional[str] = Header(None)):
     verify_admin(x_admin_key)
+    # Try file first (for in-progress jobs), then DB
     job = _load_job(job_id)
+    if not job:
+        job = await _load_job_db(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
@@ -1397,8 +1590,72 @@ async def list_jobs(
     x_admin_key: Optional[str] = Header(None),
 ):
     verify_admin(x_admin_key)
-    jobs = _list_jobs(limit=limit)
-    return {"jobs": jobs, "total": len(jobs)}
+    # Get from DB (persistent) and merge with file-based (in-progress)
+    db_jobs = await _list_jobs_db(limit=limit)
+    file_jobs = _list_jobs(limit=limit)
+    # Merge: DB is source of truth, but file may have more recent progress
+    db_ids = {j["job_id"] for j in db_jobs}
+    merged = list(db_jobs)
+    for fj in file_jobs:
+        if fj.get("job_id") not in db_ids:
+            merged.append(fj)
+    merged.sort(key=lambda j: j.get("created_at", ""), reverse=True)
+    merged = merged[:limit]
+    return {"jobs": merged, "total": len(merged)}
+
+
+@router.get("/completed-clips")
+async def list_completed_clips(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    x_admin_key: Optional[str] = Header(None),
+):
+    """完成動画一覧: 全ジョブの成功したクリップを一覧表示"""
+    verify_admin(x_admin_key)
+    await _ensure_jobs_table()
+    try:
+        async with get_session() as session:
+            # Get all completed clips from jobs
+            result = await session.execute(text("""
+                SELECT j.job_id, j.status as job_status, j.created_at as job_created_at,
+                       j.config, j.source_clip, j.results
+                FROM ai_clip_jobs j
+                WHERE j.status = 'done'
+                  AND jsonb_array_length(COALESCE(j.results, '[]'::jsonb)) > 0
+                ORDER BY j.created_at DESC
+            """))
+            rows = result.fetchall()
+
+            clips = []
+            for row in rows:
+                results_data = row.results if isinstance(row.results, list) else json.loads(row.results or "[]")
+                config_data = row.config if isinstance(row.config, dict) else json.loads(row.config or "{}")
+                source_data = row.source_clip if isinstance(row.source_clip, (dict, type(None))) else json.loads(row.source_clip or "null")
+                for r in results_data:
+                    if r.get("status") == "done" and r.get("blob_url"):
+                        clips.append({
+                            "job_id": row.job_id,
+                            "clip_id": r.get("clip_id"),
+                            "download_url": r.get("download_url"),
+                            "blob_url": r.get("blob_url"),
+                            "thumbnail_url": r.get("thumbnail_url"),
+                            "file_size": r.get("file_size"),
+                            "duration_sec": r.get("duration_sec"),
+                            "hook_text": r.get("hook_text"),
+                            "cta_text": r.get("cta_text"),
+                            "captions_count": r.get("captions_count", 0),
+                            "effects_applied": r.get("effects_applied", {}),
+                            "created_at": str(row.job_created_at) if row.job_created_at else None,
+                            "config": config_data,
+                            "source_clip": source_data,
+                        })
+
+            total = len(clips)
+            paginated = clips[offset:offset + limit]
+            return {"clips": paginated, "total": total, "offset": offset, "limit": limit}
+    except Exception as e:
+        logger.error(f"[ai-clip] Failed to list completed clips: {e}", exc_info=True)
+        return {"clips": [], "total": 0, "offset": offset, "limit": limit, "error": str(e)[:200]}
 
 
 # ─── Background Processing ───────────────────────────────────────────────────
