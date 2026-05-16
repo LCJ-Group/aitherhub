@@ -71,6 +71,10 @@ export default function AutoAIClipPanel({ adminKey }) {
   const [activeJobId, setActiveJobId] = useState(null);
   const [activeJob, setActiveJob] = useState(null);
 
+  // ── Preview state ──
+  const [previewUrl, setPreviewUrl] = useState(null); // currently playing video URL
+  const [previewClipId, setPreviewClipId] = useState(null);
+
   const headers = { "X-Admin-Key": adminKey };
 
   // ── Fetch initial data ──
@@ -751,18 +755,57 @@ export default function AutoAIClipPanel({ adminKey }) {
                         <span className="text-gray-600">
                           {r.status === "done" ? "✅" : "❌"} クリップ {r.clip_id?.slice(0, 8)}
                         </span>
-                        {r.download_url && (
-                          <a
-                            href={r.download_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-purple-600 hover:text-purple-800 font-medium"
-                          >
-                            ⬇️ ダウンロード
-                          </a>
-                        )}
-                        {r.error && <span className="text-red-500 text-xs">{r.error}</span>}
+                        <div className="flex items-center gap-3">
+                          {r.download_url && (
+                            <button
+                              onClick={() => {
+                                if (previewClipId === r.clip_id) {
+                                  setPreviewUrl(null);
+                                  setPreviewClipId(null);
+                                } else {
+                                  setPreviewUrl(r.download_url);
+                                  setPreviewClipId(r.clip_id);
+                                }
+                              }}
+                              className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all ${
+                                previewClipId === r.clip_id
+                                  ? "bg-purple-600 text-white shadow-md"
+                                  : "bg-purple-50 text-purple-700 hover:bg-purple-100"
+                              }`}
+                            >
+                              {previewClipId === r.clip_id ? "⏹ 閉じる" : "▶ プレビュー"}
+                            </button>
+                          )}
+                          {r.download_url && (
+                            <a
+                              href={r.download_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-purple-600 hover:text-purple-800 font-medium text-xs"
+                            >
+                              ⬇️ ダウンロード
+                            </a>
+                          )}
+                          {r.error && <span className="text-red-500 text-xs">{r.error}</span>}
+                        </div>
                       </div>
+
+                      {/* Inline Video Preview */}
+                      {previewClipId === r.clip_id && previewUrl && (
+                        <div className="mt-3 mb-3 rounded-lg overflow-hidden bg-black shadow-lg">
+                          <video
+                            key={previewUrl}
+                            controls
+                            autoPlay
+                            playsInline
+                            className="w-full max-h-[480px] mx-auto"
+                            style={{ maxWidth: "360px", margin: "0 auto", display: "block" }}
+                          >
+                            <source src={previewUrl} type="video/mp4" />
+                            お使いのブラウザは動画再生に対応していません。
+                          </video>
+                        </div>
+                      )}
 
                       {/* V2: Show applied effects */}
                       {r.effects_applied && (
