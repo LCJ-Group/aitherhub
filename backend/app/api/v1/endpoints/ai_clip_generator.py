@@ -64,6 +64,7 @@ _AI_CLIP_JOB_DIR = os.path.join(tempfile.gettempdir(), "aitherhub_ai_clip_jobs")
 os.makedirs(_AI_CLIP_JOB_DIR, exist_ok=True)
 
 _DB_TABLE_ENSURED = False
+_LAST_DB_SAVE_ERROR = None
 
 async def _ensure_jobs_table():
     """Create ai_clip_jobs table if not exists (idempotent)"""
@@ -253,7 +254,11 @@ async def _save_job_db(job_id: str, data: dict):
             })
             await session.commit()
     except Exception as e:
-        logger.warning(f"[ai-clip] DB save failed for {job_id}: {e}")
+        import traceback
+        logger.error(f"[ai-clip] DB save failed for {job_id}: {e}\n{traceback.format_exc()}")
+        # Store last error for diagnostics
+        global _LAST_DB_SAVE_ERROR
+        _LAST_DB_SAVE_ERROR = f"{type(e).__name__}: {str(e)[:300]}"
 
 
 def _load_job(job_id: str) -> dict | None:
@@ -1395,7 +1400,7 @@ async def diagnostics(x_admin_key: Optional[str] = Header(None)):
         ffmpeg_ok = False
         ffprobe_ok = False
     # DB table check
-    db_status = {"table_exists": False, "job_count": 0, "error": None}
+    db_status = {"table_exists": False, "job_count": 0, "error": None, "last_save_error": _LAST_DB_SAVE_ERROR}
     try:
         await _ensure_jobs_table()
         async with AsyncSessionLocal() as session:
