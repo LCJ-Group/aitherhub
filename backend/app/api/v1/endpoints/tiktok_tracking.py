@@ -317,7 +317,13 @@ async def list_tracked_videos(
                              FROM video_clips vc
                              WHERE vc.id = CAST(tv.clip_db_id AS uuid)
                              LIMIT 1)
-                        ELSE NULL END as clip_exported_at
+                        ELSE NULL END as clip_exported_at,
+                        CASE WHEN tv.clip_db_id IS NOT NULL THEN
+                            (SELECT vc.clip_url
+                             FROM video_clips vc
+                             WHERE vc.id = CAST(tv.clip_db_id AS uuid)
+                             LIMIT 1)
+                        ELSE NULL END as clip_original_url
                     FROM tiktok_tracked_videos tv
                     ORDER BY tv.created_at DESC
                     LIMIT :limit OFFSET :offset
@@ -355,7 +361,13 @@ async def list_tracked_videos(
                              FROM video_clips vc
                              WHERE vc.id = CAST(tv.clip_db_id AS uuid)
                              LIMIT 1)
-                        ELSE NULL END as clip_exported_at
+                        ELSE NULL END as clip_exported_at,
+                        CASE WHEN tv.clip_db_id IS NOT NULL THEN
+                            (SELECT vc.clip_url
+                             FROM video_clips vc
+                             WHERE vc.id = CAST(tv.clip_db_id AS uuid)
+                             LIMIT 1)
+                        ELSE NULL END as clip_original_url
                     FROM tiktok_tracked_videos tv
                     WHERE tv.status = :status
                     ORDER BY tv.created_at DESC
@@ -1016,3 +1028,101 @@ async def import_account_status(
         "matched_to_clipdb": row[3],
         "total_on_tiktok": total_on_tiktok,
     }
+
+
+@router.get("/accounts")
+async def list_tracked_accounts(
+    x_admin_key: Optional[str] = Header(None),
+):
+    """List all unique TikTok accounts that have tracked videos."""
+    verify_admin(x_admin_key)
+    async with get_session() as session:
+        result = await session.execute(
+            text("""
+                SELECT
+                    tv.account_name,
+                    COUNT(*) as total_videos,
+                    COUNT(*) FILTER (WHERE tv.status = 'active') as active_videos,
+                    COUNT(*) FILTER (WHERE tv.status = 'stopped') as stopped_videos,
+                    COUNT(*) FILTER (WHERE tv.clip_db_id IS NOT NULL) as matched_videos,
+                    COALESCE(SUM(latest.play_count), 0) as total_plays,
+                    COALESCE(SUM(latest.digg_count), 0) as total_diggs,
+                    MIN(tv.created_at) as first_registered,
+                    MAX(tv.last_fetched_at) as last_fetched
+                FROM tiktok_tracked_videos tv
+                LEFT JOIN LATERAL (
+                    SELECT ps.play_count, ps.digg_count
+                    FROM tiktok_performance_snapshots ps
+                    WHERE ps.tracked_video_id = tv.id
+                    ORDER BY ps.fetched_at DESC LIMIT 1
+                ) latest ON true
+                WHERE tv.account_name IS NOT NULL AND tv.account_name != ''
+                GROUP BY tv.account_name
+                ORDER BY total_videos DESC
+            """)
+        )
+        rows = result.fetchall()
+        columns = result.keys()
+        return [dict(zip(columns, row)) for row in rows]
+
+
+@router.delete("/accounts/{account_name}")
+async def delete_account_videos(
+    account_name: str,
+    x_admin_key: Optional[str] = Header(None),
+):
+    """Delete all tracked videos for a specific account."""
+    verify_admin(x_admin_key)
+    async with get_session() as session:
+        # First delete snapshots
+        await session.execute(
+            text("""
+                DELETE FROM tiktok_performance_snapshots
+                WHERE tracked_video_id IN (
+                    SELECT id FROM tiktok_tracked_videos WHERE account_name = :account
+                )
+            """),
+            {"account": account_name}
+        )
+        # Then delete tracked videos
+        result = await session.execute(
+            text("DELETE FROM tiktok_tracked_videos WHERE account_name = :account RETURNING id"),
+            {"account": account_name}
+        )
+        deleted = result.fetchall()
+        await session.commit()
+        return {"deleted": len(deleted), "account": account_name}
+
+
+@router.patch("/accounts/{account_name}/stop-all")
+async def stop_all_account_videos(
+    account_name: str,
+    x_admin_key: Optional[str] = Header(None),
+):
+    """Stop tracking all videos for a specific account."""
+    verify_admin(x_admin_key)
+    async with get_session() as session:
+        result = await session.execute(
+            text("UPDATE tiktok_tracked_videos SET status = 'stopped', updated_at = NOW() WHERE account_name = :account AND status = 'active' RETURNING id"),
+            {"account": account_name}
+        )
+        stopped = result.fetchall()
+        await session.commit()
+        return {"stopped": len(stopped), "account": account_name}
+
+
+@router.patch("/accounts/{account_name}/resume-all")
+async def resume_all_account_videos(
+    account_name: str,
+    x_admin_key: Optional[str] = Header(None),
+):
+    """Resume tracking all videos for a specific account."""
+    verify_admin(x_admin_key)
+    async with get_session() as session:
+        result = await session.execute(
+            text("UPDATE tiktok_tracked_videos SET status = 'active', updated_at = NOW() WHERE account_name = :account AND status = 'stopped' RETURNING id"),
+            {"account": account_name}
+        )
+        resumed = result.fetchall()
+        await session.commit()
+        return {"resumed": len(resumed), "account": account_name}

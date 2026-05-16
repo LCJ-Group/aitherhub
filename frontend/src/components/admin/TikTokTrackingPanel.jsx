@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import Highcharts from "highcharts";
 import HighchartsReact from "highcharts-react-official";
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
@@ -47,13 +47,100 @@ const FREQUENCY_HELP = `📊 推奨取得頻度（自動適用）
 • TikTokアカウントURLを入力するだけで全投稿を自動取得
 • 各投稿をClipDBクリップと自動マッチング`;
 
+// ── Video Player Modal ──
+function VideoPlayerModal({ video, onClose }) {
+  if (!video) return null;
+  const videoUrl = video.clip_exported_url || video.clip_original_url || null;
+  const tiktokUrl = video.tiktok_url;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full mx-4 overflow-hidden" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+          <div className="min-w-0">
+            <div className="text-sm font-bold text-gray-800 truncate">{video.label || video.title || "無題"}</div>
+            <div className="text-[10px] text-gray-400">@{video.account_name || "—"}</div>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-lg ml-2 flex-shrink-0">✕</button>
+        </div>
+        <div className="bg-black">
+          {videoUrl ? (
+            <video
+              src={videoUrl}
+              controls
+              autoPlay
+              playsInline
+              className="w-full max-h-[70vh] object-contain"
+              onError={(e) => {
+                e.target.style.display = "none";
+                e.target.nextSibling && (e.target.nextSibling.style.display = "flex");
+              }}
+            />
+          ) : null}
+          {/* Fallback: TikTok embed or message */}
+          <div className={`${videoUrl ? "hidden" : "flex"} flex-col items-center justify-center py-12 px-4`}>
+            {tiktokUrl ? (
+              <>
+                <div className="text-gray-400 text-sm mb-3">動画ファイルがありません</div>
+                <a
+                  href={tiktokUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-4 py-2 bg-gradient-to-r from-pink-500 to-rose-500 text-white text-sm font-medium rounded-lg hover:from-pink-600 hover:to-rose-600 transition-colors"
+                >
+                  TikTokで見る ↗
+                </a>
+              </>
+            ) : (
+              <div className="text-gray-400 text-sm">動画URLが見つかりません</div>
+            )}
+          </div>
+        </div>
+        {/* Bottom actions */}
+        <div className="px-4 py-3 border-t border-gray-100 flex gap-2 flex-wrap">
+          {video.clip_exported_url && (
+            <a href={video.clip_exported_url} target="_blank" rel="noopener noreferrer"
+              className="px-3 py-1.5 text-[10px] font-medium bg-emerald-50 text-emerald-600 rounded-md hover:bg-emerald-100 transition-colors">
+              ✅ AH編集版
+            </a>
+          )}
+          {video.clip_original_url && (
+            <a href={video.clip_original_url} target="_blank" rel="noopener noreferrer"
+              className="px-3 py-1.5 text-[10px] font-medium bg-blue-50 text-blue-600 rounded-md hover:bg-blue-100 transition-colors">
+              📎 元クリップ
+            </a>
+          )}
+          {tiktokUrl && (
+            <a href={tiktokUrl} target="_blank" rel="noopener noreferrer"
+              className="px-3 py-1.5 text-[10px] font-medium bg-pink-50 text-pink-600 rounded-md hover:bg-pink-100 transition-colors">
+              🎵 TikTokで開く
+            </a>
+          )}
+          {video.clip_db_id && (
+            <button
+              onClick={() => {
+                const url = new URL(window.location.href);
+                url.searchParams.set('tab', 'clip-db');
+                url.searchParams.set('clip_id', video.clip_db_id);
+                window.location.href = url.toString();
+              }}
+              className="px-3 py-1.5 text-[10px] font-medium bg-indigo-50 text-indigo-600 rounded-md hover:bg-indigo-100 transition-colors">
+              🎬 クリップDBで見る
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function TikTokTrackingPanel({ adminKey }) {
   const [videos, setVideos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [statusFilter, setStatusFilter] = useState("active");
 
-  // Sub-view: "list" | "register" | "import"
+  // Sub-view: "list" | "register" | "import" | "accounts"
   const [subView, setSubView] = useState("list");
 
   // Register form
@@ -72,6 +159,11 @@ export default function TikTokTrackingPanel({ adminKey }) {
   const [importResult, setImportResult] = useState(null);
   const [importStatus, setImportStatus] = useState(null);
 
+  // Account management
+  const [accounts, setAccounts] = useState([]);
+  const [accountsLoading, setAccountsLoading] = useState(false);
+  const [accountFilter, setAccountFilter] = useState("");
+
   // Fingerprint status
   const [fpStatus, setFpStatus] = useState(null);
   const [fpGenerating, setFpGenerating] = useState(false);
@@ -80,6 +172,9 @@ export default function TikTokTrackingPanel({ adminKey }) {
   const [selectedVideo, setSelectedVideo] = useState(null);
   const [snapshots, setSnapshots] = useState([]);
   const [snapshotsLoading, setSnapshotsLoading] = useState(false);
+
+  // Video player modal
+  const [playerVideo, setPlayerVideo] = useState(null);
 
   // Fetch now
   const [fetchingId, setFetchingId] = useState(null);
@@ -109,6 +204,48 @@ export default function TikTokTrackingPanel({ adminKey }) {
   }, [adminKey, statusFilter]);
 
   useEffect(() => { fetchVideos(); }, [fetchVideos]);
+
+  // ── Fetch accounts list ──
+  const fetchAccounts = useCallback(async () => {
+    setAccountsLoading(true);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/v1/tiktok-tracking/accounts`,
+        { headers }
+      );
+      if (res.ok) setAccounts(await res.json());
+    } catch (e) {
+      console.error("Failed to fetch accounts:", e);
+    } finally {
+      setAccountsLoading(false);
+    }
+  }, [adminKey]);
+
+  useEffect(() => {
+    if (subView === "accounts") fetchAccounts();
+  }, [subView, fetchAccounts]);
+
+  // ── Account actions ──
+  const handleAccountAction = async (accountName, action) => {
+    const actionMap = {
+      "stop-all": { method: "PATCH", url: `${API_BASE}/api/v1/tiktok-tracking/accounts/${encodeURIComponent(accountName)}/stop-all`, confirm: `@${accountName} の全動画を停止しますか？` },
+      "resume-all": { method: "PATCH", url: `${API_BASE}/api/v1/tiktok-tracking/accounts/${encodeURIComponent(accountName)}/resume-all`, confirm: `@${accountName} の全動画を再開しますか？` },
+      "delete": { method: "DELETE", url: `${API_BASE}/api/v1/tiktok-tracking/accounts/${encodeURIComponent(accountName)}`, confirm: `@${accountName} の全追跡データを削除しますか？この操作は取り消せません。` },
+    };
+    const cfg = actionMap[action];
+    if (!cfg) return;
+    if (!confirm(cfg.confirm)) return;
+    try {
+      const res = await fetch(cfg.url, { method: cfg.method, headers });
+      if (!res.ok) throw new Error(`Error ${res.status}`);
+      const result = await res.json();
+      alert(`完了: ${JSON.stringify(result)}`);
+      fetchAccounts();
+      fetchVideos();
+    } catch (e) {
+      alert(`操作失敗: ${e.message}`);
+    }
+  };
 
   // ── Fetch fingerprint status ──
   const fetchFpStatus = useCallback(async () => {
@@ -360,9 +497,43 @@ export default function TikTokTrackingPanel({ adminKey }) {
   }, 0);
   const matchedCount = videos.filter(v => v.clip_db_id).length;
 
+  // ── Filter videos by account ──
+  const filteredVideos = accountFilter
+    ? videos.filter(v => v.account_name === accountFilter)
+    : videos;
+
+  // ── Build rows with inline detail panel ──
+  // Group videos into rows of 3 (matching xl:grid-cols-3), insert detail panel after selected row
+  const gridItems = useMemo(() => {
+    const items = [];
+    const cols = 3; // xl:grid-cols-3
+    for (let i = 0; i < filteredVideos.length; i++) {
+      items.push({ type: "card", video: filteredVideos[i] });
+      // After each row of 3, check if selected video is in this row
+      if ((i + 1) % cols === 0 || i === filteredVideos.length - 1) {
+        const rowStart = Math.floor(i / cols) * cols;
+        const rowEnd = Math.min(rowStart + cols, filteredVideos.length);
+        const rowVideos = filteredVideos.slice(rowStart, rowEnd);
+        if (selectedVideo && rowVideos.some(v => v.id === selectedVideo.id)) {
+          items.push({ type: "detail" });
+        }
+      }
+    }
+    return items;
+  }, [filteredVideos, selectedVideo]);
+
+  // ── Unique account names for filter dropdown ──
+  const uniqueAccounts = useMemo(() => {
+    const names = [...new Set(videos.map(v => v.account_name).filter(Boolean))];
+    return names.sort();
+  }, [videos]);
+
   // ── Render ──
   return (
     <div className="space-y-4">
+      {/* Video Player Modal */}
+      {playerVideo && <VideoPlayerModal video={playerVideo} onClose={() => setPlayerVideo(null)} />}
+
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-3">
@@ -391,6 +562,29 @@ export default function TikTokTrackingPanel({ adminKey }) {
             <option value="stopped">停止中</option>
             <option value="all">すべて</option>
           </select>
+          {/* Account filter */}
+          {uniqueAccounts.length > 1 && (
+            <select
+              value={accountFilter}
+              onChange={(e) => setAccountFilter(e.target.value)}
+              className="text-xs border border-gray-200 rounded-md px-2 py-1.5 bg-white text-gray-600"
+            >
+              <option value="">全アカウント</option>
+              {uniqueAccounts.map(name => (
+                <option key={name} value={name}>@{name}</option>
+              ))}
+            </select>
+          )}
+          <button
+            onClick={() => { setSubView(subView === "accounts" ? "list" : "accounts"); }}
+            className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all shadow-sm ${
+              subView === "accounts"
+                ? "bg-teal-600 text-white"
+                : "bg-gradient-to-r from-teal-500 to-cyan-500 text-white hover:from-teal-600 hover:to-cyan-600"
+            }`}
+          >
+            👥 アカウント管理
+          </button>
           <button
             onClick={() => { setSubView(subView === "import" ? "list" : "import"); setImportError(null); }}
             className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all shadow-sm ${
@@ -425,7 +619,7 @@ export default function TikTokTrackingPanel({ adminKey }) {
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
           <div className="bg-white rounded-xl border border-gray-200 p-3 text-center">
             <div className="text-[10px] text-gray-400 mb-1">追跡動画数</div>
-            <div className="text-lg font-bold text-gray-800">{videos.length}</div>
+            <div className="text-lg font-bold text-gray-800">{filteredVideos.length}{accountFilter ? `/${videos.length}` : ""}</div>
           </div>
           <div className="bg-white rounded-xl border border-gray-200 p-3 text-center">
             <div className="text-[10px] text-gray-400 mb-1">合計再生数</div>
@@ -443,6 +637,112 @@ export default function TikTokTrackingPanel({ adminKey }) {
             <div className="text-[10px] text-gray-400 mb-1">アクティブ</div>
             <div className="text-lg font-bold text-green-500">{videos.filter(v => v.status === "active").length}</div>
           </div>
+        </div>
+      )}
+
+      {/* Account Management Panel */}
+      {subView === "accounts" && (
+        <div className="bg-gradient-to-r from-teal-50 to-cyan-50 border border-teal-200 rounded-xl p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="text-sm font-semibold text-teal-700">👥 登録済みアカウント管理</div>
+            <div className="flex gap-2">
+              <button onClick={fetchAccounts} className="px-3 py-1.5 text-[10px] font-medium bg-teal-100 text-teal-600 rounded-lg hover:bg-teal-200 transition-colors">
+                ↻ 更新
+              </button>
+              <button onClick={() => setSubView("list")} className="px-3 py-1.5 text-[10px] font-medium bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 transition-colors">
+                閉じる
+              </button>
+            </div>
+          </div>
+
+          {accountsLoading ? (
+            <div className="flex items-center justify-center py-8">
+              <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-teal-500"></div>
+            </div>
+          ) : accounts.length === 0 ? (
+            <div className="text-center py-6 text-gray-400 text-sm">
+              登録済みアカウントはありません。「📥 アカウント一括」でインポートしてください。
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {accounts.map((acc) => (
+                <div key={acc.account_name} className="bg-white rounded-lg border border-teal-100 p-3">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-8 h-8 rounded-full bg-gradient-to-br from-teal-400 to-cyan-500 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
+                        {acc.account_name?.charAt(0)?.toUpperCase() || "?"}
+                      </div>
+                      <div className="min-w-0">
+                        <button
+                          onClick={() => { setAccountFilter(acc.account_name); setSubView("list"); }}
+                          className="text-sm font-semibold text-teal-700 hover:text-teal-900 hover:underline"
+                        >
+                          @{acc.account_name}
+                        </button>
+                        <div className="text-[10px] text-gray-400">
+                          登録: {acc.first_registered ? new Date(acc.first_registered).toLocaleDateString("ja-JP") : "—"}
+                          {acc.last_fetched && ` | 最終取得: ${timeAgo(acc.last_fetched)}`}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      <button
+                        onClick={() => { setAccountFilter(acc.account_name); setSubView("list"); }}
+                        className="px-2 py-1 text-[10px] font-medium bg-blue-50 text-blue-600 rounded-md hover:bg-blue-100 transition-colors"
+                      >
+                        📋 動画一覧
+                      </button>
+                      <button
+                        onClick={() => handleAccountAction(acc.account_name, "stop-all")}
+                        className="px-2 py-1 text-[10px] font-medium bg-yellow-50 text-yellow-600 rounded-md hover:bg-yellow-100 transition-colors"
+                      >
+                        ⏸ 全停止
+                      </button>
+                      <button
+                        onClick={() => handleAccountAction(acc.account_name, "resume-all")}
+                        className="px-2 py-1 text-[10px] font-medium bg-green-50 text-green-600 rounded-md hover:bg-green-100 transition-colors"
+                      >
+                        ▶ 全再開
+                      </button>
+                      <button
+                        onClick={() => handleAccountAction(acc.account_name, "delete")}
+                        className="px-2 py-1 text-[10px] font-medium bg-red-50 text-red-500 rounded-md hover:bg-red-100 transition-colors"
+                      >
+                        🗑
+                      </button>
+                    </div>
+                  </div>
+                  {/* Account stats */}
+                  <div className="grid grid-cols-3 md:grid-cols-6 gap-2 mt-2">
+                    <div className="text-center bg-gray-50 rounded-lg p-1.5">
+                      <div className="text-[9px] text-gray-400">動画数</div>
+                      <div className="text-xs font-bold text-gray-700">{acc.total_videos}</div>
+                    </div>
+                    <div className="text-center bg-green-50 rounded-lg p-1.5">
+                      <div className="text-[9px] text-gray-400">アクティブ</div>
+                      <div className="text-xs font-bold text-green-600">{acc.active_videos}</div>
+                    </div>
+                    <div className="text-center bg-gray-50 rounded-lg p-1.5">
+                      <div className="text-[9px] text-gray-400">停止</div>
+                      <div className="text-xs font-bold text-gray-500">{acc.stopped_videos}</div>
+                    </div>
+                    <div className="text-center bg-indigo-50 rounded-lg p-1.5">
+                      <div className="text-[9px] text-gray-400">ClipDB紐付</div>
+                      <div className="text-xs font-bold text-indigo-600">{acc.matched_videos}</div>
+                    </div>
+                    <div className="text-center bg-red-50 rounded-lg p-1.5">
+                      <div className="text-[9px] text-gray-400">合計再生</div>
+                      <div className="text-xs font-bold text-red-500">{fmtNum(acc.total_plays)}</div>
+                    </div>
+                    <div className="text-center bg-pink-50 rounded-lg p-1.5">
+                      <div className="text-[9px] text-gray-400">合計いいね</div>
+                      <div className="text-xs font-bold text-pink-500">{fmtNum(acc.total_diggs)}</div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -673,6 +973,19 @@ export default function TikTokTrackingPanel({ adminKey }) {
         </div>
       )}
 
+      {/* Account filter indicator */}
+      {accountFilter && (
+        <div className="flex items-center gap-2 bg-teal-50 border border-teal-200 rounded-lg px-3 py-2">
+          <span className="text-xs text-teal-700">🔍 @{accountFilter} の動画を表示中</span>
+          <button
+            onClick={() => setAccountFilter("")}
+            className="text-xs text-teal-500 hover:text-teal-700 underline"
+          >
+            フィルター解除
+          </button>
+        </div>
+      )}
+
       {/* Error */}
       {error && (
         <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-600">
@@ -697,10 +1010,108 @@ export default function TikTokTrackingPanel({ adminKey }) {
         </div>
       )}
 
-      {/* Video cards grid */}
-      {!loading && videos.length > 0 && (
+      {/* Video cards grid with inline detail panel */}
+      {!loading && filteredVideos.length > 0 && (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-          {videos.map((video) => {
+          {gridItems.map((item, idx) => {
+            if (item.type === "detail") {
+              // Inline detail panel spanning full width
+              return (
+                <div key="detail-panel" className="col-span-1 md:col-span-2 xl:col-span-3">
+                  <div className="bg-white rounded-xl border border-pink-200 p-4 shadow-md">
+                    <div className="flex items-center justify-between mb-3">
+                      <div>
+                        <h3 className="text-sm font-bold text-gray-800">
+                          📈 {selectedVideo.label || selectedVideo.title || "無題"} — パフォーマンス推移
+                        </h3>
+                        <div className="text-[10px] text-gray-400 mt-0.5">
+                          @{selectedVideo.account_name}
+                          {selectedVideo.clip_db_id && (
+                            <>
+                              <span className="ml-2 text-indigo-500">🔗 Clip: {selectedVideo.clip_db_id.slice(0, 8)}...</span>
+                              {selectedVideo.is_aitherhub_edited
+                                ? <span className="ml-1 px-1.5 py-0.5 rounded text-[9px] font-medium bg-emerald-100 text-emerald-700">✅ AH編集済</span>
+                                : <span className="ml-1 px-1.5 py-0.5 rounded text-[9px] font-medium bg-amber-100 text-amber-700">⚠️ 未編集</span>
+                              }
+                            </>
+                          )}
+                          {selectedVideo.tiktok_url && (
+                            <>
+                              {" | "}
+                              <a href={selectedVideo.tiktok_url} target="_blank" rel="noopener noreferrer"
+                                className="text-blue-400 hover:text-blue-600 underline" onClick={(e) => e.stopPropagation()}>
+                                TikTokで開く ↗
+                              </a>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => setPlayerVideo(selectedVideo)}
+                          className="px-2 py-1 text-[10px] font-medium bg-purple-50 text-purple-600 rounded-md hover:bg-purple-100 transition-colors"
+                        >
+                          ▶ 動画を見る
+                        </button>
+                        <button onClick={() => { setSelectedVideo(null); setSnapshots([]); }} className="text-gray-400 hover:text-gray-600 text-lg">✕</button>
+                      </div>
+                    </div>
+
+                    {snapshotsLoading ? (
+                      <div className="flex items-center justify-center py-12">
+                        <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-pink-500"></div>
+                      </div>
+                    ) : snapshots.length === 0 ? (
+                      <div className="text-center py-8 text-gray-400 text-sm">
+                        スナップショットデータがありません。「今すぐ取得」でデータを追加してください。
+                      </div>
+                    ) : (
+                      <HighchartsReact highcharts={Highcharts} options={chartOptions} />
+                    )}
+
+                    {/* Snapshot table */}
+                    {snapshots.length > 0 && (
+                      <div className="mt-4 overflow-x-auto">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="border-b border-gray-100 text-gray-400">
+                              <th className="text-left py-1.5 px-2 font-medium">日時</th>
+                              <th className="text-right py-1.5 px-2 font-medium">再生数</th>
+                              <th className="text-right py-1.5 px-2 font-medium">いいね</th>
+                              <th className="text-right py-1.5 px-2 font-medium">コメント</th>
+                              <th className="text-right py-1.5 px-2 font-medium">シェア</th>
+                              <th className="text-right py-1.5 px-2 font-medium">保存</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {snapshots.slice().reverse().slice(0, 20).map((s, i) => (
+                              <tr key={s.id || i} className="border-b border-gray-50 hover:bg-gray-50">
+                                <td className="py-1.5 px-2 text-gray-500">
+                                  {new Date(s.fetched_at).toLocaleString("ja-JP", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}
+                                </td>
+                                <td className="text-right py-1.5 px-2 font-medium text-red-500">{fmtNum(s.play_count)}</td>
+                                <td className="text-right py-1.5 px-2 font-medium text-pink-500">{fmtNum(s.digg_count)}</td>
+                                <td className="text-right py-1.5 px-2 font-medium text-blue-500">{fmtNum(s.comment_count)}</td>
+                                <td className="text-right py-1.5 px-2 font-medium text-green-500">{fmtNum(s.share_count)}</td>
+                                <td className="text-right py-1.5 px-2 font-medium text-amber-500">{fmtNum(s.collect_count)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                        {snapshots.length > 20 && (
+                          <div className="text-center text-[10px] text-gray-400 mt-2">
+                            最新20件を表示中（全{snapshots.length}件）
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            }
+
+            // Video card
+            const video = item.video;
             const snap = video.latest_snapshot ? (typeof video.latest_snapshot === 'string' ? JSON.parse(video.latest_snapshot) : video.latest_snapshot) : null;
             const isSelected = selectedVideo?.id === video.id;
             return (
@@ -784,6 +1195,12 @@ export default function TikTokTrackingPanel({ adminKey }) {
                     {fetchingId === video.id ? "取得中..." : "📡 今すぐ取得"}
                   </button>
                   <button
+                    onClick={(e) => { e.stopPropagation(); setPlayerVideo(video); }}
+                    className="flex-1 py-1 text-[10px] font-medium bg-purple-50 text-purple-600 rounded-md hover:bg-purple-100 transition-colors"
+                  >
+                    ▶ 見る
+                  </button>
+                  <button
                     onClick={(e) => { e.stopPropagation(); handleToggleStatus(video.id, video.status); }}
                     className={`flex-1 py-1 text-[10px] font-medium rounded-md transition-colors ${
                       video.status === "active"
@@ -801,13 +1218,12 @@ export default function TikTokTrackingPanel({ adminKey }) {
                   </button>
                 </div>
 
-                {/* Clip DB link */}
+                {/* Clip DB badges (compact) */}
                 {video.clip_db_id && (
                   <div className="px-3 pb-1 flex gap-1.5">
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        // Navigate to clip-db tab with the clip selected
                         const url = new URL(window.location.href);
                         url.searchParams.set('tab', 'clip-db');
                         url.searchParams.set('clip_id', video.clip_db_id);
@@ -817,17 +1233,6 @@ export default function TikTokTrackingPanel({ adminKey }) {
                     >
                       🎬 クリップDBで見る
                     </button>
-                    {video.clip_exported_url && (
-                      <a
-                        href={video.clip_exported_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={(e) => e.stopPropagation()}
-                        className="flex-1 py-1 text-[10px] font-medium bg-emerald-50 text-emerald-600 rounded-md hover:bg-emerald-100 transition-colors text-center"
-                      >
-                        ▶ AH編集版を見る
-                      </a>
-                    )}
                   </div>
                 )}
 
@@ -839,102 +1244,6 @@ export default function TikTokTrackingPanel({ adminKey }) {
               </div>
             );
           })}
-        </div>
-      )}
-
-      {/* Detail chart panel */}
-      {selectedVideo && (
-        <div className="bg-white rounded-xl border border-gray-200 p-4 mt-4">
-          <div className="flex items-center justify-between mb-3">
-            <div>
-              <h3 className="text-sm font-bold text-gray-800">
-                📈 {selectedVideo.label || selectedVideo.title || "無題"} — パフォーマンス推移
-              </h3>
-              <div className="text-[10px] text-gray-400 mt-0.5">
-                @{selectedVideo.account_name}
-                {selectedVideo.clip_db_id && (
-                  <>
-                    <span className="ml-2 text-indigo-500">🔗 Clip: {selectedVideo.clip_db_id.slice(0, 8)}...</span>
-                    {selectedVideo.is_aitherhub_edited
-                      ? <span className="ml-1 px-1.5 py-0.5 rounded text-[9px] font-medium bg-emerald-100 text-emerald-700">✅ AH編集済</span>
-                      : <span className="ml-1 px-1.5 py-0.5 rounded text-[9px] font-medium bg-amber-100 text-amber-700">⚠️ 未編集</span>
-                    }
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        const url = new URL(window.location.href);
-                        url.searchParams.set('tab', 'clip-db');
-                        url.searchParams.set('clip_id', selectedVideo.clip_db_id);
-                        window.location.href = url.toString();
-                      }}
-                      className="ml-1 px-1.5 py-0.5 rounded text-[9px] font-medium bg-indigo-50 text-indigo-600 hover:bg-indigo-100 transition-colors cursor-pointer"
-                    >
-                      🎬 クリップDBで見る
-                    </button>
-                  </>
-                )}
-                {selectedVideo.tiktok_url && (
-                  <>
-                    {" | "}
-                    <a href={selectedVideo.tiktok_url} target="_blank" rel="noopener noreferrer"
-                      className="text-blue-400 hover:text-blue-600 underline" onClick={(e) => e.stopPropagation()}>
-                      TikTokで開く ↗
-                    </a>
-                  </>
-                )}
-              </div>
-            </div>
-            <button onClick={() => { setSelectedVideo(null); setSnapshots([]); }} className="text-gray-400 hover:text-gray-600 text-lg">✕</button>
-          </div>
-
-          {snapshotsLoading ? (
-            <div className="flex items-center justify-center py-12">
-              <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-pink-500"></div>
-            </div>
-          ) : snapshots.length === 0 ? (
-            <div className="text-center py-8 text-gray-400 text-sm">
-              スナップショットデータがありません。「今すぐ取得」でデータを追加してください。
-            </div>
-          ) : (
-            <HighchartsReact highcharts={Highcharts} options={chartOptions} />
-          )}
-
-          {/* Snapshot table */}
-          {snapshots.length > 0 && (
-            <div className="mt-4 overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="border-b border-gray-100 text-gray-400">
-                    <th className="text-left py-1.5 px-2 font-medium">日時</th>
-                    <th className="text-right py-1.5 px-2 font-medium">再生数</th>
-                    <th className="text-right py-1.5 px-2 font-medium">いいね</th>
-                    <th className="text-right py-1.5 px-2 font-medium">コメント</th>
-                    <th className="text-right py-1.5 px-2 font-medium">シェア</th>
-                    <th className="text-right py-1.5 px-2 font-medium">保存</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {snapshots.slice().reverse().slice(0, 20).map((s, i) => (
-                    <tr key={s.id || i} className="border-b border-gray-50 hover:bg-gray-50">
-                      <td className="py-1.5 px-2 text-gray-500">
-                        {new Date(s.fetched_at).toLocaleString("ja-JP", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}
-                      </td>
-                      <td className="text-right py-1.5 px-2 font-medium text-red-500">{fmtNum(s.play_count)}</td>
-                      <td className="text-right py-1.5 px-2 font-medium text-pink-500">{fmtNum(s.digg_count)}</td>
-                      <td className="text-right py-1.5 px-2 font-medium text-blue-500">{fmtNum(s.comment_count)}</td>
-                      <td className="text-right py-1.5 px-2 font-medium text-green-500">{fmtNum(s.share_count)}</td>
-                      <td className="text-right py-1.5 px-2 font-medium text-amber-500">{fmtNum(s.collect_count)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {snapshots.length > 20 && (
-                <div className="text-center text-[10px] text-gray-400 mt-2">
-                  最新20件を表示中（全{snapshots.length}件）
-                </div>
-              )}
-            </div>
-          )}
         </div>
       )}
 
