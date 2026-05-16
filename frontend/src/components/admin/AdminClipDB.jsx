@@ -7,6 +7,7 @@ import {
   MessageSquare, SkipBack, SkipForward, Volume2, VolumeX,
   TrendingUp, Activity, Brain, Clock, Zap, Target, Eye,
 } from "lucide-react";
+import { TikTokUrlRegisterButton } from "./TikTokTrackingPanel";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
 
@@ -595,6 +596,9 @@ function ClipCard({ clip, onPlay, brands, adminKey, onBrandChange }) {
             <Scissors className="w-3 h-3" /> CLIP EDITOR
           </a>
         )}
+
+        {/* TikTok tracking button */}
+        <TikTokUrlRegisterButton clipId={clip.id} adminKey={adminKey} />
 
         {/* NG mark / unmark section */}
         <div className="relative pt-1 border-t border-gray-100 mt-1">

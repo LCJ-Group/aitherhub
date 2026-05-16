@@ -690,6 +690,52 @@ async def run_all_ddl_migrations():
         except Exception as e:
             logger.warning(f"[DDL] video_performance: {e}")
 
+        # ── tiktok_tracked_videos (TikTok URL tracking for auto performance fetch) ──
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(_text("""
+                    CREATE TABLE IF NOT EXISTS tiktok_tracked_videos (
+                        id SERIAL PRIMARY KEY,
+                        tiktok_url TEXT NOT NULL,
+                        tiktok_video_id VARCHAR(64),
+                        account_name VARCHAR(255),
+                        title TEXT,
+                        cover_url TEXT,
+                        clip_db_id TEXT,
+                        label TEXT,
+                        status VARCHAR(20) DEFAULT 'active' NOT NULL,
+                        last_fetched_at TIMESTAMPTZ,
+                        created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+                        updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+                    )
+                """))
+                await conn.execute(_text("CREATE INDEX IF NOT EXISTS ix_tiktok_tracked_videos_status ON tiktok_tracked_videos(status)"))
+                await conn.execute(_text("CREATE UNIQUE INDEX IF NOT EXISTS ix_tiktok_tracked_videos_tiktok_video_id ON tiktok_tracked_videos(tiktok_video_id)"))
+                logger.info("[DDL] tiktok_tracked_videos \u2713")
+        except Exception as e:
+            logger.warning(f"[DDL] tiktok_tracked_videos: {e}")
+
+        # ── tiktok_performance_snapshots (periodic performance data snapshots) ──
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(_text("""
+                    CREATE TABLE IF NOT EXISTS tiktok_performance_snapshots (
+                        id SERIAL PRIMARY KEY,
+                        tracked_video_id INTEGER NOT NULL REFERENCES tiktok_tracked_videos(id) ON DELETE CASCADE,
+                        play_count INTEGER DEFAULT 0,
+                        digg_count INTEGER DEFAULT 0,
+                        comment_count INTEGER DEFAULT 0,
+                        share_count INTEGER DEFAULT 0,
+                        collect_count INTEGER DEFAULT 0,
+                        fetched_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+                    )
+                """))
+                await conn.execute(_text("CREATE INDEX IF NOT EXISTS ix_tiktok_snapshots_tracked_video_id ON tiktok_performance_snapshots(tracked_video_id)"))
+                await conn.execute(_text("CREATE INDEX IF NOT EXISTS ix_tiktok_snapshots_fetched_at ON tiktok_performance_snapshots(fetched_at)"))
+                logger.info("[DDL] tiktok_performance_snapshots \u2713")
+        except Exception as e:
+            logger.warning(f"[DDL] tiktok_performance_snapshots: {e}")
+
         elapsed = time.time() - ddl_start
         logger.info(f"[DDL] All migrations completed in {elapsed:.1f}s")
 

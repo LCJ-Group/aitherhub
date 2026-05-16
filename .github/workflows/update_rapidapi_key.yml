@@ -1,0 +1,42 @@
+name: Update RAPIDAPI_KEY on Azure App Service
+on:
+  workflow_dispatch:
+env:
+  AZURE_WEBAPP_NAME: aitherhubAPI
+  AZURE_RG: rg-vdp-kyogoku
+jobs:
+  update_key:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_AA4E9EC299D1433D9FF12541F06BA50D }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_AE01A735F8B046C49C5F169706AC5842 }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_8E4F3767CE0647AEAA62C4C721F843FE }}
+      - name: Update RAPIDAPI_KEY app setting
+        run: |
+          az webapp config appsettings set \
+            --resource-group ${{ env.AZURE_RG }} \
+            --name ${{ env.AZURE_WEBAPP_NAME }} \
+            --settings RAPIDAPI_KEY="${{ secrets.RAPIDAPI_KEY }}" \
+            --output none
+          echo "✅ RAPIDAPI_KEY updated on production slot"
+      - name: Update staging slot too
+        run: |
+          az webapp config appsettings set \
+            --resource-group ${{ env.AZURE_RG }} \
+            --name ${{ env.AZURE_WEBAPP_NAME }} \
+            --slot staging \
+            --settings RAPIDAPI_KEY="${{ secrets.RAPIDAPI_KEY }}" \
+            --output none 2>/dev/null || echo "⚠️ Staging slot not found, skipping"
+          echo "✅ Done"
+      - name: Restart app to pick up new key
+        run: |
+          az webapp restart \
+            --resource-group ${{ env.AZURE_RG }} \
+            --name ${{ env.AZURE_WEBAPP_NAME }}
+          echo "✅ App restarted"
