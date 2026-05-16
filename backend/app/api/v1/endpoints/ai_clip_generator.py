@@ -1610,49 +1610,66 @@ async def list_completed_clips(
     offset: int = Query(0, ge=0),
     x_admin_key: Optional[str] = Header(None),
 ):
-    """完成動画一覧: 全ジョブの成功したクリップを一覧表示"""
+    """完成動画一覧: DB + ファイルマージで全ジョブの成功クリップを一覧表示"""
     verify_admin(x_admin_key)
     await _ensure_jobs_table()
     try:
-        async with get_session() as session:
-            # Get all completed clips from jobs
-            result = await session.execute(text("""
-                SELECT j.job_id, j.status as job_status, j.created_at as job_created_at,
-                       j.config, j.source_clip, j.results
-                FROM ai_clip_jobs j
-                WHERE j.status = 'done'
-                  AND jsonb_array_length(COALESCE(j.results, '[]'::jsonb)) > 0
-                ORDER BY j.created_at DESC
-            """))
-            rows = result.fetchall()
+        # Get from DB (persistent) and merge with file-based (in-progress)
+        db_jobs = await _list_jobs_db(limit=500)
+        file_jobs = _list_jobs(limit=500)
+        # Merge: DB is source of truth, but file may have more recent data
+        db_ids = {j["job_id"] for j in db_jobs}
+        merged = list(db_jobs)
+        for fj in file_jobs:
+            if fj.get("job_id") not in db_ids:
+                merged.append(fj)
 
-            clips = []
-            for row in rows:
-                results_data = row.results if isinstance(row.results, list) else json.loads(row.results or "[]")
-                config_data = row.config if isinstance(row.config, dict) else json.loads(row.config or "{}")
-                source_data = row.source_clip if isinstance(row.source_clip, (dict, type(None))) else json.loads(row.source_clip or "null")
-                for r in results_data:
-                    if r.get("status") == "done" and r.get("blob_url"):
-                        clips.append({
-                            "job_id": row.job_id,
-                            "clip_id": r.get("clip_id"),
-                            "download_url": r.get("download_url"),
-                            "blob_url": r.get("blob_url"),
-                            "thumbnail_url": r.get("thumbnail_url"),
-                            "file_size": r.get("file_size"),
-                            "duration_sec": r.get("duration_sec"),
-                            "hook_text": r.get("hook_text"),
-                            "cta_text": r.get("cta_text"),
-                            "captions_count": r.get("captions_count", 0),
-                            "effects_applied": r.get("effects_applied", {}),
-                            "created_at": str(row.job_created_at) if row.job_created_at else None,
-                            "config": config_data,
-                            "source_clip": source_data,
-                        })
+        clips = []
+        for job in merged:
+            if job.get("status") != "done":
+                continue
+            results_data = job.get("results", [])
+            if isinstance(results_data, str):
+                try:
+                    results_data = json.loads(results_data)
+                except Exception:
+                    results_data = []
+            config_data = job.get("config", {})
+            if isinstance(config_data, str):
+                try:
+                    config_data = json.loads(config_data)
+                except Exception:
+                    config_data = {}
+            source_data = job.get("source_clip")
+            if isinstance(source_data, str):
+                try:
+                    source_data = json.loads(source_data)
+                except Exception:
+                    source_data = None
+            for r in results_data:
+                if r.get("status") == "done" and (r.get("blob_url") or r.get("download_url")):
+                    clips.append({
+                        "job_id": job.get("job_id"),
+                        "clip_id": r.get("clip_id"),
+                        "download_url": r.get("download_url"),
+                        "blob_url": r.get("blob_url"),
+                        "thumbnail_url": r.get("thumbnail_url"),
+                        "file_size": r.get("file_size"),
+                        "duration_sec": r.get("duration_sec"),
+                        "hook_text": r.get("hook_text"),
+                        "cta_text": r.get("cta_text"),
+                        "captions_count": r.get("captions_count", 0),
+                        "effects_applied": r.get("effects_applied", {}),
+                        "created_at": str(job.get("created_at")) if job.get("created_at") else None,
+                        "config": config_data,
+                        "source_clip": source_data,
+                    })
 
-            total = len(clips)
-            paginated = clips[offset:offset + limit]
-            return {"clips": paginated, "total": total, "offset": offset, "limit": limit}
+        # Sort by created_at desc
+        clips.sort(key=lambda c: c.get("created_at", "") or "", reverse=True)
+        total = len(clips)
+        paginated = clips[offset:offset + limit]
+        return {"clips": paginated, "total": total, "offset": offset, "limit": limit}
     except Exception as e:
         logger.error(f"[ai-clip] Failed to list completed clips: {e}", exc_info=True)
         return {"clips": [], "total": 0, "offset": offset, "limit": limit, "error": str(e)[:200]}
