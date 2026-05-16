@@ -787,6 +787,20 @@ async def _process_single_clip(job_id: str, clip: dict, req: GenerateRequest,
         output_size = os.path.getsize(output_path)
         logger.info(f"[ai-clip {job_id}] Encoded: {output_size} bytes")
 
+        # Get actual output duration
+        actual_duration = duration
+        try:
+            probe_out = subprocess.run(
+                ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", output_path],
+                capture_output=True, text=True, timeout=15
+            )
+            if probe_out.returncode == 0:
+                probe_out_data = json.loads(probe_out.stdout)
+                if "format" in probe_out_data and "duration" in probe_out_data["format"]:
+                    actual_duration = float(probe_out_data["format"]["duration"])
+        except Exception:
+            pass
+
         # ── 8. Generate thumbnail ──
         thumbnail_url = None
         if req.enable_thumbnail:
@@ -807,7 +821,7 @@ async def _process_single_clip(job_id: str, clip: dict, req: GenerateRequest,
             "blob_url": blob_url,
             "thumbnail_url": thumbnail_url,
             "file_size": output_size,
-            "duration_sec": duration,
+            "duration_sec": actual_duration,
             "hook_text": hook_text,
             "captions_count": len(captions),
         }
@@ -875,8 +889,35 @@ async def _transcribe_clip(video_path: str, target_language: str = "auto") -> li
     except Exception as e:
         logger.warning(f"[ai-clip] Dict load failed: {e}")
 
+    # ── Extract audio to mp3 first (Whisper has 25MB file size limit) ──
+    whisper_file = video_path
+    tmp_audio_dir = os.path.dirname(video_path)
+    audio_path = os.path.join(tmp_audio_dir, "audio_for_whisper.mp3")
     try:
-        with open(video_path, "rb") as f:
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-y", "-i", video_path,
+            "-vn",  # no video
+            "-acodec", "libmp3lame",
+            "-ar", "16000",  # 16kHz (optimal for Whisper)
+            "-ac", "1",  # mono
+            "-b:a", "64k",  # 64kbps
+            audio_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout_audio, stderr_audio = await asyncio.wait_for(proc.communicate(), timeout=60)
+        if proc.returncode == 0 and os.path.exists(audio_path):
+            audio_size = os.path.getsize(audio_path)
+            video_size = os.path.getsize(video_path)
+            logger.info(f"[ai-clip] Extracted audio: {audio_size/1024/1024:.1f} MB (from {video_size/1024/1024:.1f} MB video)")
+            whisper_file = audio_path
+        else:
+            logger.warning(f"[ai-clip] Audio extraction failed (rc={proc.returncode}), using original video")
+    except Exception as audio_err:
+        logger.warning(f"[ai-clip] Audio extraction error: {audio_err}, using original video")
+
+    try:
+        with open(whisper_file, "rb") as f:
             whisper_kwargs = dict(
                 model="whisper",
                 file=f,
@@ -1191,7 +1232,15 @@ async def _generate_thumbnail(video_path: str, tmp_dir: str, clip_id: str) -> Op
 
         blob_url = f"https://{ACCOUNT_NAME}.blob.core.windows.net/{CONTAINER_NAME}/{blob_name}"
 
-        # Try CDN URL
+        # Generate SAS URL for thumbnail (CDN may 409 for new blobs)
+        try:
+            sas_url = generate_read_sas_from_url(blob_url, expires_hours=720)  # 30 days
+            if sas_url:
+                return sas_url
+        except Exception as sas_err:
+            logger.warning(f"[ai-clip] Thumbnail SAS generation failed: {sas_err}")
+
+        # Fallback: try CDN URL
         cdn_host = os.getenv("CDN_HOST", "https://cdn.aitherhub.com")
         blob_host = f"https://{ACCOUNT_NAME}.blob.core.windows.net"
         if cdn_host and blob_host in blob_url:
