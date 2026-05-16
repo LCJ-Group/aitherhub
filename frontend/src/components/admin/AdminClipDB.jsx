@@ -2705,18 +2705,45 @@ function AiClipGenerationModal({ clip, onClose, onGenerate, generating, jobStatu
           {/* Processing status */}
           {isProcessing && (
             <div className="space-y-3">
-              <div className="flex items-center gap-2">
-                <Loader2 className="w-5 h-5 animate-spin text-emerald-500" />
-                <span className="text-sm font-medium text-gray-700">生成中...</span>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Loader2 className="w-5 h-5 animate-spin text-emerald-500" />
+                  <span className="text-sm font-medium text-gray-700">生成中...</span>
+                </div>
+                <span className="text-lg font-bold text-emerald-600">{jobStatus?.progress_pct || 0}%</span>
               </div>
-              <div className="w-full bg-gray-100 rounded-full h-2.5">
+              <div className="w-full bg-gray-100 rounded-full h-3">
                 <div
-                  className="bg-emerald-500 h-2.5 rounded-full transition-all duration-500"
+                  className="bg-gradient-to-r from-emerald-400 to-emerald-600 h-3 rounded-full transition-all duration-500"
                   style={{ width: `${jobStatus?.progress_pct || 0}%` }}
                 />
               </div>
-              <p className="text-xs text-gray-500">{jobStatus?.current_step || "処理を開始しています..."}</p>
-              <p className="text-[10px] text-gray-400">※ 通常 2～5分かかります。このモーダルを閉じても生成は続行されます。</p>
+              <p className="text-xs text-gray-600 font-medium">{jobStatus?.current_step || "処理を開始しています..."}</p>
+              {/* Time info */}
+              {(() => {
+                const createdAt = jobStatus?.created_at ? new Date(jobStatus.created_at) : null;
+                const now = new Date();
+                const elapsedMs = createdAt ? now - createdAt : 0;
+                const elapsedSec = Math.floor(elapsedMs / 1000);
+                const elapsedMin = Math.floor(elapsedSec / 60);
+                const elapsedRemSec = elapsedSec % 60;
+                const pct = jobStatus?.progress_pct || 0;
+                let etaText = "推定中...";
+                if (pct > 5 && elapsedMs > 5000) {
+                  const totalEstMs = (elapsedMs / pct) * 100;
+                  const remainMs = Math.max(0, totalEstMs - elapsedMs);
+                  const remainMin = Math.floor(remainMs / 1000 / 60);
+                  const remainSec = Math.floor((remainMs / 1000) % 60);
+                  etaText = remainMin > 0 ? `約${remainMin}分${remainSec}秒` : `約${remainSec}秒`;
+                }
+                return (
+                  <div className="flex items-center justify-between text-xs text-gray-500">
+                    <span>⏱ 経過: {elapsedMin > 0 ? `${elapsedMin}分${elapsedRemSec}秒` : `${elapsedRemSec}秒`}</span>
+                    <span>⏳ 残り: {etaText}</span>
+                  </div>
+                );
+              })()}
+              <p className="text-[10px] text-gray-400 text-center">※ このモーダルを閉じても生成は続行されます</p>
             </div>
           )}
 

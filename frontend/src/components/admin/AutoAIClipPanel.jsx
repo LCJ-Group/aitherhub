@@ -713,15 +713,42 @@ export default function AutoAIClipPanel({ adminKey }) {
                 <div className="mt-4 p-3 bg-white rounded-lg border">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-xs font-medium text-purple-600">進捗</span>
-                    <span className="text-xs text-gray-500">{activeJob.progress_pct}%</span>
+                    <span className="text-sm font-bold text-purple-700">{activeJob.progress_pct || 0}%</span>
                   </div>
-                  <div className="w-full bg-gray-200 rounded-full h-2">
+                  <div className="w-full bg-gray-200 rounded-full h-3">
                     <div
-                      className="bg-purple-500 h-2 rounded-full transition-all duration-500"
-                      style={{ width: `${activeJob.progress_pct}%` }}
+                      className="bg-gradient-to-r from-purple-500 to-pink-500 h-3 rounded-full transition-all duration-500"
+                      style={{ width: `${activeJob.progress_pct || 0}%` }}
                     ></div>
                   </div>
-                  <p className="text-xs text-gray-500 mt-1">{activeJob.current_step}</p>
+                  <p className="text-xs text-gray-600 mt-2 font-medium">{activeJob.current_step}</p>
+                  {/* Time info */}
+                  {(() => {
+                    const createdAt = activeJob.created_at ? new Date(activeJob.created_at) : null;
+                    const now = new Date();
+                    const elapsedMs = createdAt ? now - createdAt : 0;
+                    const elapsedSec = Math.floor(elapsedMs / 1000);
+                    const elapsedMin = Math.floor(elapsedSec / 60);
+                    const elapsedRemSec = elapsedSec % 60;
+                    const pct = activeJob.progress_pct || 0;
+                    let etaText = "計算中...";
+                    if (pct > 5 && elapsedMs > 5000) {
+                      const totalEstMs = (elapsedMs / pct) * 100;
+                      const remainMs = Math.max(0, totalEstMs - elapsedMs);
+                      const remainMin = Math.floor(remainMs / 1000 / 60);
+                      const remainSec = Math.floor((remainMs / 1000) % 60);
+                      etaText = remainMin > 0 ? `約${remainMin}分${remainSec}秒` : `約${remainSec}秒`;
+                    } else if (pct <= 5) {
+                      etaText = "推定中...";
+                    }
+                    return (
+                      <div className="flex items-center justify-between mt-2 text-xs text-gray-500">
+                        <span>⏱ 経過: {elapsedMin > 0 ? `${elapsedMin}分${elapsedRemSec}秒` : `${elapsedRemSec}秒`}</span>
+                        <span>⏳ 残り: {etaText}</span>
+                      </div>
+                    );
+                  })()}
+                  <p className="text-xs text-gray-400 mt-1 text-center">※ このモーダルを閉じても生成は続行されます</p>
                 </div>
               )}
             </div>
@@ -751,18 +778,45 @@ export default function AutoAIClipPanel({ adminKey }) {
               <div className="mb-3">
                 <div className="flex justify-between text-sm mb-1">
                   <span>{activeJob.current_step || activeJob.status}</span>
-                  <span>{activeJob.clips_completed || 0}/{activeJob.clips_total || 0}件</span>
+                  <span className="flex items-center gap-3">
+                    <span className="font-bold text-purple-700">{activeJob.progress_pct || 0}%</span>
+                    <span>{activeJob.clips_completed || 0}/{activeJob.clips_total || 0}件</span>
+                  </span>
                 </div>
                 <div className="w-full bg-gray-200 rounded-full h-3">
                   <div
                     className={`h-3 rounded-full transition-all duration-500 ${
                       activeJob.status === "done" ? "bg-green-500" :
                       activeJob.status === "failed" ? "bg-red-500" :
-                      "bg-purple-500"
+                      "bg-gradient-to-r from-purple-500 to-pink-500"
                     }`}
                     style={{ width: `${activeJob.progress_pct || 0}%` }}
                   ></div>
                 </div>
+                {/* Time info */}
+                {activeJob.status !== "done" && activeJob.status !== "failed" && (() => {
+                  const createdAt = activeJob.created_at ? new Date(activeJob.created_at) : null;
+                  const now = new Date();
+                  const elapsedMs = createdAt ? now - createdAt : 0;
+                  const elapsedSec = Math.floor(elapsedMs / 1000);
+                  const elapsedMin = Math.floor(elapsedSec / 60);
+                  const elapsedRemSec = elapsedSec % 60;
+                  const pct = activeJob.progress_pct || 0;
+                  let etaText = "推定中...";
+                  if (pct > 5 && elapsedMs > 5000) {
+                    const totalEstMs = (elapsedMs / pct) * 100;
+                    const remainMs = Math.max(0, totalEstMs - elapsedMs);
+                    const remainMin = Math.floor(remainMs / 1000 / 60);
+                    const remainSec = Math.floor((remainMs / 1000) % 60);
+                    etaText = remainMin > 0 ? `約${remainMin}分${remainSec}秒` : `約${remainSec}秒`;
+                  }
+                  return (
+                    <div className="flex items-center justify-between mt-2 text-xs text-gray-500">
+                      <span>⏱ 経過: {elapsedMin > 0 ? `${elapsedMin}分${elapsedRemSec}秒` : `${elapsedRemSec}秒`}</span>
+                      <span>⏳ 残り: {etaText}</span>
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* Error */}
