@@ -36,7 +36,7 @@ export default function AutoAIClipPanel({ adminKey }) {
   const [generating, setGenerating] = useState(false);
   const [activeTab, setActiveTab] = useState("generate"); // generate, jobs, candidates
 
-  // ── Config ──
+  // ── Config (V2: new effect options) ──
   const [config, setConfig] = useState({
     brand_id: "",
     max_clips: 5,
@@ -54,6 +54,17 @@ export default function AutoAIClipPanel({ adminKey }) {
     min_importance: 0,
     target_language: "auto",
     position_y: 75,
+    // V2 new options
+    enable_silence_cut: true,
+    enable_zoom_pulse: true,
+    enable_progress_bar: true,
+    enable_flash_intro: true,
+    enable_loop_fade: true,
+    enable_cta: true,
+    enable_keyword_highlight: true,
+    enable_subtitle_animation: true,
+    zoom_intensity: 1.08,
+    silence_threshold_db: -30,
   });
 
   // ── Polling for active job ──
@@ -144,16 +155,28 @@ export default function AutoAIClipPanel({ adminKey }) {
     }
   };
 
-  // ── Apply template ──
+  // ── Apply template (V2: support new fields) ──
   const applyTemplate = (template) => {
+    const c = template.config || template;
     setConfig(prev => ({
       ...prev,
-      subtitle_style: template.subtitle_style || "auto",
-      enable_sfx: template.enable_sfx ?? true,
-      enable_transitions: template.enable_transitions ?? true,
-      transition_type: template.transition_type || "fade",
-      enable_hook: template.enable_hook ?? true,
-      min_cta_score: template.min_cta_score || 0,
+      subtitle_style: c.subtitle_style || prev.subtitle_style,
+      enable_sfx: c.enable_sfx ?? prev.enable_sfx,
+      enable_transitions: c.enable_transitions ?? prev.enable_transitions,
+      transition_type: c.transition_type || prev.transition_type,
+      enable_hook: c.enable_hook ?? prev.enable_hook,
+      min_cta_score: c.min_cta_score ?? prev.min_cta_score,
+      max_duration: c.max_duration ?? prev.max_duration,
+      // V2 fields
+      enable_silence_cut: c.enable_silence_cut ?? prev.enable_silence_cut,
+      enable_zoom_pulse: c.enable_zoom_pulse ?? prev.enable_zoom_pulse,
+      enable_progress_bar: c.enable_progress_bar ?? prev.enable_progress_bar,
+      enable_flash_intro: c.enable_flash_intro ?? prev.enable_flash_intro,
+      enable_loop_fade: c.enable_loop_fade ?? prev.enable_loop_fade,
+      enable_cta: c.enable_cta ?? prev.enable_cta,
+      enable_keyword_highlight: c.enable_keyword_highlight ?? prev.enable_keyword_highlight,
+      enable_subtitle_animation: c.enable_subtitle_animation ?? prev.enable_subtitle_animation,
+      zoom_intensity: c.zoom_intensity ?? prev.zoom_intensity,
     }));
   };
 
@@ -173,10 +196,10 @@ export default function AutoAIClipPanel({ adminKey }) {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
-            🤖 全自動AIクリップ生成
+            🤖 全自動AIクリップ生成 <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">V2</span>
           </h2>
           <p className="text-sm text-gray-500 mt-1">
-            ClipDBからNG除外・ブランド選択済みクリップを自動選定し、字幕・フック・サムネイルを全自動生成
+            字幕・フック・CTA・ズームパルス・無音カット・進行バー・キーワードハイライトを全自動生成
           </p>
         </div>
         <button
@@ -216,7 +239,7 @@ export default function AutoAIClipPanel({ adminKey }) {
             {/* Templates */}
             <section className="bg-white rounded-lg border p-4">
               <h3 className="font-semibold text-gray-700 mb-3">📋 テンプレート</h3>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
                 {templates.map(t => (
                   <button
                     key={t.id}
@@ -224,7 +247,7 @@ export default function AutoAIClipPanel({ adminKey }) {
                     className="p-3 border rounded-lg hover:border-purple-400 hover:bg-purple-50 transition-all text-left"
                   >
                     <div className="font-medium text-sm text-gray-800">{t.name}</div>
-                    <div className="text-xs text-gray-500 mt-1">{t.description}</div>
+                    <div className="text-xs text-gray-500 mt-1 line-clamp-2">{t.description}</div>
                   </button>
                 ))}
               </div>
@@ -244,7 +267,7 @@ export default function AutoAIClipPanel({ adminKey }) {
                     <option value="">全ブランド（割り当て済みのみ）</option>
                     {brands.map(b => (
                       <option key={b.client_id} value={b.client_id}>
-                        {b.name} ({b.clip_count}件)
+                        {b.client_name || b.brand_name} ({b.clip_count}件)
                       </option>
                     ))}
                   </select>
@@ -351,9 +374,171 @@ export default function AutoAIClipPanel({ adminKey }) {
               </div>
             </section>
 
-            {/* Effects */}
+            {/* V2: Advanced Effects */}
             <section className="bg-white rounded-lg border p-4">
-              <h3 className="font-semibold text-gray-700 mb-3">✨ エフェクト設定</h3>
+              <h3 className="font-semibold text-gray-700 mb-3">🎬 V2 プロダクション・エフェクト</h3>
+              <p className="text-xs text-gray-400 mb-4">プロ編集風の演出を自動適用します。TikTok/Reelsの視聴維持率・完視聴率を最大化。</p>
+
+              <div className="grid grid-cols-2 gap-x-6 gap-y-3">
+                {/* Silence Cut */}
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={config.enable_silence_cut}
+                    onChange={e => setConfig(prev => ({ ...prev, enable_silence_cut: e.target.checked }))}
+                    className="rounded text-purple-600"
+                  />
+                  <div>
+                    <span className="text-sm font-medium text-gray-700">✂️ 無音カット</span>
+                    <p className="text-xs text-gray-400">無音区間を自動検出してカット</p>
+                  </div>
+                </label>
+
+                {/* Zoom Pulse */}
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={config.enable_zoom_pulse}
+                    onChange={e => setConfig(prev => ({ ...prev, enable_zoom_pulse: e.target.checked }))}
+                    className="rounded text-purple-600"
+                  />
+                  <div>
+                    <span className="text-sm font-medium text-gray-700">🔍 ズームパルス</span>
+                    <p className="text-xs text-gray-400">強調ポイントで自動ズーム</p>
+                  </div>
+                </label>
+
+                {/* Progress Bar */}
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={config.enable_progress_bar}
+                    onChange={e => setConfig(prev => ({ ...prev, enable_progress_bar: e.target.checked }))}
+                    className="rounded text-purple-600"
+                  />
+                  <div>
+                    <span className="text-sm font-medium text-gray-700">📊 進行バー</span>
+                    <p className="text-xs text-gray-400">画面下部に白い進行バー表示</p>
+                  </div>
+                </label>
+
+                {/* Flash Intro */}
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={config.enable_flash_intro}
+                    onChange={e => setConfig(prev => ({ ...prev, enable_flash_intro: e.target.checked }))}
+                    className="rounded text-purple-600"
+                  />
+                  <div>
+                    <span className="text-sm font-medium text-gray-700">⚡ フラッシュイントロ</span>
+                    <p className="text-xs text-gray-400">最初0.5秒の明るさブースト</p>
+                  </div>
+                </label>
+
+                {/* Loop Fade */}
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={config.enable_loop_fade}
+                    onChange={e => setConfig(prev => ({ ...prev, enable_loop_fade: e.target.checked }))}
+                    className="rounded text-purple-600"
+                  />
+                  <div>
+                    <span className="text-sm font-medium text-gray-700">🔄 ループフェード</span>
+                    <p className="text-xs text-gray-400">最後1秒フェードアウト</p>
+                  </div>
+                </label>
+
+                {/* CTA */}
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={config.enable_cta}
+                    onChange={e => setConfig(prev => ({ ...prev, enable_cta: e.target.checked }))}
+                    className="rounded text-purple-600"
+                  />
+                  <div>
+                    <span className="text-sm font-medium text-gray-700">📢 CTA自動生成</span>
+                    <p className="text-xs text-gray-400">最後3秒に行動喚起テキスト</p>
+                  </div>
+                </label>
+
+                {/* Keyword Highlight */}
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={config.enable_keyword_highlight}
+                    onChange={e => setConfig(prev => ({ ...prev, enable_keyword_highlight: e.target.checked }))}
+                    className="rounded text-purple-600"
+                  />
+                  <div>
+                    <span className="text-sm font-medium text-gray-700">🌟 キーワードハイライト</span>
+                    <p className="text-xs text-gray-400">商品名・CTAワードを色分け</p>
+                  </div>
+                </label>
+
+                {/* Subtitle Animation */}
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={config.enable_subtitle_animation}
+                    onChange={e => setConfig(prev => ({ ...prev, enable_subtitle_animation: e.target.checked }))}
+                    className="rounded text-purple-600"
+                  />
+                  <div>
+                    <span className="text-sm font-medium text-gray-700">✨ 字幕アニメーション</span>
+                    <p className="text-xs text-gray-400">フェードイン・スケール演出</p>
+                  </div>
+                </label>
+              </div>
+
+              {/* Zoom Intensity Slider */}
+              {config.enable_zoom_pulse && (
+                <div className="mt-4 pt-3 border-t">
+                  <label className="block text-sm font-medium text-gray-600 mb-1">
+                    ズーム強度: {((config.zoom_intensity - 1) * 100).toFixed(0)}%
+                  </label>
+                  <input
+                    type="range"
+                    min={100}
+                    max={130}
+                    value={Math.round(config.zoom_intensity * 100)}
+                    onChange={e => setConfig(prev => ({ ...prev, zoom_intensity: parseInt(e.target.value) / 100 }))}
+                    className="w-full"
+                  />
+                  <div className="flex justify-between text-xs text-gray-400">
+                    <span>控えめ (0%)</span>
+                    <span>強め (30%)</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Silence Threshold */}
+              {config.enable_silence_cut && (
+                <div className="mt-3 pt-3 border-t">
+                  <label className="block text-sm font-medium text-gray-600 mb-1">
+                    無音検出感度: {config.silence_threshold_db}dB
+                  </label>
+                  <input
+                    type="range"
+                    min={-60}
+                    max={-10}
+                    value={config.silence_threshold_db}
+                    onChange={e => setConfig(prev => ({ ...prev, silence_threshold_db: parseInt(e.target.value) }))}
+                    className="w-full"
+                  />
+                  <div className="flex justify-between text-xs text-gray-400">
+                    <span>高感度 (-60dB)</span>
+                    <span>低感度 (-10dB)</span>
+                  </div>
+                </div>
+              )}
+            </section>
+
+            {/* Original Effects */}
+            <section className="bg-white rounded-lg border p-4">
+              <h3 className="font-semibold text-gray-700 mb-3">✨ 基本エフェクト</h3>
               <div className="grid grid-cols-2 gap-4">
                 {/* Hook */}
                 <div className="col-span-2">
@@ -397,7 +582,7 @@ export default function AutoAIClipPanel({ adminKey }) {
                     onChange={e => setConfig(prev => ({ ...prev, enable_thumbnail: e.target.checked }))}
                     className="rounded"
                   />
-                  <span className="text-sm font-medium text-gray-700">🖼️ サムネイル自動生成</span>
+                  <span className="text-sm font-medium text-gray-700">🖼️ サムネイル自動生成（テキスト入り）</span>
                 </label>
 
                 {/* Transitions */}
@@ -449,7 +634,7 @@ export default function AutoAIClipPanel({ adminKey }) {
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between">
                   <span className="text-gray-600">ブランド:</span>
-                  <span className="font-medium">{config.brand_id ? brands.find(b => b.client_id === config.brand_id)?.name || config.brand_id : "全ブランド"}</span>
+                  <span className="font-medium">{config.brand_id ? brands.find(b => b.client_id === config.brand_id)?.client_name || config.brand_id : "全ブランド"}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-600">最大生成数:</span>
@@ -464,16 +649,22 @@ export default function AutoAIClipPanel({ adminKey }) {
                   <span className="font-medium">{config.enable_hook ? "ON" : "OFF"}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-gray-600">効果音:</span>
-                  <span className="font-medium">{config.enable_sfx ? "ON" : "OFF"}</span>
+                  <span className="text-gray-600">CTA:</span>
+                  <span className="font-medium">{config.enable_cta ? "ON" : "OFF"}</span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">トランジション:</span>
-                  <span className="font-medium">{config.enable_transitions ? config.transition_type : "OFF"}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">サムネイル:</span>
-                  <span className="font-medium">{config.enable_thumbnail ? "ON" : "OFF"}</span>
+              </div>
+
+              {/* V2 Effects Summary */}
+              <div className="mt-3 pt-3 border-t border-purple-200">
+                <h4 className="text-xs font-semibold text-purple-700 mb-2">V2 エフェクト</h4>
+                <div className="flex flex-wrap gap-1.5">
+                  {config.enable_silence_cut && <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">✂️ 無音カット</span>}
+                  {config.enable_zoom_pulse && <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">🔍 ズーム</span>}
+                  {config.enable_progress_bar && <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">📊 進行バー</span>}
+                  {config.enable_flash_intro && <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">⚡ フラッシュ</span>}
+                  {config.enable_loop_fade && <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">🔄 ループ</span>}
+                  {config.enable_keyword_highlight && <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">🌟 ハイライト</span>}
+                  {config.enable_subtitle_animation && <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">✨ アニメ</span>}
                 </div>
               </div>
 
@@ -486,7 +677,7 @@ export default function AutoAIClipPanel({ adminKey }) {
                     : "bg-gradient-to-r from-purple-600 to-pink-500 hover:from-purple-700 hover:to-pink-600 shadow-lg hover:shadow-xl"
                 }`}
               >
-                {generating ? "⏳ 生成中..." : "🚀 全自動生成を開始"}
+                {generating ? "⏳ 生成中..." : "🚀 V2 全自動生成を開始"}
               </button>
 
               {activeJob && activeJob.status !== "done" && activeJob.status !== "failed" && (
@@ -555,21 +746,47 @@ export default function AutoAIClipPanel({ adminKey }) {
                 <div className="mt-3 space-y-2">
                   <h4 className="text-sm font-medium text-gray-700">生成結果:</h4>
                   {activeJob.results.map((r, i) => (
-                    <div key={i} className="flex items-center justify-between bg-white p-2 rounded border text-sm">
-                      <span className="text-gray-600">
-                        {r.status === "done" ? "✅" : "❌"} クリップ {r.clip_id?.slice(0, 8)}
-                      </span>
-                      {r.download_url && (
-                        <a
-                          href={r.download_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-purple-600 hover:text-purple-800 font-medium"
-                        >
-                          ⬇️ ダウンロード
-                        </a>
+                    <div key={i} className="bg-white p-3 rounded border text-sm">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-gray-600">
+                          {r.status === "done" ? "✅" : "❌"} クリップ {r.clip_id?.slice(0, 8)}
+                        </span>
+                        {r.download_url && (
+                          <a
+                            href={r.download_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-purple-600 hover:text-purple-800 font-medium"
+                          >
+                            ⬇️ ダウンロード
+                          </a>
+                        )}
+                        {r.error && <span className="text-red-500 text-xs">{r.error}</span>}
+                      </div>
+
+                      {/* V2: Show applied effects */}
+                      {r.effects_applied && (
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {r.effects_applied.silence_cut && <span className="text-xs bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded">✂️ 無音カット</span>}
+                          {r.effects_applied.zoom_pulse && <span className="text-xs bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded">🔍 ズーム×{r.zoom_points}</span>}
+                          {r.effects_applied.progress_bar && <span className="text-xs bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded">📊 進行バー</span>}
+                          {r.effects_applied.flash_intro && <span className="text-xs bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded">⚡ フラッシュ</span>}
+                          {r.effects_applied.loop_fade && <span className="text-xs bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded">🔄 ループ</span>}
+                          {r.effects_applied.cta && <span className="text-xs bg-green-50 text-green-600 px-1.5 py-0.5 rounded">📢 CTA</span>}
+                          {r.effects_applied.keyword_highlight && <span className="text-xs bg-yellow-50 text-yellow-700 px-1.5 py-0.5 rounded">🌟 ハイライト</span>}
+                          {r.effects_applied.subtitle_animation && <span className="text-xs bg-purple-50 text-purple-600 px-1.5 py-0.5 rounded">✨ アニメ</span>}
+                        </div>
                       )}
-                      {r.error && <span className="text-red-500 text-xs">{r.error}</span>}
+
+                      {/* V2: Show hook & CTA text */}
+                      {(r.hook_text || r.cta_text) && (
+                        <div className="mt-2 text-xs text-gray-500 space-y-0.5">
+                          {r.hook_text && <div>🎯 フック: 「{r.hook_text}」</div>}
+                          {r.cta_text && <div>📢 CTA: 「{r.cta_text}」</div>}
+                          {r.captions_count > 0 && <div>💬 字幕: {r.captions_count}セグメント</div>}
+                          {r.duration_sec && <div>⏱️ 長さ: {r.duration_sec.toFixed(1)}秒</div>}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -684,9 +901,6 @@ export default function AutoAIClipPanel({ adminKey }) {
                       )}
                       {c.has_captions && (
                         <span className="bg-green-100 text-green-700 px-1.5 py-0.5 rounded">字幕有</span>
-                      )}
-                      {c.has_export && (
-                        <span className="bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">Export済</span>
                       )}
                     </div>
                     {c.product_name && (

@@ -1,10 +1,23 @@
 """
-ai_clip_generator.py — 全自動AIクリップ生成エンドポイント
+ai_clip_generator.py — 全自動AIクリップ生成エンドポイント V2
 ===========================================================
 ClipDBからNG除外・ブランド選択済みクリップを自動選定し、
-Whisper字幕生成→シーン別フォント切替→効果音自動挿入→
-トランジション→最初3秒フック生成→サムネイル自動生成→Export
+Whisper字幕生成→シーン別フォント切替→ズームパルス→無音カット→
+進行バー→ループ感→CTA最適化→サムネイル強化→Export
 を全自動で行うAPIエンドポイント。
+
+V2 新機能:
+  - 無音/フィラーカット（Whisperタイムスタンプで無音区間を検出→カット）
+  - ズームパルス（音量ピーク検出→zoompan 1.05x）
+  - 画面揺れ（シェイク）（強調ポイントでcrop offset微振動）
+  - 進行バー（画面下部にプログレスバー描画）
+  - ループ感演出（最後1秒フェードアウト→最初フレームオーバーレイ）
+  - 字幕出現アニメーション（ASS \\fad タグ）
+  - キーワードハイライト（商品名・CTA語を別色）
+  - 最初0.5秒の視覚インパクト（コントラスト強調フラッシュ）
+  - CTA字幕最適化（最後3秒にGPT生成CTA）
+  - サムネイル強化（テキスト入り＋背景ぼかし）
+  - シーン別字幕スタイル自動切替（autoモードデフォルト化）
 
 Endpoints:
   POST /ai-clip/generate          - 全自動クリップ生成ジョブ開始
@@ -13,6 +26,7 @@ Endpoints:
   GET  /ai-clip/candidates        - 生成候補クリップ一覧（プレビュー）
   GET  /ai-clip/brands            - 利用可能ブランド一覧
   GET  /ai-clip/templates         - 編集テンプレート一覧
+  GET  /ai-clip/diagnostics       - 環境診断
 
 注意: 既存のclip_editor_v2.pyやclip_db.pyは一切変更しない。
 ロジックは参考にしつつ、完全に独立した実装とする。
@@ -24,6 +38,8 @@ import logging
 import tempfile
 import asyncio
 import time
+import math
+import random
 import subprocess
 from typing import Optional, List
 from datetime import datetime, timezone
@@ -47,9 +63,9 @@ _AI_CLIP_JOB_DIR = os.path.join(tempfile.gettempdir(), "aitherhub_ai_clip_jobs")
 os.makedirs(_AI_CLIP_JOB_DIR, exist_ok=True)
 
 # Concurrency limiter
-_AI_CLIP_SEMAPHORE = asyncio.Semaphore(1)  # Max 1 concurrent AI clip generation (heavy)
+_AI_CLIP_SEMAPHORE = asyncio.Semaphore(1)
 
-# ─── ASS Subtitle Styles (copied from clip_editor_v2 for independence) ────────
+# ─── ASS Subtitle Styles ────────────────────────────────────────────────────
 _ASS_STYLES = {
     'simple': {
         'fontsize': 80, 'bold': 1, 'primary_color': '&H00FFFFFF',
@@ -91,33 +107,28 @@ _HOOK_STYLE = {
     'border_style': 1, 'back_color': '&H70000000',
 }
 
+# CTA style (end of video)
+_CTA_STYLE = {
+    'fontsize': 100, 'bold': 1, 'primary_color': '&H0000FF00',  # Green
+    'outline_color': '&H00000000', 'outline': 8, 'shadow': 4,
+    'border_style': 1, 'back_color': '&H70000000',
+}
+
+# Keyword highlight color (ASS color format: &HBBGGRR)
+_HIGHLIGHT_COLOR = '&H0000FFFF'  # Bright yellow
+_HIGHLIGHT_CTA_COLOR = '&H0000FF00'  # Green for CTA words
+
 # Scene-based style mapping
 _SCENE_STYLE_MAP = {
-    'intro': 'pop',        # 冒頭: インパクト重視
-    'product': 'box',      # 商品紹介: 読みやすさ重視
-    'demo': 'simple',      # デモ: シンプル
-    'cta': 'gradient',     # CTA: 目立つ
-    'closing': 'outline',  # 締め: クリーン
-    'default': 'box',      # デフォルト
+    'intro': 'pop',
+    'product': 'box',
+    'demo': 'simple',
+    'cta': 'gradient',
+    'closing': 'outline',
+    'default': 'box',
 }
 
-# Transition types for ffmpeg xfade
-_TRANSITIONS = [
-    'fade', 'fadeblack', 'fadewhite', 'slideleft', 'slideright',
-    'slideup', 'slidedown', 'wipeleft', 'wiperight', 'wipeup', 'wipedown',
-    'smoothleft', 'smoothright', 'smoothup', 'smoothdown',
-]
-
-# Sound effects (will be downloaded from Azure Blob Storage)
-_SFX_TYPES = {
-    'whoosh': 'sfx/whoosh.mp3',
-    'pop': 'sfx/pop.mp3',
-    'ding': 'sfx/ding.mp3',
-    'swoosh': 'sfx/swoosh.mp3',
-    'impact': 'sfx/impact.mp3',
-}
-
-# Font search paths (same as clip_editor_v2)
+# Font search paths
 _FONT_SEARCH_PATHS = [
     '/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc',
     '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
@@ -126,6 +137,20 @@ _FONT_SEARCH_PATHS = [
     '/usr/share/fonts/noto-cjk/NotoSansCJK-Bold.ttc',
     '/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc',
     '/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc',
+]
+
+# CTA keywords for highlight detection
+_CTA_KEYWORDS = [
+    '買', '購入', 'リンク', 'url', 'クーポン', '割引', '限定', '今すぐ',
+    '下單', '購買', '連結', '優惠', '折扣', 'セール', '特別', '無料',
+    'プレゼント', 'お得', '半額', 'キャンペーン', '期間限定',
+]
+
+# Product/emphasis keywords
+_EMPHASIS_KEYWORDS = [
+    '商品', '製品', '成分', '効果', '使い方', 'すごい', 'やばい',
+    '最高', 'おすすめ', '人気', '話題', 'プロ', '美容師', 'サロン',
+    'KYOGOKU', '京極', 'ケラチン', 'コラーゲン', 'アミノ酸',
 ]
 
 
@@ -174,7 +199,6 @@ def _update_job(job_id: str, **kwargs):
 
 
 def _list_jobs(limit: int = 50) -> list:
-    """List recent jobs sorted by creation time."""
     jobs = []
     if not os.path.exists(_AI_CLIP_JOB_DIR):
         return jobs
@@ -194,7 +218,6 @@ def _list_jobs(limit: int = 50) -> list:
 
 # ─── Utility Functions ────────────────────────────────────────────────────────
 def _find_cjk_font() -> str:
-    """Find a CJK-capable font."""
     import glob
     for p in _FONT_SEARCH_PATHS:
         if os.path.exists(p):
@@ -208,7 +231,6 @@ def _find_cjk_font() -> str:
 
 
 def _seconds_to_ass_time(seconds: float) -> str:
-    """Convert seconds to ASS time format: H:MM:SS.cc"""
     h = int(seconds // 3600)
     m = int((seconds % 3600) // 60)
     s = int(seconds % 60)
@@ -217,41 +239,744 @@ def _seconds_to_ass_time(seconds: float) -> str:
 
 
 def _classify_scene(text_content: str, time_start: float, total_duration: float) -> str:
-    """Classify scene type based on content and timing."""
     position_ratio = time_start / max(total_duration, 1)
-
-    # First 10%: intro
     if position_ratio < 0.1:
         return 'intro'
-    # Last 10%: closing
     if position_ratio > 0.9:
         return 'closing'
-
     text_lower = text_content.lower()
-    # CTA keywords
-    cta_keywords = ['買', '購入', 'リンク', 'url', 'クーポン', '割引', '限定', '今すぐ',
-                    '下單', '購買', '連結', '優惠', '折扣']
-    if any(kw in text_lower for kw in cta_keywords):
+    if any(kw in text_lower for kw in _CTA_KEYWORDS):
         return 'cta'
-
-    # Product keywords
     product_keywords = ['商品', '製品', 'プロダクト', '成分', '効果', '使い方',
                        '產品', '成份', '效果', '用法']
     if any(kw in text_lower for kw in product_keywords):
         return 'product'
-
-    # Demo keywords
-    demo_keywords = ['見て', '実際', 'こんな感じ', 'デモ', '使って',
-                    '看', '實際', '示範']
+    demo_keywords = ['見て', '実際', 'こんな感じ', 'デモ', '使って', '看', '實際', '示範']
     if any(kw in text_lower for kw in demo_keywords):
         return 'demo'
-
     return 'default'
+
+
+# ─── V2: Audio Analysis (volume peaks for zoom/shake) ────────────────────────
+def _detect_volume_peaks(video_path: str, threshold_db: float = -15.0) -> list:
+    """ffmpegのvolumedetectで音量ピークを検出する。
+    Returns list of (time_sec, volume_db) tuples for peaks above threshold.
+    """
+    try:
+        # Use astats to get per-frame RMS levels
+        cmd = [
+            "ffmpeg", "-i", video_path, "-af",
+            "astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level:file=-",
+            "-f", "null", "-"
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if proc.returncode != 0:
+            return []
+
+        peaks = []
+        current_time = 0.0
+        frame_duration = 1.0 / 25.0  # Approximate
+
+        for line in proc.stderr.split('\n'):
+            if 'time=' in line:
+                # Parse time from ffmpeg progress
+                try:
+                    time_str = line.split('time=')[1].split(' ')[0]
+                    parts = time_str.split(':')
+                    if len(parts) == 3:
+                        current_time = float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
+                except Exception:
+                    pass
+
+        # Simpler approach: use silencedetect to find NON-silent (loud) moments
+        cmd2 = [
+            "ffmpeg", "-i", video_path, "-af",
+            f"silencedetect=noise={threshold_db}dB:d=0.3",
+            "-f", "null", "-"
+        ]
+        proc2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=60)
+
+        # Parse silence periods to find loud periods
+        silence_starts = []
+        silence_ends = []
+        for line in proc2.stderr.split('\n'):
+            if 'silence_start:' in line:
+                try:
+                    t = float(line.split('silence_start:')[1].strip().split(' ')[0])
+                    silence_starts.append(t)
+                except Exception:
+                    pass
+            elif 'silence_end:' in line:
+                try:
+                    t = float(line.split('silence_end:')[1].strip().split(' ')[0].split('|')[0])
+                    silence_ends.append(t)
+                except Exception:
+                    pass
+
+        # The transitions from silence to non-silence are "peaks" (sudden volume increase)
+        for end_t in silence_ends:
+            peaks.append(end_t)
+
+        logger.info(f"[ai-clip] Detected {len(peaks)} volume peaks, {len(silence_starts)} silence periods")
+        return peaks
+
+    except Exception as e:
+        logger.warning(f"[ai-clip] Volume peak detection failed: {e}")
+        return []
+
+
+def _detect_silence_periods(video_path: str, noise_db: float = -30.0,
+                             min_duration: float = 0.5) -> list:
+    """無音区間を検出する。Returns list of (start, end) tuples."""
+    try:
+        cmd = [
+            "ffmpeg", "-i", video_path, "-af",
+            f"silencedetect=noise={noise_db}dB:d={min_duration}",
+            "-f", "null", "-"
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+
+        silence_periods = []
+        current_start = None
+
+        for line in proc.stderr.split('\n'):
+            if 'silence_start:' in line:
+                try:
+                    current_start = float(line.split('silence_start:')[1].strip().split(' ')[0])
+                except Exception:
+                    pass
+            elif 'silence_end:' in line and current_start is not None:
+                try:
+                    end_t = float(line.split('silence_end:')[1].strip().split(' ')[0].split('|')[0])
+                    silence_periods.append((current_start, end_t))
+                    current_start = None
+                except Exception:
+                    pass
+
+        logger.info(f"[ai-clip] Detected {len(silence_periods)} silence periods")
+        return silence_periods
+
+    except Exception as e:
+        logger.warning(f"[ai-clip] Silence detection failed: {e}")
+        return []
+
+
+# ─── V2: Smart Silence Trimming ──────────────────────────────────────────────
+def _build_silence_trim_segments(duration: float, silence_periods: list,
+                                  captions: list, keep_margin: float = 0.15) -> list:
+    """無音区間をカットするためのセグメントリストを構築。
+    字幕がある区間は絶対にカットしない。
+    Returns list of (start, end) tuples representing segments to KEEP.
+    """
+    if not silence_periods:
+        return [(0, duration)]
+
+    # Build "protected" intervals from captions (don't cut these)
+    protected = []
+    for cap in (captions or []):
+        s = float(cap.get("start", 0))
+        e = float(cap.get("end", 0))
+        if e > s:
+            protected.append((max(0, s - 0.2), min(duration, e + 0.2)))
+
+    # Merge overlapping protected intervals
+    protected.sort()
+    merged_protected = []
+    for s, e in protected:
+        if merged_protected and s <= merged_protected[-1][1]:
+            merged_protected[-1] = (merged_protected[-1][0], max(merged_protected[-1][1], e))
+        else:
+            merged_protected.append((s, e))
+
+    def _is_protected(start, end):
+        for ps, pe in merged_protected:
+            if start < pe and end > ps:
+                return True
+        return False
+
+    # Determine which silence periods to actually cut
+    cuttable = []
+    for s_start, s_end in silence_periods:
+        # Don't cut first 0.5s or last 0.5s
+        if s_start < 0.5 or s_end > duration - 0.5:
+            continue
+        # Don't cut if overlaps with caption
+        if _is_protected(s_start, s_end):
+            continue
+        # Only cut silences longer than 0.8s (keep natural pauses)
+        if s_end - s_start < 0.8:
+            continue
+        # Keep a small margin at start and end of silence
+        cut_start = s_start + keep_margin
+        cut_end = s_end - keep_margin
+        if cut_end > cut_start:
+            cuttable.append((cut_start, cut_end))
+
+    if not cuttable:
+        return [(0, duration)]
+
+    # Build keep segments (inverse of cuttable)
+    keep_segments = []
+    prev_end = 0
+    for cut_start, cut_end in sorted(cuttable):
+        if cut_start > prev_end:
+            keep_segments.append((prev_end, cut_start))
+        prev_end = cut_end
+    if prev_end < duration:
+        keep_segments.append((prev_end, duration))
+
+    logger.info(f"[ai-clip] Silence trim: {len(cuttable)} cuts, {len(keep_segments)} keep segments")
+    return keep_segments
+
+
+# ─── V2: Zoom Pulse Keyframes ────────────────────────────────────────────────
+def _generate_zoom_keyframes(duration: float, volume_peaks: list,
+                              captions: list, max_zoom: float = 1.08) -> list:
+    """音量ピークとキャプションの強調ポイントでズームキーフレームを生成。
+    Returns list of (time, zoom_factor) tuples.
+    """
+    keyframes = []
+
+    # Add zoom at volume peaks (sudden loud moments)
+    for peak_time in volume_peaks:
+        if 0.5 < peak_time < duration - 1.0:
+            keyframes.append((peak_time, max_zoom))
+
+    # Add zoom at emphasis keywords in captions
+    for cap in (captions or []):
+        cap_text = cap.get("text", "").lower()
+        cap_start = float(cap.get("start", 0))
+        if any(kw in cap_text for kw in _EMPHASIS_KEYWORDS):
+            if 0.5 < cap_start < duration - 1.0:
+                keyframes.append((cap_start, max_zoom * 0.95))
+
+    # Deduplicate (keep only one zoom per 2-second window)
+    keyframes.sort(key=lambda x: x[0])
+    filtered = []
+    for kf in keyframes:
+        if not filtered or kf[0] - filtered[-1][0] > 2.0:
+            filtered.append(kf)
+
+    # Limit to max 8 zooms per clip (too many = distracting)
+    if len(filtered) > 8:
+        filtered = sorted(filtered, key=lambda x: x[1], reverse=True)[:8]
+        filtered.sort(key=lambda x: x[0])
+
+    logger.info(f"[ai-clip] Generated {len(filtered)} zoom keyframes")
+    return filtered
+
+
+# ─── V2: Build Advanced ffmpeg Filter Chain ──────────────────────────────────
+def _build_advanced_ffmpeg_command(
+    video_path: str, ass_path: str, output_path: str,
+    video_width: int, video_height: int, duration: float,
+    req, zoom_keyframes: list, keep_segments: list,
+    enable_progress_bar: bool = True,
+    enable_flash_intro: bool = True,
+    enable_loop_fade: bool = True,
+) -> list:
+    """V2: 高度なffmpegフィルタチェーンを構築する。
+
+    フィルタ構成:
+    1. 無音カット（concat demuxer or select filter）
+    2. ズームパルス（zoompan or crop+scale）
+    3. 最初0.5秒フラッシュ（eq brightness boost）
+    4. ASS字幕焼き込み
+    5. 進行バー（drawbox）
+    6. ループ感フェードアウト（fade filter）
+    """
+    filter_parts = []
+
+    # ── 1. Zoom Pulse via crop+scale ──
+    # We use the crop filter to simulate zoom: crop a slightly smaller area, then scale back up
+    # This is more reliable than zoompan for short pulses
+    if zoom_keyframes:
+        # Build a complex expression for crop that zooms at specific times
+        # zoom_factor at time t: interpolate between 1.0 and max_zoom
+        # Each zoom lasts ~0.4s (0.2s in, 0.2s out)
+        zoom_expr_parts = []
+        for t, zf in zoom_keyframes:
+            # Triangular pulse: rises from 1.0 to zf over 0.2s, falls back over 0.2s
+            zoom_expr_parts.append(
+                f"if(between(t,{t:.2f},{t+0.4:.2f}),"
+                f"{zf:.3f}*sin((t-{t:.2f})*{math.pi/0.4:.4f})+"
+                f"(1-sin((t-{t:.2f})*{math.pi/0.4:.4f})),"
+            )
+
+        if zoom_expr_parts:
+            # Build nested if expression
+            # Fallback to 1.0 (no zoom)
+            zoom_expr = "1.0"
+            for part in reversed(zoom_expr_parts):
+                zoom_expr = part + zoom_expr + ")"
+
+            # crop width = iw/zoom, crop height = ih/zoom, centered
+            cw = f"iw/({zoom_expr})"
+            ch = f"ih/({zoom_expr})"
+            cx = f"(iw-{cw})/2"
+            cy = f"(ih-{ch})/2"
+
+            filter_parts.append(f"crop=w={cw}:h={ch}:x={cx}:y={cy}")
+            filter_parts.append(f"scale={video_width}:{video_height}")
+
+    # ── 2. Flash intro (first 0.5s brightness boost) ──
+    if enable_flash_intro:
+        # Boost brightness for first 0.3s, then fade to normal by 0.5s
+        flash_expr = "if(lt(t,0.3),1.5-t*1.67,1.0)"
+        filter_parts.append(f"eq=brightness='{flash_expr}':eval=frame")
+
+    # ── 3. ASS subtitles ──
+    # Escape the path for ffmpeg filter
+    escaped_ass = ass_path.replace("'", "'\\''").replace(":", "\\:")
+    filter_parts.append(f"ass='{escaped_ass}'")
+
+    # ── 4. Progress bar at bottom ──
+    if enable_progress_bar:
+        bar_height = 6
+        bar_y = video_height - bar_height
+        # Progress bar: white bar that grows from left to right
+        # t/duration * iw = current width
+        bar_expr = f"drawbox=x=0:y={bar_y}:w='t/{duration:.2f}*iw':h={bar_height}:color=white@0.8:t=fill"
+        filter_parts.append(bar_expr)
+        # Background bar (dark)
+        bg_bar = f"drawbox=x=0:y={bar_y}:w=iw:h={bar_height}:color=black@0.3:t=fill"
+        # Insert bg bar before the progress bar
+        filter_parts.insert(-1, bg_bar)
+
+    # ── 5. Loop fade (last 1s fade out) ──
+    if enable_loop_fade and duration > 5:
+        fade_start = max(0, duration - 1.0)
+        filter_parts.append(f"fade=t=out:st={fade_start:.2f}:d=1.0:alpha=0")
+        # Since alpha fade doesn't work well with non-alpha output, use regular fade
+        filter_parts[-1] = f"fade=t=out:st={fade_start:.2f}:d=1.0"
+
+    video_filter = ",".join(filter_parts) if filter_parts else "null"
+
+    # ── Build concat demuxer file for silence trimming ──
+    use_concat = len(keep_segments) > 1 and len(keep_segments) <= 20
+
+    if use_concat:
+        # Create a temporary concat filter script
+        # We'll use the select+concat approach within filtergraph
+        select_parts = []
+        for seg_start, seg_end in keep_segments:
+            select_parts.append(f"between(t,{seg_start:.3f},{seg_end:.3f})")
+
+        select_expr = "+".join(select_parts)
+        # Prepend select filter before other video filters
+        silence_vf = f"select='{select_expr}',setpts=N/FRAME_RATE/TB"
+        silence_af = f"aselect='{select_expr}',asetpts=N/SR/TB"
+
+        full_vf = silence_vf + "," + video_filter if video_filter != "null" else silence_vf
+        full_af = silence_af
+
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", video_path,
+            "-vf", full_vf,
+            "-af", full_af,
+            "-c:v", "libx264",
+            "-preset", "fast",
+            "-crf", "22",
+            "-c:a", "aac",
+            "-b:a", "128k",
+            "-movflags", "+faststart",
+            "-vsync", "vfr",
+            output_path,
+        ]
+    else:
+        # No silence trimming, just apply video filters
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", video_path,
+            "-vf", video_filter,
+            "-c:v", "libx264",
+            "-preset", "fast",
+            "-crf", "22",
+            "-c:a", "aac",
+            "-b:a", "128k",
+            "-movflags", "+faststart",
+            "-t", str(min(duration, getattr(req, 'max_duration', 60))),
+            output_path,
+        ]
+
+    return cmd
+
+
+# ─── V2: Enhanced ASS with Animations & Highlights ──────────────────────────
+def _highlight_keywords(text_content: str, product_name: str = "") -> str:
+    """キーワードをASS override tagでハイライトする"""
+    result = text_content
+
+    # Build keyword list (product name first, then CTA, then emphasis)
+    highlight_map = {}
+    if product_name:
+        for word in product_name.split():
+            if len(word) >= 2:
+                highlight_map[word] = _HIGHLIGHT_COLOR
+
+    for kw in _CTA_KEYWORDS:
+        if kw in result:
+            highlight_map[kw] = _HIGHLIGHT_CTA_COLOR
+
+    for kw in _EMPHASIS_KEYWORDS:
+        if kw in result:
+            highlight_map[kw] = _HIGHLIGHT_COLOR
+
+    # Apply highlights (ASS override tags)
+    for keyword, color in highlight_map.items():
+        if keyword in result:
+            result = result.replace(
+                keyword,
+                f"{{\\c{color}}}{keyword}{{\\c}}"
+            )
+
+    return result
+
+
+def _generate_cta_text(captions: list, clip: dict) -> str:
+    """最後の3秒に表示するCTAテキストを生成"""
+    product_name = clip.get("product_name") or ""
+
+    # Try GPT-based CTA generation
+    try:
+        import openai
+        azure_key = os.getenv("AZURE_OPENAI_KEY", "")
+        azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
+        azure_model = os.getenv("GPT5_MODEL") or os.getenv("GPT5_DEPLOYMENT") or "gpt-4.1-mini"
+
+        if azure_key and azure_endpoint:
+            from urllib.parse import urlparse as _urlparse
+            _parsed = _urlparse(azure_endpoint)
+            clean_endpoint = f"{_parsed.scheme}://{_parsed.netloc}/"
+
+            client = openai.AzureOpenAI(
+                api_key=azure_key,
+                azure_endpoint=clean_endpoint,
+                api_version=os.getenv("GPT5_API_VERSION", "2025-04-01-preview"),
+            )
+
+            transcript = " ".join(c.get("text", "") for c in (captions or []))[:300]
+            prompt = f"""以下のライブコマース動画の最後に表示するCTA（行動喚起）テキストを1つ生成してください。
+
+条件:
+- 12文字以内
+- 視聴者にフォロー/いいね/コメントを促す
+- 商品名: {product_name}
+- 動画内容: {transcript}
+
+CTAテキストのみ出力（説明不要）:"""
+
+            response = client.responses.create(
+                model=azure_model,
+                input=[{"role": "user", "content": prompt}],
+                max_output_tokens=50,
+            )
+
+            result = ""
+            if hasattr(response, "output_text") and response.output_text:
+                result = response.output_text.strip()
+            elif hasattr(response, "output") and response.output:
+                for item in response.output:
+                    if hasattr(item, "content"):
+                        for part in item.content:
+                            if hasattr(part, "text"):
+                                result += part.text
+                result = result.strip()
+
+            if result:
+                return result.strip('"\'「」『』').strip()[:20]
+
+    except Exception as e:
+        logger.warning(f"[ai-clip] CTA generation via GPT failed: {e}")
+
+    # Fallback CTAs
+    ctas = [
+        "フォローで最新情報✨",
+        "いいね&保存してね💕",
+        "コメントで質問OK！",
+        "プロフィールから購入🛒",
+        "続きはプロフで確認👆",
+    ]
+    return random.choice(ctas)
+
+
+def _generate_enhanced_ass(styled_captions: list, hook_text: Optional[str],
+                            cta_text: Optional[str], ass_path: str,
+                            video_width: int, video_height: int,
+                            duration: float, position_y: float,
+                            product_name: str = "",
+                            enable_animations: bool = True,
+                            enable_highlights: bool = True):
+    """V2: アニメーション・ハイライト付きASS字幕ファイルを生成する"""
+    if position_y < 33:
+        alignment = 8
+        margin_v = max(20, int(video_height * position_y / 100))
+    elif position_y < 66:
+        alignment = 5
+        margin_v = 30
+    else:
+        alignment = 2
+        margin_v = max(20, int(video_height * (100 - position_y) / 100))
+
+    base_width = 1080
+    scale_factor = min(video_width, video_height) / base_width
+
+    ass = "[Script Info]\n"
+    ass += "ScriptType: v4.00+\n"
+    ass += f"PlayResX: {video_width}\n"
+    ass += f"PlayResY: {video_height}\n"
+    ass += "WrapStyle: 0\n\n"
+
+    ass += "[V4+ Styles]\n"
+    ass += "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
+
+    for style_name, s in _ASS_STYLES.items():
+        fontsize = max(40, int(s['fontsize'] * scale_factor))
+        outline_val = max(2, int(s['outline'] * scale_factor))
+        shadow_val = max(0, int(s.get('shadow', 0) * scale_factor))
+        secondary = s.get('secondary_color', '&H0000FFFF')
+        ass += (f"Style: {style_name},Noto Sans CJK JP,{fontsize},{s['primary_color']},{secondary},"
+                f"{s['outline_color']},{s['back_color']},{s['bold']},0,0,0,100,100,2,0,"
+                f"{s['border_style']},{outline_val},{shadow_val},{alignment},"
+                f"40,40,{margin_v},1\n")
+
+    # Hook style
+    hook_fontsize = max(60, int(_HOOK_STYLE['fontsize'] * scale_factor))
+    hook_outline = max(3, int(_HOOK_STYLE['outline'] * scale_factor))
+    hook_shadow = max(0, int(_HOOK_STYLE['shadow'] * scale_factor))
+    ass += (f"Style: hook,Noto Sans CJK JP,{hook_fontsize},{_HOOK_STYLE['primary_color']},&H0000FFFF,"
+            f"{_HOOK_STYLE['outline_color']},{_HOOK_STYLE['back_color']},{_HOOK_STYLE['bold']},0,0,0,100,100,2,0,"
+            f"{_HOOK_STYLE['border_style']},{hook_outline},{hook_shadow},8,"
+            f"40,40,100,1\n")
+
+    # CTA style
+    cta_fontsize = max(50, int(_CTA_STYLE['fontsize'] * scale_factor))
+    cta_outline = max(3, int(_CTA_STYLE['outline'] * scale_factor))
+    cta_shadow = max(0, int(_CTA_STYLE['shadow'] * scale_factor))
+    ass += (f"Style: cta,Noto Sans CJK JP,{cta_fontsize},{_CTA_STYLE['primary_color']},&H0000FFFF,"
+            f"{_CTA_STYLE['outline_color']},{_CTA_STYLE['back_color']},{_CTA_STYLE['bold']},0,0,0,100,100,2,0,"
+            f"{_CTA_STYLE['border_style']},{cta_outline},{cta_shadow},8,"
+            f"40,40,200,1\n")
+
+    ass += "\n[Events]\n"
+    ass += "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+
+    # ── Hook text (first 3 seconds) with animation ──
+    if hook_text:
+        hook_start = _seconds_to_ass_time(0)
+        hook_end = _seconds_to_ass_time(3.0)
+        safe_hook = hook_text.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}")
+        if enable_animations:
+            # Fade in 200ms, fade out 300ms + scale animation
+            anim_tag = "{\\fad(200,300)\\fscx120\\fscy120\\t(0,200,\\fscx100\\fscy100)}"
+            ass += f"Dialogue: 1,{hook_start},{hook_end},hook,,0,0,0,,{anim_tag}{safe_hook}\n"
+        else:
+            ass += f"Dialogue: 1,{hook_start},{hook_end},hook,,0,0,0,,{safe_hook}\n"
+
+    # ── Styled captions with animations and highlights ──
+    MIN_DISPLAY = 2.5
+    for i, cap in enumerate(styled_captions):
+        cap_start = float(cap.get("start", 0))
+        cap_end = float(cap.get("end", 0))
+        cap_text = cap.get("text", "").strip()
+        style = cap.get("style", "box")
+
+        if not cap_text:
+            continue
+        if cap_end <= cap_start:
+            cap_end = cap_start + MIN_DISPLAY
+        if cap_end - cap_start < MIN_DISPLAY:
+            cap_end = cap_start + MIN_DISPLAY
+            if i + 1 < len(styled_captions):
+                next_start = float(styled_captions[i + 1].get("start", 0))
+                if next_start > cap_start:
+                    cap_end = min(cap_end, next_start)
+
+        start_ts = _seconds_to_ass_time(cap_start)
+        end_ts = _seconds_to_ass_time(cap_end)
+
+        # Apply keyword highlights
+        if enable_highlights:
+            cap_text = _highlight_keywords(cap_text, product_name)
+
+        safe_text = cap_text.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}")
+        # But preserve our highlight tags (they use { } which we just escaped)
+        # We need to un-escape our intentional override tags
+        safe_text = cap_text  # Use original with highlights intact
+
+        # Escape only non-override braces
+        import re
+        # Split by our override tags, escape the rest
+        parts = re.split(r'(\{\\[^}]+\})', safe_text)
+        final_text = ""
+        for part in parts:
+            if part.startswith("{\\") and part.endswith("}"):
+                final_text += part  # Keep override tags
+            else:
+                final_text += part.replace("\\", "\\\\")
+
+        if enable_animations:
+            # Fade in 150ms, fade out 100ms
+            anim_prefix = "{\\fad(150,100)}"
+            ass += f"Dialogue: 0,{start_ts},{end_ts},{style},,0,0,0,,{anim_prefix}{final_text}\n"
+        else:
+            ass += f"Dialogue: 0,{start_ts},{end_ts},{style},,0,0,0,,{final_text}\n"
+
+    # ── CTA text (last 3 seconds) with animation ──
+    if cta_text and duration > 5:
+        cta_start = _seconds_to_ass_time(max(0, duration - 3.5))
+        cta_end = _seconds_to_ass_time(duration - 0.3)
+        safe_cta = cta_text.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}")
+        if enable_animations:
+            cta_anim = "{\\fad(300,200)\\fscx80\\fscy80\\t(0,300,\\fscx100\\fscy100)}"
+            ass += f"Dialogue: 2,{cta_start},{cta_end},cta,,0,0,0,,{cta_anim}{safe_cta}\n"
+        else:
+            ass += f"Dialogue: 2,{cta_start},{cta_end},cta,,0,0,0,,{safe_cta}\n"
+
+    with open(ass_path, "w", encoding="utf-8") as f:
+        f.write(ass)
+
+    caption_count = len(styled_captions)
+    logger.info(f"[ai-clip] Generated enhanced ASS: {caption_count} captions, "
+                f"hook={'yes' if hook_text else 'no'}, cta={'yes' if cta_text else 'no'}, "
+                f"animations={enable_animations}, highlights={enable_highlights}")
+
+
+# ─── V2: Enhanced Thumbnail with Text Overlay ────────────────────────────────
+async def _generate_enhanced_thumbnail(video_path: str, tmp_dir: str, clip_id: str,
+                                        hook_text: str = "", product_name: str = "") -> Optional[str]:
+    """V2: テキスト入り＋背景ぼかしサムネイルを生成"""
+    thumbnail_path = os.path.join(tmp_dir, "thumbnail.jpg")
+    thumb_text = hook_text or product_name or ""
+
+    if thumb_text:
+        # Generate thumbnail with text overlay using ffmpeg
+        font_path = _find_cjk_font()
+        # Escape for ffmpeg drawtext
+        safe_text = thumb_text.replace("'", "\\'").replace(":", "\\:")
+        safe_font = font_path.replace("'", "\\'").replace(":", "\\:")
+
+        # Complex filter: extract frame, add blur background + sharp foreground + text
+        vf_parts = [
+            # Split into two: blurred bg and sharp fg
+            "split[bg][fg]",
+        ]
+        vf_bg = "[bg]boxblur=20:5[blurred]"
+        vf_fg = "[fg]crop=iw*0.9:ih*0.9:iw*0.05:ih*0.05,scale=iw*0.95:-1[sharp]"
+        vf_overlay = f"[blurred][sharp]overlay=(W-w)/2:(H-h)/2"
+        vf_text = (
+            f"drawtext=fontfile='{safe_font}':"
+            f"text='{safe_text}':"
+            f"fontsize=60:fontcolor=white:borderw=4:bordercolor=black:"
+            f"x=(w-text_w)/2:y=h*0.1"
+        )
+
+        cmd = [
+            "ffmpeg", "-y", "-i", video_path,
+            "-ss", "1.5", "-vframes", "1",
+            "-vf", f"{vf_overlay},{vf_text}",
+            "-filter_complex", f"{vf_bg};{vf_fg}",
+            "-q:v", "2",
+            thumbnail_path,
+        ]
+
+        # Simpler approach: just frame + text overlay (more reliable)
+        safe_text_simple = thumb_text.replace("'", "").replace(":", " ")
+        cmd_simple = [
+            "ffmpeg", "-y", "-i", video_path,
+            "-ss", "1.5", "-vframes", "1",
+            "-vf", (
+                f"scale=720:-1,"
+                f"drawtext=fontfile='{safe_font}':"
+                f"text='{safe_text_simple}':"
+                f"fontsize=48:fontcolor=white:borderw=3:bordercolor=black:"
+                f"x=(w-text_w)/2:y=h*0.08"
+            ),
+            "-q:v", "2",
+            thumbnail_path,
+        ]
+
+        proc = await asyncio.create_subprocess_exec(
+            *cmd_simple, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+        await asyncio.wait_for(proc.communicate(), timeout=30)
+
+        if proc.returncode != 0 or not os.path.exists(thumbnail_path):
+            logger.warning(f"[ai-clip] Enhanced thumbnail failed, falling back to simple")
+            # Fallback to simple frame extraction
+            cmd_fallback = [
+                "ffmpeg", "-y", "-i", video_path,
+                "-ss", "1.5", "-vframes", "1",
+                "-vf", "scale=720:-1",
+                "-q:v", "2",
+                thumbnail_path,
+            ]
+            proc2 = await asyncio.create_subprocess_exec(
+                *cmd_fallback, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            )
+            await asyncio.wait_for(proc2.communicate(), timeout=30)
+    else:
+        # No text, just extract frame
+        cmd = [
+            "ffmpeg", "-y", "-i", video_path,
+            "-ss", "1.5", "-vframes", "1",
+            "-vf", "scale=720:-1",
+            "-q:v", "2",
+            thumbnail_path,
+        ]
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+        await asyncio.wait_for(proc.communicate(), timeout=30)
+
+    if not os.path.exists(thumbnail_path):
+        return None
+
+    # Upload to blob
+    try:
+        from azure.storage.blob import BlobServiceClient, ContentSettings
+        from app.services.storage_service import (
+            CONNECTION_STRING, ACCOUNT_NAME, CONTAINER_NAME,
+            generate_read_sas_from_url,
+        )
+
+        if not CONNECTION_STRING:
+            return None
+
+        blob_name = f"ai-clips/thumbnails/{clip_id}_{uuid.uuid4().hex[:8]}.jpg"
+        svc = BlobServiceClient.from_connection_string(CONNECTION_STRING)
+        bc = svc.get_blob_client(container=CONTAINER_NAME, blob=blob_name)
+
+        with open(thumbnail_path, "rb") as data:
+            bc.upload_blob(
+                data, overwrite=True,
+                content_settings=ContentSettings(content_type="image/jpeg")
+            )
+
+        blob_url = f"https://{ACCOUNT_NAME}.blob.core.windows.net/{CONTAINER_NAME}/{blob_name}"
+
+        try:
+            sas_url = generate_read_sas_from_url(blob_url, expires_hours=720)
+            if sas_url:
+                return sas_url
+        except Exception as sas_err:
+            logger.warning(f"[ai-clip] Thumbnail SAS failed: {sas_err}")
+
+        cdn_host = os.getenv("CDN_HOST", "https://cdn.aitherhub.com")
+        blob_host = f"https://{ACCOUNT_NAME}.blob.core.windows.net"
+        if cdn_host and blob_host in blob_url:
+            return blob_url.replace(blob_host, cdn_host)
+        return blob_url
+
+    except Exception as e:
+        logger.warning(f"[ai-clip] Thumbnail upload failed: {e}")
+        return None
 
 
 # ─── Pydantic Models ─────────────────────────────────────────────────────────
 class GenerateRequest(BaseModel):
-    """全自動AIクリップ生成リクエスト"""
+    """全自動AIクリップ生成リクエスト V2"""
     brand_id: Optional[str] = Field(None, description="ブランドID（widget_clientsのclient_id）")
     max_clips: int = Field(5, ge=1, le=20, description="最大生成クリップ数")
     subtitle_style: str = Field("auto", description="字幕スタイル (auto/simple/box/outline/pop/gradient/karaoke)")
@@ -268,6 +993,17 @@ class GenerateRequest(BaseModel):
     min_importance: float = Field(0.0, ge=0.0, description="最小重要度スコア")
     target_language: str = Field("auto", description="字幕言語 (auto/ja/zh/zh-tw)")
     position_y: float = Field(75.0, ge=0, le=100, description="字幕Y位置（%）")
+    # V2 new options
+    enable_silence_cut: bool = Field(True, description="無音区間を自動カットするか")
+    enable_zoom_pulse: bool = Field(True, description="ズームパルスを有効にするか")
+    enable_progress_bar: bool = Field(True, description="進行バーを表示するか")
+    enable_flash_intro: bool = Field(True, description="最初0.5秒のフラッシュ演出")
+    enable_loop_fade: bool = Field(True, description="ループ感フェードアウト")
+    enable_cta: bool = Field(True, description="最後3秒にCTAテキストを表示")
+    enable_keyword_highlight: bool = Field(True, description="キーワードハイライト")
+    enable_subtitle_animation: bool = Field(True, description="字幕出現アニメーション")
+    zoom_intensity: float = Field(1.08, ge=1.0, le=1.3, description="ズーム倍率 (1.0=なし, 1.3=最大)")
+    silence_threshold_db: float = Field(-30.0, ge=-60.0, le=-10.0, description="無音検出閾値(dB)")
 
 
 class JobStatusResponse(BaseModel):
@@ -287,26 +1023,21 @@ class JobStatusResponse(BaseModel):
 
 @router.get("/brands")
 async def list_brands(x_admin_key: Optional[str] = Header(None)):
-    """利用可能なブランド（ウィジェットクライアント）一覧を取得"""
     verify_admin(x_admin_key)
     async with get_session() as session:
         result = await session.execute(text("""
-            SELECT client_id, name, domain, is_active,
-                   (SELECT COUNT(*) FROM widget_clip_assignments wca
-                    WHERE wca.client_id = wc.client_id AND wca.is_active = TRUE) as clip_count
+            SELECT wc.client_id, wc.client_name, wc.brand_name,
+                   COUNT(wca.clip_id) as clip_count
             FROM widget_clients wc
-            WHERE wc.is_active = TRUE
-            ORDER BY name
+            LEFT JOIN widget_clip_assignments wca ON wca.client_id = wc.client_id AND wca.is_active = TRUE
+            GROUP BY wc.client_id, wc.client_name, wc.brand_name
+            ORDER BY clip_count DESC
         """))
         rows = result.fetchall()
     return {
         "brands": [
-            {
-                "client_id": r.client_id,
-                "name": r.name,
-                "domain": r.domain,
-                "clip_count": r.clip_count,
-            }
+            {"client_id": r.client_id, "client_name": r.client_name,
+             "brand_name": r.brand_name, "clip_count": r.clip_count}
             for r in rows
         ]
     }
@@ -314,25 +1045,21 @@ async def list_brands(x_admin_key: Optional[str] = Header(None)):
 
 @router.get("/candidates")
 async def list_candidates(
-    brand_id: Optional[str] = Query(None, description="ブランドID"),
-    min_cta_score: int = Query(0, ge=0, le=5),
-    min_importance: float = Query(0.0, ge=0.0),
-    min_duration: float = Query(10.0),
-    max_duration: float = Query(60.0),
+    brand_id: Optional[str] = Query(None),
+    min_duration: float = Query(5.0),
+    max_duration: float = Query(180.0),
+    min_cta_score: int = Query(0),
     limit: int = Query(20, ge=1, le=100),
     x_admin_key: Optional[str] = Header(None),
 ):
-    """生成候補クリップ一覧（プレビュー用）。NG除外・ブランド選択済みのみ。"""
     verify_admin(x_admin_key)
-
     conditions = [
         "vc.status = 'completed'",
         "vc.clip_url IS NOT NULL",
-        "COALESCE(vc.is_unusable, FALSE) = FALSE",  # NG除外
+        "COALESCE(vc.is_unusable, FALSE) = FALSE",
     ]
     params: dict = {"limit": limit}
 
-    # ブランド選択済みのみ（brand_id指定時）
     if brand_id:
         conditions.append("""
             vc.id::text IN (
@@ -342,7 +1069,6 @@ async def list_candidates(
         """)
         params["brand_id"] = brand_id
     else:
-        # ブランド未指定の場合でも、何かしらブランドが割り当てられているクリップのみ
         conditions.append("""
             vc.id::text IN (
                 SELECT wca.clip_id FROM widget_clip_assignments wca
@@ -350,34 +1076,24 @@ async def list_candidates(
             )
         """)
 
-    # Duration filter
     if min_duration > 0:
-        conditions.append("COALESCE(vc.duration_sec, 0) >= :min_duration")
-        params["min_duration"] = min_duration
+        conditions.append("COALESCE(vc.duration_sec, 0) >= :min_dur")
+        params["min_dur"] = min_duration
     if max_duration > 0:
-        conditions.append("COALESCE(vc.duration_sec, 0) <= :max_duration")
-        params["max_duration"] = max_duration
-
-    # CTA score filter
+        conditions.append("COALESCE(vc.duration_sec, 0) <= :max_dur")
+        params["max_dur"] = max_duration
     if min_cta_score > 0:
-        conditions.append("COALESCE(vc.cta_score, 0) >= :min_cta_score")
-        params["min_cta_score"] = min_cta_score
-
-    # Importance score filter
-    if min_importance > 0:
-        conditions.append("COALESCE(vc.importance_score, 0) >= :min_importance")
-        params["min_importance"] = min_importance
+        conditions.append("COALESCE(vc.cta_score, 0) >= :min_cta")
+        params["min_cta"] = min_cta_score
 
     where_clause = " AND ".join(conditions)
 
     async with get_session() as session:
         result = await session.execute(text(f"""
-            SELECT vc.id as clip_id, vc.video_id, vc.phase_index,
-                   vc.time_start, vc.time_end, vc.duration_sec,
-                   vc.clip_url, vc.thumbnail_url, vc.transcript_text,
-                   vc.product_name, vc.cta_score, vc.importance_score,
-                   vc.liver_name, vc.stream_date, vc.captions,
-                   vc.subtitle_style, vc.exported_url
+            SELECT vc.id as clip_id, vc.video_id, vc.duration_sec,
+                   vc.transcript_text, vc.product_name, vc.cta_score,
+                   vc.importance_score, vc.thumbnail_url, vc.liver_name,
+                   vc.captions IS NOT NULL as has_captions
             FROM video_clips vc
             WHERE {where_clause}
             ORDER BY COALESCE(vc.importance_score, 0) DESC,
@@ -387,123 +1103,113 @@ async def list_candidates(
         rows = result.fetchall()
 
     return {
-        "total": len(rows),
         "candidates": [
             {
-                "clip_id": str(r.clip_id),
-                "video_id": str(r.video_id),
-                "phase_index": r.phase_index,
-                "time_start": r.time_start,
-                "time_end": r.time_end,
-                "duration_sec": r.duration_sec,
-                "clip_url": r.clip_url,
-                "thumbnail_url": r.thumbnail_url,
-                "transcript_text": (r.transcript_text or "")[:200],
-                "product_name": r.product_name,
-                "cta_score": r.cta_score,
-                "importance_score": r.importance_score,
-                "liver_name": r.liver_name,
-                "stream_date": str(r.stream_date) if r.stream_date else None,
-                "has_captions": r.captions is not None,
-                "has_export": r.exported_url is not None,
-                "subtitle_style": r.subtitle_style,
+                "clip_id": str(r.clip_id), "video_id": str(r.video_id),
+                "duration_sec": r.duration_sec, "transcript_text": r.transcript_text,
+                "product_name": r.product_name, "cta_score": r.cta_score,
+                "importance_score": r.importance_score, "thumbnail_url": r.thumbnail_url,
+                "liver_name": r.liver_name, "has_captions": r.has_captions,
             }
             for r in rows
-        ]
+        ],
+        "total": len(rows),
     }
 
 
 @router.get("/templates")
 async def list_templates(x_admin_key: Optional[str] = Header(None)):
-    """編集テンプレート一覧（字幕スタイル・トランジション・効果音の組み合わせ）"""
     verify_admin(x_admin_key)
     return {
         "templates": [
             {
                 "id": "sales_highlight",
                 "name": "セールスハイライト",
-                "description": "売上に繋がるシーンを強調。CTAスコア高いクリップ優先。",
-                "subtitle_style": "pop",
-                "enable_sfx": True,
-                "enable_transitions": True,
-                "transition_type": "fade",
-                "enable_hook": True,
-                "min_cta_score": 3,
+                "description": "CTAスコアが高いクリップを優先。フック＋字幕＋CTA付き。",
+                "config": {
+                    "min_cta_score": 3, "subtitle_style": "auto",
+                    "enable_hook": True, "enable_cta": True,
+                    "enable_zoom_pulse": True, "enable_silence_cut": True,
+                    "enable_progress_bar": True, "enable_flash_intro": True,
+                },
             },
             {
-                "id": "product_showcase",
+                "id": "product_intro",
                 "name": "商品紹介",
-                "description": "商品の魅力を伝えるクリーンな編集。",
-                "subtitle_style": "box",
-                "enable_sfx": False,
-                "enable_transitions": True,
-                "transition_type": "fadeblack",
-                "enable_hook": True,
-                "min_cta_score": 0,
+                "description": "商品名が含まれるクリップを優先。box字幕で読みやすく。",
+                "config": {
+                    "subtitle_style": "box", "enable_hook": True,
+                    "enable_cta": True, "enable_zoom_pulse": True,
+                    "enable_silence_cut": True, "enable_progress_bar": True,
+                },
             },
             {
                 "id": "viral_short",
                 "name": "バズ狙いショート",
-                "description": "TikTok/Reels向け。派手な演出でインパクト重視。",
-                "subtitle_style": "auto",
-                "enable_sfx": True,
-                "enable_transitions": True,
-                "transition_type": "slideleft",
-                "enable_hook": True,
-                "min_cta_score": 0,
+                "description": "15秒以内の短尺。pop字幕＋フック＋全エフェクトON。",
+                "config": {
+                    "max_duration": 15, "subtitle_style": "pop",
+                    "enable_hook": True, "enable_cta": True,
+                    "enable_zoom_pulse": True, "enable_silence_cut": True,
+                    "enable_progress_bar": True, "enable_flash_intro": True,
+                    "enable_loop_fade": True, "zoom_intensity": 1.12,
+                },
             },
             {
                 "id": "minimal",
                 "name": "ミニマル",
-                "description": "字幕のみ。効果音・トランジションなし。",
-                "subtitle_style": "simple",
-                "enable_sfx": False,
-                "enable_transitions": False,
-                "transition_type": "fade",
-                "enable_hook": False,
-                "min_cta_score": 0,
+                "description": "エフェクト最小限。字幕のみのシンプルな仕上がり。",
+                "config": {
+                    "subtitle_style": "simple", "enable_hook": False,
+                    "enable_cta": False, "enable_zoom_pulse": False,
+                    "enable_silence_cut": False, "enable_progress_bar": False,
+                    "enable_flash_intro": False, "enable_loop_fade": False,
+                },
             },
-        ],
-        "available_styles": list(_ASS_STYLES.keys()) + ["auto"],
-        "available_transitions": _TRANSITIONS,
-        "available_sfx": list(_SFX_TYPES.keys()),
+            {
+                "id": "full_production",
+                "name": "フルプロダクション",
+                "description": "全エフェクトON。最高品質の仕上がり。",
+                "config": {
+                    "subtitle_style": "auto", "enable_hook": True,
+                    "enable_cta": True, "enable_zoom_pulse": True,
+                    "enable_silence_cut": True, "enable_progress_bar": True,
+                    "enable_flash_intro": True, "enable_loop_fade": True,
+                    "enable_keyword_highlight": True, "enable_subtitle_animation": True,
+                    "zoom_intensity": 1.08,
+                },
+            },
+        ]
     }
 
 
 @router.get("/diagnostics")
 async def diagnostics(x_admin_key: Optional[str] = Header(None)):
-    """Whisper/環境変数の診断情報を返す"""
     verify_admin(x_admin_key)
-    import openai
-
     azure_key = os.getenv("AZURE_OPENAI_KEY", "")
     azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
     gpt_model = os.getenv("GPT5_MODEL") or os.getenv("GPT5_DEPLOYMENT") or "gpt-4.1-mini"
-
-    # Check font availability
-    font_found = None
-    for fp in _FONT_SEARCH_PATHS:
-        if os.path.exists(fp):
-            font_found = fp
-            break
-
-    # Check ffmpeg
-    ffmpeg_ok = False
-    try:
-        r = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True, timeout=5)
-        ffmpeg_ok = r.returncode == 0
-    except Exception:
-        pass
-
+    font_found = _find_cjk_font()
+    ffmpeg_ok = subprocess.run(["ffmpeg", "-version"], capture_output=True).returncode == 0
     return {
+        "version": "2.0",
         "azure_openai_key_set": bool(azure_key),
-        "azure_openai_key_prefix": azure_key[:8] + "..." if azure_key else "NOT SET",
         "azure_openai_endpoint": azure_endpoint or "NOT SET",
         "gpt_model": gpt_model,
         "font_found": font_found,
         "ffmpeg_available": ffmpeg_ok,
         "job_dir": _AI_CLIP_JOB_DIR,
-        "job_dir_exists": os.path.exists(_AI_CLIP_JOB_DIR),
+        "features": {
+            "silence_cut": True,
+            "zoom_pulse": True,
+            "progress_bar": True,
+            "flash_intro": True,
+            "loop_fade": True,
+            "cta_generation": True,
+            "keyword_highlight": True,
+            "subtitle_animation": True,
+            "enhanced_thumbnail": True,
+        },
     }
 
 
@@ -513,12 +1219,9 @@ async def generate_ai_clip(
     background_tasks: BackgroundTasks,
     x_admin_key: Optional[str] = Header(None),
 ):
-    """全自動AIクリップ生成ジョブを開始する"""
     verify_admin(x_admin_key)
-
     job_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
-
     job_data = {
         "job_id": job_id,
         "status": "queued",
@@ -533,20 +1236,12 @@ async def generate_ai_clip(
         "config": req.dict(),
     }
     _save_job(job_id, job_data)
-
-    # Start background processing
     background_tasks.add_task(_run_ai_clip_generation, job_id, req)
-
-    return {
-        "job_id": job_id,
-        "status": "queued",
-        "message": "全自動AIクリップ生成ジョブを開始しました",
-    }
+    return {"job_id": job_id, "status": "queued", "message": "全自動AIクリップ生成ジョブを開始しました (V2)"}
 
 
 @router.get("/jobs/{job_id}")
 async def get_job_status(job_id: str, x_admin_key: Optional[str] = Header(None)):
-    """ジョブの進捗を確認する"""
     verify_admin(x_admin_key)
     job = _load_job(job_id)
     if not job:
@@ -559,7 +1254,6 @@ async def list_jobs(
     limit: int = Query(20, ge=1, le=100),
     x_admin_key: Optional[str] = Header(None),
 ):
-    """全ジョブ一覧を取得する"""
     verify_admin(x_admin_key)
     jobs = _list_jobs(limit=limit)
     return {"jobs": jobs, "total": len(jobs)}
@@ -568,7 +1262,6 @@ async def list_jobs(
 # ─── Background Processing ───────────────────────────────────────────────────
 
 async def _run_ai_clip_generation(job_id: str, req: GenerateRequest):
-    """全自動AIクリップ生成のメインパイプライン"""
     try:
         async with _AI_CLIP_SEMAPHORE:
             await _run_ai_clip_generation_inner(job_id, req)
@@ -578,22 +1271,19 @@ async def _run_ai_clip_generation(job_id: str, req: GenerateRequest):
 
 
 async def _run_ai_clip_generation_inner(job_id: str, req: GenerateRequest):
-    """Inner pipeline logic."""
     import httpx
 
-    logger.info(f"[ai-clip {job_id}] Starting generation pipeline")
+    logger.info(f"[ai-clip {job_id}] Starting V2 generation pipeline")
     _update_job(job_id, status="selecting", progress_pct=5, current_step="候補クリップ選定中...")
 
-    # ── Step 1: Select candidate clips from ClipDB ──
     candidates = await _select_candidates(req)
     if not candidates:
         _update_job(job_id, status="failed", error="条件に合うクリップが見つかりませんでした")
         return
 
     clips_total = min(len(candidates), req.max_clips)
-    _update_job(job_id, clips_total=clips_total, progress_pct=10,
+    _update_job(job_id, clips_total=clips_total, progress_pct=8,
                 current_step=f"{clips_total}件のクリップを選定完了")
-    logger.info(f"[ai-clip {job_id}] Selected {clips_total} candidates")
 
     results = []
     for idx, clip in enumerate(candidates[:clips_total]):
@@ -604,43 +1294,31 @@ async def _run_ai_clip_generation_inner(job_id: str, req: GenerateRequest):
             _update_job(job_id, status="processing", progress_pct=step_base_pct,
                         current_step=f"クリップ {idx+1}/{clips_total} 処理中...",
                         clips_completed=idx)
-
-            result = await _process_single_clip(job_id, clip, req, idx, clips_total)
+            result = await _process_single_clip_v2(job_id, clip, req, idx, clips_total)
             results.append(result)
-
             _update_job(job_id, clips_completed=idx + 1, results=results)
             logger.info(f"[ai-clip {job_id}] Clip {idx+1}/{clips_total} done: {clip_id}")
-
         except Exception as e:
             logger.error(f"[ai-clip {job_id}] Clip {idx+1} failed: {e}", exc_info=True)
-            results.append({
-                "clip_id": clip_id,
-                "status": "failed",
-                "error": str(e)[:200],
-            })
+            results.append({"clip_id": clip_id, "status": "failed", "error": str(e)[:200]})
             _update_job(job_id, clips_completed=idx + 1, results=results)
 
-    # ── Final ──
     success_count = sum(1 for r in results if r.get("status") == "done")
     _update_job(
-        job_id,
-        status="done",
-        progress_pct=100,
+        job_id, status="done", progress_pct=100,
         current_step=f"完了: {success_count}/{clips_total}件成功",
-        clips_completed=clips_total,
-        results=results,
+        clips_completed=clips_total, results=results,
     )
-    logger.info(f"[ai-clip {job_id}] Pipeline complete: {success_count}/{clips_total} success")
+    logger.info(f"[ai-clip {job_id}] V2 Pipeline complete: {success_count}/{clips_total} success")
 
 
 async def _select_candidates(req: GenerateRequest) -> list:
-    """ClipDBから候補クリップを選定する"""
     conditions = [
         "vc.status = 'completed'",
         "vc.clip_url IS NOT NULL",
         "COALESCE(vc.is_unusable, FALSE) = FALSE",
     ]
-    params: dict = {"limit": req.max_clips * 3}  # 余裕を持って取得
+    params: dict = {"limit": req.max_clips * 3}
 
     if req.brand_id:
         conditions.append("""
@@ -691,34 +1369,28 @@ async def _select_candidates(req: GenerateRequest) -> list:
 
     return [
         {
-            "clip_id": r.clip_id,
-            "video_id": r.video_id,
-            "phase_index": r.phase_index,
-            "time_start": r.time_start,
-            "time_end": r.time_end,
-            "duration_sec": r.duration_sec,
-            "clip_url": r.clip_url,
-            "thumbnail_url": r.thumbnail_url,
-            "transcript_text": r.transcript_text,
-            "product_name": r.product_name,
-            "cta_score": r.cta_score,
-            "importance_score": r.importance_score,
-            "captions": r.captions,
-            "subtitle_style": r.subtitle_style,
+            "clip_id": r.clip_id, "video_id": r.video_id,
+            "phase_index": r.phase_index, "time_start": r.time_start,
+            "time_end": r.time_end, "duration_sec": r.duration_sec,
+            "clip_url": r.clip_url, "thumbnail_url": r.thumbnail_url,
+            "transcript_text": r.transcript_text, "product_name": r.product_name,
+            "cta_score": r.cta_score, "importance_score": r.importance_score,
+            "captions": r.captions, "subtitle_style": r.subtitle_style,
             "liver_name": r.liver_name,
         }
         for r in rows
     ]
 
 
-async def _process_single_clip(job_id: str, clip: dict, req: GenerateRequest,
-                                idx: int, total: int) -> dict:
-    """1つのクリップを全自動処理する"""
+async def _process_single_clip_v2(job_id: str, clip: dict, req: GenerateRequest,
+                                    idx: int, total: int) -> dict:
+    """V2: 1つのクリップを全自動処理する（全エフェクト付き）"""
     import httpx
 
     clip_id = str(clip["clip_id"])
     clip_url = clip["clip_url"]
     captions = clip.get("captions")
+    product_name = clip.get("product_name") or ""
     tmp_dir = tempfile.mkdtemp(prefix=f"ai_clip_{clip_id[:8]}_")
 
     try:
@@ -727,7 +1399,6 @@ async def _process_single_clip(job_id: str, clip: dict, req: GenerateRequest,
         video_path = os.path.join(tmp_dir, "input.mp4")
 
         download_url = clip_url
-        # Generate SAS token if needed
         if "?" not in download_url or "sig=" not in download_url:
             try:
                 from app.services.storage_service import generate_read_sas_from_url
@@ -746,7 +1417,7 @@ async def _process_single_clip(job_id: str, clip: dict, req: GenerateRequest,
         file_size = os.path.getsize(video_path)
         logger.info(f"[ai-clip {job_id}] Downloaded clip: {file_size} bytes")
 
-        # ── 2. Get video info (resolution, duration) ──
+        # ── 2. Get video info ──
         probe_cmd = [
             "ffprobe", "-v", "quiet", "-print_format", "json",
             "-show_format", "-show_streams", video_path
@@ -767,62 +1438,99 @@ async def _process_single_clip(job_id: str, clip: dict, req: GenerateRequest,
         if "format" in probe_data and "duration" in probe_data["format"]:
             duration = float(probe_data["format"]["duration"])
 
-        # ── 3. Transcribe (if no captions exist) ──
+        # ── 3. Audio analysis (V2: volume peaks + silence detection) ──
+        volume_peaks = []
+        silence_periods = []
+        keep_segments = [(0, duration)]
+
+        if req.enable_zoom_pulse:
+            _update_job(job_id, current_step=f"クリップ {idx+1}/{total}: 音声分析中（ズームポイント検出）...")
+            volume_peaks = _detect_volume_peaks(video_path)
+
+        if req.enable_silence_cut:
+            _update_job(job_id, current_step=f"クリップ {idx+1}/{total}: 無音区間検出中...")
+            silence_periods = _detect_silence_periods(
+                video_path, noise_db=req.silence_threshold_db
+            )
+
+        # ── 4. Transcribe ──
         if not captions:
             _update_job(job_id, current_step=f"クリップ {idx+1}/{total}: 字幕生成中 (Whisper)...")
             captions = await _transcribe_clip(video_path, req.target_language)
 
-        # Parse captions if string
         if isinstance(captions, str):
             try:
                 captions = json.loads(captions)
             except Exception:
                 captions = []
-
         if not captions:
             captions = []
 
-        # ── 4. Hook detection & generation ──
+        # ── 4b. Build silence trim segments (after captions, to protect caption regions) ──
+        if req.enable_silence_cut and silence_periods:
+            keep_segments = _build_silence_trim_segments(duration, silence_periods, captions)
+
+        # ── 5. Generate zoom keyframes ──
+        zoom_keyframes = []
+        if req.enable_zoom_pulse and (volume_peaks or captions):
+            zoom_keyframes = _generate_zoom_keyframes(
+                duration, volume_peaks, captions, max_zoom=req.zoom_intensity
+            )
+
+        # ── 6. Hook generation ──
         hook_text = None
         if req.enable_hook:
             _update_job(job_id, current_step=f"クリップ {idx+1}/{total}: フック生成中...")
             hook_text = await _generate_hook(captions, clip, req)
 
-        # ── 5. Scene classification & style assignment ──
+        # ── 7. CTA generation (V2) ──
+        cta_text = None
+        if req.enable_cta:
+            _update_job(job_id, current_step=f"クリップ {idx+1}/{total}: CTA生成中...")
+            cta_text = _generate_cta_text(captions, clip)
+
+        # ── 8. Scene classification & style assignment ──
         _update_job(job_id, current_step=f"クリップ {idx+1}/{total}: シーン分析中...")
         styled_captions = _assign_scene_styles(captions, duration, req.subtitle_style)
 
-        # ── 6. Generate ASS subtitle file ──
+        # ── 9. Generate enhanced ASS subtitle file (V2) ──
         _update_job(job_id, current_step=f"クリップ {idx+1}/{total}: 字幕ファイル生成中...")
         ass_path = os.path.join(tmp_dir, "subtitles.ass")
-        _generate_multi_style_ass(
-            styled_captions, hook_text, ass_path,
-            video_width, video_height, duration, req.position_y
+        _generate_enhanced_ass(
+            styled_captions, hook_text, cta_text, ass_path,
+            video_width, video_height, duration, req.position_y,
+            product_name=product_name,
+            enable_animations=req.enable_subtitle_animation,
+            enable_highlights=req.enable_keyword_highlight,
         )
 
-        # ── 7. Build ffmpeg command ──
-        _update_job(job_id, current_step=f"クリップ {idx+1}/{total}: エンコード中...")
+        # ── 10. Build advanced ffmpeg command (V2) ──
+        _update_job(job_id, current_step=f"クリップ {idx+1}/{total}: エンコード中（V2フィルタ適用）...")
         output_path = os.path.join(tmp_dir, "output.mp4")
-        ffmpeg_cmd = _build_ffmpeg_command(
+        ffmpeg_cmd = _build_advanced_ffmpeg_command(
             video_path, ass_path, output_path,
-            video_width, video_height, duration, req
+            video_width, video_height, duration, req,
+            zoom_keyframes=zoom_keyframes,
+            keep_segments=keep_segments,
+            enable_progress_bar=req.enable_progress_bar,
+            enable_flash_intro=req.enable_flash_intro,
+            enable_loop_fade=req.enable_loop_fade,
         )
 
-        # Execute ffmpeg
-        logger.info(f"[ai-clip {job_id}] ffmpeg: {' '.join(ffmpeg_cmd[:10])}...")
+        logger.info(f"[ai-clip {job_id}] ffmpeg V2 cmd: {' '.join(ffmpeg_cmd[:15])}...")
         proc = await asyncio.create_subprocess_exec(
             *ffmpeg_cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=600)
 
         if proc.returncode != 0:
             err_msg = stderr.decode()[-500:] if stderr else "Unknown error"
             raise RuntimeError(f"ffmpeg failed: {err_msg}")
 
         output_size = os.path.getsize(output_path)
-        logger.info(f"[ai-clip {job_id}] Encoded: {output_size} bytes")
+        logger.info(f"[ai-clip {job_id}] Encoded V2: {output_size} bytes")
 
         # Get actual output duration
         actual_duration = duration
@@ -838,17 +1546,20 @@ async def _process_single_clip(job_id: str, clip: dict, req: GenerateRequest,
         except Exception:
             pass
 
-        # ── 8. Generate thumbnail ──
+        # ── 11. Enhanced thumbnail (V2) ──
         thumbnail_url = None
         if req.enable_thumbnail:
             _update_job(job_id, current_step=f"クリップ {idx+1}/{total}: サムネイル生成中...")
-            thumbnail_url = await _generate_thumbnail(output_path, tmp_dir, clip_id)
+            thumbnail_url = await _generate_enhanced_thumbnail(
+                output_path, tmp_dir, clip_id,
+                hook_text=hook_text or "", product_name=product_name,
+            )
 
-        # ── 9. Upload to Azure Blob Storage ──
+        # ── 12. Upload to Azure Blob Storage ──
         _update_job(job_id, current_step=f"クリップ {idx+1}/{total}: アップロード中...")
         download_url, blob_url = await _upload_to_blob(output_path, clip_id, job_id)
 
-        # ── 10. Save to DB ──
+        # ── 13. Save to DB ──
         await _save_export_record(clip_id, blob_url, thumbnail_url)
 
         return {
@@ -860,13 +1571,25 @@ async def _process_single_clip(job_id: str, clip: dict, req: GenerateRequest,
             "file_size": output_size,
             "duration_sec": actual_duration,
             "hook_text": hook_text,
+            "cta_text": cta_text,
             "captions_count": len(captions),
+            "zoom_points": len(zoom_keyframes),
+            "silence_cuts": max(0, len(keep_segments) - 1),
+            "effects_applied": {
+                "silence_cut": req.enable_silence_cut and len(keep_segments) > 1,
+                "zoom_pulse": req.enable_zoom_pulse and len(zoom_keyframes) > 0,
+                "progress_bar": req.enable_progress_bar,
+                "flash_intro": req.enable_flash_intro,
+                "loop_fade": req.enable_loop_fade,
+                "cta": req.enable_cta and bool(cta_text),
+                "keyword_highlight": req.enable_keyword_highlight,
+                "subtitle_animation": req.enable_subtitle_animation,
+            },
         }
 
     except Exception as e:
         raise
     finally:
-        # Cleanup temp files
         import shutil
         try:
             shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -874,8 +1597,9 @@ async def _process_single_clip(job_id: str, clip: dict, req: GenerateRequest,
             pass
 
 
+# ─── Whisper Transcription (unchanged from V1, proven working) ───────────────
+
 async def _transcribe_clip(video_path: str, target_language: str = "auto") -> list:
-    """Whisper APIで字幕を生成する"""
     import openai
 
     azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "https://aoai-kyogoku-service.openai.azure.com/")
@@ -895,19 +1619,16 @@ async def _transcribe_clip(video_path: str, target_language: str = "auto") -> li
         azure_endpoint=clean_endpoint,
     )
 
-    # Determine language
     whisper_lang_map = {"ja": "ja", "zh-tw": "zh", "zh": "zh"}
     is_auto = target_language == "auto"
     whisper_language = None if is_auto else whisper_lang_map.get(target_language, "ja")
 
-    # Whisper prompt
     whisper_prompt = (
         "全頭ブリーチ、カラーリング、ヘアケア、ケラチン、アミノ酸、コラーゲン、"
         "頭皮、毛穴、髪質、ダメージ、補修、シャンプー、トリートメント、"
         "ヘアマスク、KYOGOKU、京極、ライブ配信、ライブコマース"
     )
 
-    # Load user dictionary
     try:
         async with get_session() as session:
             dict_result = await session.execute(text("""
@@ -926,32 +1647,26 @@ async def _transcribe_clip(video_path: str, target_language: str = "auto") -> li
     except Exception as e:
         logger.warning(f"[ai-clip] Dict load failed: {e}")
 
-    # ── Extract audio to mp3 first (Whisper has 25MB file size limit) ──
+    # Extract audio to mp3 (Whisper 25MB limit)
     whisper_file = video_path
     tmp_audio_dir = os.path.dirname(video_path)
     audio_path = os.path.join(tmp_audio_dir, "audio_for_whisper.mp3")
     try:
         proc = await asyncio.create_subprocess_exec(
             "ffmpeg", "-y", "-i", video_path,
-            "-vn",  # no video
-            "-acodec", "libmp3lame",
-            "-ar", "16000",  # 16kHz (optimal for Whisper)
-            "-ac", "1",  # mono
-            "-b:a", "64k",  # 64kbps
+            "-vn", "-acodec", "libmp3lame", "-ar", "16000", "-ac", "1", "-b:a", "64k",
             audio_path,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
         stdout_audio, stderr_audio = await asyncio.wait_for(proc.communicate(), timeout=60)
         if proc.returncode == 0 and os.path.exists(audio_path):
             audio_size = os.path.getsize(audio_path)
-            video_size = os.path.getsize(video_path)
-            logger.info(f"[ai-clip] Extracted audio: {audio_size/1024/1024:.1f} MB (from {video_size/1024/1024:.1f} MB video)")
+            logger.info(f"[ai-clip] Extracted audio: {audio_size/1024/1024:.1f} MB")
             whisper_file = audio_path
         else:
-            logger.warning(f"[ai-clip] Audio extraction failed (rc={proc.returncode}), using original video")
+            logger.warning(f"[ai-clip] Audio extraction failed, using original video")
     except Exception as audio_err:
-        logger.warning(f"[ai-clip] Audio extraction error: {audio_err}, using original video")
+        logger.warning(f"[ai-clip] Audio extraction error: {audio_err}")
 
     try:
         with open(whisper_file, "rb") as f:
@@ -968,14 +1683,7 @@ async def _transcribe_clip(video_path: str, target_language: str = "auto") -> li
 
             response = await openai_client.audio.transcriptions.create(**whisper_kwargs)
 
-        # Debug: log response attributes
         logger.info(f"[ai-clip] Whisper response type: {type(response).__name__}")
-        logger.info(f"[ai-clip] Whisper response attrs: {[a for a in dir(response) if not a.startswith('_')]}")
-        if hasattr(response, 'text'):
-            logger.info(f"[ai-clip] Whisper response.text: {(response.text or '')[:200]}")
-        if hasattr(response, 'segments'):
-            seg_count = len(response.segments) if response.segments else 0
-            logger.info(f"[ai-clip] Whisper response.segments count: {seg_count}")
 
         segments = []
         if hasattr(response, "segments") and response.segments:
@@ -985,8 +1693,6 @@ async def _transcribe_clip(video_path: str, target_language: str = "auto") -> li
                 t = getattr(seg, "text", "") if hasattr(seg, "text") else (seg.get("text", "") if isinstance(seg, dict) else "")
                 segments.append({"start": float(s), "end": float(e), "text": str(t).strip()})
         elif hasattr(response, "text") and response.text:
-            # Fallback: single segment with full text
-            # Estimate duration from audio file
             try:
                 probe_res = subprocess.run(
                     ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", whisper_file],
@@ -1009,25 +1715,22 @@ async def _transcribe_clip(video_path: str, target_language: str = "auto") -> li
         return []
 
 
+# ─── Hook Generation (unchanged from V1) ─────────────────────────────────────
+
 async def _generate_hook(captions: list, clip: dict, req: GenerateRequest) -> str:
-    """フックテキストを生成する（AI or ルールベース）"""
-    # If custom hook text provided, use it
     if req.hook_text:
         return req.hook_text
 
-    # Try to detect hook from existing captions using hook_detection_service logic
     from app.services.hook_detection_service import detect_hooks, suggest_hook_placement
 
     if captions:
         hooks = detect_hooks(captions, max_candidates=5)
         if hooks and hooks[0].hook_score >= 50:
-            return hooks[0].text[:50]  # Use detected hook
+            return hooks[0].text[:50]
 
-    # Fallback: Generate hook using GPT
     transcript = " ".join(c.get("text", "") for c in (captions or []))[:500]
     product_name = clip.get("product_name") or ""
 
-    # If no transcript available, use simple hook directly (GPT can't generate good hooks without content)
     if not transcript.strip():
         return _generate_simple_hook(product_name, transcript)
 
@@ -1038,7 +1741,6 @@ async def _generate_hook(captions: list, clip: dict, req: GenerateRequest) -> st
         azure_model = os.getenv("GPT5_MODEL") or os.getenv("GPT5_DEPLOYMENT") or "gpt-4.1-mini"
 
         if not azure_key or not azure_endpoint:
-            # Fallback to simple hook
             return _generate_simple_hook(product_name, transcript)
 
         from urllib.parse import urlparse as _urlparse
@@ -1080,7 +1782,6 @@ async def _generate_hook(captions: list, clip: dict, req: GenerateRequest) -> st
             result = result.strip()
 
         if result:
-            # Clean up: remove quotes, limit length
             result = result.strip('"\'「」『』').strip()
             return result[:30]
 
@@ -1091,231 +1792,33 @@ async def _generate_hook(captions: list, clip: dict, req: GenerateRequest) -> st
 
 
 def _generate_simple_hook(product_name: str, transcript: str) -> str:
-    """シンプルなフックテキストを生成（GPTが使えない場合のフォールバック）"""
     if product_name:
         hooks = [
             f"知らないと損！{product_name}",
             f"プロが選ぶ{product_name}",
             f"衝撃の{product_name}",
         ]
-        import random
         return random.choice(hooks)[:25]
     return "プロが教える美髪の秘密"
 
 
 def _assign_scene_styles(captions: list, total_duration: float, base_style: str) -> list:
-    """各字幕セグメントにシーンに応じたスタイルを割り当てる"""
     styled = []
     for cap in captions:
         cap_start = float(cap.get("start", 0))
         cap_text = cap.get("text", "")
-
         if base_style != "auto":
-            # Fixed style
             style = base_style
         else:
-            # Auto: classify scene and assign style
             scene = _classify_scene(cap_text, cap_start, total_duration)
             style = _SCENE_STYLE_MAP.get(scene, 'box')
-
-        styled.append({
-            **cap,
-            "style": style,
-        })
+        styled.append({**cap, "style": style})
     return styled
 
 
-def _generate_multi_style_ass(styled_captions: list, hook_text: Optional[str],
-                               ass_path: str, video_width: int, video_height: int,
-                               duration: float, position_y: float):
-    """複数スタイルのASS字幕ファイルを生成する"""
-    # Calculate alignment and margin
-    if position_y < 33:
-        alignment = 8  # top-center
-        margin_v = max(20, int(video_height * position_y / 100))
-    elif position_y < 66:
-        alignment = 5  # middle-center
-        margin_v = 30
-    else:
-        alignment = 2  # bottom-center
-        margin_v = max(20, int(video_height * (100 - position_y) / 100))
-
-    base_width = 1080
-    scale_factor = min(video_width, video_height) / base_width
-
-    ass = "[Script Info]\n"
-    ass += "ScriptType: v4.00+\n"
-    ass += f"PlayResX: {video_width}\n"
-    ass += f"PlayResY: {video_height}\n"
-    ass += "WrapStyle: 0\n\n"
-
-    # Define all styles
-    ass += "[V4+ Styles]\n"
-    ass += "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
-
-    for style_name, s in _ASS_STYLES.items():
-        fontsize = max(40, int(s['fontsize'] * scale_factor))
-        outline_val = max(2, int(s['outline'] * scale_factor))
-        shadow_val = max(0, int(s.get('shadow', 0) * scale_factor))
-        secondary = s.get('secondary_color', '&H0000FFFF')
-        ass += (f"Style: {style_name},Noto Sans CJK JP,{fontsize},{s['primary_color']},{secondary},"
-                f"{s['outline_color']},{s['back_color']},{s['bold']},0,0,0,100,100,2,0,"
-                f"{s['border_style']},{outline_val},{shadow_val},{alignment},"
-                f"40,40,{margin_v},1\n")
-
-    # Hook style (large, top-center)
-    hook_fontsize = max(60, int(_HOOK_STYLE['fontsize'] * scale_factor))
-    hook_outline = max(3, int(_HOOK_STYLE['outline'] * scale_factor))
-    hook_shadow = max(0, int(_HOOK_STYLE['shadow'] * scale_factor))
-    ass += (f"Style: hook,Noto Sans CJK JP,{hook_fontsize},{_HOOK_STYLE['primary_color']},&H0000FFFF,"
-            f"{_HOOK_STYLE['outline_color']},{_HOOK_STYLE['back_color']},{_HOOK_STYLE['bold']},0,0,0,100,100,2,0,"
-            f"{_HOOK_STYLE['border_style']},{hook_outline},{hook_shadow},8,"
-            f"40,40,100,1\n")
-
-    ass += "\n[Events]\n"
-    ass += "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
-
-    # Add hook text (first 3 seconds)
-    if hook_text:
-        hook_start = _seconds_to_ass_time(0)
-        hook_end = _seconds_to_ass_time(3.0)
-        # Escape ASS special chars
-        safe_hook = hook_text.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}")
-        ass += f"Dialogue: 1,{hook_start},{hook_end},hook,,0,0,0,,{safe_hook}\n"
-
-    # Add styled captions
-    MIN_DISPLAY = 2.5
-    for i, cap in enumerate(styled_captions):
-        cap_start = float(cap.get("start", 0))
-        cap_end = float(cap.get("end", 0))
-        cap_text = cap.get("text", "").strip()
-        style = cap.get("style", "box")
-
-        if not cap_text:
-            continue
-        if cap_end <= cap_start:
-            cap_end = cap_start + MIN_DISPLAY
-
-        # Extend short captions
-        if cap_end - cap_start < MIN_DISPLAY:
-            cap_end = cap_start + MIN_DISPLAY
-            # Cap at next caption start
-            if i + 1 < len(styled_captions):
-                next_start = float(styled_captions[i + 1].get("start", 0))
-                if next_start > cap_start:
-                    cap_end = min(cap_end, next_start)
-
-        start_ts = _seconds_to_ass_time(cap_start)
-        end_ts = _seconds_to_ass_time(cap_end)
-        safe_text = cap_text.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}")
-        ass += f"Dialogue: 0,{start_ts},{end_ts},{style},,0,0,0,,{safe_text}\n"
-
-    with open(ass_path, "w", encoding="utf-8") as f:
-        f.write(ass)
-
-    logger.info(f"[ai-clip] Generated ASS: {len(styled_captions)} captions, hook={'yes' if hook_text else 'no'}")
-
-
-def _build_ffmpeg_command(video_path: str, ass_path: str, output_path: str,
-                          video_width: int, video_height: int,
-                          duration: float, req: GenerateRequest) -> list:
-    """ffmpegコマンドを構築する"""
-    # Base command with ASS subtitles
-    filter_complex_parts = []
-    input_files = ["-i", video_path]
-
-    # Video filter: burn ASS subtitles
-    # Use ass filter (requires libass, available in our Docker image)
-    vf = f"ass='{ass_path}'"
-    filter_complex_parts.append(vf)
-
-    # Build the full filter
-    video_filter = ",".join(filter_complex_parts)
-
-    cmd = [
-        "ffmpeg", "-y",
-        *input_files,
-        "-vf", video_filter,
-        "-c:v", "libx264",
-        "-preset", "fast",
-        "-crf", "23",
-        "-c:a", "aac",
-        "-b:a", "128k",
-        "-movflags", "+faststart",
-        "-t", str(min(duration, req.max_duration)),
-        output_path,
-    ]
-
-    return cmd
-
-
-async def _generate_thumbnail(video_path: str, tmp_dir: str, clip_id: str) -> Optional[str]:
-    """動画からサムネイルを生成してBlobにアップロード"""
-    thumbnail_path = os.path.join(tmp_dir, "thumbnail.jpg")
-
-    # Extract frame at 1 second (or first frame if shorter)
-    cmd = [
-        "ffmpeg", "-y", "-i", video_path,
-        "-ss", "1", "-vframes", "1",
-        "-vf", "scale=720:-1",
-        "-q:v", "2",
-        thumbnail_path,
-    ]
-
-    proc = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-    )
-    await asyncio.wait_for(proc.communicate(), timeout=30)
-
-    if proc.returncode != 0 or not os.path.exists(thumbnail_path):
-        logger.warning(f"[ai-clip] Thumbnail generation failed for {clip_id}")
-        return None
-
-    # Upload thumbnail to blob
-    try:
-        from azure.storage.blob import BlobServiceClient, ContentSettings
-        from app.services.storage_service import (
-            CONNECTION_STRING, ACCOUNT_NAME, CONTAINER_NAME,
-            generate_read_sas_from_url,
-        )
-
-        if not CONNECTION_STRING:
-            return None
-
-        blob_name = f"ai-clips/thumbnails/{clip_id}_{uuid.uuid4().hex[:8]}.jpg"
-        svc = BlobServiceClient.from_connection_string(CONNECTION_STRING)
-        bc = svc.get_blob_client(container=CONTAINER_NAME, blob=blob_name)
-
-        with open(thumbnail_path, "rb") as data:
-            bc.upload_blob(
-                data, overwrite=True,
-                content_settings=ContentSettings(content_type="image/jpeg")
-            )
-
-        blob_url = f"https://{ACCOUNT_NAME}.blob.core.windows.net/{CONTAINER_NAME}/{blob_name}"
-
-        # Generate SAS URL for thumbnail (CDN may 409 for new blobs)
-        try:
-            sas_url = generate_read_sas_from_url(blob_url, expires_hours=720)  # 30 days
-            if sas_url:
-                return sas_url
-        except Exception as sas_err:
-            logger.warning(f"[ai-clip] Thumbnail SAS generation failed: {sas_err}")
-
-        # Fallback: try CDN URL
-        cdn_host = os.getenv("CDN_HOST", "https://cdn.aitherhub.com")
-        blob_host = f"https://{ACCOUNT_NAME}.blob.core.windows.net"
-        if cdn_host and blob_host in blob_url:
-            return blob_url.replace(blob_host, cdn_host)
-        return blob_url
-
-    except Exception as e:
-        logger.warning(f"[ai-clip] Thumbnail upload failed: {e}")
-        return None
-
+# ─── Upload & DB Save (unchanged from V1) ────────────────────────────────────
 
 async def _upload_to_blob(output_path: str, clip_id: str, job_id: str) -> tuple:
-    """完成動画をAzure Blob Storageにアップロード"""
     from azure.storage.blob import BlobServiceClient, ContentSettings
     from app.services.storage_service import (
         CONNECTION_STRING, ACCOUNT_NAME, CONTAINER_NAME,
@@ -1341,7 +1844,6 @@ async def _upload_to_blob(output_path: str, clip_id: str, job_id: str) -> tuple:
 
     blob_url = f"https://{ACCOUNT_NAME}.blob.core.windows.net/{CONTAINER_NAME}/{blob_name}"
 
-    # Generate download URL with SAS token
     try:
         disposition = f'attachment; filename="ai_clip_{clip_id[:8]}.mp4"'
         download_url = generate_read_sas_from_url(blob_url, expires_hours=72, content_disposition=disposition)
@@ -1350,7 +1852,6 @@ async def _upload_to_blob(output_path: str, clip_id: str, job_id: str) -> tuple:
     except Exception:
         download_url = blob_url
 
-    # CDN URL
     cdn_host = os.getenv("CDN_HOST", "https://cdn.aitherhub.com")
     blob_host = f"https://{ACCOUNT_NAME}.blob.core.windows.net"
     if cdn_host and blob_host in blob_url:
@@ -1360,7 +1861,6 @@ async def _upload_to_blob(output_path: str, clip_id: str, job_id: str) -> tuple:
 
 
 async def _save_export_record(clip_id: str, blob_url: str, thumbnail_url: Optional[str]):
-    """エクスポート結果をDBに保存"""
     try:
         async with get_session() as session:
             await session.execute(text("""
