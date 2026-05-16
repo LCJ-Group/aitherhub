@@ -735,6 +735,11 @@ export default function TikTokTrackingPanel({ adminKey }) {
                             🔗 紐付済
                           </span>
                         )}
+                        {video.clip_db_id && (
+                          video.is_aitherhub_edited
+                            ? <span className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-emerald-100 text-emerald-700">✅ AH編集済</span>
+                            : <span className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-amber-100 text-amber-700">⚠️ 未編集</span>
+                        )}
                       </div>
                     </div>
                     <div className="text-[10px] text-gray-400 mt-1">
@@ -796,6 +801,36 @@ export default function TikTokTrackingPanel({ adminKey }) {
                   </button>
                 </div>
 
+                {/* Clip DB link */}
+                {video.clip_db_id && (
+                  <div className="px-3 pb-1 flex gap-1.5">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        // Navigate to clip-db tab with the clip selected
+                        const url = new URL(window.location.href);
+                        url.searchParams.set('tab', 'clip-db');
+                        url.searchParams.set('clip_id', video.clip_db_id);
+                        window.location.href = url.toString();
+                      }}
+                      className="flex-1 py-1 text-[10px] font-medium bg-indigo-50 text-indigo-600 rounded-md hover:bg-indigo-100 transition-colors"
+                    >
+                      🎬 クリップDBで見る
+                    </button>
+                    {video.clip_exported_url && (
+                      <a
+                        href={video.clip_exported_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                        className="flex-1 py-1 text-[10px] font-medium bg-emerald-50 text-emerald-600 rounded-md hover:bg-emerald-100 transition-colors text-center"
+                      >
+                        ▶ AH編集版を見る
+                      </a>
+                    )}
+                  </div>
+                )}
+
                 {/* Last fetched */}
                 <div className="px-3 pb-2 text-[9px] text-gray-300">
                   最終取得: {video.last_fetched_at ? timeAgo(video.last_fetched_at) : "未取得"}
@@ -818,7 +853,25 @@ export default function TikTokTrackingPanel({ adminKey }) {
               <div className="text-[10px] text-gray-400 mt-0.5">
                 @{selectedVideo.account_name}
                 {selectedVideo.clip_db_id && (
-                  <span className="ml-2 text-indigo-500">🔗 Clip: {selectedVideo.clip_db_id.slice(0, 8)}...</span>
+                  <>
+                    <span className="ml-2 text-indigo-500">🔗 Clip: {selectedVideo.clip_db_id.slice(0, 8)}...</span>
+                    {selectedVideo.is_aitherhub_edited
+                      ? <span className="ml-1 px-1.5 py-0.5 rounded text-[9px] font-medium bg-emerald-100 text-emerald-700">✅ AH編集済</span>
+                      : <span className="ml-1 px-1.5 py-0.5 rounded text-[9px] font-medium bg-amber-100 text-amber-700">⚠️ 未編集</span>
+                    }
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const url = new URL(window.location.href);
+                        url.searchParams.set('tab', 'clip-db');
+                        url.searchParams.set('clip_id', selectedVideo.clip_db_id);
+                        window.location.href = url.toString();
+                      }}
+                      className="ml-1 px-1.5 py-0.5 rounded text-[9px] font-medium bg-indigo-50 text-indigo-600 hover:bg-indigo-100 transition-colors cursor-pointer"
+                    >
+                      🎬 クリップDBで見る
+                    </button>
+                  </>
                 )}
                 {selectedVideo.tiktok_url && (
                   <>

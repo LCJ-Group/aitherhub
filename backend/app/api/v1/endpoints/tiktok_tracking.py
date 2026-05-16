@@ -299,7 +299,25 @@ async def list_tracked_videos(
                             'fetched_at', ps.fetched_at
                         ) FROM tiktok_performance_snapshots ps
                         WHERE ps.tracked_video_id = tv.id
-                        ORDER BY ps.fetched_at DESC LIMIT 1) as latest_snapshot
+                        ORDER BY ps.fetched_at DESC LIMIT 1) as latest_snapshot,
+                        CASE WHEN tv.clip_db_id IS NOT NULL THEN
+                            (SELECT vc.exported_url IS NOT NULL
+                             FROM video_clips vc
+                             WHERE vc.id = CAST(tv.clip_db_id AS uuid)
+                             LIMIT 1)
+                        ELSE NULL END as is_aitherhub_edited,
+                        CASE WHEN tv.clip_db_id IS NOT NULL THEN
+                            (SELECT vc.exported_url
+                             FROM video_clips vc
+                             WHERE vc.id = CAST(tv.clip_db_id AS uuid)
+                             LIMIT 1)
+                        ELSE NULL END as clip_exported_url,
+                        CASE WHEN tv.clip_db_id IS NOT NULL THEN
+                            (SELECT vc.exported_at
+                             FROM video_clips vc
+                             WHERE vc.id = CAST(tv.clip_db_id AS uuid)
+                             LIMIT 1)
+                        ELSE NULL END as clip_exported_at
                     FROM tiktok_tracked_videos tv
                     ORDER BY tv.created_at DESC
                     LIMIT :limit OFFSET :offset
@@ -319,7 +337,25 @@ async def list_tracked_videos(
                             'fetched_at', ps.fetched_at
                         ) FROM tiktok_performance_snapshots ps
                         WHERE ps.tracked_video_id = tv.id
-                        ORDER BY ps.fetched_at DESC LIMIT 1) as latest_snapshot
+                        ORDER BY ps.fetched_at DESC LIMIT 1) as latest_snapshot,
+                        CASE WHEN tv.clip_db_id IS NOT NULL THEN
+                            (SELECT vc.exported_url IS NOT NULL
+                             FROM video_clips vc
+                             WHERE vc.id = CAST(tv.clip_db_id AS uuid)
+                             LIMIT 1)
+                        ELSE NULL END as is_aitherhub_edited,
+                        CASE WHEN tv.clip_db_id IS NOT NULL THEN
+                            (SELECT vc.exported_url
+                             FROM video_clips vc
+                             WHERE vc.id = CAST(tv.clip_db_id AS uuid)
+                             LIMIT 1)
+                        ELSE NULL END as clip_exported_url,
+                        CASE WHEN tv.clip_db_id IS NOT NULL THEN
+                            (SELECT vc.exported_at
+                             FROM video_clips vc
+                             WHERE vc.id = CAST(tv.clip_db_id AS uuid)
+                             LIMIT 1)
+                        ELSE NULL END as clip_exported_at
                     FROM tiktok_tracked_videos tv
                     WHERE tv.status = :status
                     ORDER BY tv.created_at DESC
