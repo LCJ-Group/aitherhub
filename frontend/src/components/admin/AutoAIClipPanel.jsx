@@ -78,6 +78,15 @@ export default function AutoAIClipPanel({ adminKey }) {
   const [previewUrl, setPreviewUrl] = useState(null); // currently playing video URL
   const [previewClipId, setPreviewClipId] = useState(null);
 
+  // ── Caption editing state ──
+  const [editingJobId, setEditingJobId] = useState(null);
+  const [editingClipId, setEditingClipId] = useState(null);
+  const [editCaptions, setEditCaptions] = useState([]);
+  const [editHook, setEditHook] = useState("");
+  const [editCta, setEditCta] = useState("");
+  const [captionLoading, setCaptionLoading] = useState(false);
+  const [regenerating, setRegenerating] = useState(false);
+
   const headers = { "X-Admin-Key": adminKey };
 
   // ── Fetch initial data ──
@@ -206,6 +215,78 @@ export default function AutoAIClipPanel({ adminKey }) {
       enable_subtitle_animation: c.enable_subtitle_animation ?? prev.enable_subtitle_animation,
       zoom_intensity: c.zoom_intensity ?? prev.zoom_intensity,
     }));
+  };
+
+  // ── Caption editing handlers ──
+  const openCaptionEditor = async (jobId, clipId) => {
+    setCaptionLoading(true);
+    setEditingJobId(jobId);
+    setEditingClipId(clipId);
+    try {
+      const res = await axios.get(`${API_BASE}/api/v1/ai-clip/jobs/${jobId}/captions`, { headers });
+      setEditCaptions(res.data.captions || []);
+      setEditHook(res.data.hook_text || "");
+      setEditCta(res.data.cta_text || "");
+    } catch (e) {
+      alert("字幕データの取得に失敗: " + (e.response?.data?.detail || e.message));
+      setEditingJobId(null);
+      setEditingClipId(null);
+    } finally {
+      setCaptionLoading(false);
+    }
+  };
+
+  const saveCaptions = async () => {
+    try {
+      await axios.patch(
+        `${API_BASE}/api/v1/ai-clip/jobs/${editingJobId}/captions`,
+        { captions: editCaptions, hook_text: editHook, cta_text: editCta },
+        { headers: { ...headers, "Content-Type": "application/json" } }
+      );
+      alert("字幕を保存しました");
+    } catch (e) {
+      alert("保存に失敗: " + (e.response?.data?.detail || e.message));
+    }
+  };
+
+  const handleRegenerate = async () => {
+    if (!confirm("修正した字幕で動画を再エンコードしますか？\n（2〜3分かかります）")) return;
+    setRegenerating(true);
+    try {
+      // First save the captions
+      await axios.patch(
+        `${API_BASE}/api/v1/ai-clip/jobs/${editingJobId}/captions`,
+        { captions: editCaptions, hook_text: editHook, cta_text: editCta },
+        { headers: { ...headers, "Content-Type": "application/json" } }
+      );
+      // Then trigger regeneration
+      const res = await axios.post(
+        `${API_BASE}/api/v1/ai-clip/jobs/${editingJobId}/regenerate`,
+        {},
+        { headers }
+      );
+      alert("再エンコードを開始しました。完了まで2〜3分お待ちください。");
+      setEditingJobId(null);
+      setEditingClipId(null);
+      // Start polling the new job
+      if (res.data.new_job_id) {
+        setActiveJobId(res.data.new_job_id);
+        setActiveJob({ job_id: res.data.new_job_id, status: "processing", progress_pct: 0 });
+        setActiveTab("jobs");
+      }
+    } catch (e) {
+      alert("再エンコード開始に失敗: " + (e.response?.data?.detail || e.message));
+    } finally {
+      setRegenerating(false);
+    }
+  };
+
+  const closeCaptionEditor = () => {
+    setEditingJobId(null);
+    setEditingClipId(null);
+    setEditCaptions([]);
+    setEditHook("");
+    setEditCta("");
   };
 
   // ── Loading ──
@@ -917,6 +998,15 @@ export default function AutoAIClipPanel({ adminKey }) {
                           {r.duration_sec && <div>⏱️ 長さ: {r.duration_sec.toFixed(1)}秒</div>}
                         </div>
                       )}
+                      {/* Caption Edit Button */}
+                      {r.status === "done" && r.captions_count > 0 && (
+                        <button
+                          onClick={() => openCaptionEditor(activeJob.job_id, r.clip_id)}
+                          className="mt-2 px-3 py-1.5 bg-yellow-50 text-yellow-700 border border-yellow-300 rounded-md text-xs font-medium hover:bg-yellow-100 transition-colors"
+                        >
+                          ✏️ 字幕を編集
+                        </button>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -1087,6 +1177,14 @@ export default function AutoAIClipPanel({ adminKey }) {
                     <div className="flex items-center justify-between text-xs text-gray-400 border-t pt-1">
                       <span>{clip.created_at ? new Date(clip.created_at).toLocaleDateString('ja-JP') : ''}</span>
                       <div className="flex gap-2">
+                        {clip.captions_count > 0 && clip.job_id && (
+                          <button
+                            onClick={() => openCaptionEditor(clip.job_id, clip.clip_id)}
+                            className="text-yellow-600 hover:text-yellow-800 font-medium"
+                          >
+                            ✏️ 編集
+                          </button>
+                        )}
                         {clip.download_url && (
                           <a
                             href={clip.download_url}
@@ -1114,6 +1212,114 @@ export default function AutoAIClipPanel({ adminKey }) {
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Caption Editor Modal */}
+      {editingJobId && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={closeCaptionEditor}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[85vh] overflow-hidden" onClick={e => e.stopPropagation()}>
+            {/* Modal Header */}
+            <div className="flex items-center justify-between p-4 border-b bg-gradient-to-r from-yellow-50 to-orange-50">
+              <h3 className="font-bold text-gray-800 flex items-center gap-2">
+                ✏️ 字幕・テキスト編集
+              </h3>
+              <button onClick={closeCaptionEditor} className="text-gray-400 hover:text-gray-600 text-xl">✕</button>
+            </div>
+
+            {captionLoading ? (
+              <div className="p-8 text-center">
+                <div className="animate-spin inline-block w-8 h-8 border-2 border-purple-500 border-t-transparent rounded-full mb-2"></div>
+                <p className="text-gray-500">字幕データを読み込み中...</p>
+              </div>
+            ) : (
+              <div className="overflow-y-auto max-h-[calc(85vh-140px)] p-4 space-y-4">
+                {/* Hook & CTA */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">🎯 フックテキスト</label>
+                    <input
+                      type="text"
+                      value={editHook}
+                      onChange={e => setEditHook(e.target.value)}
+                      className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-yellow-300 focus:border-yellow-400"
+                      placeholder="最初3秒のフックテキスト"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">📢 CTAテキスト</label>
+                    <input
+                      type="text"
+                      value={editCta}
+                      onChange={e => setEditCta(e.target.value)}
+                      className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-yellow-300 focus:border-yellow-400"
+                      placeholder="購入誘導テキスト（例: 左下タップで購入）"
+                    />
+                  </div>
+                </div>
+
+                {/* Captions List */}
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="text-sm font-medium text-gray-700">💬 字幕セグメント ({editCaptions.length}件)</label>
+                    <span className="text-xs text-gray-400">テキストを直接編集できます</span>
+                  </div>
+                  <div className="space-y-2 max-h-[400px] overflow-y-auto border rounded-lg p-2 bg-gray-50">
+                    {editCaptions.map((cap, idx) => (
+                      <div key={idx} className="flex items-start gap-2 bg-white p-2 rounded border">
+                        <div className="flex-shrink-0 text-xs text-gray-400 pt-2 w-16 text-right">
+                          {cap.start_time?.toFixed(1)}s
+                        </div>
+                        <input
+                          type="text"
+                          value={cap.text}
+                          onChange={e => {
+                            const updated = [...editCaptions];
+                            updated[idx] = { ...updated[idx], text: e.target.value };
+                            setEditCaptions(updated);
+                          }}
+                          className="flex-1 border rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-yellow-300 focus:border-yellow-400"
+                        />
+                        <button
+                          onClick={() => {
+                            const updated = editCaptions.filter((_, i) => i !== idx);
+                            setEditCaptions(updated);
+                          }}
+                          className="flex-shrink-0 text-red-400 hover:text-red-600 px-1 pt-1.5"
+                          title="削除"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Modal Footer */}
+            {!captionLoading && (
+              <div className="flex items-center justify-between p-4 border-t bg-gray-50">
+                <button
+                  onClick={saveCaptions}
+                  className="px-4 py-2 bg-blue-500 text-white rounded-lg text-sm font-medium hover:bg-blue-600 transition-colors"
+                >
+                  💾 保存のみ
+                </button>
+                <button
+                  onClick={handleRegenerate}
+                  disabled={regenerating}
+                  className={`px-4 py-2 rounded-lg text-sm font-bold text-white transition-all ${
+                    regenerating
+                      ? "bg-gray-400 cursor-not-allowed"
+                      : "bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 shadow-md"
+                  }`}
+                >
+                  {regenerating ? "⚙️ 再エンコード中..." : "🚀 保存＆再エンコード"}
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       )}
 

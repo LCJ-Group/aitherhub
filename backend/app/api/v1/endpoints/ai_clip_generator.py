@@ -430,6 +430,44 @@ def _seconds_to_ass_time(seconds: float) -> str:
     cs = int((seconds % 1) * 100)
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
+import re as _re
+
+# Emoji regex pattern - matches most Unicode emoji ranges
+_EMOJI_PATTERN = _re.compile(
+    "["
+    "\U0001F600-\U0001F64F"  # emoticons
+    "\U0001F300-\U0001F5FF"  # symbols & pictographs
+    "\U0001F680-\U0001F6FF"  # transport & map
+    "\U0001F1E0-\U0001F1FF"  # flags
+    "\U00002702-\U000027B0"  # dingbats
+    "\U000024C2-\U0001F251"  # enclosed chars
+    "\U0001F900-\U0001F9FF"  # supplemental symbols
+    "\U0001FA00-\U0001FA6F"  # chess symbols
+    "\U0001FA70-\U0001FAFF"  # symbols extended-A
+    "\U00002600-\U000026FF"  # misc symbols
+    "\U0000FE00-\U0000FE0F"  # variation selectors
+    "\U0000200D"             # zero width joiner
+    "\U00002B50-\U00002B55"  # stars
+    "\U0000231A-\U0000231B"  # watch/hourglass
+    "\U000023E9-\U000023F3"  # media controls
+    "\U000023F8-\U000023FA"  # more media
+    "\U000025AA-\U000025AB"  # squares
+    "\U000025B6"             # play button
+    "\U000025C0"             # reverse button
+    "\U000025FB-\U000025FE"  # squares
+    "\U00002934-\U00002935"  # arrows
+    "\U00002B05-\U00002B07"  # arrows
+    "\U00003030"             # wavy dash
+    "\U0000303D"             # part alternation mark
+    "\U00003297"             # circled ideograph
+    "\U00003299"             # circled ideograph
+    "]+", flags=_re.UNICODE
+)
+
+def _strip_emoji(text: str) -> str:
+    """ASS字幕用にテキストから絵文字を除去する（フォントが対応していないため）"""
+    return _EMOJI_PATTERN.sub("", text).strip()
+
 
 def _classify_scene(text_content: str, time_start: float, total_duration: float) -> str:
     position_ratio = time_start / max(total_duration, 1)
@@ -846,11 +884,13 @@ def _generate_cta_text(captions: list, clip: dict) -> str:
             )
 
             transcript = " ".join(c.get("text", "") for c in (captions or []))[:300]
-            prompt = f"""以下のライブコマース動画の最後に表示するCTA（行動喚起）テキストを1つ生成してください。
+            prompt = f"""以下のTikTokライブコマース動画の最後に表示するCTA（行動喚起）テキストを1つ生成してください。
 
 条件:
-- 12文字以内
-- 視聴者にフォロー/いいね/コメントを促す
+- 15文字以内
+- TikTokの購入導線を意識する（左下のカートボタン、プロフィールリンク）
+- 具体的なアクションを促す（例: 「左下タップで購入」「プロフからチェック」「カートに追加してね」）
+- 絵文字は使わない（フォント非対応のため）
 - 商品名: {product_name}
 - 動画内容: {transcript}
 
@@ -879,13 +919,16 @@ CTAテキストのみ出力（説明不要）:"""
     except Exception as e:
         logger.warning(f"[ai-clip] CTA generation via GPT failed: {e}")
 
-    # Fallback CTAs
+    # Fallback CTAs (TikTok購入導線に最適化、絵文字なし)
     ctas = [
-        "フォローで最新情報✨",
-        "いいね&保存してね💕",
-        "コメントで質問OK！",
-        "プロフィールから購入🛒",
-        "続きはプロフで確認👆",
+        "左下タップで購入できます",
+        "プロフィールから購入",
+        "カートに追加してね",
+        "左下から今すぐゲット",
+        "いいね&保存してね",
+        "フォローで最新情報",
+        "コメントで質問OK",
+        "プロフからチェック",
     ]
     return random.choice(ctas)
 
@@ -963,7 +1006,7 @@ def _generate_enhanced_ass(styled_captions: list, hook_text: Optional[str],
     if hook_text:
         hook_start = _seconds_to_ass_time(0)
         hook_end = _seconds_to_ass_time(3.0)
-        safe_hook = hook_text.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}")
+        safe_hook = _strip_emoji(hook_text).replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}")
         if enable_animations:
             # Fade in 200ms, fade out 300ms + scale animation
             anim_tag = "{\\fad(200,300)\\fscx120\\fscy120\\t(0,200,\\fscx100\\fscy100)}"
@@ -976,9 +1019,8 @@ def _generate_enhanced_ass(styled_captions: list, hook_text: Optional[str],
     for i, cap in enumerate(styled_captions):
         cap_start = float(cap.get("start", 0))
         cap_end = float(cap.get("end", 0))
-        cap_text = cap.get("text", "").strip()
+        cap_text = _strip_emoji(cap.get("text", "").strip())
         style = cap.get("style", "box")
-
         if not cap_text:
             continue
         if cap_end <= cap_start:
@@ -1024,7 +1066,7 @@ def _generate_enhanced_ass(styled_captions: list, hook_text: Optional[str],
     if cta_text and duration > 5:
         cta_start = _seconds_to_ass_time(max(0, duration - 3.5))
         cta_end = _seconds_to_ass_time(duration - 0.3)
-        safe_cta = cta_text.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}")
+        safe_cta = _strip_emoji(cta_text).replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}")
         if enable_animations:
             cta_anim = "{\\fad(300,200)\\fscx80\\fscy80\\t(0,300,\\fscx100\\fscy100)}"
             ass += f"Dialogue: 2,{cta_start},{cta_end},cta,,0,0,0,,{cta_anim}{safe_cta}\n"
@@ -1452,7 +1494,7 @@ async def diagnostics(x_admin_key: Optional[str] = Header(None)):
         db_status["error"] = f"{type(e).__name__}: {str(e)[:200]}\n{traceback.format_exc()[-200:]}"
 
     return {
-        "version": "2.3",
+        "version": "2.4",
         "azure_openai_key_set": bool(azure_key),
         "azure_openai_endpoint": azure_endpoint or "NOT SET",
         "gpt_model": gpt_model,
@@ -1727,8 +1769,276 @@ async def list_completed_clips(
         return {"clips": [], "total": 0, "offset": offset, "limit": limit, "error": str(e)[:200]}
 
 
-# ─── Background Processing ───────────────────────────────────────────────────
+# ─── Caption Editing & Regeneration ───────────────────────────────────────────
 
+class CaptionSegment(BaseModel):
+    start: float
+    end: float
+    text: str
+
+class UpdateCaptionsRequest(BaseModel):
+    captions: List[CaptionSegment]
+    hook_text: Optional[str] = None
+    cta_text: Optional[str] = None
+
+
+@router.get("/jobs/{job_id}/captions")
+async def get_job_captions(
+    job_id: str,
+    x_admin_key: str = Header(None),
+):
+    """ジョブの字幕データを取得する（編集用）"""
+    verify_admin(x_admin_key)
+    job = await _load_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="ジョブが見つかりません")
+    results = job.get("results", [])
+    if not results:
+        raise HTTPException(status_code=404, detail="生成結果がありません")
+    # Get captions from the first result
+    result = results[0] if isinstance(results, list) else results
+    captions = result.get("captions", [])
+    return {
+        "job_id": job_id,
+        "clip_id": result.get("clip_id"),
+        "captions": captions,
+        "hook_text": result.get("hook_text"),
+        "cta_text": result.get("cta_text"),
+        "captions_count": len(captions),
+        "duration_sec": result.get("duration_sec"),
+    }
+
+
+@router.patch("/jobs/{job_id}/captions")
+async def update_job_captions(
+    job_id: str,
+    req: UpdateCaptionsRequest,
+    x_admin_key: str = Header(None),
+):
+    """ジョブの字幕・フック・CTAテキストを更新する"""
+    verify_admin(x_admin_key)
+    job = await _load_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="ジョブが見つかりません")
+    results = job.get("results", [])
+    if not results:
+        raise HTTPException(status_code=404, detail="生成結果がありません")
+    # Update captions in the first result
+    if isinstance(results, list) and len(results) > 0:
+        results[0]["captions"] = [c.dict() for c in req.captions]
+        results[0]["captions_count"] = len(req.captions)
+        if req.hook_text is not None:
+            results[0]["hook_text"] = req.hook_text
+        if req.cta_text is not None:
+            results[0]["cta_text"] = req.cta_text
+    job["results"] = results
+    await _save_job(job_id, job)
+    return {
+        "status": "updated",
+        "job_id": job_id,
+        "captions_count": len(req.captions),
+        "hook_text": req.hook_text if req.hook_text is not None else results[0].get("hook_text"),
+        "cta_text": req.cta_text if req.cta_text is not None else results[0].get("cta_text"),
+    }
+
+
+class RegenerateRequest(BaseModel):
+    subtitle_style: str = "auto"
+    position_y: float = 75.0
+    enable_subtitle_animation: bool = True
+    enable_keyword_highlight: bool = True
+
+
+@router.post("/jobs/{job_id}/regenerate")
+async def regenerate_clip(
+    job_id: str,
+    req: RegenerateRequest,
+    background_tasks: BackgroundTasks,
+    x_admin_key: str = Header(None),
+):
+    """修正済み字幕で動画を再エンコードする（Whisperスキップ）"""
+    verify_admin(x_admin_key)
+    job = await _load_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="ジョブが見つかりません")
+    results = job.get("results", [])
+    if not results or not isinstance(results, list) or len(results) == 0:
+        raise HTTPException(status_code=404, detail="生成結果がありません")
+    result = results[0]
+    captions = result.get("captions", [])
+    if not captions:
+        raise HTTPException(status_code=400, detail="字幕データがありません。先にcaptionsを設定してください")
+    # Get source clip info
+    source_clip = job.get("source_clip") or job.get("config", {})
+    clip_id = result.get("clip_id") or source_clip.get("clip_id", "")
+    # Create a new regeneration job
+    regen_job_id = str(uuid.uuid4())
+    regen_job = {
+        "job_id": regen_job_id,
+        "status": "processing",
+        "progress_pct": 0,
+        "current_step": "再エンコード準備中...",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "config": {
+            "type": "regenerate",
+            "original_job_id": job_id,
+            "clip_id": clip_id,
+            "subtitle_style": req.subtitle_style,
+        },
+        "results": [],
+    }
+    await _save_job(regen_job_id, regen_job)
+    # Start background regeneration
+    background_tasks.add_task(
+        _run_regeneration,
+        regen_job_id, job_id, clip_id, captions,
+        result.get("hook_text"), result.get("cta_text"),
+        req.subtitle_style, req.position_y,
+        req.enable_subtitle_animation, req.enable_keyword_highlight,
+        source_clip,
+    )
+    return {
+        "job_id": regen_job_id,
+        "status": "processing",
+        "message": "再エンコードを開始しました。字幕修正が反映されます。",
+    }
+
+
+async def _run_regeneration(
+    job_id: str, original_job_id: str, clip_id: str,
+    captions: list, hook_text: Optional[str], cta_text: Optional[str],
+    subtitle_style: str, position_y: float,
+    enable_animations: bool, enable_highlights: bool,
+    source_clip: dict,
+):
+    """バックグラウンドで再エンコードを実行する"""
+    try:
+        await _update_job(job_id, progress_pct=10, current_step="元動画をダウンロード中...")
+        # IMPORTANT: Use the ORIGINAL source video from clip-db (not the generated output
+        # which already has subtitles burned in)
+        video_url = None
+        # First try clip-db (original video without subtitles)
+        try:
+            async with get_session() as session:
+                row = await session.execute(text(
+                    "SELECT video_url FROM clips WHERE id = CAST(:cid AS uuid) LIMIT 1"
+                ), {"cid": clip_id})
+                clip_row = row.fetchone()
+                if clip_row:
+                    video_url = clip_row.video_url
+                    logger.info(f"[ai-clip regen] Using original clip-db video for {clip_id}")
+        except Exception as e:
+            logger.warning(f"[ai-clip regen] Failed to get clip-db video: {e}")
+        # Fallback: use the generated video (already has subtitles - not ideal but better than nothing)
+        if not video_url:
+            original_job = await _load_job(original_job_id)
+            if original_job:
+                original_result = original_job.get("results", [{}])[0]
+                video_url = original_result.get("blob_url") or original_result.get("download_url")
+                logger.warning(f"[ai-clip regen] Falling back to generated video (may have old subtitles)")
+        if not video_url:
+            await _update_job(job_id, status="error", error="元動画のURLが取得できません")
+            return
+        # Download the original video
+        await _update_job(job_id, progress_pct=20, current_step="元動画をダウンロード中...")
+        tmp_dir = tempfile.mkdtemp(prefix="regen_")
+        video_path = os.path.join(tmp_dir, "source.mp4")
+        import httpx
+        async with httpx.AsyncClient(timeout=120) as client:
+            resp = await client.get(video_url)
+            if resp.status_code != 200:
+                await _update_job(job_id, status="error", error=f"動画ダウンロード失敗: HTTP {resp.status_code}")
+                return
+            with open(video_path, "wb") as f:
+                f.write(resp.content)
+        # Get video dimensions
+        await _update_job(job_id, progress_pct=30, current_step="動画情報を取得中...")
+        probe_cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_streams", video_path]
+        probe_proc = await asyncio.create_subprocess_exec(
+            *probe_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+        probe_out, _ = await probe_proc.communicate()
+        video_width, video_height = 1080, 1920
+        duration = 30.0
+        if probe_out:
+            probe_data = json.loads(probe_out)
+            for stream in probe_data.get("streams", []):
+                if stream.get("codec_type") == "video":
+                    video_width = int(stream.get("width", 1080))
+                    video_height = int(stream.get("height", 1920))
+                    dur_str = stream.get("duration")
+                    if dur_str:
+                        duration = float(dur_str)
+                    break
+        # Generate ASS subtitle file with edited captions
+        await _update_job(job_id, progress_pct=40, current_step="字幕ファイル生成中...")
+        styled_captions = _assign_scene_styles(captions, duration, subtitle_style)
+        ass_path = os.path.join(tmp_dir, "subtitles.ass")
+        product_name = source_clip.get("product_name", "") if source_clip else ""
+        _generate_enhanced_ass(
+            styled_captions, hook_text, cta_text, ass_path,
+            video_width, video_height, duration, position_y,
+            product_name=product_name,
+            enable_animations=enable_animations,
+            enable_highlights=enable_highlights,
+        )
+        # Build ffmpeg command for re-encoding (subtitles only, no other effects)
+        await _update_job(job_id, progress_pct=50, current_step="再エンコード中...")
+        output_path = os.path.join(tmp_dir, "output.mp4")
+        font_path = _find_noto_font()
+        fontsdir = os.path.dirname(font_path)
+        # Simple re-encode with subtitles
+        ffmpeg_cmd = [
+            "ffmpeg", "-y", "-i", video_path,
+            "-vf", f"subtitles={ass_path}:fontsdir={fontsdir}",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+            "-c:a", "aac", "-b:a", "128k",
+            "-movflags", "+faststart",
+            output_path,
+        ]
+        proc = await asyncio.create_subprocess_exec(
+            *ffmpeg_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
+        if proc.returncode != 0:
+            err_msg = stderr.decode()[-500:] if stderr else "Unknown ffmpeg error"
+            await _update_job(job_id, status="error", error=f"ffmpegエラー: {err_msg}")
+            return
+        # Upload to Azure Blob Storage
+        await _update_job(job_id, progress_pct=80, current_step="アップロード中...")
+        output_size = os.path.getsize(output_path)
+        download_url, blob_url = await _upload_to_blob(output_path, clip_id, job_id)
+        # Update job with result
+        await _update_job(job_id, progress_pct=100, current_step="完了", status="done")
+        regen_result = {
+            "clip_id": clip_id,
+            "status": "done",
+            "download_url": download_url,
+            "blob_url": blob_url,
+            "file_size": output_size,
+            "duration_sec": duration,
+            "hook_text": hook_text,
+            "cta_text": cta_text,
+            "captions_count": len(captions),
+            "captions": captions,
+            "effects_applied": {"regenerated": True, "subtitle_style": subtitle_style},
+        }
+        job_data = await _load_job(job_id)
+        if job_data:
+            job_data["results"] = [regen_result]
+            job_data["status"] = "done"
+            job_data["progress_pct"] = 100
+            await _save_job(job_id, job_data)
+        # Cleanup
+        import shutil
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        logger.info(f"[ai-clip] Regeneration complete: {job_id}")
+    except Exception as e:
+        logger.error(f"[ai-clip] Regeneration failed: {e}", exc_info=True)
+        await _update_job(job_id, status="error", error=str(e)[:500])
+
+
+# ─── Background Processing ───────────────────────────────────────────────────
 async def _run_ai_clip_generation(job_id: str, req: GenerateRequest):
     try:
         async with _AI_CLIP_SEMAPHORE:
@@ -2043,6 +2353,7 @@ async def _process_single_clip_v2(job_id: str, clip: dict, req: GenerateRequest,
             "hook_text": hook_text,
             "cta_text": cta_text,
             "captions_count": len(captions),
+            "captions": captions,  # 字幕データを保存（後で編集可能にするため）
             "zoom_points": len(zoom_keyframes),
             "silence_cuts": max(0, len(keep_segments) - 1),
             "effects_applied": {
