@@ -948,6 +948,14 @@ def _generate_enhanced_ass(styled_captions: list, hook_text: Optional[str],
             f"{_CTA_STYLE['border_style']},{cta_outline},{cta_shadow},8,"
             f"40,40,200,1\n")
 
+    # Default style (safety net for any unresolved style references)
+    default_fontsize = max(40, int(80 * scale_factor))
+    default_outline = max(2, int(5 * scale_factor))
+    ass += (f"Style: Default,Noto Sans CJK JP,{default_fontsize},&H00FFFFFF,&H0000FFFF,"
+            f"&H00000000,&H80000000,1,0,0,0,100,100,2,0,"
+            f"1,{default_outline},3,{alignment},"
+            f"40,40,{margin_v},1\n")
+
     ass += "\n[Events]\n"
     ass += "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
 
@@ -2265,6 +2273,11 @@ def _generate_simple_hook(product_name: str, transcript: str) -> str:
 
 
 def _assign_scene_styles(captions: list, total_duration: float, base_style: str) -> list:
+    # Validate base_style against known ASS styles
+    valid_styles = set(_ASS_STYLES.keys())  # simple, box, outline, pop, gradient, karaoke
+    if base_style != "auto" and base_style not in valid_styles:
+        logger.warning(f"[ai-clip] Invalid subtitle_style '{base_style}', falling back to 'box'")
+        base_style = "box"
     styled = []
     for cap in captions:
         cap_start = float(cap.get("start", 0))
@@ -2274,6 +2287,9 @@ def _assign_scene_styles(captions: list, total_duration: float, base_style: str)
         else:
             scene = _classify_scene(cap_text, cap_start, total_duration)
             style = _SCENE_STYLE_MAP.get(scene, 'box')
+        # Final safety: ensure style exists in _ASS_STYLES
+        if style not in valid_styles:
+            style = 'box'
         styled.append({**cap, "style": style})
     return styled
 
