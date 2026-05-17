@@ -854,7 +854,7 @@ def _build_drawtext_filters(
             f":shadowx=3:shadowy=3"
             f":x=(w-text_w)/2"
             f":y=h*0.12"
-            f":enable='between(t\,0\,3)'"
+            f":enable='between(t,0,3)'"
         )
         filters.append(hook_filter)
     
@@ -909,7 +909,7 @@ def _build_drawtext_filters(
             f"{box_params}"
             f":x=(w-text_w)/2"
             f":y={sub_y}"
-            f":enable='between(t\,{cap_start:.3f}\,{cap_end:.3f})'"
+            f":enable='between(t,{cap_start:.3f},{cap_end:.3f})'"
         )
         filters.append(sub_filter)
     
@@ -932,7 +932,7 @@ def _build_drawtext_filters(
             f":box=1:boxcolor=black@0.5:boxborderw=10"
             f":x=(w-text_w)/2"
             f":y=h*0.15"
-            f":enable='between(t\,{cta_start:.3f}\,{cta_end:.3f})'"
+            f":enable='between(t,{cta_start:.3f},{cta_end:.3f})'"
         )
         filters.append(cta_filter)
     
@@ -1072,12 +1072,13 @@ def _build_advanced_ffmpeg_command(video_path: str, ass_path: str, output_path: 
         ]
     else:
         # Video filter only, pass audio through
-        fc = f"[0:v]{video_chain}[vout]"
+        # Use -vf instead of -filter_complex to avoid comma escaping issues
+        # in drawtext enable=between() expressions
+        vf_str = ",".join(vf_parts) if vf_parts else "null"
         cmd = [
             "ffmpeg", "-y",
             "-i", video_path,
-            "-filter_complex", fc,
-            "-map", "[vout]", "-map", "0:a",
+            "-vf", vf_str,
             "-c:v", "libx264",
             "-preset", "fast",
             "-crf", "22",
@@ -1088,6 +1089,15 @@ def _build_advanced_ffmpeg_command(video_path: str, ass_path: str, output_path: 
             output_path,
         ]
 
+    # Log the full ffmpeg command for debugging
+    logger.info(f"[ai-clip] ffmpeg cmd: {' '.join(cmd[:6])}... ({len(cmd)} args)")
+    logger.info(f"[ai-clip] vf_parts count: {len(vf_parts)}, af_chain: {'yes' if af_chain else 'no'}")
+    if not af_chain and vf_parts:
+        # Log the -vf string (truncated) for debugging
+        vf_arg_idx = cmd.index('-vf') + 1 if '-vf' in cmd else -1
+        if vf_arg_idx > 0:
+            vf_val = cmd[vf_arg_idx]
+            logger.info(f"[ai-clip] -vf value (first 500 chars): {vf_val[:500]}")
     return cmd
 
 
@@ -1761,7 +1771,7 @@ async def diagnostics(x_admin_key: Optional[str] = Header(None)):
         db_status["error"] = f"{type(e).__name__}: {str(e)[:200]}\n{traceback.format_exc()[-200:]}"
 
     return {
-        "version": "2.6",
+        "version": "2.7",
         "azure_openai_key_set": bool(azure_key),
         "azure_openai_endpoint": azure_endpoint or "NOT SET",
         "gpt_model": gpt_model,
