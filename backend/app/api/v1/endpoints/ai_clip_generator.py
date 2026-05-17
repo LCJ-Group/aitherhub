@@ -49,7 +49,7 @@ from fastapi import APIRouter, HTTPException, Query, Header, BackgroundTasks
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
-from app.core.db import AsyncSessionLocal
+from app.core.db import AsyncSessionLocal, engine
 
 logger = logging.getLogger(__name__)
 
@@ -72,8 +72,8 @@ async def _ensure_jobs_table():
     if _DB_TABLE_ENSURED:
         return
     try:
-        async with AsyncSessionLocal() as session:
-            await session.execute(text("""
+        async with engine.begin() as conn:
+            await conn.execute(text("""
                 CREATE TABLE IF NOT EXISTS ai_clip_jobs (
                     job_id TEXT PRIMARY KEY,
                     status TEXT NOT NULL DEFAULT 'queued',
@@ -89,7 +89,6 @@ async def _ensure_jobs_table():
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
             """))
-            await session.commit()
         _DB_TABLE_ENSURED = True
         logger.info("[ai-clip] ai_clip_jobs table ensured")
     except Exception as e:
@@ -217,11 +216,25 @@ async def _save_job(job_id: str, data: dict):
 
 
 async def _save_job_db(job_id: str, data: dict):
-    """Save job to DB (async)"""
+    """Save job to DB (async) - uses engine.begin() for guaranteed commit"""
     try:
         await _ensure_jobs_table()
-        async with AsyncSessionLocal() as session:
-            await session.execute(text("""
+        params = {
+            "job_id": data.get("job_id", job_id),
+            "status": data.get("status", "queued"),
+            "progress_pct": max(0, min(100, int(data.get("progress_pct", 0)))),
+            "current_step": data.get("current_step"),
+            "clips_completed": int(data.get("clips_completed", 0)),
+            "clips_total": int(data.get("clips_total", 0)),
+            "results": json.dumps(data.get("results", []), default=str),
+            "error": data.get("error"),
+            "config": json.dumps(data.get("config", {}), default=str),
+            "source_clip": json.dumps(data.get("source_clip"), default=str) if data.get("source_clip") else None,
+            "created_at": data.get("created_at", datetime.now(timezone.utc).isoformat()),
+            "updated_at": data.get("updated_at", datetime.now(timezone.utc).isoformat()),
+        }
+        async with engine.begin() as conn:
+            await conn.execute(text("""
                 INSERT INTO ai_clip_jobs (job_id, status, progress_pct, current_step,
                     clips_completed, clips_total, results, error, config, source_clip, created_at, updated_at)
                 VALUES (:job_id, :status, :progress_pct, :current_step,
@@ -238,21 +251,8 @@ async def _save_job_db(job_id: str, data: dict):
                     config = EXCLUDED.config,
                     source_clip = EXCLUDED.source_clip,
                     updated_at = EXCLUDED.updated_at
-            """), {
-                "job_id": data.get("job_id", job_id),
-                "status": data.get("status", "queued"),
-                "progress_pct": max(0, min(100, int(data.get("progress_pct", 0)))),
-                "current_step": data.get("current_step"),
-                "clips_completed": int(data.get("clips_completed", 0)),
-                "clips_total": int(data.get("clips_total", 0)),
-                "results": json.dumps(data.get("results", []), default=str),
-                "error": data.get("error"),
-                "config": json.dumps(data.get("config", {}), default=str),
-                "source_clip": json.dumps(data.get("source_clip"), default=str) if data.get("source_clip") else None,
-                "created_at": data.get("created_at", datetime.now(timezone.utc).isoformat()),
-                "updated_at": data.get("updated_at", datetime.now(timezone.utc).isoformat()),
-            })
-            await session.commit()
+            """), params)
+        logger.info(f"[ai-clip] DB save OK for {job_id} (status={params['status']})")
     except Exception as e:
         import traceback
         logger.error(f"[ai-clip] DB save failed for {job_id}: {e}\n{traceback.format_exc()}")
@@ -285,8 +285,8 @@ async def _load_job_db(job_id: str) -> dict | None:
     """Load job from DB (async)"""
     try:
         await _ensure_jobs_table()
-        async with AsyncSessionLocal() as session:
-            result = await session.execute(text("""
+        async with engine.connect() as conn:
+            result = await conn.execute(text("""
                 SELECT job_id, status, progress_pct, current_step,
                        clips_completed, clips_total, results, error,
                        config, source_clip, created_at, updated_at
@@ -347,8 +347,8 @@ async def _list_jobs_db(limit: int = 50) -> list:
     """List jobs from DB (async)"""
     try:
         await _ensure_jobs_table()
-        async with AsyncSessionLocal() as session:
-            result = await session.execute(text("""
+        async with engine.connect() as conn:
+            result = await conn.execute(text("""
                 SELECT job_id, status, progress_pct, current_step,
                        clips_completed, clips_total, results, error,
                        config, source_clip, created_at, updated_at
@@ -1405,25 +1405,24 @@ async def diagnostics(x_admin_key: Optional[str] = Header(None)):
         await _ensure_jobs_table()
         # Test write: insert a test job and then delete it
         test_id = f"diag-test-{uuid.uuid4().hex[:8]}"
-        async with AsyncSessionLocal() as session:
-            await session.execute(text("""
+        async with engine.begin() as conn:
+            await conn.execute(text("""
                 INSERT INTO ai_clip_jobs (job_id, status, progress_pct, current_step, clips_completed, clips_total, results, config, created_at, updated_at)
                 VALUES (:job_id, 'test', 0, 'diagnostic test', 0, 0, '[]'::jsonb, '{}'::jsonb, NOW(), NOW())
             """), {"job_id": test_id})
-            await session.commit()
         # Verify the test write
-        async with AsyncSessionLocal() as session:
-            result = await session.execute(text(
+        async with engine.connect() as conn:
+            result = await conn.execute(text(
                 "SELECT COUNT(*) as cnt FROM ai_clip_jobs WHERE job_id = :job_id"
             ), {"job_id": test_id})
             row = result.fetchone()
             db_status["test_write"] = "OK" if (row and row.cnt > 0) else "FAILED (not found after insert)"
-            # Clean up test row
-            await session.execute(text("DELETE FROM ai_clip_jobs WHERE job_id = :job_id"), {"job_id": test_id})
-            await session.commit()
+        # Clean up test row
+        async with engine.begin() as conn:
+            await conn.execute(text("DELETE FROM ai_clip_jobs WHERE job_id = :job_id"), {"job_id": test_id})
         # Count actual jobs
-        async with AsyncSessionLocal() as session:
-            result = await session.execute(text(
+        async with engine.connect() as conn:
+            result = await conn.execute(text(
                 "SELECT COUNT(*) as cnt FROM ai_clip_jobs"
             ))
             row = result.fetchone()
