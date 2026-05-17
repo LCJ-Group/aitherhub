@@ -34,6 +34,7 @@ Endpoints:
 import uuid
 import json
 import os
+import re
 import logging
 import tempfile
 import asyncio
@@ -430,10 +431,8 @@ def _seconds_to_ass_time(seconds: float) -> str:
     cs = int((seconds % 1) * 100)
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
-import re as _re
-
 # Emoji regex pattern - matches most Unicode emoji ranges
-_EMOJI_PATTERN = _re.compile(
+_EMOJI_PATTERN = re.compile(
     "["
     "\U0001F600-\U0001F64F"  # emoticons
     "\U0001F300-\U0001F5FF"  # symbols & pictographs
@@ -461,7 +460,7 @@ _EMOJI_PATTERN = _re.compile(
     "\U0000303D"             # part alternation mark
     "\U00003297"             # circled ideograph
     "\U00003299"             # circled ideograph
-    "]+", flags=_re.UNICODE
+    "]+", flags=re.UNICODE
 )
 
 def _strip_emoji(text: str) -> str:
