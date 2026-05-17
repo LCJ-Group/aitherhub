@@ -269,9 +269,9 @@ export default function AutoAIClipPanel({ adminKey }) {
       setEditingJobId(null);
       setEditingClipId(null);
       // Start polling the new job
-      if (res.data.new_job_id) {
-        setActiveJobId(res.data.new_job_id);
-        setActiveJob({ job_id: res.data.new_job_id, status: "processing", progress_pct: 0 });
+      if (res.data.job_id) {
+        setActiveJobId(res.data.job_id);
+        setActiveJob({ job_id: res.data.job_id, status: "processing", progress_pct: 0 });
         setActiveTab("jobs");
       }
     } catch (e) {
@@ -1268,7 +1268,7 @@ export default function AutoAIClipPanel({ adminKey }) {
                     {editCaptions.map((cap, idx) => (
                       <div key={idx} className="flex items-start gap-2 bg-white p-2 rounded border">
                         <div className="flex-shrink-0 text-xs text-gray-400 pt-2 w-16 text-right">
-                          {cap.start_time?.toFixed(1)}s
+                          {(cap.start ?? cap.start_time)?.toFixed(1)}s
                         </div>
                         <input
                           type="text"
