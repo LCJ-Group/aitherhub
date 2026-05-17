@@ -1632,6 +1632,53 @@ async def debug_fonts(x_admin_key: Optional[str] = Header(None)):
     all_fonts = glob.glob('/usr/share/fonts/**/*.ttf', recursive=True) + \
                glob.glob('/usr/share/fonts/**/*.ttc', recursive=True)
     
+    # Check ffmpeg ASS/libass support
+    ffmpeg_ass_info = ""
+    try:
+        r = subprocess.run(['ffmpeg', '-filters'], capture_output=True, text=True, timeout=10)
+        for line in r.stdout.split('\n'):
+            if 'ass' in line.lower() or 'subtitle' in line.lower():
+                ffmpeg_ass_info += line.strip() + '\n'
+    except Exception as e:
+        ffmpeg_ass_info = f"Error: {e}"
+
+    # Check libass version
+    libass_info = ""
+    try:
+        r = subprocess.run(['dpkg', '-l', 'libass9', 'libass-dev'], capture_output=True, text=True, timeout=10)
+        libass_info = r.stdout[:500]
+    except Exception as e:
+        libass_info = f"Error: {e}"
+
+    # Quick ASS render test
+    ass_test_result = ""
+    try:
+        import tempfile
+        test_ass = tempfile.NamedTemporaryFile(suffix='.ass', mode='w', delete=False)
+        test_ass.write('[Script Info]\nScriptType: v4.00+\nPlayResX: 100\nPlayResY: 100\n\n')
+        test_ass.write('[V4+ Styles]\n')
+        test_ass.write('Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n')
+        test_ass.write(f'Style: Default,{font_name},20,&H00FFFFFF,&H0000FFFF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,5,10,10,10,1\n\n')
+        test_ass.write('[Events]\n')
+        test_ass.write('Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n')
+        test_ass.write('Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,\u30c6\u30b9\u30c8 Test\n')
+        test_ass.close()
+        
+        test_out = test_ass.name.replace('.ass', '.png')
+        font_dir = os.path.dirname(font_path)
+        r = subprocess.run(
+            ['ffmpeg', '-y', '-f', 'lavfi', '-i', 'color=c=black:s=200x200:d=1',
+             '-vf', f"ass='{test_ass.name}':fontsdir='{font_dir}'",
+             '-frames:v', '1', test_out],
+            capture_output=True, text=True, timeout=15
+        )
+        ass_test_result = f"rc={r.returncode} stderr_tail={r.stderr[-300:] if r.stderr else 'none'}"
+        os.unlink(test_ass.name)
+        if os.path.exists(test_out):
+            os.unlink(test_out)
+    except Exception as e:
+        ass_test_result = f"Error: {e}"
+
     return {
         "font_path": font_path,
         "font_name_for_ass": font_name,
@@ -1640,6 +1687,9 @@ async def debug_fonts(x_admin_key: Optional[str] = Header(None)):
         "total_font_files": len(all_fonts),
         "fc_list_japanese": fc_list_output,
         "search_paths_status": {p: os.path.exists(p) for p in _FONT_SEARCH_PATHS},
+        "ffmpeg_ass_filters": ffmpeg_ass_info,
+        "libass_packages": libass_info,
+        "ass_render_test": ass_test_result,
     }
 
 
