@@ -783,14 +783,203 @@ def _generate_zoom_keyframes(duration: float, volume_peaks: list,
     return filtered
 
 
-# ─── V2: Build Advanced ffmpeg Filter Chain ──────────────────────────────────
-def _build_advanced_ffmpeg_command(
-    video_path: str, ass_path: str, output_path: str,
+# ─── V2: drawtext-based subtitle rendering (replaces ASS for CJK compat) ──────
+def _escape_drawtext(text: str) -> str:
+    """Escape text for ffmpeg drawtext filter.
+    drawtext requires escaping: ' \ : and special chars.
+    """
+    # Remove emoji first (font won't have them)
+    text = _strip_emoji(text)
+    # ffmpeg drawtext escaping rules:
+    # 1. Backslash must be escaped first
+    # 2. Single quotes need special handling
+    # 3. Colons must be escaped
+    # 4. Semicolons must be escaped in filter_complex
+    text = text.replace('\\', '\\\\\\\\')
+    text = text.replace("'", "\u2019")  # Replace with Unicode right single quote
+    text = text.replace(':', '\\:')
+    text = text.replace(';', '\\;')
+    text = text.replace('%', '%%')  # Percent needs doubling in drawtext
+    text = text.replace('\n', ' ')  # No newlines
+    return text
+
+
+def _build_drawtext_filters(
+    styled_captions: list,
+    hook_text: Optional[str],
+    cta_text: Optional[str],
+    font_path: str,
+    video_width: int,
+    video_height: int,
+    duration: float,
+    position_y: float = 75,
+) -> list:
+    """Build drawtext filter strings for subtitles, hook, and CTA.
+    
+    Uses ffmpeg's drawtext filter instead of ASS/libass to avoid CJK font
+    rendering issues on Azure App Service (libass 0.15.0 bug).
+    
+    Returns a list of drawtext filter strings to be added to vf_parts.
+    """
+    filters = []
+    base_width = 1080
+    scale = min(video_width, video_height) / base_width
+    
+    # Escape font path for drawtext
+    safe_font = font_path.replace("'", "\\'").replace(':', '\\:')
+    
+    # Calculate Y position based on position_y percentage
+    if position_y < 33:
+        # Top area
+        sub_y = f"h*{position_y/100:.2f}"
+    elif position_y < 66:
+        # Middle area
+        sub_y = f"(h-text_h)/2"
+    else:
+        # Bottom area (default) - above TikTok UI elements
+        sub_y = f"h*{position_y/100:.2f}-text_h"
+    
+    # ── Hook text (first 3 seconds) ──
+    if hook_text:
+        safe_hook = _escape_drawtext(hook_text)
+        hook_fontsize = max(60, int(90 * scale))
+        # Fade: alpha goes 0->1 in 0.2s, stays 1, then 1->0 in last 0.3s
+        hook_alpha = "if(lt(t\\,0.2)\\,t/0.2\\,if(gt(t\\,2.7)\\,(3-t)/0.3\\,1))"
+        hook_filter = (
+            f"drawtext=fontfile='{safe_font}'"
+            f":text='{safe_hook}'"
+            f":fontsize={hook_fontsize}"
+            f":fontcolor=white"
+            f":borderw={max(4, int(6 * scale))}"
+            f":bordercolor=black"
+            f":shadowcolor=black@0.5"
+            f":shadowx=3:shadowy=3"
+            f":x=(w-text_w)/2"
+            f":y=h*0.12"
+            f":alpha='{hook_alpha}'"
+            f":enable='between(t,0,3)'"
+        )
+        filters.append(hook_filter)
+    
+    # ── Subtitle captions ──
+    sub_fontsize = max(44, int(72 * scale))
+    for i, cap in enumerate(styled_captions or []):
+        cap_start = float(cap.get('start', 0))
+        cap_end = float(cap.get('end', 0))
+        cap_text = cap.get('text', '').strip()
+        if not cap_text:
+            continue
+        
+        # Ensure minimum display time
+        MIN_DISPLAY = 2.5
+        if cap_end <= cap_start:
+            cap_end = cap_start + MIN_DISPLAY
+        if cap_end - cap_start < MIN_DISPLAY:
+            cap_end = cap_start + MIN_DISPLAY
+            if i + 1 < len(styled_captions):
+                next_start = float(styled_captions[i + 1].get('start', 0))
+                if next_start > cap_start:
+                    cap_end = min(cap_end, next_start)
+        
+        safe_text = _escape_drawtext(cap_text)
+        if not safe_text:
+            continue
+        
+        # Determine style-based colors
+        style = cap.get('style', 'box')
+        if style == 'pop':
+            fontcolor = 'yellow'
+            bordercolor = '#FF6B35'
+        elif style == 'outline':
+            fontcolor = 'white'
+            bordercolor = 'black'
+        else:  # box, simple, default
+            fontcolor = 'white'
+            bordercolor = 'black'
+        
+        # Use box background for 'box' style
+        box_params = ""
+        if style == 'box':
+            box_params = ":box=1:boxcolor=black@0.4:boxborderw=8"
+        
+        # Fade in/out alpha expression
+        fade_in = 0.15
+        fade_out = 0.1
+        # In drawtext enable expressions, commas inside expressions need escaping
+        # Use \, for commas inside if() expressions within filter_complex
+        alpha_expr = (
+            f"if(lt(t-{cap_start:.2f}\\,{fade_in})\\,"
+            f"(t-{cap_start:.2f})/{fade_in}\\,"
+            f"if(gt(t\\,{cap_end - fade_out:.2f})\\,"
+            f"({cap_end:.2f}-t)/{fade_out}\\,"
+            f"1))"
+        )
+        
+        sub_filter = (
+            f"drawtext=fontfile='{safe_font}'"
+            f":text='{safe_text}'"
+            f":fontsize={sub_fontsize}"
+            f":fontcolor={fontcolor}"
+            f":borderw={max(3, int(5 * scale))}"
+            f":bordercolor={bordercolor}"
+            f"{box_params}"
+            f":x=(w-text_w)/2"
+            f":y={sub_y}"
+            f":alpha='{alpha_expr}'"
+            f":enable='between(t,{cap_start:.3f},{cap_end:.3f})'"
+        )
+        filters.append(sub_filter)
+    
+    # ── CTA text (last 3.5 seconds) ──
+    if cta_text and duration > 5:
+        safe_cta = _escape_drawtext(cta_text)
+        cta_fontsize = max(50, int(80 * scale))
+        cta_start = max(0, duration - 3.5)
+        cta_end = duration - 0.3
+        
+        cta_alpha = (
+            f"if(lt(t-{cta_start:.2f}\\,0.3)\\,"
+            f"(t-{cta_start:.2f})/0.3\\,"
+            f"if(gt(t\\,{cta_end - 0.2:.2f})\\,"
+            f"({cta_end:.2f}-t)/0.2\\,"
+            f"1))"
+        )
+        
+        cta_filter = (
+            f"drawtext=fontfile='{safe_font}'"
+            f":text='{safe_cta}'"
+            f":fontsize={cta_fontsize}"
+            f":fontcolor=#FFD700"
+            f":borderw={max(3, int(5 * scale))}"
+            f":bordercolor=#FF4500"
+            f":shadowcolor=black@0.7"
+            f":shadowx=2:shadowy=2"
+            f":box=1:boxcolor=black@0.5:boxborderw=10"
+            f":x=(w-text_w)/2"
+            f":y=h*0.15"
+            f":alpha='{cta_alpha}'"
+            f":enable='between(t,{cta_start:.3f},{cta_end:.3f})'"
+        )
+        filters.append(cta_filter)
+    
+    logger.info(f"[ai-clip] Built {len(filters)} drawtext filters "
+                f"(hook={'yes' if hook_text else 'no'}, "
+                f"captions={len(styled_captions or [])}, "
+                f"cta={'yes' if cta_text else 'no'})")
+    return filters
+
+
+# ─── V2: Build Advanced ffmpeg Filter Chain ──────────────────────────────────────────
+def _build_advanced_ffmpeg_command(video_path: str, ass_path: str, output_path: str,
     video_width: int, video_height: int, duration: float,
     req, zoom_keyframes: list, keep_segments: list,
     enable_progress_bar: bool = True,
     enable_flash_intro: bool = True,
     enable_loop_fade: bool = True,
+    styled_captions: list = None,
+    hook_text: str = None,
+    cta_text: str = None,
+    position_y: float = 75,
 ) -> list:
     """V2: 高度なffmpegフィルタチェーンを構築する。
 
@@ -856,25 +1045,21 @@ def _build_advanced_ffmpeg_command(
         flash_expr = "if(lt(t,0.3),0.4*(1-t/0.3),0)"
         vf_parts.append(f"eq=brightness='{flash_expr}':eval=frame")
 
-    # ── 4. ASS subtitles ──
-    # Prefer extracted OTF fonts dir over TTC dir for libass compatibility.
-    # libass 0.15.0 on Azure cannot read CJK glyphs from TTC files.
-    escaped_ass = ass_path.replace(":", "\\:").replace("'", "'\\''")
+    # ── 4. Subtitles via drawtext (replaces ASS for CJK compatibility) ──
+    # libass 0.15.0 on Azure App Service cannot render CJK glyphs from TTC/OTF.
+    # drawtext uses fontfile= (direct path) and bypasses libass entirely.
     font_path = _find_cjk_font()
-    # Use extracted fonts dir if available, otherwise use the font's own dir
-    if os.path.isdir(_EXTRACTED_FONTS_DIR) and any(
-        f.endswith('.otf') for f in os.listdir(_EXTRACTED_FONTS_DIR)
-    ):
-        font_dir = _EXTRACTED_FONTS_DIR
-        logger.info(f"[ai-clip] Using extracted fonts dir: {font_dir}")
-    else:
-        font_dir = os.path.dirname(font_path)
-        logger.info(f"[ai-clip] Using original fonts dir: {font_dir}")
-    escaped_fontdir = font_dir.replace(":", "\\:").replace("'", "'\\''")
-    # Set FONTCONFIG_PATH env var for the ffmpeg subprocess
-    os.environ.setdefault("FONTCONFIG_PATH", "/etc/fonts")
-    os.environ.setdefault("FONTCONFIG_FILE", "/etc/fonts/fonts.conf")
-    vf_parts.append(f"ass='{escaped_ass}':fontsdir='{escaped_fontdir}'")
+    dt_filters = _build_drawtext_filters(
+        styled_captions=styled_captions or [],
+        hook_text=hook_text,
+        cta_text=cta_text,
+        font_path=font_path,
+        video_width=video_width,
+        video_height=video_height,
+        duration=duration,
+        position_y=position_y,
+    )
+    vf_parts.extend(dt_filters)
 
     # ── 5. Progress bar at bottom ──
     if enable_progress_bar:
@@ -2565,6 +2750,10 @@ async def _process_single_clip_v2(job_id: str, clip: dict, req: GenerateRequest,
             enable_progress_bar=req.enable_progress_bar,
             enable_flash_intro=req.enable_flash_intro,
             enable_loop_fade=req.enable_loop_fade,
+            styled_captions=styled_captions,
+            hook_text=hook_text,
+            cta_text=cta_text,
+            position_y=req.position_y,
         )
 
         logger.info(f"[ai-clip {job_id}] ffmpeg V2 cmd: {' '.join(ffmpeg_cmd)}")
