@@ -96,7 +96,7 @@ async def _ensure_jobs_table():
         logger.warning(f"[ai-clip] Failed to ensure jobs table: {e}")
 
 # Concurrency limiter
-_AI_CLIP_SEMAPHORE = asyncio.Semaphore(1)
+_AI_CLIP_SEMAPHORE = asyncio.Semaphore(2)  # 2並列まで許可
 
 # ─── ASS Subtitle Styles ────────────────────────────────────────────────────
 _ASS_STYLES = {
@@ -2175,22 +2175,32 @@ async def _run_ai_clip_generation_inner(job_id: str, req: GenerateRequest):
                 current_step=f"{clips_total}件のクリップを選定完了")
 
     results = []
-    for idx, clip in enumerate(candidates[:clips_total]):
-        clip_id = str(clip["clip_id"])
-        step_base_pct = 10 + int((idx / clips_total) * 80)
+    PARALLEL_BATCH = 2  # 2クリップずつ並列処理
+    selected = candidates[:clips_total]
 
-        try:
-            await _update_job(job_id, status="processing", progress_pct=step_base_pct,
-                        current_step=f"クリップ {idx+1}/{clips_total} 処理中...",
-                        clips_completed=idx)
-            result = await _process_single_clip_v2(job_id, clip, req, idx, clips_total)
-            results.append(result)
-            await _update_job(job_id, clips_completed=idx + 1, results=results)
-            logger.info(f"[ai-clip {job_id}] Clip {idx+1}/{clips_total} done: {clip_id}")
-        except Exception as e:
-            logger.error(f"[ai-clip {job_id}] Clip {idx+1} failed: {e}", exc_info=True)
-            results.append({"clip_id": clip_id, "status": "failed", "error": str(e)[:200]})
-            await _update_job(job_id, clips_completed=idx + 1, results=results)
+    for batch_start in range(0, len(selected), PARALLEL_BATCH):
+        batch = selected[batch_start:batch_start + PARALLEL_BATCH]
+        batch_pct = 10 + int((batch_start / clips_total) * 80)
+        await _update_job(job_id, status="processing", progress_pct=batch_pct,
+                    current_step=f"クリップ {batch_start+1}-{batch_start+len(batch)}/{clips_total} 並列処理中...",
+                    clips_completed=len(results))
+
+        async def _safe_process(clip, idx):
+            clip_id = str(clip["clip_id"])
+            try:
+                return await _process_single_clip_v2(job_id, clip, req, idx, clips_total)
+            except Exception as e:
+                logger.error(f"[ai-clip {job_id}] Clip {idx+1} failed: {e}", exc_info=True)
+                return {"clip_id": clip_id, "status": "failed", "error": str(e)[:200]}
+
+        batch_results = await asyncio.gather(
+            *[_safe_process(clip, batch_start + i) for i, clip in enumerate(batch)]
+        )
+        results.extend(batch_results)
+        await _update_job(job_id, clips_completed=len(results), results=results)
+        for i, br in enumerate(batch_results):
+            cid = str(batch[i]["clip_id"])
+            logger.info(f"[ai-clip {job_id}] Clip {batch_start+i+1}/{clips_total} {'done' if br.get('status')=='done' else 'failed'}: {cid}")
 
     success_count = sum(1 for r in results if r.get("status") == "done")
     await _update_job(

@@ -35,6 +35,7 @@ export default function AutoAIClipPanel({ adminKey }) {
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [activeTab, setActiveTab] = useState("generate"); // generate, jobs, completed, candidates
+  const [jobFilter, setJobFilter] = useState("all"); // all, done, error
   const [completedClips, setCompletedClips] = useState([]);
   const [completedLoading, setCompletedLoading] = useState(false);
   const [completedTotal, setCompletedTotal] = useState(0);
@@ -1016,14 +1017,41 @@ export default function AutoAIClipPanel({ adminKey }) {
 
           {/* Jobs List */}
           <div className="bg-white rounded-lg border">
-            <div className="p-3 border-b">
+            <div className="p-3 border-b flex items-center justify-between">
               <h3 className="font-semibold text-gray-700">ジョブ履歴</h3>
+              <div className="flex gap-1">
+                {[
+                  { id: "all", label: `全て (${jobs.length})`, color: "gray" },
+                  { id: "done", label: `✅ 完成 (${jobs.filter(j => j.status === "done").length})`, color: "green" },
+                  { id: "error", label: `❌ エラー (${jobs.filter(j => j.status === "failed" || j.status === "error").length})`, color: "red" },
+                ].map(f => (
+                  <button
+                    key={f.id}
+                    onClick={() => setJobFilter(f.id)}
+                    className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all ${
+                      jobFilter === f.id
+                        ? f.color === "green" ? "bg-green-100 text-green-700 ring-1 ring-green-300"
+                        : f.color === "red" ? "bg-red-100 text-red-700 ring-1 ring-red-300"
+                        : "bg-gray-100 text-gray-700 ring-1 ring-gray-300"
+                        : "text-gray-500 hover:bg-gray-50"
+                    }`}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
             </div>
-            {jobs.length === 0 ? (
-              <div className="p-8 text-center text-gray-400">まだジョブがありません</div>
-            ) : (
+            {(() => {
+              const filteredJobs = jobFilter === "all" ? jobs
+                : jobFilter === "done" ? jobs.filter(j => j.status === "done")
+                : jobs.filter(j => j.status === "failed" || j.status === "error");
+              return filteredJobs.length === 0 ? (
+                <div className="p-8 text-center text-gray-400">
+                  {jobFilter === "all" ? "まだジョブがありません" : `${jobFilter === "done" ? "完成" : "エラー"}ジョブはありません`}
+                </div>
+              ) : (
               <div className="divide-y">
-                {jobs.map(job => (
+                {filteredJobs.map(job => (
                   <div
                     key={job.job_id}
                     className="p-3 hover:bg-gray-50 cursor-pointer"
@@ -1063,7 +1091,8 @@ export default function AutoAIClipPanel({ adminKey }) {
                   </div>
                 ))}
               </div>
-            )}
+              );
+            })()}
           </div>
         </div>
       )}
@@ -1101,9 +1130,9 @@ export default function AutoAIClipPanel({ adminKey }) {
                 <div key={`${clip.job_id}-${clip.clip_id}-${idx}`} className="bg-white rounded-lg border overflow-hidden hover:shadow-md transition-shadow">
                   {/* Video Preview */}
                   <div className="relative bg-black aspect-video">
-                    {clip.blob_url ? (
+                    {(clip.download_url || clip.blob_url) ? (
                       <video
-                        src={clip.blob_url}
+                        src={clip.download_url || clip.blob_url}
                         className="w-full h-full object-contain"
                         controls
                         preload="metadata"
