@@ -2323,3 +2323,50 @@ async def _save_export_record(clip_id: str, blob_url: str, thumbnail_url: Option
             logger.info(f"[ai-clip] Saved export record for clip {clip_id}")
     except Exception as e:
         logger.warning(f"[ai-clip] Failed to save export record: {e}")
+
+
+@router.post("/test-db-save")
+async def test_db_save(admin=Depends(verify_admin)):
+    """Test endpoint to verify _save_job_db works end-to-end"""
+    test_job_id = f"test-{uuid.uuid4().hex[:8]}"
+    test_data = {
+        "job_id": test_job_id,
+        "status": "test",
+        "progress_pct": 42,
+        "current_step": "testing DB save",
+        "clips_completed": 0,
+        "clips_total": 1,
+        "results": [],
+        "error": None,
+        "config": {"test": True},
+        "source_clip": None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    
+    # Call _save_job_db
+    await _save_job_db(test_job_id, test_data)
+    
+    # Immediately read back from DB
+    async with engine.connect() as conn:
+        result = await conn.execute(text(
+            "SELECT job_id, status, progress_pct FROM ai_clip_jobs WHERE job_id = :job_id"
+        ), {"job_id": test_job_id})
+        row = result.fetchone()
+    
+    # Also check total count
+    async with engine.connect() as conn:
+        result = await conn.execute(text("SELECT COUNT(*) as cnt FROM ai_clip_jobs"))
+        count_row = result.fetchone()
+    
+    # Clean up
+    async with engine.begin() as conn:
+        await conn.execute(text("DELETE FROM ai_clip_jobs WHERE job_id = :job_id"), {"job_id": test_job_id})
+    
+    return {
+        "test_job_id": test_job_id,
+        "found_in_db": row is not None,
+        "row_data": {"job_id": row.job_id, "status": row.status, "progress_pct": row.progress_pct} if row else None,
+        "total_jobs_before_cleanup": count_row.cnt if count_row else 0,
+        "last_save_error": _LAST_DB_SAVE_ERROR,
+    }
