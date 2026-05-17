@@ -1774,6 +1774,8 @@ class CaptionSegment(BaseModel):
     start: float
     end: float
     text: str
+    style: Optional[str] = None
+    scene_type: Optional[str] = None
 
 class UpdateCaptionsRequest(BaseModel):
     captions: List[CaptionSegment]
@@ -1788,7 +1790,10 @@ async def get_job_captions(
 ):
     """ジョブの字幕データを取得する（編集用）"""
     verify_admin(x_admin_key)
-    job = await _load_job(job_id)
+    # _load_job is sync (file-based), then fallback to async DB
+    job = _load_job(job_id)
+    if not job:
+        job = await _load_job_db(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="ジョブが見つかりません")
     results = job.get("results", [])
@@ -1816,7 +1821,10 @@ async def update_job_captions(
 ):
     """ジョブの字幕・フック・CTAテキストを更新する"""
     verify_admin(x_admin_key)
-    job = await _load_job(job_id)
+    # _load_job is sync (file-based), then fallback to async DB
+    job = _load_job(job_id)
+    if not job:
+        job = await _load_job_db(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="ジョブが見つかりません")
     results = job.get("results", [])
@@ -1857,7 +1865,10 @@ async def regenerate_clip(
 ):
     """修正済み字幕で動画を再エンコードする（Whisperスキップ）"""
     verify_admin(x_admin_key)
-    job = await _load_job(job_id)
+    # _load_job is sync (file-based), then fallback to async DB
+    job = _load_job(job_id)
+    if not job:
+        job = await _load_job_db(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="ジョブが見つかりません")
     results = job.get("results", [])
@@ -1930,7 +1941,9 @@ async def _run_regeneration(
             logger.warning(f"[ai-clip regen] Failed to get clip-db video: {e}")
         # Fallback: use the generated video (already has subtitles - not ideal but better than nothing)
         if not video_url:
-            original_job = await _load_job(original_job_id)
+            original_job = _load_job(original_job_id)
+            if not original_job:
+                original_job = await _load_job_db(original_job_id)
             if original_job:
                 original_result = original_job.get("results", [{}])[0]
                 video_url = original_result.get("blob_url") or original_result.get("download_url")
@@ -2022,7 +2035,9 @@ async def _run_regeneration(
             "captions": captions,
             "effects_applied": {"regenerated": True, "subtitle_style": subtitle_style},
         }
-        job_data = await _load_job(job_id)
+        job_data = _load_job(job_id)
+        if not job_data:
+            job_data = await _load_job_db(job_id)
         if job_data:
             job_data["results"] = [regen_result]
             job_data["status"] = "done"
