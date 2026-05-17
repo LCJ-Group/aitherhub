@@ -465,6 +465,47 @@ def _find_cjk_font() -> str:
     return all_fonts[0] if all_fonts else '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
 
 
+def _detect_cjk_font_name() -> str:
+    """fontconfigを使って実際に利用可能なCJKフォント名を検出する。
+    ASSファイルのFontname欄にはfontconfigが認識するフォント名を使う必要がある。
+    """
+    try:
+        result = subprocess.run(
+            ['fc-list', ':lang=ja', 'family'],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            families = result.stdout.strip().split('\n')
+            # Prefer Noto Sans CJK JP
+            for fam in families:
+                names = [n.strip() for n in fam.split(',')]
+                for name in names:
+                    if 'Noto Sans CJK JP' in name:
+                        logger.info(f"[ai-clip] Detected CJK font via fc-list: {name}")
+                        return name
+            # Fallback: any Noto Sans CJK
+            for fam in families:
+                names = [n.strip() for n in fam.split(',')]
+                for name in names:
+                    if 'Noto Sans CJK' in name:
+                        logger.info(f"[ai-clip] Detected CJK font via fc-list: {name}")
+                        return name
+            # Fallback: any Japanese font
+            for fam in families:
+                first_name = fam.split(',')[0].strip()
+                if first_name:
+                    logger.info(f"[ai-clip] Using first Japanese font: {first_name}")
+                    return first_name
+    except Exception as e:
+        logger.warning(f"[ai-clip] fc-list failed: {e}")
+
+    # Last resort: use the font file path directly in the ASS
+    # Some libass versions accept file paths as font names
+    font_path = _find_cjk_font()
+    logger.warning(f"[ai-clip] fc-list unavailable, using font path: {font_path}")
+    return 'Noto Sans CJK JP'
+
+
 def _seconds_to_ass_time(seconds: float) -> str:
     h = int(seconds // 3600)
     m = int((seconds % 3600) // 60)
@@ -811,8 +852,11 @@ def _build_advanced_ffmpeg_command(
         vf_parts.append(f"eq=brightness='{flash_expr}':eval=frame")
 
     # ── 4. ASS subtitles ──
-    escaped_ass = ass_path.replace(":", "\\:").replace("'", "'\\''")
-    vf_parts.append(f"ass='{escaped_ass}'")
+    # Use fontsdir to help libass find CJK fonts
+    escaped_ass = ass_path.replace(":", "\\:").replace("'", "'\\''") 
+    font_dir = os.path.dirname(_find_cjk_font())
+    escaped_fontdir = font_dir.replace(":", "\\:").replace("'", "'\\''") 
+    vf_parts.append(f"ass='{escaped_ass}':fontsdir='{escaped_fontdir}'")
 
     # ── 5. Progress bar at bottom ──
     if enable_progress_bar:
@@ -994,6 +1038,10 @@ def _generate_enhanced_ass(styled_captions: list, hook_text: Optional[str],
     base_width = 1080
     scale_factor = min(video_width, video_height) / base_width
 
+    # Detect the actual CJK font name available on the system
+    cjk_font_name = _detect_cjk_font_name()
+    logger.info(f"[ai-clip] ASS using font: {cjk_font_name}")
+
     ass = "[Script Info]\n"
     ass += "ScriptType: v4.00+\n"
     ass += f"PlayResX: {video_width}\n"
@@ -1008,7 +1056,7 @@ def _generate_enhanced_ass(styled_captions: list, hook_text: Optional[str],
         outline_val = max(2, int(s['outline'] * scale_factor))
         shadow_val = max(0, int(s.get('shadow', 0) * scale_factor))
         secondary = s.get('secondary_color', '&H0000FFFF')
-        ass += (f"Style: {style_name},Noto Sans CJK JP,{fontsize},{s['primary_color']},{secondary},"
+        ass += (f"Style: {style_name},{cjk_font_name},{fontsize},{s['primary_color']},{secondary},"
                 f"{s['outline_color']},{s['back_color']},{s['bold']},0,0,0,100,100,2,0,"
                 f"{s['border_style']},{outline_val},{shadow_val},{alignment},"
                 f"40,40,{margin_v},1\n")
@@ -1019,7 +1067,7 @@ def _generate_enhanced_ass(styled_captions: list, hook_text: Optional[str],
     hook_fontsize = max(60, int(_hook_style['fontsize'] * scale_factor))
     hook_outline = max(3, int(_hook_style['outline'] * scale_factor))
     hook_shadow = max(0, int(_hook_style.get('shadow', 0) * scale_factor))
-    ass += (f"Style: hook,Noto Sans CJK JP,{hook_fontsize},{_hook_style['primary_color']},&H0000FFFF,"
+    ass += (f"Style: hook,{cjk_font_name},{hook_fontsize},{_hook_style['primary_color']},&H0000FFFF,"
             f"{_hook_style['outline_color']},{_hook_style['back_color']},{_hook_style['bold']},0,0,0,100,100,2,0,"
             f"{_hook_style['border_style']},{hook_outline},{hook_shadow},8,"
             f"40,40,100,1\n")
@@ -1028,7 +1076,7 @@ def _generate_enhanced_ass(styled_captions: list, hook_text: Optional[str],
     cta_fontsize = max(50, int(_CTA_STYLE['fontsize'] * scale_factor))
     cta_outline = max(3, int(_CTA_STYLE['outline'] * scale_factor))
     cta_shadow = max(0, int(_CTA_STYLE['shadow'] * scale_factor))
-    ass += (f"Style: cta,Noto Sans CJK JP,{cta_fontsize},{_CTA_STYLE['primary_color']},&H0000FFFF,"
+    ass += (f"Style: cta,{cjk_font_name},{cta_fontsize},{_CTA_STYLE['primary_color']},&H0000FFFF,"
             f"{_CTA_STYLE['outline_color']},{_CTA_STYLE['back_color']},{_CTA_STYLE['bold']},0,0,0,100,100,2,0,"
             f"{_CTA_STYLE['border_style']},{cta_outline},{cta_shadow},8,"
             f"40,40,200,1\n")
@@ -1036,7 +1084,7 @@ def _generate_enhanced_ass(styled_captions: list, hook_text: Optional[str],
     # Default style (safety net for any unresolved style references)
     default_fontsize = max(40, int(80 * scale_factor))
     default_outline = max(2, int(5 * scale_factor))
-    ass += (f"Style: Default,Noto Sans CJK JP,{default_fontsize},&H00FFFFFF,&H0000FFFF,"
+    ass += (f"Style: Default,{cjk_font_name},{default_fontsize},&H00FFFFFF,&H0000FFFF,"
             f"&H00000000,&H80000000,1,0,0,0,100,100,2,0,"
             f"1,{default_outline},3,{alignment},"
             f"40,40,{margin_v},1\n")
@@ -1557,6 +1605,41 @@ async def diagnostics(x_admin_key: Optional[str] = Header(None)):
             "subtitle_animation": True,
             "enhanced_thumbnail": True,
         },
+    }
+
+
+@router.get("/debug-fonts")
+async def debug_fonts(x_admin_key: Optional[str] = Header(None)):
+    """Debug endpoint to check font availability on the server."""
+    verify_admin(x_admin_key)
+    import glob
+    font_path = _find_cjk_font()
+    font_name = _detect_cjk_font_name()
+    
+    # Check fc-list output
+    fc_list_output = ""
+    try:
+        result = subprocess.run(
+            ['fc-list', ':lang=ja', 'family'],
+            capture_output=True, text=True, timeout=10
+        )
+        fc_list_output = result.stdout[:2000] if result.stdout else f"(empty, rc={result.returncode})"
+    except Exception as e:
+        fc_list_output = f"Error: {e}"
+    
+    # Check font files
+    noto_fonts = glob.glob('/usr/share/fonts/**/NotoSans*CJK*', recursive=True)
+    all_fonts = glob.glob('/usr/share/fonts/**/*.ttf', recursive=True) + \
+               glob.glob('/usr/share/fonts/**/*.ttc', recursive=True)
+    
+    return {
+        "font_path": font_path,
+        "font_name_for_ass": font_name,
+        "font_path_exists": os.path.exists(font_path),
+        "noto_cjk_files": noto_fonts[:20],
+        "total_font_files": len(all_fonts),
+        "fc_list_japanese": fc_list_output,
+        "search_paths_status": {p: os.path.exists(p) for p in _FONT_SEARCH_PATHS},
     }
 
 

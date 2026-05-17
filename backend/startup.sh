@@ -11,15 +11,45 @@ echo "[startup] Python: $(python --version 2>&1)"
 echo "[startup] Working dir: $(pwd)"
 echo "[startup] Date: $(date -u)"
 
-# ── Check ffmpeg availability (NO background install - Docker will handle this) ──
+# ── Check ffmpeg availability ──
 if command -v ffmpeg &> /dev/null; then
     echo "[startup] ffmpeg available: $(ffmpeg -version 2>&1 | head -1)"
 else
     echo "[startup] WARNING: ffmpeg not found. Export features will not work."
     echo "[startup] Installing ffmpeg synchronously (one-time)..."
-    apt-get update -qq && apt-get install -y -qq --no-install-recommends ffmpeg libass-dev fonts-noto-cjk 2>&1 | tail -5
-    fc-cache -f 2>/dev/null
+    apt-get update -qq && apt-get install -y -qq --no-install-recommends ffmpeg libass9 libass-dev fonts-noto-cjk fontconfig 2>&1 | tail -5
+    fc-cache -fv 2>/dev/null
     echo "[startup] ffmpeg installed: $(ffmpeg -version 2>&1 | head -1)"
+fi
+
+# ── Ensure CJK fonts are available (critical for subtitle rendering) ──
+CJK_FONT_FOUND=false
+for FONT_PATH in /usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc /usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc /usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc; do
+    if [ -f "$FONT_PATH" ]; then
+        CJK_FONT_FOUND=true
+        echo "[startup] CJK font found: $FONT_PATH"
+        break
+    fi
+done
+if [ "$CJK_FONT_FOUND" = "false" ]; then
+    echo "[startup] WARNING: CJK fonts not found. Installing fonts-noto-cjk..."
+    apt-get update -qq 2>/dev/null
+    apt-get install -y -qq --no-install-recommends fonts-noto-cjk fontconfig libass9 2>&1 | tail -5
+    fc-cache -fv 2>/dev/null
+    echo "[startup] CJK fonts installed."
+    # Verify
+    for FONT_PATH in /usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc /usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc; do
+        if [ -f "$FONT_PATH" ]; then
+            echo "[startup] Verified CJK font: $FONT_PATH"
+            break
+        fi
+    done
+fi
+
+# ── Verify libass can find fonts ──
+if command -v fc-list &> /dev/null; then
+    CJK_COUNT=$(fc-list | grep -ci 'noto.*cjk' || echo "0")
+    echo "[startup] fontconfig CJK fonts registered: $CJK_COUNT"
 fi
 
 # ── Set up Python environment ──
