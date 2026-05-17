@@ -1771,7 +1771,7 @@ async def diagnostics(x_admin_key: Optional[str] = Header(None)):
         db_status["error"] = f"{type(e).__name__}: {str(e)[:200]}\n{traceback.format_exc()[-200:]}"
 
     return {
-        "version": "2.8",
+        "version": "2.9",
         "azure_openai_key_set": bool(azure_key),
         "azure_openai_endpoint": azure_endpoint or "NOT SET",
         "gpt_model": gpt_model,
@@ -2781,18 +2781,20 @@ async def _process_single_clip_v2(job_id: str, clip: dict, req: GenerateRequest,
             position_y=req.position_y,
         )
 
-        logger.info(f"[ai-clip {job_id}] ffmpeg V2 cmd: {' '.join(ffmpeg_cmd)}")
+        ffmpeg_cmd_str = ' '.join(ffmpeg_cmd)
+        logger.info(f"[ai-clip {job_id}] ffmpeg V2 cmd: {ffmpeg_cmd_str}")
         proc = await asyncio.create_subprocess_exec(
             *ffmpeg_cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=600)
+        ffmpeg_stderr_str = stderr.decode() if stderr else ""
+        logger.info(f"[ai-clip {job_id}] ffmpeg stderr (last 500): {ffmpeg_stderr_str[-500:]}")
 
         if proc.returncode != 0:
-            err_full = stderr.decode() if stderr else "Unknown error"
-            logger.error(f"[ai-clip {job_id}] ffmpeg FULL stderr:\n{err_full}")
-            raise RuntimeError(f"ffmpeg failed: {err_full[-800:]}")
+            logger.error(f"[ai-clip {job_id}] ffmpeg FULL stderr:\n{ffmpeg_stderr_str}")
+            raise RuntimeError(f"ffmpeg failed: {ffmpeg_stderr_str[-800:]}")
 
         output_size = os.path.getsize(output_path)
         logger.info(f"[ai-clip {job_id}] Encoded V2: {output_size} bytes")
@@ -2852,6 +2854,8 @@ async def _process_single_clip_v2(job_id: str, clip: dict, req: GenerateRequest,
                 "keyword_highlight": req.enable_keyword_highlight,
                 "subtitle_animation": req.enable_subtitle_animation,
             },
+            "ffmpeg_cmd": ffmpeg_cmd_str[-2000:],  # Last 2000 chars for debugging
+            "ffmpeg_stderr": ffmpeg_stderr_str[-1000:],  # Last 1000 chars
         }
 
     except Exception as e:
