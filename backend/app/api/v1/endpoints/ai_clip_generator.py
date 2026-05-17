@@ -203,7 +203,12 @@ _SCENE_STYLE_MAP = {
 }
 
 # Font search paths
+# Extracted individual OTF files are preferred over TTC for libass compatibility.
+# libass 0.15.0 on Azure App Service cannot reliably read CJK glyphs from TTC.
+_EXTRACTED_FONTS_DIR = "/tmp/aitherhub_fonts"
 _FONT_SEARCH_PATHS = [
+    f'{_EXTRACTED_FONTS_DIR}/NotoSansCJK-JP-Bold.otf',     # Extracted from TTC (preferred)
+    f'{_EXTRACTED_FONTS_DIR}/NotoSansCJK-JP-Regular.otf',  # Extracted from TTC (preferred)
     '/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc',
     '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
     '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
@@ -852,11 +857,19 @@ def _build_advanced_ffmpeg_command(
         vf_parts.append(f"eq=brightness='{flash_expr}':eval=frame")
 
     # ── 4. ASS subtitles ──
-    # Use ass filter with fontsdir. Ensure FONTCONFIG_PATH is set before
-    # ffmpeg runs so libass can find system fonts via fontconfig.
+    # Prefer extracted OTF fonts dir over TTC dir for libass compatibility.
+    # libass 0.15.0 on Azure cannot read CJK glyphs from TTC files.
     escaped_ass = ass_path.replace(":", "\\:").replace("'", "'\\''")
     font_path = _find_cjk_font()
-    font_dir = os.path.dirname(font_path)
+    # Use extracted fonts dir if available, otherwise use the font's own dir
+    if os.path.isdir(_EXTRACTED_FONTS_DIR) and any(
+        f.endswith('.otf') for f in os.listdir(_EXTRACTED_FONTS_DIR)
+    ):
+        font_dir = _EXTRACTED_FONTS_DIR
+        logger.info(f"[ai-clip] Using extracted fonts dir: {font_dir}")
+    else:
+        font_dir = os.path.dirname(font_path)
+        logger.info(f"[ai-clip] Using original fonts dir: {font_dir}")
     escaped_fontdir = font_dir.replace(":", "\\:").replace("'", "'\\''")
     # Set FONTCONFIG_PATH env var for the ffmpeg subprocess
     os.environ.setdefault("FONTCONFIG_PATH", "/etc/fonts")

@@ -61,6 +61,17 @@ if command -v fc-list &> /dev/null; then
     fc-list ':lang=ja' family 2>/dev/null | head -5
 fi
 
+# ── Extract individual OTF from TTC for libass compatibility ──
+# libass 0.15.0 on Azure cannot reliably read CJK glyphs from TTC files.
+# Extracting JP Bold/Regular as standalone OTF files fixes this.
+AITHER_FONTS_DIR="/tmp/aitherhub_fonts"
+if [ ! -f "$AITHER_FONTS_DIR/NotoSansCJK-JP-Bold.otf" ]; then
+    echo "[startup] Extracting CJK fonts from TTC for libass compatibility..."
+    python extract_cjk_fonts.py "$AITHER_FONTS_DIR" 2>&1 || echo "[startup] WARNING: Font extraction failed"
+else
+    echo "[startup] Extracted CJK fonts already available at $AITHER_FONTS_DIR"
+fi
+
 # ── Set up Python environment ──
 echo "[startup] Setting up Python environment..."
 
