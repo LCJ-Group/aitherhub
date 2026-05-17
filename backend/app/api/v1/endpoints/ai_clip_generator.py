@@ -133,12 +133,53 @@ _ASS_STYLES = {
     },
 }
 
-# Hook style (large text for first 3 seconds)
-_HOOK_STYLE = {
-    'fontsize': 120, 'bold': 1, 'primary_color': '&H0035E1FF',  # Yellow
-    'outline_color': '&H00356BFF', 'outline': 10, 'shadow': 5,
-    'border_style': 1, 'back_color': '&H70000000',
-}
+# Hook style variants (large text for first 3 seconds) — randomly selected per clip
+_HOOK_STYLES = [
+    {  # Yellow-Orange pop
+        'fontsize': 120, 'bold': 1, 'primary_color': '&H0035E1FF',
+        'outline_color': '&H00356BFF', 'outline': 10, 'shadow': 5,
+        'border_style': 1, 'back_color': '&H70000000',
+    },
+    {  # White with strong black outline
+        'fontsize': 115, 'bold': 1, 'primary_color': '&H00FFFFFF',
+        'outline_color': '&H00000000', 'outline': 12, 'shadow': 4,
+        'border_style': 1, 'back_color': '&H60000000',
+    },
+    {  # Neon green
+        'fontsize': 118, 'bold': 1, 'primary_color': '&H0000FF88',
+        'outline_color': '&H00003300', 'outline': 10, 'shadow': 5,
+        'border_style': 1, 'back_color': '&H60000000',
+    },
+    {  # Hot pink
+        'fontsize': 120, 'bold': 1, 'primary_color': '&H008080FF',
+        'outline_color': '&H00000066', 'outline': 10, 'shadow': 4,
+        'border_style': 1, 'back_color': '&H60000000',
+    },
+    {  # Cyan/aqua
+        'fontsize': 116, 'bold': 1, 'primary_color': '&H00FFFF00',
+        'outline_color': '&H00663300', 'outline': 10, 'shadow': 5,
+        'border_style': 1, 'back_color': '&H60000000',
+    },
+    {  # Red with white outline (high contrast)
+        'fontsize': 122, 'bold': 1, 'primary_color': '&H000000FF',
+        'outline_color': '&H00FFFFFF', 'outline': 11, 'shadow': 3,
+        'border_style': 1, 'back_color': '&H60000000',
+    },
+    {  # Gold with dark outline
+        'fontsize': 118, 'bold': 1, 'primary_color': '&H0000D4FF',
+        'outline_color': '&H00003366', 'outline': 10, 'shadow': 5,
+        'border_style': 1, 'back_color': '&H60000000',
+    },
+    {  # White boxed (clean style)
+        'fontsize': 110, 'bold': 1, 'primary_color': '&H00FFFFFF',
+        'outline_color': '&H00000000', 'outline': 22, 'shadow': 0,
+        'border_style': 3, 'back_color': '&H80000000',
+    },
+]
+
+def _pick_hook_style() -> dict:
+    """ランダムにフックスタイルを選択"""
+    return random.choice(_HOOK_STYLES)
 
 # CTA style (end of video)
 _CTA_STYLE = {
@@ -973,12 +1014,14 @@ def _generate_enhanced_ass(styled_captions: list, hook_text: Optional[str],
                 f"40,40,{margin_v},1\n")
 
     # Hook style
-    hook_fontsize = max(60, int(_HOOK_STYLE['fontsize'] * scale_factor))
-    hook_outline = max(3, int(_HOOK_STYLE['outline'] * scale_factor))
-    hook_shadow = max(0, int(_HOOK_STYLE['shadow'] * scale_factor))
-    ass += (f"Style: hook,Noto Sans CJK JP,{hook_fontsize},{_HOOK_STYLE['primary_color']},&H0000FFFF,"
-            f"{_HOOK_STYLE['outline_color']},{_HOOK_STYLE['back_color']},{_HOOK_STYLE['bold']},0,0,0,100,100,2,0,"
-            f"{_HOOK_STYLE['border_style']},{hook_outline},{hook_shadow},8,"
+    # Pick a random hook style for variety
+    _hook_style = _pick_hook_style()
+    hook_fontsize = max(60, int(_hook_style['fontsize'] * scale_factor))
+    hook_outline = max(3, int(_hook_style['outline'] * scale_factor))
+    hook_shadow = max(0, int(_hook_style.get('shadow', 0) * scale_factor))
+    ass += (f"Style: hook,Noto Sans CJK JP,{hook_fontsize},{_hook_style['primary_color']},&H0000FFFF,"
+            f"{_hook_style['outline_color']},{_hook_style['back_color']},{_hook_style['bold']},0,0,0,100,100,2,0,"
+            f"{_hook_style['border_style']},{hook_outline},{hook_shadow},8,"
             f"40,40,100,1\n")
 
     # CTA style
@@ -2602,16 +2645,25 @@ async def _generate_hook(captions: list, clip: dict, req: GenerateRequest) -> st
             api_version=os.getenv("GPT5_API_VERSION", "2025-04-01-preview"),
         )
 
-        prompt = f"""以下のライブコマース動画の内容から、TikTok/Reelsの最初3秒で視聴者を引き付ける
+        prompt = f"""以下の動画の内容から、TikTok/Reelsの最初3秒で視聴者のスクロールを止める
 フックテキスト（キャッチコピー）を1つ生成してください。
 
 条件:
-- 15文字以内
-- 視聴者の興味を引く疑問文、衝撃的な事実、または数字を含む
-- 商品名: {product_name}
+- 15文字以内（厳守）
+- 絵文字は使わない（フォント非対応のため）
+- 美容や髪に限定しない。動画の実際の内容に合わせる
+- 以下のパターンからランダムに選んで使う:
+  * 疑問文で好奇心を刺激（「なぜ〇〇は△△なの？」）
+  * 衝撃的な事実や数字（「99%の人が知らない」）
+  * 禁止・警告系（「絶対やめて！」「まだ〇〇してるの？」）
+  * 共感・あるある系（「これ分かる人いる？」）
+  * 対比・ギャップ（「高い vs 安い」「プロ vs 素人」）
+  * 秘密・裏技系（「誰も教えてくれない〇〇」）
+- 前回と違うパターンを使うこと
+- 商品名: {product_name or '（なし）'}
 - 動画内容: {transcript[:300]}
 
-フックテキストのみを出力してください（説明不要）:"""
+フックテキストのみを出力（説明不要、括弧不要）:"""
 
         response = client.responses.create(
             model=azure_model,
@@ -2641,28 +2693,88 @@ async def _generate_hook(captions: list, clip: dict, req: GenerateRequest) -> st
 
 
 def _generate_simple_hook(product_name: str, transcript: str) -> str:
+    """GPTが使えない場合のフォールバックフック生成。多様なパターンでランダムに選択。"""
+    # 商品名がある場合は商品名を含むフック
     if product_name:
-        hooks = [
+        product_hooks = [
             f"知らないと損！{product_name}",
             f"プロが選ぶ{product_name}",
             f"衝撃の{product_name}",
+            f"なぜ{product_name}が人気？",
+            f"{product_name}の真実",
+            f"これが{product_name}の力",
+            f"まだ{product_name}使ってない？",
+            f"プロが愛用する理由",
+            f"驚きの変化を見て",
         ]
-        return random.choice(hooks)[:25]
-    return "プロが教える美髪の秘密"
+        return random.choice(product_hooks)[:25]
+
+    # 汎用的なバズるフック（美容に限定しない）
+    generic_hooks = [
+        # 疑問文系
+        "これ知ってた？",
+        "なぜ誰も教えないの？",
+        "これマジですごい",
+        "分かる人いる？",
+        "まだ知らないの？",
+        # 衝撃・数字系
+        "99%が知らない事実",
+        "たった3秒で分かる",
+        "これ見たら変わる",
+        "衝撃の結果がこちら",
+        "プロも驚いた方法",
+        # 禁止・警告系
+        "絶対にやめて！",
+        "これだけはやめて",
+        "知らないと損する",
+        "今すぐ確認して",
+        # 秘密・裏技系
+        "プロの裏技公開",
+        "誰も教えない秘密",
+        "業界の裏側見せます",
+        "こっそり教えます",
+        # 対比・ギャップ系
+        "プロ vs 素人の差",
+        "高いものと安いものの差",
+        "ビフォーアフター",
+        "差がやばすぎる",
+        # 共感・あるある系
+        "これ分かる人いる？",
+        "みんなやってない？",
+        "それ間違ってます",
+        # 紧急・限定系
+        "今だけのチャンス",
+        "見ないと後悔する",
+        "最後まで見て",
+    ]
+    return random.choice(generic_hooks)
 
 
 def _assign_scene_styles(captions: list, total_duration: float, base_style: str) -> list:
     # Validate base_style against known ASS styles
-    valid_styles = set(_ASS_STYLES.keys())  # simple, box, outline, pop, gradient, karaoke
+    valid_styles = list(_ASS_STYLES.keys())  # simple, box, outline, pop, gradient, karaoke
     if base_style != "auto" and base_style not in valid_styles:
         logger.warning(f"[ai-clip] Invalid subtitle_style '{base_style}', falling back to 'box'")
         base_style = "box"
+
+    # For "auto" mode: pick a random dominant style for this clip (adds variety between clips)
+    # 50% chance: use scene classification, 50% chance: use a random dominant style
+    use_random_dominant = (base_style == "auto" and random.random() < 0.5)
+    random_dominant = random.choice(valid_styles) if use_random_dominant else None
+
     styled = []
     for cap in captions:
         cap_start = float(cap.get("start", 0))
         cap_text = cap.get("text", "")
         if base_style != "auto":
             style = base_style
+        elif use_random_dominant:
+            # Use dominant style with occasional variation (20% chance of scene-based override)
+            if random.random() < 0.2:
+                scene = _classify_scene(cap_text, cap_start, total_duration)
+                style = _SCENE_STYLE_MAP.get(scene, random_dominant)
+            else:
+                style = random_dominant
         else:
             scene = _classify_scene(cap_text, cap_start, total_duration)
             style = _SCENE_STYLE_MAP.get(scene, 'box')
