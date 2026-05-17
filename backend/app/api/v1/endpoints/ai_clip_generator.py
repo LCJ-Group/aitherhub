@@ -947,8 +947,12 @@ def _generate_overlay_images(
     font_path: str,
     tmp_dir: str,
     position_y: float = 75.0,
+    clip_duration: float = 0,
 ) -> list:
     """Pillowで全overlay画像（フック・字幕・CTA）を生成する。
+    
+    clip_duration: 実際の出力クリップの長さ（秒）。0の場合はdurationを使用。
+    字幕のタイムスタンプがclip_durationを超える場合、自動的にオフセット補正を行う。
     
     Returns:
         list of (png_path, start_time, end_time) tuples
@@ -958,6 +962,25 @@ def _generate_overlay_images(
     overlays = []
     base_width = 1080
     scale = min(video_width, video_height) / base_width
+    
+    # ── Determine effective clip duration and caption time offset ──
+    effective_duration = clip_duration if clip_duration > 0 else duration
+    
+    # Auto-detect if captions need time offset correction
+    # If the first caption starts after the clip duration, captions are in absolute time
+    caption_offset = 0.0
+    if styled_captions:
+        first_start = min(float(c.get('start', 0)) for c in styled_captions if c.get('text', '').strip())
+        last_end = max(float(c.get('end', 0)) for c in styled_captions if c.get('text', '').strip())
+        # If captions span beyond clip duration, they need offset correction
+        if first_start > effective_duration * 0.5 or last_end > effective_duration * 1.5:
+            caption_offset = first_start
+            logger.info(f"[ai-clip] Caption time offset detected: {caption_offset:.1f}s "
+                        f"(first_start={first_start:.1f}, last_end={last_end:.1f}, "
+                        f"clip_duration={effective_duration:.1f})")
+    
+    logger.info(f"[ai-clip] Overlay generation: duration={duration:.1f}, "
+                f"clip_duration={effective_duration:.1f}, caption_offset={caption_offset:.1f}")
     
     # ── Hook text (first 3 seconds) ──
     if hook_text:
@@ -987,11 +1010,18 @@ def _generate_overlay_images(
     sub_fontsize = max(44, int(72 * scale))
     MIN_DISPLAY = 2.5
     for i, cap in enumerate(styled_captions or []):
-        cap_start = float(cap.get('start', 0))
-        cap_end = float(cap.get('end', 0))
+        cap_start = float(cap.get('start', 0)) - caption_offset
+        cap_end = float(cap.get('end', 0)) - caption_offset
         cap_text = cap.get('text', '').strip()
         if not cap_text:
             continue
+        
+        # Skip captions outside clip duration
+        if cap_start >= effective_duration or cap_end <= 0:
+            continue
+        # Clamp to clip boundaries
+        cap_start = max(0.0, cap_start)
+        cap_end = min(effective_duration, cap_end)
         
         # Ensure minimum display time
         if cap_end <= cap_start:
@@ -1045,10 +1075,10 @@ def _generate_overlay_images(
         overlays.append((sub_path, cap_start, cap_end))
     
     # ── CTA text (last 3.5 seconds) ──
-    if cta_text and duration > 5:
+    if cta_text and effective_duration > 5:
         cta_fontsize = max(50, int(80 * scale))
-        cta_start = max(0, duration - 3.5)
-        cta_end = duration - 0.3
+        cta_start = max(0, effective_duration - 3.5)
+        cta_end = effective_duration - 0.3
         cta_img = _render_text_overlay_image(
             text=cta_text,
             video_width=video_width,
@@ -1926,7 +1956,7 @@ async def diagnostics(x_admin_key: Optional[str] = Header(None)):
         db_status["error"] = f"{type(e).__name__}: {str(e)[:200]}\n{traceback.format_exc()[-200:]}"
 
     return {
-        "version": "2.11",
+        "version": "2.12",
         "azure_openai_key_set": bool(azure_key),
         "azure_openai_endpoint": azure_endpoint or "NOT SET",
         "gpt_model": gpt_model,
@@ -2609,6 +2639,7 @@ async def _run_regeneration(
             font_path=font_path,
             tmp_dir=tmp_dir,
             position_y=position_y,
+            clip_duration=duration,  # For regen, clip_duration = actual video duration
         )
         logger.info(f"[ai-clip regen] Generated {len(overlay_images)} overlay images")
         # Build ffmpeg command for re-encoding with Pillow overlay
@@ -2942,6 +2973,8 @@ async def _process_single_clip_v2(job_id: str, clip: dict, req: GenerateRequest,
         # ── 9. Generate Pillow overlay images (V2.10) ── (55%)
         await _update_job(job_id, progress_pct=55, current_step=f"クリップ {idx+1}/{total}: 字幕画像生成中 (Pillow)...")
         font_path = _find_cjk_font()
+        # Calculate effective clip duration (limited by max_duration)
+        clip_duration = min(duration, getattr(req, 'max_duration', 60))
         overlay_images = _generate_overlay_images(
             styled_captions=styled_captions,
             hook_text=hook_text,
@@ -2952,8 +2985,10 @@ async def _process_single_clip_v2(job_id: str, clip: dict, req: GenerateRequest,
             font_path=font_path,
             tmp_dir=tmp_dir,
             position_y=req.position_y,
+            clip_duration=clip_duration,
         )
-        logger.info(f"[ai-clip {job_id}] Generated {len(overlay_images)} overlay images")
+        logger.info(f"[ai-clip {job_id}] Generated {len(overlay_images)} overlay images "
+                    f"(clip_duration={clip_duration:.1f}s)")
 
         # Also generate ASS file as backup metadata (not used for rendering)
         ass_path = os.path.join(tmp_dir, "subtitles.ass")
