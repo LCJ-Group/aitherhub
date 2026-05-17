@@ -46,10 +46,19 @@ if [ "$CJK_FONT_FOUND" = "false" ]; then
     done
 fi
 
+# ── Always refresh fontconfig cache (critical for libass) ──
+if command -v fc-cache &> /dev/null; then
+    echo "[startup] Refreshing fontconfig cache..."
+    fc-cache -fv 2>&1 | tail -3
+    echo "[startup] fontconfig cache refreshed."
+fi
+
 # ── Verify libass can find fonts ──
 if command -v fc-list &> /dev/null; then
     CJK_COUNT=$(fc-list | grep -ci 'noto.*cjk' || echo "0")
     echo "[startup] fontconfig CJK fonts registered: $CJK_COUNT"
+    # Log specific Japanese font families for debugging
+    fc-list ':lang=ja' family 2>/dev/null | head -5
 fi
 
 # ── Set up Python environment ──
