@@ -1802,9 +1802,23 @@ async def get_job_captions(
     # Get captions from the first result
     result = results[0] if isinstance(results, list) else results
     captions = result.get("captions", [])
+    clip_id = result.get("clip_id") or job.get("config", {}).get("clip_id", "")
+    # Fallback: if captions not in results (pre-v2.4 jobs), try video_clips table
+    if not captions and clip_id:
+        try:
+            async with engine.connect() as conn:
+                row = await conn.execute(text(
+                    "SELECT captions FROM video_clips WHERE id = CAST(:cid AS uuid) LIMIT 1"
+                ), {"cid": clip_id})
+                clip_row = row.fetchone()
+                if clip_row and clip_row.captions:
+                    captions = clip_row.captions if isinstance(clip_row.captions, list) else json.loads(clip_row.captions or "[]")
+                    logger.info(f"[ai-clip] Loaded {len(captions)} captions from video_clips for {clip_id}")
+        except Exception as e:
+            logger.warning(f"[ai-clip] Failed to load captions from video_clips: {e}")
     return {
         "job_id": job_id,
-        "clip_id": result.get("clip_id"),
+        "clip_id": clip_id,
         "captions": captions,
         "hook_text": result.get("hook_text"),
         "cta_text": result.get("cta_text"),
@@ -1876,11 +1890,24 @@ async def regenerate_clip(
         raise HTTPException(status_code=404, detail="生成結果がありません")
     result = results[0]
     captions = result.get("captions", [])
-    if not captions:
-        raise HTTPException(status_code=400, detail="字幕データがありません。先にcaptionsを設定してください")
     # Get source clip info
     source_clip = job.get("source_clip") or job.get("config", {})
     clip_id = result.get("clip_id") or source_clip.get("clip_id", "")
+    # Fallback: if captions not in results (pre-v2.4 jobs), try video_clips table
+    if not captions and clip_id:
+        try:
+            async with engine.connect() as conn:
+                row = await conn.execute(text(
+                    "SELECT captions FROM video_clips WHERE id = CAST(:cid AS uuid) LIMIT 1"
+                ), {"cid": clip_id})
+                clip_row = row.fetchone()
+                if clip_row and clip_row.captions:
+                    captions = clip_row.captions if isinstance(clip_row.captions, list) else json.loads(clip_row.captions or "[]")
+                    logger.info(f"[ai-clip regen] Loaded {len(captions)} captions from video_clips for {clip_id}")
+        except Exception as e:
+            logger.warning(f"[ai-clip regen] Failed to load captions from video_clips: {e}")
+    if not captions:
+        raise HTTPException(status_code=400, detail="字幕データがありません。先にcaptionsを設定してください")
     # Create a new regeneration job
     regen_job_id = str(uuid.uuid4())
     regen_job = {
