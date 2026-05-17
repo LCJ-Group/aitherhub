@@ -843,8 +843,6 @@ def _build_drawtext_filters(
     if hook_text:
         safe_hook = _escape_drawtext(hook_text)
         hook_fontsize = max(60, int(90 * scale))
-        # Fade: alpha goes 0->1 in 0.2s, stays 1, then 1->0 in last 0.3s
-        hook_alpha = "if(lt(t\\,0.2)\\,t/0.2\\,if(gt(t\\,2.7)\\,(3-t)/0.3\\,1))"
         hook_filter = (
             f"drawtext=fontfile='{safe_font}'"
             f":text='{safe_hook}'"
@@ -856,8 +854,7 @@ def _build_drawtext_filters(
             f":shadowx=3:shadowy=3"
             f":x=(w-text_w)/2"
             f":y=h*0.12"
-            f":alpha='{hook_alpha}'"
-            f":enable='between(t,0,3)'"
+            f":enable='between(t\,0\,3)'"
         )
         filters.append(hook_filter)
     
@@ -902,19 +899,6 @@ def _build_drawtext_filters(
         if style == 'box':
             box_params = ":box=1:boxcolor=black@0.4:boxborderw=8"
         
-        # Fade in/out alpha expression
-        fade_in = 0.15
-        fade_out = 0.1
-        # In drawtext enable expressions, commas inside expressions need escaping
-        # Use \, for commas inside if() expressions within filter_complex
-        alpha_expr = (
-            f"if(lt(t-{cap_start:.2f}\\,{fade_in})\\,"
-            f"(t-{cap_start:.2f})/{fade_in}\\,"
-            f"if(gt(t\\,{cap_end - fade_out:.2f})\\,"
-            f"({cap_end:.2f}-t)/{fade_out}\\,"
-            f"1))"
-        )
-        
         sub_filter = (
             f"drawtext=fontfile='{safe_font}'"
             f":text='{safe_text}'"
@@ -925,8 +909,7 @@ def _build_drawtext_filters(
             f"{box_params}"
             f":x=(w-text_w)/2"
             f":y={sub_y}"
-            f":alpha='{alpha_expr}'"
-            f":enable='between(t,{cap_start:.3f},{cap_end:.3f})'"
+            f":enable='between(t\,{cap_start:.3f}\,{cap_end:.3f})'"
         )
         filters.append(sub_filter)
     
@@ -936,14 +919,6 @@ def _build_drawtext_filters(
         cta_fontsize = max(50, int(80 * scale))
         cta_start = max(0, duration - 3.5)
         cta_end = duration - 0.3
-        
-        cta_alpha = (
-            f"if(lt(t-{cta_start:.2f}\\,0.3)\\,"
-            f"(t-{cta_start:.2f})/0.3\\,"
-            f"if(gt(t\\,{cta_end - 0.2:.2f})\\,"
-            f"({cta_end:.2f}-t)/0.2\\,"
-            f"1))"
-        )
         
         cta_filter = (
             f"drawtext=fontfile='{safe_font}'"
@@ -957,8 +932,7 @@ def _build_drawtext_filters(
             f":box=1:boxcolor=black@0.5:boxborderw=10"
             f":x=(w-text_w)/2"
             f":y=h*0.15"
-            f":alpha='{cta_alpha}'"
-            f":enable='between(t,{cta_start:.3f},{cta_end:.3f})'"
+            f":enable='between(t\,{cta_start:.3f}\,{cta_end:.3f})'"
         )
         filters.append(cta_filter)
     
