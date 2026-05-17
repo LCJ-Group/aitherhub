@@ -784,82 +784,204 @@ def _generate_zoom_keyframes(duration: float, volume_peaks: list,
 
 
 # ─── V2: drawtext-based subtitle rendering (replaces ASS for CJK compat) ──────
-def _escape_drawtext(text: str) -> str:
-    """Escape text for ffmpeg drawtext filter.
-    drawtext requires escaping: ' \ : and special chars.
+# ─── V2.10: Pillow + overlay 方式 ──────────────────────────────────────────
+# drawtext / ASS (libass) はAzure App Serviceで日本語レンダリングに失敗するため、
+# Pillowで透過PNG画像を生成し、ffmpegのoverlayフィルタで合成する方式に変更。
+# overlayフィルタはffmpegの基本機能なので環境依存なく確実に動作する。
+
+def _render_text_overlay_image(
+    text: str,
+    video_width: int,
+    video_height: int,
+    font_path: str,
+    font_size: int = 72,
+    text_color: tuple = (255, 255, 255, 255),
+    outline_color: tuple = (0, 0, 0, 255),
+    outline_width: int = 4,
+    bg_color: tuple = None,
+    bg_padding: int = 10,
+    position: str = 'center_bottom',
+    position_y_pct: float = 75.0,
+    max_chars_per_line: int = 18,
+) -> 'Image':
+    """Pillowで透過PNG画像にテキストを描画する。
+    
+    Args:
+        text: 描画するテキスト
+        video_width: 動画の幅
+        video_height: 動画の高さ
+        font_path: フォントファイルのパス
+        font_size: フォントサイズ
+        text_color: テキスト色 (R, G, B, A)
+        outline_color: アウトライン色 (R, G, B, A)
+        outline_width: アウトライン幅
+        bg_color: 背景ボックス色 (R, G, B, A) or None
+        bg_padding: 背景ボックスのパディング
+        position: テキスト位置 ('center_bottom', 'center_top', 'center')
+        position_y_pct: Y位置（パーセント）
+        max_chars_per_line: 1行あたりの最大文字数（自動改行用）
+    
+    Returns:
+        PIL.Image.Image (RGBA)
     """
-    # Remove emoji first (font won't have them)
-    text = _strip_emoji(text)
-    # ffmpeg drawtext escaping rules:
-    # 1. Backslash must be escaped first
-    # 2. Single quotes need special handling
-    # 3. Colons must be escaped
-    # 4. Semicolons must be escaped in filter_complex
-    text = text.replace('\\', '\\\\\\\\')
-    text = text.replace("'", "\u2019")  # Replace with Unicode right single quote
-    text = text.replace(':', '\\:')
-    text = text.replace(';', '\\;')
-    text = text.replace('%', '%%')  # Percent needs doubling in drawtext
-    text = text.replace('\n', ' ')  # No newlines
-    return text
+    from PIL import Image, ImageDraw, ImageFont
+    
+    # Clean text
+    text = _strip_emoji(text).strip()
+    if not text:
+        return Image.new('RGBA', (video_width, video_height), (0, 0, 0, 0))
+    
+    img = Image.new('RGBA', (video_width, video_height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    
+    # Load font
+    font = None
+    try:
+        font = ImageFont.truetype(font_path, font_size)
+    except Exception as e:
+        logger.warning(f"[ai-clip] Failed to load font {font_path}: {e}")
+        # Try fallback fonts
+        for fp in _FONT_SEARCH_PATHS:
+            try:
+                if os.path.exists(fp):
+                    font = ImageFont.truetype(fp, font_size)
+                    break
+            except Exception:
+                continue
+    if font is None:
+        try:
+            font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', font_size)
+        except Exception:
+            font = ImageFont.load_default()
+    
+    # Auto-wrap text into multiple lines
+    lines = []
+    current_line = ""
+    for char in text:
+        test_line = current_line + char
+        bbox = draw.textbbox((0, 0), test_line, font=font)
+        line_width = bbox[2] - bbox[0]
+        # Allow up to 90% of video width
+        if line_width > video_width * 0.88:
+            if current_line:
+                lines.append(current_line)
+                current_line = char
+            else:
+                lines.append(char)
+                current_line = ""
+        else:
+            current_line = test_line
+    if current_line:
+        lines.append(current_line)
+    
+    # Calculate total text block dimensions
+    line_heights = []
+    line_widths = []
+    line_spacing = int(font_size * 0.25)
+    for line in lines:
+        bbox = draw.textbbox((0, 0), line, font=font)
+        line_widths.append(bbox[2] - bbox[0])
+        line_heights.append(bbox[3] - bbox[1])
+    
+    total_text_h = sum(line_heights) + line_spacing * max(0, len(lines) - 1)
+    max_text_w = max(line_widths) if line_widths else 0
+    
+    # Calculate Y position
+    if position == 'center_top':
+        block_y = int(video_height * 0.10)
+    elif position == 'center':
+        block_y = (video_height - total_text_h) // 2
+    else:  # center_bottom
+        block_y = int(video_height * position_y_pct / 100) - total_text_h
+    
+    # Draw background box if specified
+    if bg_color:
+        box_x1 = (video_width - max_text_w) // 2 - bg_padding
+        box_y1 = block_y - bg_padding
+        box_x2 = (video_width + max_text_w) // 2 + bg_padding
+        box_y2 = block_y + total_text_h + bg_padding
+        # Rounded rectangle for modern look
+        radius = min(bg_padding * 2, 20)
+        draw.rounded_rectangle(
+            [box_x1, box_y1, box_x2, box_y2],
+            radius=radius,
+            fill=bg_color,
+        )
+    
+    # Draw each line
+    current_y = block_y
+    for i, line in enumerate(lines):
+        bbox = draw.textbbox((0, 0), line, font=font)
+        lw = bbox[2] - bbox[0]
+        lh = bbox[3] - bbox[1]
+        x = (video_width - lw) // 2
+        
+        # Draw outline (stroke)
+        if outline_width > 0:
+            # Use Pillow's built-in stroke for efficiency
+            draw.text(
+                (x, current_y), line, font=font,
+                fill=text_color,
+                stroke_width=outline_width,
+                stroke_fill=outline_color,
+            )
+        else:
+            draw.text((x, current_y), line, font=font, fill=text_color)
+        
+        current_y += lh + line_spacing
+    
+    return img
 
 
-def _build_drawtext_filters(
+def _generate_overlay_images(
     styled_captions: list,
     hook_text: Optional[str],
     cta_text: Optional[str],
-    font_path: str,
     video_width: int,
     video_height: int,
     duration: float,
-    position_y: float = 75,
+    font_path: str,
+    tmp_dir: str,
+    position_y: float = 75.0,
 ) -> list:
-    """Build drawtext filter strings for subtitles, hook, and CTA.
+    """Pillowで全overlay画像（フック・字幕・CTA）を生成する。
     
-    Uses ffmpeg's drawtext filter instead of ASS/libass to avoid CJK font
-    rendering issues on Azure App Service (libass 0.15.0 bug).
-    
-    Returns a list of drawtext filter strings to be added to vf_parts.
+    Returns:
+        list of (png_path, start_time, end_time) tuples
     """
-    filters = []
+    from PIL import Image
+    
+    overlays = []
     base_width = 1080
     scale = min(video_width, video_height) / base_width
     
-    # Escape font path for drawtext
-    safe_font = font_path.replace("'", "\\'").replace(':', '\\:')
-    
-    # Calculate Y position based on position_y percentage
-    if position_y < 33:
-        # Top area
-        sub_y = f"h*{position_y/100:.2f}"
-    elif position_y < 66:
-        # Middle area
-        sub_y = f"(h-text_h)/2"
-    else:
-        # Bottom area (default) - above TikTok UI elements
-        sub_y = f"h*{position_y/100:.2f}-text_h"
-    
     # ── Hook text (first 3 seconds) ──
     if hook_text:
-        safe_hook = _escape_drawtext(hook_text)
+        hook_style = _pick_hook_style()
+        # Convert ASS color (&HBBGGRR) to RGB
+        # ASS primary_color format: &H00BBGGRR
         hook_fontsize = max(60, int(90 * scale))
-        hook_filter = (
-            f"drawtext=fontfile='{safe_font}'"
-            f":text='{safe_hook}'"
-            f":fontsize={hook_fontsize}"
-            f":fontcolor=white"
-            f":borderw={max(4, int(6 * scale))}"
-            f":bordercolor=black"
-            f":shadowcolor=black@0.5"
-            f":shadowx=3:shadowy=3"
-            f":x=(w-text_w)/2"
-            f":y=h*0.12"
-            f":enable='between(t,0,3)'"
+        hook_img = _render_text_overlay_image(
+            text=hook_text,
+            video_width=video_width,
+            video_height=video_height,
+            font_path=font_path,
+            font_size=hook_fontsize,
+            text_color=(255, 255, 255, 255),
+            outline_color=(0, 0, 0, 255),
+            outline_width=max(4, int(6 * scale)),
+            bg_color=(0, 0, 0, 140),
+            bg_padding=15,
+            position='center_top',
         )
-        filters.append(hook_filter)
+        hook_path = os.path.join(tmp_dir, "overlay_hook.png")
+        hook_img.save(hook_path, 'PNG')
+        overlays.append((hook_path, 0.0, 3.0))
+        logger.info(f"[ai-clip] Generated hook overlay: {hook_text[:30]}")
     
     # ── Subtitle captions ──
     sub_fontsize = max(44, int(72 * scale))
+    MIN_DISPLAY = 2.5
     for i, cap in enumerate(styled_captions or []):
         cap_start = float(cap.get('start', 0))
         cap_end = float(cap.get('end', 0))
@@ -868,7 +990,6 @@ def _build_drawtext_filters(
             continue
         
         # Ensure minimum display time
-        MIN_DISPLAY = 2.5
         if cap_end <= cap_start:
             cap_end = cap_start + MIN_DISPLAY
         if cap_end - cap_start < MIN_DISPLAY:
@@ -878,69 +999,75 @@ def _build_drawtext_filters(
                 if next_start > cap_start:
                     cap_end = min(cap_end, next_start)
         
-        safe_text = _escape_drawtext(cap_text)
-        if not safe_text:
-            continue
-        
         # Determine style-based colors
         style = cap.get('style', 'box')
         if style == 'pop':
-            fontcolor = 'yellow'
-            bordercolor = '#FF6B35'
+            text_color = (255, 225, 53, 255)  # Yellow
+            outline_clr = (255, 107, 53, 255)  # Orange
+            bg_clr = (0, 0, 0, 120)
+        elif style == 'gradient':
+            text_color = (255, 255, 255, 255)
+            outline_clr = (0, 0, 0, 255)
+            bg_clr = (100, 40, 130, 100)  # Purple tint
         elif style == 'outline':
-            fontcolor = 'white'
-            bordercolor = 'black'
+            text_color = (255, 255, 255, 255)
+            outline_clr = (0, 0, 0, 255)
+            bg_clr = None
+        elif style == 'karaoke':
+            text_color = (255, 255, 255, 200)
+            outline_clr = (0, 0, 0, 255)
+            bg_clr = (0, 0, 0, 80)
         else:  # box, simple, default
-            fontcolor = 'white'
-            bordercolor = 'black'
+            text_color = (255, 255, 255, 255)
+            outline_clr = (0, 0, 0, 255)
+            bg_clr = (0, 0, 0, 100)
         
-        # Use box background for 'box' style
-        box_params = ""
-        if style == 'box':
-            box_params = ":box=1:boxcolor=black@0.4:boxborderw=8"
-        
-        sub_filter = (
-            f"drawtext=fontfile='{safe_font}'"
-            f":text='{safe_text}'"
-            f":fontsize={sub_fontsize}"
-            f":fontcolor={fontcolor}"
-            f":borderw={max(3, int(5 * scale))}"
-            f":bordercolor={bordercolor}"
-            f"{box_params}"
-            f":x=(w-text_w)/2"
-            f":y={sub_y}"
-            f":enable='between(t,{cap_start:.3f},{cap_end:.3f})'"
+        sub_img = _render_text_overlay_image(
+            text=cap_text,
+            video_width=video_width,
+            video_height=video_height,
+            font_path=font_path,
+            font_size=sub_fontsize,
+            text_color=text_color,
+            outline_color=outline_clr,
+            outline_width=max(3, int(5 * scale)),
+            bg_color=bg_clr,
+            bg_padding=8,
+            position='center_bottom',
+            position_y_pct=position_y,
         )
-        filters.append(sub_filter)
+        sub_path = os.path.join(tmp_dir, f"overlay_sub_{i:03d}.png")
+        sub_img.save(sub_path, 'PNG')
+        overlays.append((sub_path, cap_start, cap_end))
     
     # ── CTA text (last 3.5 seconds) ──
     if cta_text and duration > 5:
-        safe_cta = _escape_drawtext(cta_text)
         cta_fontsize = max(50, int(80 * scale))
         cta_start = max(0, duration - 3.5)
         cta_end = duration - 0.3
-        
-        cta_filter = (
-            f"drawtext=fontfile='{safe_font}'"
-            f":text='{safe_cta}'"
-            f":fontsize={cta_fontsize}"
-            f":fontcolor=#FFD700"
-            f":borderw={max(3, int(5 * scale))}"
-            f":bordercolor=#FF4500"
-            f":shadowcolor=black@0.7"
-            f":shadowx=2:shadowy=2"
-            f":box=1:boxcolor=black@0.5:boxborderw=10"
-            f":x=(w-text_w)/2"
-            f":y=h*0.15"
-            f":enable='between(t,{cta_start:.3f},{cta_end:.3f})'"
+        cta_img = _render_text_overlay_image(
+            text=cta_text,
+            video_width=video_width,
+            video_height=video_height,
+            font_path=font_path,
+            font_size=cta_fontsize,
+            text_color=(255, 215, 0, 255),  # Gold
+            outline_color=(255, 69, 0, 255),  # OrangeRed
+            outline_width=max(3, int(5 * scale)),
+            bg_color=(0, 0, 0, 150),
+            bg_padding=12,
+            position='center_top',
         )
-        filters.append(cta_filter)
+        cta_path = os.path.join(tmp_dir, "overlay_cta.png")
+        cta_img.save(cta_path, 'PNG')
+        overlays.append((cta_path, cta_start, cta_end))
+        logger.info(f"[ai-clip] Generated CTA overlay: {cta_text[:30]}")
     
-    logger.info(f"[ai-clip] Built {len(filters)} drawtext filters "
+    logger.info(f"[ai-clip] Generated {len(overlays)} overlay images "
                 f"(hook={'yes' if hook_text else 'no'}, "
                 f"captions={len(styled_captions or [])}, "
                 f"cta={'yes' if cta_text else 'no'})")
-    return filters
+    return overlays
 
 
 # ─── V2: Build Advanced ffmpeg Filter Chain ──────────────────────────────────────────
@@ -954,22 +1081,23 @@ def _build_advanced_ffmpeg_command(video_path: str, ass_path: str, output_path: 
     hook_text: str = None,
     cta_text: str = None,
     position_y: float = 75,
+    overlay_images: list = None,
 ) -> list:
-    """V2: 高度なffmpegフィルタチェーンを構築する。
+    """V2.10: Pillow overlay方式の高度なffmpegフィルタチェーンを構築する。
 
     フィルタ構成:
-    1. 無音カット（concat demuxer or select filter）
-    2. ズームパルス（zoompan or crop+scale）
-    3. 最初0.5秒フラッシュ（eq brightness boost）
-    4. ASS字幕焼き込み
+    1. 無音カット（select filter）
+    2. ズームパルス（crop+scale）
+    3. 最初0.3秒フラッシュ（eq brightness boost）
+    4. 字幕・Hook・CTA: Pillow生成PNG + overlayフィルタ（drawtext/ASS廃止）
     5. 進行バー（drawbox）
     6. ループ感フェードアウト（fade filter）
-    """
-    # ── Strategy: use -filter_complex with semicolons to avoid comma escaping ──
-    # This is more robust than -vf because semicolons separate filter chains,
-    # allowing commas inside expressions without escaping.
     
-    # Build video filter chain parts (will be joined with commas)
+    overlay_images: list of (png_path, start_time, end_time) from _generate_overlay_images()
+    """
+    overlay_images = overlay_images or []
+    
+    # Build video filter chain parts (effects only, no text rendering)
     vf_parts = []
     
     # ── 1. Silence trimming (select filter) ──
@@ -983,27 +1111,18 @@ def _build_advanced_ffmpeg_command(video_path: str, ass_path: str, output_path: 
         af_chain = f"aselect='{select_expr}',asetpts=N/SR/TB"
 
     # ── 2. Zoom Pulse via crop+scale ──
-    # Use simple per-keyframe approach: each zoom is a short crop pulse
     if zoom_keyframes:
-        # Build a nested if() expression for zoom factor
-        # Inside crop filter params, commas are parameter separators
-        # so we use the single-string form: crop=w:h:x:y
         parts = []
         for t, zf in zoom_keyframes:
-            # sin((t-t0)*pi/0.4) goes 0→1→0 over 0.4s window
             freq = math.pi / 0.4
             parts.append(
                 f"if(between(t,{t:.2f},{t+0.4:.2f}),"
                 f"{zf:.3f}*sin((t-{t:.2f})*{freq:.4f})+"
                 f"(1-sin((t-{t:.2f})*{freq:.4f})),"
             )
-        # Build nested expression with fallback 1.0
         zoom_expr = "1.0"
         for part in reversed(parts):
             zoom_expr = part + zoom_expr + ")"
-
-        # Use crop=w:h:x:y positional form (no named params, no colons in values)
-        # crop filter: crop=out_w:out_h:x:y
         crop_f = (
             f"crop="
             f"'iw/({zoom_expr})':"
@@ -1019,21 +1138,10 @@ def _build_advanced_ffmpeg_command(video_path: str, ass_path: str, output_path: 
         flash_expr = "if(lt(t,0.3),0.4*(1-t/0.3),0)"
         vf_parts.append(f"eq=brightness='{flash_expr}':eval=frame")
 
-    # ── 4. Subtitles via drawtext (replaces ASS for CJK compatibility) ──
-    # libass 0.15.0 on Azure App Service cannot render CJK glyphs from TTC/OTF.
-    # drawtext uses fontfile= (direct path) and bypasses libass entirely.
-    font_path = _find_cjk_font()
-    dt_filters = _build_drawtext_filters(
-        styled_captions=styled_captions or [],
-        hook_text=hook_text,
-        cta_text=cta_text,
-        font_path=font_path,
-        video_width=video_width,
-        video_height=video_height,
-        duration=duration,
-        position_y=position_y,
-    )
-    vf_parts.extend(dt_filters)
+    # ── 4. Subtitles/Hook/CTA: Pillow overlay (NO drawtext/ASS) ──
+    # Text rendering is handled by Pillow PNG images + ffmpeg overlay filter.
+    # This completely bypasses libass and drawtext CJK rendering issues.
+    # overlay_images are added as additional inputs to ffmpeg.
 
     # ── 5. Progress bar at bottom ──
     if enable_progress_bar:
@@ -1048,17 +1156,68 @@ def _build_advanced_ffmpeg_command(video_path: str, ass_path: str, output_path: 
         fade_start = max(0, duration - 1.5)
         vf_parts.append(f"fade=t=out:st={fade_start:.2f}:d=1.5")
 
-    # ── Assemble -filter_complex ──
-    # Use -filter_complex with [0:v] and [0:a] labels
-    # Semicolons separate video and audio chains
+    # ── Assemble ffmpeg command ──
+    # Strategy: Always use -filter_complex to combine video effects + overlay images.
+    # This avoids the -vf mode which caused hangs with drawtext.
+    
+    # Build input arguments
+    input_args = ["-i", video_path]
+    for png_path, _, _ in overlay_images:
+        input_args.extend(["-i", png_path])
+    
+    # Build filter_complex string
+    fc_parts = []
+    
+    # Step A: Apply video effects to the main video
     video_chain = ",".join(vf_parts) if vf_parts else "null"
     
-    if af_chain:
-        # Both video and audio filter chains
+    if overlay_images:
+        # Apply effects first, then chain overlays
+        fc_parts.append(f"[0:v]{video_chain}[vfx]")
+        
+        # Step B: Chain overlay filters for each PNG image
+        current_label = "[vfx]"
+        for i, (png_path, start_t, end_t) in enumerate(overlay_images):
+            input_idx = i + 1  # 0 is the video
+            is_last = (i == len(overlay_images) - 1)
+            out_label = "[vout]" if is_last else f"[v{i}]"
+            # Use enable=between() to control when overlay is visible
+            # Commas in between() must be escaped with \\ in filter_complex
+            enable_expr = f"between(t\\,{start_t:.3f}\\,{end_t:.3f})"
+            fc_parts.append(
+                f"{current_label}[{input_idx}:v]overlay=0:0:"
+                f"enable='{enable_expr}':"
+                f"format=auto{out_label}"
+            )
+            current_label = out_label
+        
+        # Step C: Audio chain (if silence trimming)
+        if af_chain:
+            fc_parts.append(f"[0:a]{af_chain}[aout]")
+        
+        fc_str = ";".join(fc_parts)
+        
+        cmd = [
+            "ffmpeg", "-y",
+            *input_args,
+            "-filter_complex", fc_str,
+            "-map", "[vout]",
+            "-map", "[aout]" if af_chain else "0:a",
+            "-c:v", "libx264",
+            "-preset", "fast",
+            "-crf", "22",
+            "-c:a", "aac",
+            "-b:a", "128k",
+            "-movflags", "+faststart",
+            "-t", str(min(duration, getattr(req, 'max_duration', 60))),
+            output_path,
+        ]
+    elif af_chain:
+        # No overlays but has audio filter
         fc = f"[0:v]{video_chain}[vout];[0:a]{af_chain}[aout]"
         cmd = [
             "ffmpeg", "-y",
-            "-i", video_path,
+            *input_args,
             "-filter_complex", fc,
             "-map", "[vout]", "-map", "[aout]",
             "-c:v", "libx264",
@@ -1071,13 +1230,11 @@ def _build_advanced_ffmpeg_command(video_path: str, ass_path: str, output_path: 
             output_path,
         ]
     else:
-        # Video filter only, pass audio through
-        # Use -vf instead of -filter_complex to avoid comma escaping issues
-        # in drawtext enable=between() expressions
+        # No overlays, no audio filter - simple -vf mode
         vf_str = ",".join(vf_parts) if vf_parts else "null"
         cmd = [
             "ffmpeg", "-y",
-            "-i", video_path,
+            *input_args,
             "-vf", vf_str,
             "-c:v", "libx264",
             "-preset", "fast",
@@ -1089,15 +1246,9 @@ def _build_advanced_ffmpeg_command(video_path: str, ass_path: str, output_path: 
             output_path,
         ]
 
-    # Log the full ffmpeg command for debugging
+    # Log the ffmpeg command for debugging
     logger.info(f"[ai-clip] ffmpeg cmd: {' '.join(cmd[:6])}... ({len(cmd)} args)")
-    logger.info(f"[ai-clip] vf_parts count: {len(vf_parts)}, af_chain: {'yes' if af_chain else 'no'}")
-    if not af_chain and vf_parts:
-        # Log the -vf string (truncated) for debugging
-        vf_arg_idx = cmd.index('-vf') + 1 if '-vf' in cmd else -1
-        if vf_arg_idx > 0:
-            vf_val = cmd[vf_arg_idx]
-            logger.info(f"[ai-clip] -vf value (first 500 chars): {vf_val[:500]}")
+    logger.info(f"[ai-clip] vf_parts={len(vf_parts)}, overlays={len(overlay_images)}, af={'yes' if af_chain else 'no'}")
     return cmd
 
 
@@ -1771,7 +1922,7 @@ async def diagnostics(x_admin_key: Optional[str] = Header(None)):
         db_status["error"] = f"{type(e).__name__}: {str(e)[:200]}\n{traceback.format_exc()[-200:]}"
 
     return {
-        "version": "2.9",
+        "version": "2.10",
         "azure_openai_key_set": bool(azure_key),
         "azure_openai_endpoint": azure_endpoint or "NOT SET",
         "gpt_model": gpt_model,
@@ -2440,32 +2591,63 @@ async def _run_regeneration(
                     if dur_str:
                         duration = float(dur_str)
                     break
-        # Generate ASS subtitle file with edited captions
-        await _update_job(job_id, progress_pct=40, current_step="字幕ファイル生成中...")
+        # Generate Pillow overlay images (V2.10)
+        await _update_job(job_id, progress_pct=40, current_step="字幕画像生成中 (Pillow)...")
         styled_captions = _assign_scene_styles(captions, duration, subtitle_style)
-        ass_path = os.path.join(tmp_dir, "subtitles.ass")
-        product_name = source_clip.get("product_name", "") if source_clip else ""
-        _generate_enhanced_ass(
-            styled_captions, hook_text, cta_text, ass_path,
-            video_width, video_height, duration, position_y,
-            product_name=product_name,
-            enable_animations=enable_animations,
-            enable_highlights=enable_highlights,
-        )
-        # Build ffmpeg command for re-encoding (subtitles only, no other effects)
-        await _update_job(job_id, progress_pct=50, current_step="再エンコード中...")
-        output_path = os.path.join(tmp_dir, "output.mp4")
         font_path = _find_cjk_font()
-        fontsdir = os.path.dirname(font_path)
-        # Simple re-encode with subtitles
-        ffmpeg_cmd = [
-            "ffmpeg", "-y", "-i", video_path,
-            "-vf", f"subtitles={ass_path}:fontsdir={fontsdir}",
-            "-c:v", "libx264", "-preset", "fast", "-crf", "22",
-            "-c:a", "aac", "-b:a", "128k",
-            "-movflags", "+faststart",
-            output_path,
-        ]
+        overlay_images = _generate_overlay_images(
+            styled_captions=styled_captions,
+            hook_text=hook_text,
+            cta_text=cta_text,
+            video_width=video_width,
+            video_height=video_height,
+            duration=duration,
+            font_path=font_path,
+            tmp_dir=tmp_dir,
+            position_y=position_y,
+        )
+        logger.info(f"[ai-clip regen] Generated {len(overlay_images)} overlay images")
+        # Build ffmpeg command for re-encoding with Pillow overlay
+        await _update_job(job_id, progress_pct=50, current_step="再エンコード中 (Pillow overlay)...")
+        output_path = os.path.join(tmp_dir, "output.mp4")
+        # Build overlay filter chain
+        input_args = ["-i", video_path]
+        for png_path, _, _ in overlay_images:
+            input_args.extend(["-i", png_path])
+        if overlay_images:
+            fc_parts = ["[0:v]null[vfx]"]
+            current_label = "[vfx]"
+            for i, (png_path, start_t, end_t) in enumerate(overlay_images):
+                input_idx = i + 1
+                is_last = (i == len(overlay_images) - 1)
+                out_label = "[vout]" if is_last else f"[v{i}]"
+                enable_expr = f"between(t\\,{start_t:.3f}\\,{end_t:.3f})"
+                fc_parts.append(
+                    f"{current_label}[{input_idx}:v]overlay=0:0:"
+                    f"enable='{enable_expr}':"
+                    f"format=auto{out_label}"
+                )
+                current_label = out_label
+            fc_str = ";".join(fc_parts)
+            ffmpeg_cmd = [
+                "ffmpeg", "-y",
+                *input_args,
+                "-filter_complex", fc_str,
+                "-map", "[vout]", "-map", "0:a",
+                "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+                "-c:a", "aac", "-b:a", "128k",
+                "-movflags", "+faststart",
+                output_path,
+            ]
+        else:
+            # No overlays - just copy
+            ffmpeg_cmd = [
+                "ffmpeg", "-y", "-i", video_path,
+                "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+                "-c:a", "aac", "-b:a", "128k",
+                "-movflags", "+faststart",
+                output_path,
+            ]
         proc = await asyncio.create_subprocess_exec(
             *ffmpeg_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
@@ -2753,19 +2935,37 @@ async def _process_single_clip_v2(job_id: str, clip: dict, req: GenerateRequest,
         await _update_job(job_id, progress_pct=50, current_step=f"クリップ {idx+1}/{total}: シーン分析中...")
         styled_captions = _assign_scene_styles(captions, duration, req.subtitle_style)
 
-        # ── 9. Generate enhanced ASS subtitle file (V2) ── (55%)
-        await _update_job(job_id, progress_pct=55, current_step=f"クリップ {idx+1}/{total}: 字幕ファイル生成中...")
-        ass_path = os.path.join(tmp_dir, "subtitles.ass")
-        _generate_enhanced_ass(
-            styled_captions, hook_text, cta_text, ass_path,
-            video_width, video_height, duration, req.position_y,
-            product_name=product_name,
-            enable_animations=req.enable_subtitle_animation,
-            enable_highlights=req.enable_keyword_highlight,
+        # ── 9. Generate Pillow overlay images (V2.10) ── (55%)
+        await _update_job(job_id, progress_pct=55, current_step=f"クリップ {idx+1}/{total}: 字幕画像生成中 (Pillow)...")
+        font_path = _find_cjk_font()
+        overlay_images = _generate_overlay_images(
+            styled_captions=styled_captions,
+            hook_text=hook_text,
+            cta_text=cta_text,
+            video_width=video_width,
+            video_height=video_height,
+            duration=duration,
+            font_path=font_path,
+            tmp_dir=tmp_dir,
+            position_y=req.position_y,
         )
+        logger.info(f"[ai-clip {job_id}] Generated {len(overlay_images)} overlay images")
 
-        # ── 10. Build advanced ffmpeg command (V2) ── (60%)
-        await _update_job(job_id, progress_pct=60, current_step=f"クリップ {idx+1}/{total}: エンコード中（V2フィルタ適用）...")
+        # Also generate ASS file as backup metadata (not used for rendering)
+        ass_path = os.path.join(tmp_dir, "subtitles.ass")
+        try:
+            _generate_enhanced_ass(
+                styled_captions, hook_text, cta_text, ass_path,
+                video_width, video_height, duration, req.position_y,
+                product_name=product_name,
+                enable_animations=req.enable_subtitle_animation,
+                enable_highlights=req.enable_keyword_highlight,
+            )
+        except Exception as ass_err:
+            logger.warning(f"[ai-clip {job_id}] ASS generation failed (non-fatal): {ass_err}")
+
+        # ── 10. Build advanced ffmpeg command (V2.10 Pillow overlay) ── (60%)
+        await _update_job(job_id, progress_pct=60, current_step=f"クリップ {idx+1}/{total}: エンコード中（Pillow overlay適用）...")
         output_path = os.path.join(tmp_dir, "output.mp4")
         ffmpeg_cmd = _build_advanced_ffmpeg_command(
             video_path, ass_path, output_path,
@@ -2779,6 +2979,7 @@ async def _process_single_clip_v2(job_id: str, clip: dict, req: GenerateRequest,
             hook_text=hook_text,
             cta_text=cta_text,
             position_y=req.position_y,
+            overlay_images=overlay_images,
         )
 
         ffmpeg_cmd_str = ' '.join(ffmpeg_cmd)
