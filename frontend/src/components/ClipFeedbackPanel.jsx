@@ -277,6 +277,9 @@ const ClipFeedbackPanel = ({
     }
   }, [videoId, phaseIndex, timeStart, timeEnd, clipId, aiScore, scoreBreakdown, rating, selectedReasons, salesConfirm, salesNote, onFeedbackSubmitted, api]);
 
+  // Check if there's anything to save
+  const canSave = rating !== null || salesConfirm !== null;
+
   // Compact mode: just rating buttons
   if (compact) {
     return (
