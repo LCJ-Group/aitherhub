@@ -219,6 +219,37 @@ async def _timeout_stalled_clips():
                         f"heartbeat={len(heartbeat_dead_clips)}, "
                         f"queued={len(stale_queued_clips)})"
                     )
+                
+                # ── Part 4: Cleanup ai_clip_jobs table (frontend display) ────
+                # These are the jobs shown in the AI Clip Generator UI.
+                # If they've been stuck for 10+ minutes, mark them as failed.
+                AI_CLIP_JOB_TIMEOUT_MINUTES = 10
+                try:
+                    result4 = await db.execute(
+                        text("""
+                            UPDATE ai_clip_jobs
+                            SET status = 'failed',
+                                error = 'Auto-timeout: job stuck for over ' || :age || ' minutes',
+                                updated_at = NOW()
+                            WHERE status IN ('processing', 'selecting', 'queued')
+                              AND updated_at < NOW() - INTERVAL '1 minute' * :age
+                            RETURNING job_id
+                        """),
+                        {"age": AI_CLIP_JOB_TIMEOUT_MINUTES},
+                    )
+                    await db.commit()
+                    ai_clip_cleaned = result4.fetchall()
+                    if ai_clip_cleaned:
+                        logger.info(
+                            f"[clip-timeout] AI clip jobs cleanup: "
+                            f"{len(ai_clip_cleaned)} stuck jobs marked as failed"
+                        )
+                except Exception as ai_err:
+                    logger.debug(f"[clip-timeout] AI clip jobs cleanup error: {ai_err}")
+                    try:
+                        await db.rollback()
+                    except Exception:
+                        pass
         
         except Exception as e:
             logger.error(f"[clip-timeout] Check cycle error: {e}", exc_info=True)

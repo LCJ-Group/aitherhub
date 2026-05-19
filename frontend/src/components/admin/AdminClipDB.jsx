@@ -1307,9 +1307,13 @@ export default function AdminClipDB({ adminKey }) {
     return () => { delete window.__openAiClipModal; };
   }, []);
 
-  // Poll AI clip job status
+  // Poll AI clip job status with stall detection
+  const [aiClipStalled, setAiClipStalled] = useState(false);
+  const lastProgressRef = useRef({ pct: 0, time: Date.now() });
   useEffect(() => {
     if (!aiClipJobId) return;
+    setAiClipStalled(false);
+    lastProgressRef.current = { pct: 0, time: Date.now() };
     const interval = setInterval(async () => {
       try {
         const res = await fetch(`${API_BASE}/api/v1/ai-clip/jobs/${aiClipJobId}`, {
@@ -1320,6 +1324,16 @@ export default function AdminClipDB({ adminKey }) {
         if (data.status === "done" || data.status === "failed") {
           clearInterval(interval);
           setAiClipGenerating(false);
+          setAiClipStalled(false);
+        } else {
+          // Stall detection: if progress hasn't changed for 5 minutes
+          const currentPct = data.progress_pct || 0;
+          if (currentPct !== lastProgressRef.current.pct) {
+            lastProgressRef.current = { pct: currentPct, time: Date.now() };
+            setAiClipStalled(false);
+          } else if (Date.now() - lastProgressRef.current.time > 5 * 60 * 1000) {
+            setAiClipStalled(true);
+          }
         }
       } catch (e) {
         console.warn("[AI Clip] Poll failed:", e);
@@ -2538,6 +2552,7 @@ export default function AdminClipDB({ adminKey }) {
           onGenerate={(options) => startAiClipGeneration(aiClipModalClip, options)}
           generating={aiClipGenerating}
           jobStatus={aiClipJobStatus}
+          stalled={aiClipStalled}
         />
       )}
     </div>
@@ -2547,7 +2562,7 @@ export default function AdminClipDB({ adminKey }) {
 // ═══════════════════════════════════════════════
 // ─── AI Clip Generation Modal ───
 // ═══════════════════════════════════════════════
-function AiClipGenerationModal({ clip, onClose, onGenerate, generating, jobStatus }) {
+function AiClipGenerationModal({ clip, onClose, onGenerate, generating, jobStatus, stalled }) {
   const [options, setOptions] = useState({
     subtitle_style: "auto",
     enable_sfx: true,
@@ -2705,12 +2720,22 @@ function AiClipGenerationModal({ clip, onClose, onGenerate, generating, jobStatu
           {/* Processing status */}
           {isProcessing && (
             <div className="space-y-3">
+              {/* Stall warning */}
+              {stalled && (
+                <div className="flex items-center gap-2 p-3 bg-amber-50 border border-amber-200 rounded-xl">
+                  <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0" />
+                  <div className="flex-1">
+                    <p className="text-xs font-medium text-amber-700">処理が停止している可能性があります</p>
+                    <p className="text-[10px] text-amber-600 mt-0.5">5分以上進捗が更新されていません。サーバー側で自動リカバリーが実行されます。</p>
+                  </div>
+                </div>
+              )}
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <Loader2 className="w-5 h-5 animate-spin text-emerald-500" />
-                  <span className="text-sm font-medium text-gray-700">生成中...</span>
+                  <Loader2 className={`w-5 h-5 animate-spin ${stalled ? 'text-amber-500' : 'text-emerald-500'}`} />
+                  <span className="text-sm font-medium text-gray-700">{stalled ? '応答待ち...' : '生成中...'}</span>
                 </div>
-                <span className="text-lg font-bold text-emerald-600">{jobStatus?.progress_pct || 0}%</span>
+                <span className={`text-lg font-bold ${stalled ? 'text-amber-600' : 'text-emerald-600'}`}>{jobStatus?.progress_pct || 0}%</span>
               </div>
               <div className="w-full bg-gray-100 rounded-full h-3">
                 <div

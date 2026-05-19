@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import axios from "axios";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
@@ -156,16 +156,29 @@ export default function AutoAIClipPanel({ adminKey }) {
     }
   }, [activeTab, fetchCompletedClips]);
 
-  // ── Poll active job ──
+  // ── Poll active job with stall detection ──
+  const [jobStalled, setJobStalled] = useState(false);
+  const lastJobProgressRef = useRef({ pct: 0, time: Date.now() });
   useEffect(() => {
     if (!activeJobId) return;
+    setJobStalled(false);
+    lastJobProgressRef.current = { pct: 0, time: Date.now() };
     const interval = setInterval(async () => {
       try {
         const res = await axios.get(`${API_BASE}/api/v1/ai-clip/jobs/${activeJobId}`, { headers });
         setActiveJob(res.data);
         if (res.data.status === "done" || res.data.status === "failed") {
           clearInterval(interval);
+          setJobStalled(false);
           fetchData(); // Refresh jobs list
+        } else {
+          const currentPct = res.data.progress_pct || 0;
+          if (currentPct !== lastJobProgressRef.current.pct) {
+            lastJobProgressRef.current = { pct: currentPct, time: Date.now() };
+            setJobStalled(false);
+          } else if (Date.now() - lastJobProgressRef.current.time > 5 * 60 * 1000) {
+            setJobStalled(true);
+          }
         }
       } catch (e) {
         console.error("Job poll error:", e);
@@ -793,9 +806,18 @@ export default function AutoAIClipPanel({ adminKey }) {
 
               {activeJob && activeJob.status !== "done" && activeJob.status !== "failed" && (
                 <div className="mt-4 p-3 bg-white rounded-lg border">
+                  {jobStalled && (
+                    <div className="flex items-center gap-2 p-2 mb-2 bg-amber-50 border border-amber-200 rounded-lg">
+                      <span className="text-amber-500">⚠️</span>
+                      <div>
+                        <p className="text-xs font-medium text-amber-700">処理が停止している可能性があります</p>
+                        <p className="text-[10px] text-amber-600">サーバー側で自動リカバリーが実行されます。しばらくお待ちください。</p>
+                      </div>
+                    </div>
+                  )}
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-medium text-purple-600">進捗</span>
-                    <span className="text-sm font-bold text-purple-700">{activeJob.progress_pct || 0}%</span>
+                    <span className={`text-xs font-medium ${jobStalled ? 'text-amber-600' : 'text-purple-600'}`}>{jobStalled ? '応答待ち' : '進捗'}</span>
+                    <span className={`text-sm font-bold ${jobStalled ? 'text-amber-700' : 'text-purple-700'}`}>{activeJob.progress_pct || 0}%</span>
                   </div>
                   <div className="w-full bg-gray-200 rounded-full h-3">
                     <div

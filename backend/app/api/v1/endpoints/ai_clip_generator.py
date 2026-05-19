@@ -1956,7 +1956,7 @@ async def diagnostics(x_admin_key: Optional[str] = Header(None)):
         db_status["error"] = f"{type(e).__name__}: {str(e)[:200]}\n{traceback.format_exc()[-200:]}"
 
     return {
-        "version": "2.13",
+        "version": "2.14",
         "azure_openai_key_set": bool(azure_key),
         "azure_openai_endpoint": azure_endpoint or "NOT SET",
         "gpt_model": gpt_model,
@@ -2104,6 +2104,53 @@ async def debug_fonts(x_admin_key: Optional[str] = Header(None)):
         "libass_packages": libass_info,
         "ass_render_tests": ass_test_results,
     }
+
+
+@router.post("/cleanup-stuck-jobs")
+async def cleanup_stuck_jobs(
+    max_age_minutes: int = 30,
+    x_admin_key: Optional[str] = Header(None),
+):
+    """Stuck状態のAIクリップジョブを自動クリーンアップする。
+    
+    - processing/selecting状態で max_age_minutes 以上更新がないジョブをfailedに変更
+    - 既にデプロイ済みのclip_job_timeout_monitorはvideo_clipsテーブルを監視するが、
+      このエンドポイントはai_clip_jobsテーブル（フロントエンド表示用）をクリーンアップする
+    """
+    verify_admin(x_admin_key)
+    
+    try:
+        async with engine.begin() as conn:
+            result = await conn.execute(text("""
+                UPDATE ai_clip_jobs
+                SET status = 'failed',
+                    error = 'Auto-cleanup: job stuck for over ' || :age || ' minutes without progress update',
+                    updated_at = NOW()
+                WHERE status IN ('processing', 'selecting', 'queued')
+                  AND updated_at < NOW() - INTERVAL '1 minute' * :age
+                RETURNING job_id, current_step, progress_pct, updated_at
+            """), {"age": max_age_minutes})
+            cleaned = result.fetchall()
+        
+        cleaned_jobs = [
+            {
+                "job_id": str(row.job_id),
+                "last_step": row.current_step,
+                "last_progress": row.progress_pct,
+                "last_updated": str(row.updated_at),
+            }
+            for row in cleaned
+        ]
+        
+        logger.info(f"[ai-clip] Cleanup: {len(cleaned_jobs)} stuck jobs marked as failed")
+        return {
+            "cleaned_count": len(cleaned_jobs),
+            "max_age_minutes": max_age_minutes,
+            "cleaned_jobs": cleaned_jobs,
+        }
+    except Exception as e:
+        logger.error(f"[ai-clip] Cleanup error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/generate-from-clip")
