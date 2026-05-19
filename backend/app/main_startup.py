@@ -797,6 +797,15 @@ def start_background_tasks():
     except Exception as e:
         logger.warning(f"[BG] Stuck video monitor failed: {e}")
 
+    # Clip job timeout monitor (API-side safety net)
+    # Detects clips stuck in processing when worker VM is unresponsive
+    try:
+        from app.services.clip_job_timeout_monitor import start_clip_job_timeout_monitor
+        start_clip_job_timeout_monitor()
+        logger.info("[BG] Clip job timeout monitor started")
+    except Exception as e:
+        logger.warning(f"[BG] Clip job timeout monitor failed: {e}")
+
     # HeyGen avatar prefetch (background, non-blocking)
     async def _do_prefetch():
         try:
