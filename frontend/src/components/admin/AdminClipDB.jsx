@@ -8,6 +8,7 @@ import {
   TrendingUp, Activity, Brain, Clock, Zap, Target, Eye,
 } from "lucide-react";
 import { TikTokUrlRegisterButton } from "./TikTokTrackingPanel";
+import CaptionOverlayPlayer from "./CaptionOverlayPlayer";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
 
@@ -2540,7 +2541,7 @@ export default function AdminClipDB({ adminKey }) {
 
       {/* AI Clip Generation Modal */}
       {aiClipModalClip && (
-        <AiClipGenerationModal
+          <AiClipGenerationModal
           clip={aiClipModalClip}
           onClose={() => {
             setAiClipModalClip(null);
@@ -2553,6 +2554,7 @@ export default function AdminClipDB({ adminKey }) {
           generating={aiClipGenerating}
           jobStatus={aiClipJobStatus}
           stalled={aiClipStalled}
+          adminKey={adminKey}
         />
       )}
     </div>
@@ -2562,7 +2564,7 @@ export default function AdminClipDB({ adminKey }) {
 // ═══════════════════════════════════════════════
 // ─── AI Clip Generation Modal ───
 // ═══════════════════════════════════════════════
-function AiClipGenerationModal({ clip, onClose, onGenerate, generating, jobStatus, stalled }) {
+function AiClipGenerationModal({ clip, onClose, onGenerate, generating, jobStatus, stalled, adminKey }) {
   const [options, setOptions] = useState({
     subtitle_style: "auto",
     enable_sfx: true,
@@ -2797,76 +2799,113 @@ function AiClipGenerationModal({ clip, onClose, onGenerate, generating, jobStatu
 
           {/* Success result */}
           {isDone && resultClip && (
-            <div className="space-y-3">
-              <div className="flex items-center gap-2 text-emerald-600">
-                <CheckCircle className="w-5 h-5" />
-                <span className="text-sm font-bold">生成完了！</span>
-              </div>
-
-              {/* Video preview */}
-              {resultClip.download_url && (
-                <div className="rounded-xl overflow-hidden bg-black">
-                  <video
-                    src={resultClip.download_url}
-                    controls
-                    playsInline
-                    className="w-full aspect-[9/16] max-h-[50vh]"
-                  />
-                </div>
-              )}
-
-              {/* Result info */}
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                {resultClip.duration_sec && (
-                  <div className="bg-gray-50 rounded-lg p-2">
-                    <span className="text-gray-400">長さ</span>
-                    <p className="font-semibold text-gray-700">{Math.round(resultClip.duration_sec)}秒</p>
-                  </div>
-                )}
-                {resultClip.file_size_mb && (
-                  <div className="bg-gray-50 rounded-lg p-2">
-                    <span className="text-gray-400">サイズ</span>
-                    <p className="font-semibold text-gray-700">{resultClip.file_size_mb.toFixed(1)}MB</p>
-                  </div>
-                )}
-                {resultClip.hook_text && (
-                  <div className="bg-gray-50 rounded-lg p-2 col-span-2">
-                    <span className="text-gray-400">フック</span>
-                    <p className="font-semibold text-gray-700">{resultClip.hook_text}</p>
-                  </div>
-                )}
-                {resultClip.effects_applied && (
-                  <div className="bg-gray-50 rounded-lg p-2 col-span-2">
-                    <span className="text-gray-400">適用エフェクト</span>
-                    <div className="flex flex-wrap gap-1 mt-1">
-                      {Array.isArray(resultClip.effects_applied)
-                        ? resultClip.effects_applied.map((e, i) => (
-                            <span key={i} className="px-1.5 py-0.5 bg-emerald-50 text-emerald-600 rounded text-[10px] font-medium">{e}</span>
-                          ))
-                        : Object.entries(resultClip.effects_applied).filter(([_, v]) => v).map(([key, _], i) => (
-                            <span key={i} className="px-1.5 py-0.5 bg-emerald-50 text-emerald-600 rounded text-[10px] font-medium">{key}</span>
-                          ))
-                      }
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Download button */}
-              {resultClip.download_url && (
-                <a
-                  href={resultClip.download_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="w-full py-2.5 rounded-xl bg-blue-500 hover:bg-blue-600 text-white font-semibold text-sm transition-colors flex items-center justify-center gap-2"
-                >
-                  <Download className="w-4 h-4" /> ダウンロード
-                </a>
-              )}
-            </div>
+            <SuccessResult resultClip={resultClip} jobStatus={jobStatus} adminKey={adminKey} />
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════
+// ─── Success Result with Caption Overlay Player ───
+// ═══════════════════════════════════════════════
+function SuccessResult({ resultClip, jobStatus, adminKey }) {
+  const [captions, setCaptions] = useState([]);
+  const [hookText, setHookText] = useState(resultClip.hook_text || "");
+  const [ctaText, setCtaText] = useState(resultClip.cta_text || "");
+  const [captionsLoaded, setCaptionsLoaded] = useState(false);
+
+  // Load captions from API
+  useEffect(() => {
+    if (!jobStatus?.job_id || !adminKey) return;
+    const loadCaptions = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/v1/ai-clip/jobs/${jobStatus.job_id}/captions`, {
+          headers: { "X-Admin-Key": adminKey },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setCaptions(data.captions || []);
+          if (data.hook_text) setHookText(data.hook_text);
+          if (data.cta_text) setCtaText(data.cta_text);
+        }
+      } catch (e) {
+        console.warn("[SuccessResult] Failed to load captions:", e);
+      } finally {
+        setCaptionsLoaded(true);
+      }
+    };
+    loadCaptions();
+  }, [jobStatus?.job_id, adminKey]);
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2 text-emerald-600">
+        <CheckCircle className="w-5 h-5" />
+        <span className="text-sm font-bold">生成完了！</span>
+      </div>
+
+      {/* Caption Overlay Player */}
+      {resultClip.download_url && (
+        <CaptionOverlayPlayer
+          videoUrl={resultClip.download_url}
+          captions={captions}
+          onCaptionsChange={setCaptions}
+          jobId={jobStatus?.job_id}
+          adminKey={adminKey}
+          apiBase={API_BASE}
+          hookText={hookText}
+          ctaText={ctaText}
+          onHookChange={setHookText}
+          onCtaChange={setCtaText}
+          showEditPanel={captionsLoaded && captions.length > 0}
+          compact={true}
+        />
+      )}
+
+      {/* Result info */}
+      <div className="grid grid-cols-2 gap-2 text-xs">
+        {resultClip.duration_sec && (
+          <div className="bg-gray-50 rounded-lg p-2">
+            <span className="text-gray-400">長さ</span>
+            <p className="font-semibold text-gray-700">{Math.round(resultClip.duration_sec)}秒</p>
+          </div>
+        )}
+        {resultClip.file_size_mb && (
+          <div className="bg-gray-50 rounded-lg p-2">
+            <span className="text-gray-400">サイズ</span>
+            <p className="font-semibold text-gray-700">{resultClip.file_size_mb.toFixed(1)}MB</p>
+          </div>
+        )}
+        {resultClip.effects_applied && (
+          <div className="bg-gray-50 rounded-lg p-2 col-span-2">
+            <span className="text-gray-400">適用エフェクト</span>
+            <div className="flex flex-wrap gap-1 mt-1">
+              {Array.isArray(resultClip.effects_applied)
+                ? resultClip.effects_applied.map((e, i) => (
+                    <span key={i} className="px-1.5 py-0.5 bg-emerald-50 text-emerald-600 rounded text-[10px] font-medium">{e}</span>
+                  ))
+                : Object.entries(resultClip.effects_applied).filter(([_, v]) => v).map(([key, _], i) => (
+                    <span key={i} className="px-1.5 py-0.5 bg-emerald-50 text-emerald-600 rounded text-[10px] font-medium">{key}</span>
+                  ))
+              }
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Direct download button (original with burned subtitles) */}
+      {resultClip.download_url && (
+        <a
+          href={resultClip.download_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="w-full py-2.5 rounded-xl bg-blue-500 hover:bg-blue-600 text-white font-semibold text-sm transition-colors flex items-center justify-center gap-2"
+        >
+          <Download className="w-4 h-4" /> そのままダウンロード
+        </a>
+      )}
     </div>
   );
 }

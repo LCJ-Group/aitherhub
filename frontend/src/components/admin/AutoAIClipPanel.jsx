@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import axios from "axios";
+import CaptionOverlayPlayer from "./CaptionOverlayPlayer";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
 
@@ -234,15 +235,24 @@ export default function AutoAIClipPanel({ adminKey }) {
   };
 
   // ── Caption editing handlers ──
-  const openCaptionEditor = async (jobId, clipId) => {
+  const openCaptionEditor = async (jobId, clipId, videoUrl) => {
     setCaptionLoading(true);
     setEditingJobId(jobId);
     setEditingClipId(clipId);
+    if (videoUrl) setPreviewUrl(videoUrl);
     try {
       const res = await axios.get(`${API_BASE}/api/v1/ai-clip/jobs/${jobId}/captions`, { headers });
       setEditCaptions(res.data.captions || []);
       setEditHook(res.data.hook_text || "");
       setEditCta(res.data.cta_text || "");
+      // Also try to get video URL from job details if not provided
+      if (!videoUrl) {
+        try {
+          const jobRes = await axios.get(`${API_BASE}/api/v1/ai-clip/jobs/${jobId}`, { headers });
+          const result = jobRes.data?.results?.find(r => r.clip_id === clipId);
+          if (result?.download_url) setPreviewUrl(result.download_url);
+        } catch (_) {}
+      }
     } catch (e) {
       alert("字幕データの取得に失敗: " + (e.response?.data?.detail || e.message));
       setEditingJobId(null);
@@ -1026,7 +1036,7 @@ export default function AutoAIClipPanel({ adminKey }) {
                       {/* Caption Edit Button */}
                       {r.status === "done" && r.captions_count > 0 && (
                         <button
-                          onClick={() => openCaptionEditor(activeJob.job_id, r.clip_id)}
+                          onClick={() => openCaptionEditor(activeJob.job_id, r.clip_id, r.download_url)}
                           className="mt-2 px-3 py-1.5 bg-yellow-50 text-yellow-700 border border-yellow-300 rounded-md text-xs font-medium hover:bg-yellow-100 transition-colors"
                         >
                           ✏️ 字幕を編集
@@ -1232,7 +1242,7 @@ export default function AutoAIClipPanel({ adminKey }) {
                       <div className="flex gap-2">
                         {clip.captions_count > 0 && clip.job_id && (
                           <button
-                            onClick={() => openCaptionEditor(clip.job_id, clip.clip_id)}
+                            onClick={() => openCaptionEditor(clip.job_id, clip.clip_id, clip.download_url || clip.blob_url)}
                             className="text-yellow-600 hover:text-yellow-800 font-medium"
                           >
                             ✏️ 編集
@@ -1268,14 +1278,14 @@ export default function AutoAIClipPanel({ adminKey }) {
         </div>
       )}
 
-      {/* Caption Editor Modal */}
+      {/* Caption Editor Modal with Real-time Preview */}
       {editingJobId && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={closeCaptionEditor}>
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[85vh] overflow-hidden" onClick={e => e.stopPropagation()}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden" onClick={e => e.stopPropagation()}>
             {/* Modal Header */}
             <div className="flex items-center justify-between p-4 border-b bg-gradient-to-r from-yellow-50 to-orange-50">
               <h3 className="font-bold text-gray-800 flex items-center gap-2">
-                ✏️ 字幕・テキスト編集
+                ✏️ 字幕・テキスト編集（リアルタイムプレビュー）
               </h3>
               <button onClick={closeCaptionEditor} className="text-gray-400 hover:text-gray-600 text-xl">✕</button>
             </div>
@@ -1286,90 +1296,21 @@ export default function AutoAIClipPanel({ adminKey }) {
                 <p className="text-gray-500">字幕データを読み込み中...</p>
               </div>
             ) : (
-              <div className="overflow-y-auto max-h-[calc(85vh-140px)] p-4 space-y-4">
-                {/* Hook & CTA */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">🎯 フックテキスト</label>
-                    <input
-                      type="text"
-                      value={editHook}
-                      onChange={e => setEditHook(e.target.value)}
-                      className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-yellow-300 focus:border-yellow-400"
-                      placeholder="最初3秒のフックテキスト"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">📢 CTAテキスト</label>
-                    <input
-                      type="text"
-                      value={editCta}
-                      onChange={e => setEditCta(e.target.value)}
-                      className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-yellow-300 focus:border-yellow-400"
-                      placeholder="購入誘導テキスト（例: 左下タップで購入）"
-                    />
-                  </div>
-                </div>
-
-                {/* Captions List */}
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <label className="text-sm font-medium text-gray-700">💬 字幕セグメント ({editCaptions.length}件)</label>
-                    <span className="text-xs text-gray-400">テキストを直接編集できます</span>
-                  </div>
-                  <div className="space-y-2 max-h-[400px] overflow-y-auto border rounded-lg p-2 bg-gray-50">
-                    {editCaptions.map((cap, idx) => (
-                      <div key={idx} className="flex items-start gap-2 bg-white p-2 rounded border">
-                        <div className="flex-shrink-0 text-xs text-gray-400 pt-2 w-16 text-right">
-                          {(cap.start ?? cap.start_time)?.toFixed(1)}s
-                        </div>
-                        <input
-                          type="text"
-                          value={cap.text}
-                          onChange={e => {
-                            const updated = [...editCaptions];
-                            updated[idx] = { ...updated[idx], text: e.target.value };
-                            setEditCaptions(updated);
-                          }}
-                          className="flex-1 border rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-yellow-300 focus:border-yellow-400"
-                        />
-                        <button
-                          onClick={() => {
-                            const updated = editCaptions.filter((_, i) => i !== idx);
-                            setEditCaptions(updated);
-                          }}
-                          className="flex-shrink-0 text-red-400 hover:text-red-600 px-1 pt-1.5"
-                          title="削除"
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Modal Footer */}
-            {!captionLoading && (
-              <div className="flex items-center justify-between p-4 border-t bg-gray-50">
-                <button
-                  onClick={saveCaptions}
-                  className="px-4 py-2 bg-blue-500 text-white rounded-lg text-sm font-medium hover:bg-blue-600 transition-colors"
-                >
-                  💾 保存のみ
-                </button>
-                <button
-                  onClick={handleRegenerate}
-                  disabled={regenerating}
-                  className={`px-4 py-2 rounded-lg text-sm font-bold text-white transition-all ${
-                    regenerating
-                      ? "bg-gray-400 cursor-not-allowed"
-                      : "bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 shadow-md"
-                  }`}
-                >
-                  {regenerating ? "⚙️ 再エンコード中..." : "🚀 保存＆再エンコード"}
-                </button>
+              <div className="overflow-y-auto max-h-[calc(90vh-80px)] p-4">
+                <CaptionOverlayPlayer
+                  videoUrl={previewUrl}
+                  captions={editCaptions}
+                  onCaptionsChange={setEditCaptions}
+                  jobId={editingJobId}
+                  clipId={editingClipId}
+                  adminKey={adminKey}
+                  apiBase={API_BASE}
+                  hookText={editHook}
+                  ctaText={editCta}
+                  onHookChange={setEditHook}
+                  onCtaChange={setEditCta}
+                  showEditPanel={true}
+                />
               </div>
             )}
           </div>
