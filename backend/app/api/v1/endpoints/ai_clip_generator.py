@@ -1167,10 +1167,30 @@ def _build_advanced_ffmpeg_command(video_path: str, ass_path: str, output_path: 
         vf_parts.append(crop_f)
         vf_parts.append(f"scale={video_width}:{video_height}")
 
-    # ── 3. Flash intro (first 0.3s brightness boost) ──
+    # ── 3. Flash intro (multiple variations, softer than before) ──
     if enable_flash_intro:
-        flash_expr = "if(lt(t,0.3),0.4*(1-t/0.3),0)"
-        vf_parts.append(f"eq=brightness='{flash_expr}':eval=frame")
+        flash_variant = random.choice(["soft_flash", "warm_glow", "contrast_pop", "fade_in", "cool_flash"])
+        if flash_variant == "soft_flash":
+            # Gentle brightness boost (0.15 max, was 0.4 which caused white-out)
+            flash_expr = "if(lt(t,0.25),0.15*(1-t/0.25),0)"
+            vf_parts.append(f"eq=brightness='{flash_expr}':eval=frame")
+        elif flash_variant == "warm_glow":
+            # Warm saturation + slight brightness
+            bright_expr = "if(lt(t,0.3),0.08*(1-t/0.3),0)"
+            sat_expr = "if(lt(t,0.3),1.3-0.3*(t/0.3),1)"
+            vf_parts.append(f"eq=brightness='{bright_expr}':saturation='{sat_expr}':eval=frame")
+        elif flash_variant == "contrast_pop":
+            # Quick contrast increase then normalize
+            contrast_expr = "if(lt(t,0.2),1.3-0.3*(t/0.2),1)"
+            vf_parts.append(f"eq=contrast='{contrast_expr}':eval=frame")
+        elif flash_variant == "fade_in":
+            # Fade from black (0.4s)
+            vf_parts.append(f"fade=t=in:st=0:d=0.4")
+        elif flash_variant == "cool_flash":
+            # Slight desaturation + brightness for a cool look
+            bright_expr = "if(lt(t,0.2),0.12*(1-t/0.2),0)"
+            sat_expr = "if(lt(t,0.3),0.7+0.3*(t/0.3),1)"
+            vf_parts.append(f"eq=brightness='{bright_expr}':saturation='{sat_expr}':eval=frame")
 
     # ── 4. Subtitles/Hook/CTA: Pillow overlay (NO drawtext/ASS) ──
     # Text rendering is handled by Pillow PNG images + ffmpeg overlay filter.
@@ -1956,7 +1976,7 @@ async def diagnostics(x_admin_key: Optional[str] = Header(None)):
         db_status["error"] = f"{type(e).__name__}: {str(e)[:200]}\n{traceback.format_exc()[-200:]}"
 
     return {
-        "version": "2.14",
+        "version": "2.15",
         "azure_openai_key_set": bool(azure_key),
         "azure_openai_endpoint": azure_endpoint or "NOT SET",
         "gpt_model": gpt_model,

@@ -94,14 +94,16 @@ export default function AutoAIClipPanel({ adminKey }) {
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const [brandsRes, jobsRes, templatesRes] = await Promise.all([
+      const [brandsRes, jobsRes, templatesRes, completedRes] = await Promise.all([
         axios.get(`${API_BASE}/api/v1/ai-clip/brands`, { headers }).catch(() => ({ data: { brands: [] } })),
         axios.get(`${API_BASE}/api/v1/ai-clip/jobs?limit=20`, { headers }).catch(() => ({ data: { jobs: [] } })),
         axios.get(`${API_BASE}/api/v1/ai-clip/templates`, { headers }).catch(() => ({ data: { templates: [] } })),
+        axios.get(`${API_BASE}/api/v1/ai-clip/completed-clips?limit=1`, { headers }).catch(() => ({ data: { total: 0 } })),
       ]);
       setBrands(brandsRes.data.brands || []);
       setJobs(jobsRes.data.jobs || []);
       setTemplates(templatesRes.data.templates || []);
+      setCompletedTotal(completedRes.data.total || 0);
     } catch (e) {
       console.error("AI Clip data fetch error:", e);
     } finally {
