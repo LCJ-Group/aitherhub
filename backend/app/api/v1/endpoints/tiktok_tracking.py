@@ -82,12 +82,15 @@ async def fetch_video_data_from_rapidapi(tiktok_url: str) -> dict:
         resp = await client.get(full_url, headers=headers)
         data = resp.json()
 
+    # Handle RapidAPI subscription errors
+    if "message" in data and "not subscribed" in data.get("message", "").lower():
+        raise HTTPException(status_code=503, detail="RapidAPI subscription inactive or API key invalid. Please check RAPIDAPI_KEY.")
+
     if data.get("code") != 0:
         raise HTTPException(
             status_code=502,
-            detail=f"TikWM API error: {data.get('msg', 'Unknown error')}"
+            detail=f"TikWM API error: {data.get('msg', '') or data.get('message', 'Unknown error')}"
         )
-
     return data.get("data", {})
 
 
@@ -739,7 +742,13 @@ class ImportAccountRequest(BaseModel):
     max_videos: int = 0  # 0 = all
 
 async def _fetch_user_info(username: str) -> dict:
-    """Get TikTok user info (user_id, stats) from username."""
+    """Get TikTok user info (user_id, stats) from username or nickname.
+    
+    Supports:
+    - unique_id: "kyogokuprofessional", "@ryukyogoku"
+    - Full URL: "https://www.tiktok.com/@kyogokuprofessional?lang=ja-JP"
+    - Nickname/display name: "世界一の美容師京極琉（KG）" → auto-searches and resolves
+    """
     api_key = RAPIDAPI_KEY or os.getenv("RAPIDAPI_KEY", "")
     if not api_key:
         raise HTTPException(status_code=500, detail="RAPIDAPI_KEY not configured")
@@ -757,6 +766,10 @@ async def _fetch_user_info(username: str) -> dict:
         if path_parts:
             clean_username = path_parts[0]
     clean_username = clean_username.lstrip("@").strip()
+
+    # Remove parenthetical suffixes like "(日本TK最大MCN創始人)" that users may paste
+    clean_username = re.sub(r'[\(（].*?[\)）]$', '', clean_username).strip()
+
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.get(
             f"https://{RAPIDAPI_HOST}/user/info",
@@ -764,9 +777,86 @@ async def _fetch_user_info(username: str) -> dict:
             headers=headers,
         )
         data = resp.json()
-    if data.get("code") != 0:
-        raise HTTPException(status_code=502, detail=f"TikWM user info error: {data.get('msg', 'Unknown')}")
-    return data.get("data", {})
+
+    # Handle RapidAPI subscription errors
+    if "message" in data and "not subscribed" in data.get("message", "").lower():
+        raise HTTPException(status_code=503, detail="RapidAPI subscription inactive or API key invalid. Please check RAPIDAPI_KEY.")
+
+    if data.get("code") == 0:
+        return data.get("data", {})
+
+    # If unique_id lookup failed, try searching by nickname (the input might be a display name)
+    error_msg = data.get('msg', '') or data.get('message', '') or 'Unknown'
+    logger.info(f"Direct unique_id lookup failed for '{clean_username}' ({error_msg}), attempting user search...")
+
+    # Attempt user search as fallback
+    search_result = await _search_user_by_keyword(clean_username, headers)
+    if search_result:
+        return search_result
+
+    raise HTTPException(
+        status_code=404,
+        detail=f"TikTokユーザーが見つかりません: '{username}'. "
+               f"TikTokのユーザーID（@の後の英数字）を入力してください。"
+               f"例: 'kyogokuprofessional' または 'https://www.tiktok.com/@kyogokuprofessional'"
+    )
+
+
+async def _search_user_by_keyword(keyword: str, headers: dict) -> Optional[dict]:
+    """Search TikTok users by keyword and return the best match's user info."""
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(
+                f"https://{RAPIDAPI_HOST}/user/search",
+                params={"keywords": keyword, "count": 5, "cursor": 0},
+                headers=headers,
+            )
+            data = resp.json()
+
+        if data.get("code") != 0:
+            logger.warning(f"User search failed for '{keyword}': {data.get('msg', 'Unknown')}")
+            return None
+
+        user_list = data.get("data", {}).get("user_list", [])
+        if not user_list:
+            return None
+
+        # Find best match: exact nickname match or first result
+        best_match = None
+        for user_item in user_list:
+            user_info = user_item.get("user_info", {})
+            nickname = user_info.get("nickname", "")
+            unique_id = user_info.get("unique_id", "")
+            # Exact or partial match on nickname
+            if keyword.lower() in nickname.lower() or nickname.lower() in keyword.lower():
+                best_match = user_info
+                break
+        
+        if not best_match:
+            best_match = user_list[0].get("user_info", {})
+
+        if not best_match or not best_match.get("unique_id"):
+            return None
+
+        # Now fetch full user info using the resolved unique_id
+        resolved_uid = best_match["unique_id"]
+        logger.info(f"Search resolved '{keyword}' → '@{resolved_uid}' (nickname: {best_match.get('nickname', '')})")
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(
+                f"https://{RAPIDAPI_HOST}/user/info",
+                params={"unique_id": resolved_uid},
+                headers=headers,
+            )
+            data = resp.json()
+
+        if data.get("code") == 0:
+            return data.get("data", {})
+        return None
+
+    except Exception as e:
+        logger.warning(f"User search fallback failed for '{keyword}': {e}")
+        return None
 
 
 async def _fetch_user_posts(user_id: str, count: int = 30, cursor: int = 0) -> dict:
@@ -784,8 +874,11 @@ async def _fetch_user_posts(user_id: str, count: int = 30, cursor: int = 0) -> d
             headers=headers,
         )
         data = resp.json()
+    # Handle RapidAPI subscription errors
+    if "message" in data and "not subscribed" in data.get("message", "").lower():
+        raise HTTPException(status_code=503, detail="RapidAPI subscription inactive or API key invalid.")
     if data.get("code") != 0:
-        raise HTTPException(status_code=502, detail=f"TikWM user posts error: {data.get('msg', 'Unknown')}")
+        raise HTTPException(status_code=502, detail=f"TikWM user posts error: {data.get('msg', '') or data.get('message', 'Unknown')}")
     return data.get("data", {})
 
 
@@ -849,6 +942,7 @@ async def import_account(
             "nickname": user_info.get("nickname", ""),
             "user_id": str(user_id),
             "total_videos": total_videos,
+            "input_query": req.tiktok_username,  # What the user typed
         },
         "imported": 0,
         "skipped_existing": 0,

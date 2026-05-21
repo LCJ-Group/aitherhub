@@ -756,7 +756,10 @@ export default function TikTokTrackingPanel({ adminKey }) {
         <div className="bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-200 rounded-xl p-4 space-y-3">
           <div className="text-sm font-semibold text-indigo-700">📥 TikTokアカウント一括インポート</div>
           <p className="text-xs text-indigo-600/70">
-            アカウントURLまたはユーザー名を入力すると、全投稿を自動取得してClipDBクリップと自動マッチングします。
+            TikTokのユーザーID（@の後の英数字）、プロフィールURL、またはニックネーム（表示名）を入力すると、全投稿を自動取得してClipDBクリップと自動マッチングします。
+          </p>
+          <p className="text-[10px] text-indigo-500/60">
+            ✨ ニックネーム入力時は自動検索で正しいアカウントを特定します。例: 「世界一の美容師京極琉」→ @ryukyogoku
           </p>
           <form onSubmit={handleImportAccount} className="space-y-2">
             <div className="flex gap-2">
@@ -764,7 +767,7 @@ export default function TikTokTrackingPanel({ adminKey }) {
                 type="text"
                 value={importUsername}
                 onChange={(e) => setImportUsername(e.target.value)}
-                placeholder="@kyogokuprofessional または https://www.tiktok.com/@kyogokuprofessional"
+                placeholder="@ryukyogoku / ニックネーム / https://www.tiktok.com/@kyogokuprofessional"
                 className="flex-1 px-3 py-2 text-sm border border-indigo-200 rounded-lg focus:ring-2 focus:ring-indigo-300 focus:border-indigo-400 outline-none"
                 required
               />
