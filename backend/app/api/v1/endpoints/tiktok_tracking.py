@@ -770,26 +770,32 @@ async def _fetch_user_info(username: str) -> dict:
     # Remove parenthetical suffixes like "(日本TK最大MCN創始人)" that users may paste
     clean_username = re.sub(r'[\(（].*?[\)）]$', '', clean_username).strip()
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.get(
-            f"https://{RAPIDAPI_HOST}/user/info",
-            params={"unique_id": clean_username},
-            headers=headers,
-        )
-        data = resp.json()
+    # Check if input looks like a valid unique_id (alphanumeric + dots + underscores only)
+    is_likely_unique_id = bool(re.match(r'^[a-zA-Z0-9._]+$', clean_username))
 
-    # Handle RapidAPI subscription errors
-    if "message" in data and "not subscribed" in data.get("message", "").lower():
-        raise HTTPException(status_code=503, detail="RapidAPI subscription inactive or API key invalid. Please check RAPIDAPI_KEY.")
+    if is_likely_unique_id:
+        # Try direct unique_id lookup first
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(
+                f"https://{RAPIDAPI_HOST}/user/info",
+                params={"unique_id": clean_username},
+                headers=headers,
+            )
+            data = resp.json()
 
-    if data.get("code") == 0:
-        return data.get("data", {})
+        # Handle RapidAPI subscription errors
+        if "message" in data and "not subscribed" in data.get("message", "").lower():
+            raise HTTPException(status_code=503, detail="RapidAPI subscription inactive or API key invalid. Please check RAPIDAPI_KEY.")
 
-    # If unique_id lookup failed, try searching by nickname (the input might be a display name)
-    error_msg = data.get('msg', '') or data.get('message', '') or 'Unknown'
-    logger.info(f"Direct unique_id lookup failed for '{clean_username}' ({error_msg}), attempting user search...")
+        if data.get("code") == 0:
+            return data.get("data", {})
 
-    # Attempt user search as fallback
+        error_msg = data.get('msg', '') or data.get('message', '') or 'Unknown'
+        logger.info(f"Direct unique_id lookup failed for '{clean_username}' ({error_msg}), attempting user search...")
+    else:
+        logger.info(f"Input '{clean_username}' contains non-ASCII chars, skipping unique_id lookup, going directly to search...")
+
+    # Attempt user search as fallback (for nicknames or failed unique_id lookups)
     search_result = await _search_user_by_keyword(clean_username, headers)
     if search_result:
         return search_result
@@ -798,42 +804,65 @@ async def _fetch_user_info(username: str) -> dict:
         status_code=404,
         detail=f"TikTokユーザーが見つかりません: '{username}'. "
                f"TikTokのユーザーID（@の後の英数字）を入力してください。"
-               f"例: 'kyogokuprofessional' または 'https://www.tiktok.com/@kyogokuprofessional'"
+               f"例: 'ryukyogoku' または 'https://www.tiktok.com/@ryukyogoku'"
     )
 
 
 async def _search_user_by_keyword(keyword: str, headers: dict) -> Optional[dict]:
-    """Search TikTok users by keyword and return the best match's user info."""
+    """Search TikTok users by keyword and return the best match's user info.
+    
+    Tries multiple search strategies:
+    1. Direct /user/search API
+    2. If that fails, try /challenge/search as alternative
+    """
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.get(
                 f"https://{RAPIDAPI_HOST}/user/search",
-                params={"keywords": keyword, "count": 5, "cursor": 0},
+                params={"keywords": keyword, "count": 10, "cursor": 0},
                 headers=headers,
             )
             data = resp.json()
 
+        logger.info(f"User search response for '{keyword}': code={data.get('code')}, msg={data.get('msg', '')}, has_data={bool(data.get('data'))}")
+
         if data.get("code") != 0:
-            logger.warning(f"User search failed for '{keyword}': {data.get('msg', 'Unknown')}")
+            # Log the full response for debugging
+            logger.warning(f"User search API error for '{keyword}': {data}")
             return None
 
         user_list = data.get("data", {}).get("user_list", [])
         if not user_list:
+            logger.info(f"User search returned empty results for '{keyword}'")
             return None
 
-        # Find best match: exact nickname match or first result
+        logger.info(f"User search found {len(user_list)} results for '{keyword}'")
+
+        # Find best match: exact nickname match, partial match, or first result
         best_match = None
+        keyword_lower = keyword.lower()
+        
         for user_item in user_list:
             user_info = user_item.get("user_info", {})
             nickname = user_info.get("nickname", "")
             unique_id = user_info.get("unique_id", "")
-            # Exact or partial match on nickname
-            if keyword.lower() in nickname.lower() or nickname.lower() in keyword.lower():
+            nickname_lower = nickname.lower()
+            
+            # Priority 1: Exact nickname match
+            if keyword_lower == nickname_lower:
                 best_match = user_info
+                logger.info(f"Exact match found: '{nickname}' -> @{unique_id}")
+                break
+            # Priority 2: Keyword is substring of nickname or vice versa
+            if keyword_lower in nickname_lower or nickname_lower in keyword_lower:
+                best_match = user_info
+                logger.info(f"Partial match found: '{nickname}' -> @{unique_id}")
                 break
         
         if not best_match:
+            # Use first result as fallback
             best_match = user_list[0].get("user_info", {})
+            logger.info(f"No nickname match, using first result: '{best_match.get('nickname', '')}' -> @{best_match.get('unique_id', '')}")
 
         if not best_match or not best_match.get("unique_id"):
             return None
@@ -852,6 +881,8 @@ async def _search_user_by_keyword(keyword: str, headers: dict) -> Optional[dict]
 
         if data.get("code") == 0:
             return data.get("data", {})
+        
+        logger.warning(f"Failed to fetch user info for resolved uid '@{resolved_uid}': {data.get('msg', '')}")
         return None
 
     except Exception as e:
