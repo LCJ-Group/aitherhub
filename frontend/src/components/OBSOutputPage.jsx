@@ -448,7 +448,7 @@ export default function OBSOutputPage() {
         await axios.post(
           `${baseURL}/api/v1/digital-human/liveavatar/streaming/stop`,
           { session_id: sessionIdRef.current },
-          { headers: { "X-Admin-Key": ADMIN_KEY }, timeout: 10000 }
+          { headers: { "X-Admin-Key": ADMIN_KEY }, timeout: 30000 }
         );
       } catch (e) {
         console.warn("[OBS] Failed to stop session on backend:", e);

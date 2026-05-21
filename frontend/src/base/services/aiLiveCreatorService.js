@@ -464,7 +464,7 @@ class AiLiveCreatorService {
     const res = await axios.post(
       `${this.baseURL}/api/v1/digital-human/liveavatar/speak-queue/push`,
       { text },
-      { headers: this._headers(), timeout: 10000 }
+      { headers: this._headers(), timeout: 30000 }
     );
      return res.data;
   }
@@ -647,7 +647,7 @@ class AiLiveCreatorService {
   async getPersonas() {
     const res = await axios.get(
       `${this.baseURL}/api/v1/personas`,
-      { headers: this._headers(), timeout: 10000 }
+      { headers: this._headers(), timeout: 30000 }
     );
     return res.data;
   }
@@ -658,7 +658,7 @@ class AiLiveCreatorService {
   async getPersona(personaId) {
     const res = await axios.get(
       `${this.baseURL}/api/v1/personas/${personaId}`,
-      { headers: this._headers(), timeout: 10000 }
+      { headers: this._headers(), timeout: 30000 }
     );
     return res.data;
   }
@@ -670,7 +670,7 @@ class AiLiveCreatorService {
     const res = await axios.put(
       `${this.baseURL}/api/v1/personas/${personaId}`,
       data,
-      { headers: this._headers(), timeout: 10000 }
+      { headers: this._headers(), timeout: 30000 }
     );
     return res.data;
   }

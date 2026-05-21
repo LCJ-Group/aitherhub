@@ -114,7 +114,7 @@ export default function AdminDashboard() {
     try {
       const baseURL = import.meta.env.VITE_API_BASE_URL;
       const res = await axios.get(`${baseURL}/api/v1/reviewer/me`, {
-        headers: { Authorization: `Bearer ${reviewerInfo.token}` }, timeout: 10000
+        headers: { Authorization: `Bearer ${reviewerInfo.token}` }, timeout: 30000
       });
       const d = res.data;
       setReviewerStats({
@@ -1540,27 +1540,42 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
     e.stopPropagation();
     if (saving) return;
     setSaving(true);
-    try {
-      const baseURL = import.meta.env.VITE_API_BASE_URL;
-      await axios.put(
-        `${baseURL}/api/v1/admin/feedbacks/${fb.video_id}/phases/${fb.phase_index}/rating`,
-        { rating: star, ...(reviewerInfo?.id ? { reviewer_id: reviewerInfo.id } : {}) },
-        { headers: { "X-Admin-Key": "aither:hub" }, timeout: 10000 }
-      );
-      setLocalRating(star);
-      // Do NOT call onRated() here — it triggers a full list refresh
-      // which removes the rated card from the "unrated" filter, making it look
-      // like the page auto-advanced. Refresh happens on page change or manual refresh.
-      // Update reviewer stats after successful rating
-      if (reviewerInfo?.id && typeof onReviewerStatsUpdate === 'function') {
-        onReviewerStatsUpdate();
+    const baseURL = import.meta.env.VITE_API_BASE_URL;
+    const url = `${baseURL}/api/v1/admin/feedbacks/${fb.video_id}/phases/${fb.phase_index}/rating`;
+    const body = { rating: star, ...(reviewerInfo?.id ? { reviewer_id: reviewerInfo.id } : {}) };
+    const config = { headers: { "X-Admin-Key": "aither:hub" }, timeout: 30000 };
+    
+    // Retry logic: try up to 2 times on timeout/network errors
+    let lastErr = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        await axios.put(url, body, config);
+        setLocalRating(star);
+        // Do NOT call onRated() here — it triggers a full list refresh
+        // which removes the rated card from the "unrated" filter, making it look
+        // like the page auto-advanced. Refresh happens on page change or manual refresh.
+        // Update reviewer stats after successful rating
+        if (reviewerInfo?.id && typeof onReviewerStatsUpdate === 'function') {
+          onReviewerStatsUpdate();
+        }
+        setSaving(false);
+        return; // Success
+      } catch (err) {
+        lastErr = err;
+        // Only retry on timeout or network errors, not on 4xx/5xx
+        if (err.code === 'ECONNABORTED' || err.message?.includes('timeout') || !err.response) {
+          if (attempt === 0) {
+            console.warn(`Rating attempt ${attempt + 1} failed (timeout/network), retrying...`);
+            await new Promise(r => setTimeout(r, 2000)); // Wait 2s before retry
+            continue;
+          }
+        }
+        break; // Don't retry on server errors (4xx/5xx)
       }
-    } catch (err) {
-      console.error("Failed to rate:", err);
-      alert("採点に失敗しました: " + (err.response?.data?.detail || err.message));
-    } finally {
-      setSaving(false);
     }
+    console.error("Failed to rate:", lastErr);
+    alert("採点に失敗しました: " + (lastErr.response?.data?.detail || lastErr.message));
+    setSaving(false);
   };
 
   const handleToggleExpand = (e) => {

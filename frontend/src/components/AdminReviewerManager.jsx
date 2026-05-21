@@ -59,7 +59,7 @@ export default function AdminReviewerManager({ adminKey }) {
     setCreateError('');
     setCreateSuccess('');
     try {
-      const res = await axios.post(`${API_BASE}/api/v1/admin/reviewers`, createForm, { headers, timeout: 10000 });
+      const res = await axios.post(`${API_BASE}/api/v1/admin/reviewers`, createForm, { headers, timeout: 30000 });
       setCreateSuccess(`採点者「${createForm.display_name}」を作成しました (ID: ${res.data.reviewer_id})`);
       setCreateForm({ email: '', password: '', display_name: '' });
       fetchReviewers();
@@ -72,7 +72,7 @@ export default function AdminReviewerManager({ adminKey }) {
     try {
       await axios.put(`${API_BASE}/api/v1/admin/reviewers/${reviewer.id}`, {
         is_active: !reviewer.is_active,
-      }, { headers, timeout: 10000 });
+      }, { headers, timeout: 30000 });
       fetchReviewers();
     } catch (err) {
       alert('更新に失敗しました: ' + (err.response?.data?.detail || err.message));
@@ -85,7 +85,7 @@ export default function AdminReviewerManager({ adminKey }) {
     try {
       await axios.put(`${API_BASE}/api/v1/admin/reviewers/${reviewer.id}`, {
         password: newPassword,
-      }, { headers, timeout: 10000 });
+      }, { headers, timeout: 30000 });
       alert('パスワードをリセットしました');
     } catch (err) {
       alert('パスワードリセットに失敗しました');

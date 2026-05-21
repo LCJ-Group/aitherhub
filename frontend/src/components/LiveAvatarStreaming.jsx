@@ -730,7 +730,7 @@ export default function LiveAvatarStreaming({
           await axios.post(
             `${baseURL}/api/v1/auto-live/update-session`,
             { old_session_id: oldSessionId, new_session_id: session_id },
-            { headers: { "X-Admin-Key": "aither:hub" }, timeout: 10000 }
+            { headers: { "X-Admin-Key": "aither:hub" }, timeout: 30000 }
           );
           console.log(`[LiveAvatar] Auto Live session updated: ${oldSessionId} → ${session_id}`);
         } catch (e) {
