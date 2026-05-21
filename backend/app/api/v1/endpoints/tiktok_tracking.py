@@ -843,9 +843,10 @@ async def _search_user_by_keyword(keyword: str, headers: dict) -> Optional[dict]
         keyword_lower = keyword.lower()
         
         for user_item in user_list:
-            user_info = user_item.get("user_info", {})
+            # API returns "user" key (not "user_info") with camelCase fields
+            user_info = user_item.get("user", {}) or user_item.get("user_info", {})
             nickname = user_info.get("nickname", "")
-            unique_id = user_info.get("unique_id", "")
+            unique_id = user_info.get("uniqueId", "") or user_info.get("unique_id", "")
             nickname_lower = nickname.lower()
             
             # Priority 1: Exact nickname match
@@ -861,15 +862,17 @@ async def _search_user_by_keyword(keyword: str, headers: dict) -> Optional[dict]
         
         if not best_match:
             # Use first result as fallback
-            best_match = user_list[0].get("user_info", {})
-            logger.info(f"No nickname match, using first result: '{best_match.get('nickname', '')}' -> @{best_match.get('unique_id', '')}")
+            first_item = user_list[0]
+            best_match = first_item.get("user", {}) or first_item.get("user_info", {})
+            logger.info(f"No nickname match, using first result: '{best_match.get('nickname', '')}' -> @{best_match.get('uniqueId', best_match.get('unique_id', ''))}")
 
-        if not best_match or not best_match.get("unique_id"):
+        resolved_uid = best_match.get("uniqueId", "") or best_match.get("unique_id", "")
+        if not best_match or not resolved_uid:
             return None
 
         # Now fetch full user info using the resolved unique_id
-        resolved_uid = best_match["unique_id"]
         logger.info(f"Search resolved '{keyword}' → '@{resolved_uid}' (nickname: {best_match.get('nickname', '')})")
+
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.get(
