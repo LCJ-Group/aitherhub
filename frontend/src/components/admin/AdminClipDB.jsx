@@ -2861,6 +2861,7 @@ function SuccessResult({ resultClip, jobStatus, adminKey }) {
           onCtaChange={setCtaText}
           showEditPanel={captionsLoaded && captions.length > 0}
           compact={true}
+          subtitlesBurnedIn={true}
         />
       )}
 

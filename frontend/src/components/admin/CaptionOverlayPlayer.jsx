@@ -22,6 +22,7 @@ export default function CaptionOverlayPlayer({
   onCtaChange,
   showEditPanel = true,
   compact = false,
+  subtitlesBurnedIn = false,
 }) {
   const videoRef = useRef(null);
   const containerRef = useRef(null);
@@ -200,8 +201,8 @@ export default function CaptionOverlayPlayer({
           onClick={togglePlay}
         />
 
-        {/* Caption Overlay */}
-        {currentCaption && (
+        {/* Caption Overlay - hidden when subtitles are already burned into the video */}
+        {currentCaption && !subtitlesBurnedIn && (
           <div className="absolute bottom-16 left-0 right-0 flex justify-center pointer-events-none px-4">
             <div className="bg-black/70 backdrop-blur-sm rounded-lg px-4 py-2 max-w-[90%]">
               <p className="text-white text-sm md:text-base font-bold text-center leading-tight drop-shadow-lg">

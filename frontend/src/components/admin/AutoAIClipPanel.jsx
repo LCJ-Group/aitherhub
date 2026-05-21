@@ -1310,6 +1310,7 @@ export default function AutoAIClipPanel({ adminKey }) {
                   onHookChange={setEditHook}
                   onCtaChange={setEditCta}
                   showEditPanel={true}
+                  subtitlesBurnedIn={true}
                 />
               </div>
             )}
