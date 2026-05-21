@@ -1105,6 +1105,33 @@ async def import_account(
     return results
 
 
+@router.get("/debug/user-search")
+async def debug_user_search(
+    keyword: str = Query(...),
+    x_admin_key: Optional[str] = Header(None),
+):
+    """Debug endpoint to test user/search API response directly."""
+    verify_admin(x_admin_key)
+    api_key = RAPIDAPI_KEY or os.getenv("RAPIDAPI_KEY", "")
+    headers = {
+        "Content-Type": "application/json",
+        "x-rapidapi-host": RAPIDAPI_HOST,
+        "x-rapidapi-key": api_key,
+    }
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.get(
+            f"https://{RAPIDAPI_HOST}/user/search",
+            params={"keywords": keyword, "count": 10, "cursor": 0},
+            headers=headers,
+        )
+        data = resp.json()
+    return {
+        "keyword": keyword,
+        "status_code": resp.status_code,
+        "response": data,
+    }
+
+
 @router.get("/import-account/status")
 async def import_account_status(
     username: str = Query(...),
