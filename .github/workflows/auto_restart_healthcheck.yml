@@ -1,0 +1,175 @@
+name: Auto Health Check & Restart Azure App Service
+
+on:
+  schedule:
+    # Run every 3 hours (UTC): 0:00, 3:00, 6:00, 9:00, 12:00, 15:00, 18:00, 21:00
+    - cron: '0 */3 * * *'
+  workflow_dispatch:
+    inputs:
+      force_restart:
+        description: 'Force restart without health check'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+
+env:
+  AZURE_WEBAPP_NAME: aitherhubAPI
+  AZURE_RG: rg-vdp-kyogoku
+  HEALTH_URL: https://aitherhubapi-cpcjcnezbgf5f7e2.japaneast-01.azurewebsites.net/health/ready
+  APP_ROOT_URL: https://aitherhubapi-cpcjcnezbgf5f7e2.japaneast-01.azurewebsites.net/
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  health-check-and-restart:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Health Check (attempt 1)
+        id: health1
+        if: ${{ github.event.inputs.force_restart != 'true' }}
+        run: |
+          echo "🔍 Health check attempt 1..."
+          HTTP_CODE=$(curl -s -o /tmp/health_response.json -w "%{http_code}" --max-time 30 "${{ env.HEALTH_URL }}" || echo "000")
+          echo "HTTP Code: $HTTP_CODE"
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "✅ App is healthy"
+            cat /tmp/health_response.json
+            echo "healthy=true" >> $GITHUB_OUTPUT
+          else
+            echo "⚠️ Health check failed (HTTP $HTTP_CODE), waiting 30s before retry..."
+            cat /tmp/health_response.json 2>/dev/null || echo "(no response body)"
+            echo "healthy=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Wait before retry
+        if: ${{ steps.health1.outputs.healthy == 'false' && github.event.inputs.force_restart != 'true' }}
+        run: sleep 30
+
+      - name: Health Check (attempt 2)
+        id: health2
+        if: ${{ steps.health1.outputs.healthy == 'false' && github.event.inputs.force_restart != 'true' }}
+        run: |
+          echo "🔍 Health check attempt 2..."
+          HTTP_CODE=$(curl -s -o /tmp/health_response2.json -w "%{http_code}" --max-time 60 "${{ env.HEALTH_URL }}" || echo "000")
+          echo "HTTP Code: $HTTP_CODE"
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "✅ App recovered on second attempt"
+            cat /tmp/health_response2.json
+            echo "healthy=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ App is unhealthy after 2 attempts"
+            cat /tmp/health_response2.json 2>/dev/null || echo "(no response body)"
+            echo "healthy=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Determine if restart needed
+        id: decision
+        run: |
+          if [ "${{ github.event.inputs.force_restart }}" = "true" ]; then
+            echo "🔄 Force restart requested"
+            echo "restart=true" >> $GITHUB_OUTPUT
+          elif [ "${{ steps.health1.outputs.healthy }}" = "true" ]; then
+            echo "✅ No restart needed - app is healthy"
+            echo "restart=false" >> $GITHUB_OUTPUT
+          elif [ "${{ steps.health2.outputs.healthy }}" = "true" ]; then
+            echo "✅ No restart needed - app recovered on retry"
+            echo "restart=false" >> $GITHUB_OUTPUT
+          else
+            echo "❌ App is unhealthy - restart required"
+            echo "restart=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Login to Azure
+        if: ${{ steps.decision.outputs.restart == 'true' }}
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_AA4E9EC299D1433D9FF12541F06BA50D }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_AE01A735F8B046C49C5F169706AC5842 }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_8E4F3767CE0647AEAA62C4C721F843FE }}
+
+      - name: Restart Azure App Service
+        if: ${{ steps.decision.outputs.restart == 'true' }}
+        run: |
+          echo "🔄 Restarting Azure App Service: ${{ env.AZURE_WEBAPP_NAME }}..."
+          az webapp restart \
+            --resource-group ${{ env.AZURE_RG }} \
+            --name ${{ env.AZURE_WEBAPP_NAME }}
+          echo "✅ Restart command sent. Waiting 60s for app to come back up..."
+          sleep 60
+
+      - name: Verify restart success
+        if: ${{ steps.decision.outputs.restart == 'true' }}
+        run: |
+          echo "🔍 Verifying app is back online..."
+          # Try up to 5 times with 15s intervals
+          for i in 1 2 3 4 5; do
+            HTTP_CODE=$(curl -s -o /tmp/verify_response.json -w "%{http_code}" --max-time 30 "${{ env.APP_ROOT_URL }}" || echo "000")
+            echo "Attempt $i: HTTP $HTTP_CODE"
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "✅ App is back online!"
+              # Now check DB connectivity
+              DB_CODE=$(curl -s -o /tmp/db_response.json -w "%{http_code}" --max-time 60 "${{ env.HEALTH_URL }}" || echo "000")
+              echo "DB Health: HTTP $DB_CODE"
+              cat /tmp/db_response.json 2>/dev/null
+              exit 0
+            fi
+            echo "Waiting 15s before next attempt..."
+            sleep 15
+          done
+          echo "⚠️ App did not come back online after restart. Manual intervention may be needed."
+          exit 1
+
+  # Daily scheduled restart at JST 5:00 (UTC 20:00) to prevent memory leaks
+  daily-restart:
+    runs-on: ubuntu-latest
+    # Only run on the UTC 21:00 schedule (closest to JST 6:00)
+    if: ${{ github.event.schedule == '0 */3 * * *' && false }}
+    steps:
+      - run: echo "This job is disabled - daily restart handled by health check job"
+
+  # Separate daily proactive restart (runs once per day at JST 5:00 = UTC 20:00)
+  proactive-daily-restart:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.schedule == '0 */3 * * *' }}
+    steps:
+      - name: Check if this is the UTC 21:00 run (JST 6:00)
+        id: time_check
+        run: |
+          HOUR=$(date -u +%H)
+          echo "Current UTC hour: $HOUR"
+          if [ "$HOUR" = "21" ]; then
+            echo "🕕 This is the JST 6:00 run - performing proactive restart"
+            echo "is_daily=true" >> $GITHUB_OUTPUT
+          else
+            echo "⏭️ Not the daily restart time, skipping proactive restart"
+            echo "is_daily=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Login to Azure
+        if: ${{ steps.time_check.outputs.is_daily == 'true' }}
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_AA4E9EC299D1433D9FF12541F06BA50D }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_AE01A735F8B046C49C5F169706AC5842 }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_8E4F3767CE0647AEAA62C4C721F843FE }}
+
+      - name: Proactive Daily Restart
+        if: ${{ steps.time_check.outputs.is_daily == 'true' }}
+        run: |
+          echo "🔄 Proactive daily restart at JST 6:00..."
+          az webapp restart \
+            --resource-group ${{ env.AZURE_RG }} \
+            --name ${{ env.AZURE_WEBAPP_NAME }}
+          echo "✅ Daily restart completed"
+          sleep 60
+          # Verify
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 60 "${{ env.HEALTH_URL }}" || echo "000")
+          echo "Post-restart health: HTTP $HTTP_CODE"
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "⚠️ App not healthy after daily restart, but it may need more time to warm up"
+          fi
