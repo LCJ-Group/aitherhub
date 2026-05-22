@@ -937,6 +937,217 @@ def _render_text_overlay_image(
     return img
 
 
+def _render_text_overlay_image_v2(
+    text: str,
+    video_width: int,
+    video_height: int,
+    font_path: str,
+    font_size: int = 72,
+    text_color: tuple = (255, 255, 255, 255),
+    outline_color: tuple = (0, 0, 0, 255),
+    outline_width: int = 4,
+    bg_color: tuple = None,
+    bg_padding: int = 10,
+    position: str = 'center_bottom',
+    position_y_pct: float = 75.0,
+    keyword_spans: list = None,
+) -> 'Image':
+    """V2.17: キーワード強調付きテキストオーバーレイ画像を生成。
+    
+    改善点:
+    - キーワード部分を別色で描画（商品名=金, CTA=緑, 数字=オレンジ）
+    - 長文は自然な位置で改行（句読点・助詞の後）
+    - フォントサイズは呼び出し元で調整済み
+    """
+    from PIL import Image, ImageDraw, ImageFont
+    
+    keyword_spans = keyword_spans or []
+    
+    # Clean text
+    text = _strip_emoji(text).strip()
+    if not text:
+        return Image.new('RGBA', (video_width, video_height), (0, 0, 0, 0))
+    
+    img = Image.new('RGBA', (video_width, video_height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    
+    # Load font (normal + bold)
+    font = None
+    font_bold = None
+    try:
+        font = ImageFont.truetype(font_path, font_size)
+        # Try to load bold variant
+        bold_path = font_path.replace('Regular', 'Bold').replace('regular', 'bold')
+        if os.path.exists(bold_path):
+            font_bold = ImageFont.truetype(bold_path, font_size)
+        else:
+            font_bold = font  # Fallback: use same font
+    except Exception as e:
+        logger.warning(f"[ai-clip] Failed to load font {font_path}: {e}")
+        for fp in _FONT_SEARCH_PATHS:
+            try:
+                if os.path.exists(fp):
+                    font = ImageFont.truetype(fp, font_size)
+                    font_bold = font
+                    break
+            except Exception:
+                continue
+    if font is None:
+        try:
+            font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', font_size)
+            font_bold = font
+        except Exception:
+            font = ImageFont.load_default()
+            font_bold = font
+    
+    # ── Smart line breaking (自然な位置で改行) ──
+    # Break points: after particles, punctuation, before conjunctions
+    BREAK_AFTER = set('、。、。，．、。、。、。、。、。')
+    BREAK_AFTER_PARTICLES = ['は', 'が', 'を', 'に', 'で', 'も', 'と', 'の', 'へ', 'よ', 'ね', 'よ', 'って', 'から', 'まで', 'けど']
+    
+    lines = []
+    current_line = ""
+    max_width = video_width * 0.88
+    
+    i = 0
+    while i < len(text):
+        char = text[i]
+        test_line = current_line + char
+        bbox = draw.textbbox((0, 0), test_line, font=font)
+        line_width = bbox[2] - bbox[0]
+        
+        if line_width > max_width:
+            if current_line:
+                # Try to find a natural break point in the last few characters
+                best_break = -1
+                search_range = min(8, len(current_line))
+                for j in range(len(current_line) - 1, max(0, len(current_line) - search_range) - 1, -1):
+                    if current_line[j] in BREAK_AFTER or current_line[j] in '、。、。，':
+                        best_break = j + 1
+                        break
+                    # Check 2-char particles
+                    if j > 0:
+                        two_char = current_line[j-1:j+1]
+                        if two_char in BREAK_AFTER_PARTICLES:
+                            best_break = j + 1
+                            break
+                    # Single-char particles
+                    if current_line[j] in 'はがをにでもとのへよね':
+                        best_break = j + 1
+                        break
+                
+                if best_break > 0 and best_break < len(current_line):
+                    lines.append(current_line[:best_break])
+                    current_line = current_line[best_break:] + char
+                else:
+                    lines.append(current_line)
+                    current_line = char
+            else:
+                lines.append(char)
+                current_line = ""
+        else:
+            current_line = test_line
+        i += 1
+    if current_line:
+        lines.append(current_line)
+    
+    # ── Calculate text block dimensions ──
+    line_heights = []
+    line_widths = []
+    line_spacing = int(font_size * 0.25)
+    for line in lines:
+        bbox = draw.textbbox((0, 0), line, font=font)
+        line_widths.append(bbox[2] - bbox[0])
+        line_heights.append(bbox[3] - bbox[1])
+    
+    total_text_h = sum(line_heights) + line_spacing * max(0, len(lines) - 1)
+    max_text_w = max(line_widths) if line_widths else 0
+    
+    # Calculate Y position
+    if position == 'center_top':
+        block_y = int(video_height * 0.10)
+    elif position == 'center':
+        block_y = (video_height - total_text_h) // 2
+    else:  # center_bottom
+        block_y = int(video_height * position_y_pct / 100) - total_text_h
+    
+    # Draw background box
+    if bg_color:
+        box_x1 = (video_width - max_text_w) // 2 - bg_padding
+        box_y1 = block_y - bg_padding
+        box_x2 = (video_width + max_text_w) // 2 + bg_padding
+        box_y2 = block_y + total_text_h + bg_padding
+        radius = min(bg_padding * 2, 20)
+        draw.rounded_rectangle(
+            [box_x1, box_y1, box_x2, box_y2],
+            radius=radius,
+            fill=bg_color,
+        )
+    
+    # ── Draw each line with keyword highlighting ──
+    # Build a mapping from original text position to (line_idx, char_offset)
+    char_pos_map = []  # For each char in original text, which line and offset
+    pos = 0
+    for line_idx, line in enumerate(lines):
+        for char_offset in range(len(line)):
+            char_pos_map.append((line_idx, char_offset))
+            pos += 1
+    
+    current_y = block_y
+    text_pos_offset = 0  # Track position in original text
+    
+    for line_idx, line in enumerate(lines):
+        bbox = draw.textbbox((0, 0), line, font=font)
+        lw = bbox[2] - bbox[0]
+        lh = bbox[3] - bbox[1]
+        x_start = (video_width - lw) // 2
+        
+        if not keyword_spans:
+            # No keywords - draw normally
+            if outline_width > 0:
+                draw.text(
+                    (x_start, current_y), line, font=font,
+                    fill=text_color,
+                    stroke_width=outline_width,
+                    stroke_fill=outline_color,
+                )
+            else:
+                draw.text((x_start, current_y), line, font=font, fill=text_color)
+        else:
+            # Draw character by character with keyword highlighting
+            char_x = x_start
+            for ci, char in enumerate(line):
+                abs_pos = text_pos_offset + ci
+                # Check if this position is within a keyword span
+                char_color = text_color
+                use_bold = False
+                for span_start, span_end, span_color in keyword_spans:
+                    if span_start <= abs_pos < span_end:
+                        char_color = span_color
+                        use_bold = True
+                        break
+                
+                active_font = font_bold if use_bold else font
+                if outline_width > 0:
+                    draw.text(
+                        (char_x, current_y), char, font=active_font,
+                        fill=char_color,
+                        stroke_width=outline_width + (1 if use_bold else 0),
+                        stroke_fill=outline_color,
+                    )
+                else:
+                    draw.text((char_x, current_y), char, font=active_font, fill=char_color)
+                
+                # Advance x position
+                char_bbox = draw.textbbox((0, 0), char, font=active_font)
+                char_x += char_bbox[2] - char_bbox[0]
+        
+        text_pos_offset += len(line)
+        current_y += lh + line_spacing
+    
+    return img
+
+
 def _generate_overlay_images(
     styled_captions: list,
     hook_text: Optional[str],
@@ -948,6 +1159,7 @@ def _generate_overlay_images(
     tmp_dir: str,
     position_y: float = 75.0,
     clip_duration: float = 0,
+    product_name: str = "",
 ) -> list:
     """Pillowで全overlay画像（フック・字幕・CTA）を生成する。
     
@@ -1006,9 +1218,30 @@ def _generate_overlay_images(
         overlays.append((hook_path, 0.0, 3.0))
         logger.info(f"[ai-clip] Generated hook overlay: {hook_text[:30]}")
     
-    # ── Subtitle captions ──
+    # ── Subtitle captions ── (V2.17: 重畳防止 + 長文対応 + キーワード強調)
     sub_fontsize = max(44, int(72 * scale))
-    MIN_DISPLAY = 2.5
+    MIN_DISPLAY = 2.0
+    SUBTITLE_GAP = 0.1  # 字幕間ギャップ（重畳防止）
+    MAX_SINGLE_LINE_CHARS = 16  # これ以上は自動でフォント縮小
+    
+    # キーワード強調用の色定義
+    KEYWORD_HIGHLIGHT_COLOR = (255, 215, 0, 255)  # Gold for keywords
+    KEYWORD_CTA_COLOR = (0, 255, 128, 255)  # Green for CTA
+    KEYWORD_NUMBER_COLOR = (255, 140, 0, 255)  # Orange for numbers/prices
+    
+    # Build keyword set for highlighting
+    highlight_keywords = set()
+    if product_name:
+        for word in product_name.split():
+            if len(word) >= 2:
+                highlight_keywords.add(word)
+    for kw in _CTA_KEYWORDS:
+        highlight_keywords.add(kw)
+    for kw in _EMPHASIS_KEYWORDS:
+        highlight_keywords.add(kw)
+    
+    # Pre-process captions: calculate timing with gap enforcement
+    processed_captions = []
     for i, cap in enumerate(styled_captions or []):
         cap_start = float(cap.get('start', 0)) - caption_offset
         cap_end = float(cap.get('end', 0)) - caption_offset
@@ -1028,13 +1261,40 @@ def _generate_overlay_images(
             cap_end = cap_start + MIN_DISPLAY
         if cap_end - cap_start < MIN_DISPLAY:
             cap_end = cap_start + MIN_DISPLAY
-            if i + 1 < len(styled_captions):
-                next_start = float(styled_captions[i + 1].get('start', 0))
-                if next_start > cap_start:
-                    cap_end = min(cap_end, next_start)
+        
+        processed_captions.append({
+            'start': cap_start,
+            'end': cap_end,
+            'text': cap_text,
+            'style': cap.get('style', 'box'),
+            'orig_idx': i,
+        })
+    
+    # Enforce non-overlapping timing with gap (字幕重畳防止)
+    for i in range(len(processed_captions) - 1):
+        curr = processed_captions[i]
+        nxt = processed_captions[i + 1]
+        # Current caption must end before next starts (with gap)
+        max_end = nxt['start'] - SUBTITLE_GAP
+        if curr['end'] > max_end:
+            curr['end'] = max(curr['start'] + 0.5, max_end)  # At least 0.5s display
+    
+    for cap_info in processed_captions:
+        cap_text = cap_info['text']
+        cap_start = cap_info['start']
+        cap_end = cap_info['end']
+        style = cap_info['style']
+        orig_idx = cap_info['orig_idx']
+        
+        # ── 長文対応: フォントサイズ動的調整 ──
+        text_len = len(cap_text)
+        adjusted_fontsize = sub_fontsize
+        if text_len > MAX_SINGLE_LINE_CHARS * 2:  # Very long (32+ chars)
+            adjusted_fontsize = max(36, int(sub_fontsize * 0.65))
+        elif text_len > MAX_SINGLE_LINE_CHARS:  # Long (16-32 chars)
+            adjusted_fontsize = max(40, int(sub_fontsize * 0.80))
         
         # Determine style-based colors
-        style = cap.get('style', 'box')
         if style == 'pop':
             text_color = (255, 225, 53, 255)  # Yellow
             outline_clr = (255, 107, 53, 255)  # Orange
@@ -1056,12 +1316,27 @@ def _generate_overlay_images(
             outline_clr = (0, 0, 0, 255)
             bg_clr = (0, 0, 0, 100)
         
-        sub_img = _render_text_overlay_image(
+        # ── キーワード強調: 商品名・CTA・数字を検出 ──
+        # Find keywords in text for highlighting
+        keyword_spans = []  # (start_pos, end_pos, color)
+        for kw in highlight_keywords:
+            idx = cap_text.find(kw)
+            while idx >= 0:
+                kw_color = KEYWORD_CTA_COLOR if kw in _CTA_KEYWORDS else KEYWORD_HIGHLIGHT_COLOR
+                keyword_spans.append((idx, idx + len(kw), kw_color))
+                idx = cap_text.find(kw, idx + len(kw))
+        # Also highlight numbers/prices (e.g., 1980円, 50%OFF)
+        import re as _re
+        for m in _re.finditer(r'\d+[%％円万]?(?:OFF|off|オフ)?', cap_text):
+            keyword_spans.append((m.start(), m.end(), KEYWORD_NUMBER_COLOR))
+        
+        # Generate subtitle image with keyword highlighting
+        sub_img = _render_text_overlay_image_v2(
             text=cap_text,
             video_width=video_width,
             video_height=video_height,
             font_path=font_path,
-            font_size=sub_fontsize,
+            font_size=adjusted_fontsize,
             text_color=text_color,
             outline_color=outline_clr,
             outline_width=max(3, int(5 * scale)),
@@ -1069,8 +1344,9 @@ def _generate_overlay_images(
             bg_padding=8,
             position='center_bottom',
             position_y_pct=position_y,
+            keyword_spans=keyword_spans,
         )
-        sub_path = os.path.join(tmp_dir, f"overlay_sub_{i:03d}.png")
+        sub_path = os.path.join(tmp_dir, f"overlay_sub_{orig_idx:03d}.png")
         sub_img.save(sub_path, 'PNG')
         overlays.append((sub_path, cap_start, cap_end))
     
@@ -1976,7 +2252,7 @@ async def diagnostics(x_admin_key: Optional[str] = Header(None)):
         db_status["error"] = f"{type(e).__name__}: {str(e)[:200]}\n{traceback.format_exc()[-200:]}"
 
     return {
-        "version": "2.16",
+        "version": "2.17",
         "azure_openai_key_set": bool(azure_key),
         "azure_openai_endpoint": azure_endpoint or "NOT SET",
         "gpt_model": gpt_model,
@@ -2001,6 +2277,10 @@ async def diagnostics(x_admin_key: Optional[str] = Header(None)):
             "v9_discount_penalty": True,
             "v9_quality_scoring": True,
             "v9_auto_reject": True,
+            "v2_17_subtitle_gap": True,
+            "v2_17_smart_linebreak": True,
+            "v2_17_keyword_highlight_pillow": True,
+            "v2_17_dynamic_fontsize": True,
         },
     }
 
@@ -2712,6 +2992,7 @@ async def _run_regeneration(
             tmp_dir=tmp_dir,
             position_y=position_y,
             clip_duration=duration,  # For regen, clip_duration = actual video duration
+            product_name=source_clip.get('product_name', '') if source_clip else '',
         )
         logger.info(f"[ai-clip regen] Generated {len(overlay_images)} overlay images")
         # Build ffmpeg command for re-encoding with Pillow overlay
@@ -3058,6 +3339,7 @@ async def _process_single_clip_v2(job_id: str, clip: dict, req: GenerateRequest,
             tmp_dir=tmp_dir,
             position_y=req.position_y,
             clip_duration=clip_duration,
+            product_name=product_name,
         )
         logger.info(f"[ai-clip {job_id}] Generated {len(overlay_images)} overlay images "
                     f"(clip_duration={clip_duration:.1f}s)")

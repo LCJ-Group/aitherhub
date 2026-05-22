@@ -331,7 +331,22 @@ export default function AutoAIClipPanel({ adminKey }) {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
-            🤖 全自動AIクリップ生成 <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">V2</span>
+            🤖 全自動AIクリップ生成 <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">V2.17</span>
+            <span className="relative group">
+              <span className="cursor-help text-gray-400 hover:text-gray-600 text-sm">ℹ️</span>
+              <span className="absolute left-0 top-6 z-50 hidden group-hover:block w-72 p-3 bg-gray-900 text-white text-xs rounded-lg shadow-lg leading-relaxed">
+                <b>V2.17 字幕品質改善:</b><br/>
+                ・字幕重畳防止（0.1秒ギャップ制御）<br/>
+                ・長文自動フォント縮小＋自然改行<br/>
+                ・キーワード強調（商品名=金色, CTA=緑, 数字=橙）<br/>
+                ・助詞・句読点での自然な改行位置<br/>
+                <br/>
+                <b>設計思想:</b><br/>
+                ・1行に収まる字幕で視認性UP<br/>
+                ・重要ワードを色分けで目立たせる<br/>
+                ・字幕切替時の重なりを完全排除
+              </span>
+            </span>
           </h2>
           <p className="text-sm text-gray-500 mt-1">
             字幕・フック・CTA・ズームパルス・無音カット・進行バー・キーワードハイライトを全自動生成
