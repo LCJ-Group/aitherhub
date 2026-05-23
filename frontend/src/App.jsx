@@ -7,6 +7,7 @@ import DigitalHumanPage from './components/DigitalHumanPage'
 import AiLiveCreatorPage from './components/AiLiveCreatorPage'
 import OBSOutputPage from './components/OBSOutputPage'
 import PersonaPage from './components/PersonaPage'
+import LiverClonePage from './components/LiverClonePage'
 import ScriptGeneratorPage from './components/ScriptGeneratorPage'
 import PrivacyPolicy from './components/PrivacyPolicy'
 import AuthPage from './pages/authPages/AuthPage'
@@ -35,6 +36,7 @@ function App() {
             <Route path="/ai-live-creator" element={<AiLiveCreatorPage />} />
             <Route path="/ai-live-creator/obs" element={<OBSOutputPage />} />
             <Route path="/personas" element={<PersonaPage />} />
+            <Route path="/liver-clone" element={<LiverClonePage />} />
             <Route path="/script-generator" element={<ScriptGeneratorPage />} />
             <Route path="/login" element={<AuthPage mode="login" />} />
             <Route path="/register" element={<AuthPage mode="register" />} />

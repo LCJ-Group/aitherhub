@@ -127,6 +127,15 @@ class StartStreamRequest(BaseModel):
     resolution: str = Field(default="720p", description="Output resolution: 480p, 720p, 1080p")
     fps: int = Field(default=30, description="Output FPS")
     face_enhancer: bool = Field(default=True, description="Enable GFPGAN face enhancement")
+    # Liver Clone audio settings
+    voice_id: Optional[str] = Field(default=None, description="ElevenLabs voice ID for STS/TTS")
+    audio_mode: str = Field(default="hybrid", description="Audio mode: manual, auto, hybrid")
+    vad_threshold: float = Field(default=0.3, description="VAD energy threshold (0-1)")
+    silence_timeout: float = Field(default=5.0, description="Seconds of silence before auto-pilot")
+    voice_stability: float = Field(default=0.5, description="ElevenLabs voice stability")
+    voice_similarity: float = Field(default=0.75, description="ElevenLabs voice similarity")
+    language: str = Field(default="en", description="Language for TTS")
+    liver_clone_session_id: Optional[str] = Field(default=None, description="Liver Clone session ID")
 
 
 class StopStreamRequest(BaseModel):
@@ -526,6 +535,31 @@ async def start_stream(req: StartStreamRequest, auth: bool = Depends(verify_api_
 
         logger.info(f"Stream started: session={session_id}")
 
+        # Start audio processor for Liver Clone if voice_id is provided
+        audio_status = None
+        if req.voice_id:
+            try:
+                from audio_processor import AudioProcessor, AudioConfig, AudioMode
+                mode_map = {"manual": AudioMode.MANUAL, "auto": AudioMode.AUTO, "hybrid": AudioMode.HYBRID}
+                audio_config = AudioConfig(
+                    voice_id=req.voice_id,
+                    mode=mode_map.get(req.audio_mode, AudioMode.HYBRID),
+                    vad_threshold=req.vad_threshold,
+                    silence_timeout=req.silence_timeout,
+                    voice_stability=req.voice_stability,
+                    voice_similarity=req.voice_similarity,
+                    language=req.language,
+                    session_id=req.liver_clone_session_id or session_id,
+                )
+                global audio_processor
+                audio_processor = AudioProcessor(audio_config)
+                await audio_processor.start(req.input_rtmp, "")
+                audio_status = audio_processor.get_status()
+                logger.info(f"Audio processor started: mode={req.audio_mode}")
+            except Exception as ae:
+                logger.error(f"Audio processor failed to start (non-fatal): {ae}")
+                audio_status = {"error": str(ae)}
+
         return {
             "session_id": session_id,
             "status": "running",
@@ -538,6 +572,7 @@ async def start_stream(req: StartStreamRequest, auth: bool = Depends(verify_api_
                 "fps": req.fps,
                 "face_enhancer": req.face_enhancer,
             },
+            "audio": audio_status,
         }
 
     except Exception as e:
@@ -567,6 +602,14 @@ async def stop_stream(auth: bool = Depends(verify_api_key)):
 
     current_session["status"] = "stopping"
     logger.info(f"Stopping stream: session={session_id}")
+
+    # Stop audio processor if running
+    try:
+        if 'audio_processor' in globals() and audio_processor:
+            await audio_processor.stop()
+            logger.info("Audio processor stopped")
+    except Exception as ae:
+        logger.warning(f"Error stopping audio processor: {ae}")
 
     # Kill all processes in reverse order
     for key in ("ffmpeg_out_proc", "facefusion_proc", "ffmpeg_in_proc"):
@@ -1123,12 +1166,34 @@ async def delete_video_job(job_id: str, auth: bool = Depends(verify_api_key)):
     return {"status": "deleted", "job_id": job_id}
 
 
+# ── Audio Processor Endpoints ─────────────────────────────────────────────────
+
+audio_processor: Optional[object] = None  # Will hold AudioProcessor instance
+
+
+@app.get("/api/audio-status")
+async def get_audio_status(auth: bool = Depends(verify_api_key)):
+    """Get audio processor status (VAD, auto-pilot, etc.)."""
+    if audio_processor is None:
+        return {"status": "not_running", "message": "Audio processor not initialized"}
+    return audio_processor.get_status()
+
+
+@app.post("/api/audio-inject")
+async def inject_audio_text(text: str, auth: bool = Depends(verify_api_key)):
+    """Manually inject TTS text into the audio stream."""
+    if audio_processor is None:
+        raise HTTPException(400, "Audio processor not running")
+    await audio_processor._generate_and_inject_tts(text)
+    return {"status": "injected", "text": text}
+
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     logger.info(f"Starting FaceFusion GPU Worker on port {PORT}")
     uvicorn.run(
-        "worker_api:app",
+        "face_swap_worker_api:app",
         host="0.0.0.0",
         port=PORT,
         workers=1,
