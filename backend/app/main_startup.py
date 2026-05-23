@@ -712,6 +712,9 @@ async def run_all_ddl_migrations():
                 """))
                 await conn.execute(_text("CREATE INDEX IF NOT EXISTS ix_tiktok_tracked_videos_status ON tiktok_tracked_videos(status)"))
                 await conn.execute(_text("CREATE UNIQUE INDEX IF NOT EXISTS ix_tiktok_tracked_videos_tiktok_video_id ON tiktok_tracked_videos(tiktok_video_id)"))
+                # V2.17+: Add posted_at and duration columns
+                await conn.execute(_text("ALTER TABLE tiktok_tracked_videos ADD COLUMN IF NOT EXISTS posted_at TIMESTAMPTZ"))
+                await conn.execute(_text("ALTER TABLE tiktok_tracked_videos ADD COLUMN IF NOT EXISTS duration INTEGER DEFAULT 0"))
                 logger.info("[DDL] tiktok_tracked_videos \u2713")
         except Exception as e:
             logger.warning(f"[DDL] tiktok_tracked_videos: {e}")

@@ -1246,6 +1246,7 @@ export default function TikTokTrackingPanel({ adminKey }) {
 
                 {/* Last fetched */}
                 <div className="px-3 pb-2 text-[9px] text-gray-300">
+                  {video.posted_at && <><span className="text-yellow-400">投稿: {new Date(video.posted_at).toLocaleDateString("ja-JP")}</span>{" | "}</>}
                   最終取得: {video.last_fetched_at ? timeAgo(video.last_fetched_at) : "未取得"}
                   {video.created_at && ` | 登録: ${new Date(video.created_at).toLocaleDateString("ja-JP")}`}
                 </div>

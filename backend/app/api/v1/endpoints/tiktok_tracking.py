@@ -177,6 +177,16 @@ async def register_video(req: RegisterVideoRequest, x_admin_key: Optional[str] =
     cover_url = video_data.get("cover", "") or video_data.get("origin_cover", "")
     duration = video_data.get("duration", 0)
 
+    # Extract posted_at from create_time (Unix timestamp)
+    create_time = video_data.get("create_time")
+    posted_at = None
+    if create_time:
+        try:
+            from datetime import timezone
+            posted_at = datetime.fromtimestamp(int(create_time), tz=timezone.utc)
+        except (ValueError, TypeError, OSError):
+            pass
+
     # Auto-match to ClipDB if no clip_db_id provided and auto_match enabled
     auto_match_result = None
     clip_db_id = req.clip_db_id
@@ -217,14 +227,14 @@ async def register_video(req: RegisterVideoRequest, x_admin_key: Optional[str] =
         result = await session.execute(
             text("""
                 INSERT INTO tiktok_tracked_videos
-                    (tiktok_url, tiktok_video_id, account_name, title, cover_url, clip_db_id, label, status)
-                VALUES (:url, :vid, :account, :title, :cover, :clip_db_id, :label, 'active')
+                    (tiktok_url, tiktok_video_id, account_name, title, cover_url, clip_db_id, label, status, posted_at, duration)
+                VALUES (:url, :vid, :account, :title, :cover, :clip_db_id, :label, 'active', :posted_at, :duration)
                 RETURNING id
             """),
             {
                 "url": req.tiktok_url, "vid": video_id, "account": account_name,
                 "title": title, "cover": cover_url, "clip_db_id": clip_db_id,
-                "label": label_val,
+                "label": label_val, "posted_at": posted_at, "duration": duration,
             }
         )
         new_id = result.scalar()
@@ -442,6 +452,17 @@ async def fetch_now(video_id: int, x_admin_key: Optional[str] = Header(None)):
         comment_count = video_data.get("comment_count", 0)
         share_count = video_data.get("share_count", 0)
         collect_count = video_data.get("collect_count", 0)
+        duration = video_data.get("duration", 0)
+
+        # Extract posted_at from create_time (backfill for existing records)
+        create_time = video_data.get("create_time")
+        posted_at = None
+        if create_time:
+            try:
+                from datetime import timezone
+                posted_at = datetime.fromtimestamp(int(create_time), tz=timezone.utc)
+            except (ValueError, TypeError, OSError):
+                pass
 
         await session.execute(
             text("""
@@ -455,9 +476,16 @@ async def fetch_now(video_id: int, x_admin_key: Optional[str] = Header(None)):
             }
         )
 
+        # Update metadata including posted_at backfill
         await session.execute(
-            text("UPDATE tiktok_tracked_videos SET last_fetched_at = NOW(), updated_at = NOW() WHERE id = :id"),
-            {"id": video_id}
+            text("""
+                UPDATE tiktok_tracked_videos
+                SET last_fetched_at = NOW(), updated_at = NOW(),
+                    posted_at = COALESCE(:posted_at, posted_at),
+                    duration = CASE WHEN :duration > 0 THEN :duration ELSE duration END
+                WHERE id = :id
+            """),
+            {"id": video_id, "posted_at": posted_at, "duration": duration}
         )
 
         return {
@@ -709,6 +737,17 @@ async def cron_fetch_all(x_admin_key: Optional[str] = Header(None)):
                 comment_count = video_data.get("comment_count", 0)
                 share_count = video_data.get("share_count", 0)
                 collect_count = video_data.get("collect_count", 0)
+                duration = video_data.get("duration", 0)
+
+                # Extract posted_at from create_time (backfill)
+                create_time = video_data.get("create_time")
+                posted_at = None
+                if create_time:
+                    try:
+                        from datetime import timezone
+                        posted_at = datetime.fromtimestamp(int(create_time), tz=timezone.utc)
+                    except (ValueError, TypeError, OSError):
+                        pass
 
                 await session.execute(
                     text("""
@@ -722,9 +761,16 @@ async def cron_fetch_all(x_admin_key: Optional[str] = Header(None)):
                     }
                 )
 
+                # Update metadata including posted_at backfill
                 await session.execute(
-                    text("UPDATE tiktok_tracked_videos SET last_fetched_at = NOW(), updated_at = NOW() WHERE id = :id"),
-                    {"id": vid_id}
+                    text("""
+                        UPDATE tiktok_tracked_videos
+                        SET last_fetched_at = NOW(), updated_at = NOW(),
+                            posted_at = COALESCE(:posted_at, posted_at),
+                            duration = CASE WHEN :duration > 0 THEN :duration ELSE duration END
+                        WHERE id = :id
+                    """),
+                    {"id": vid_id, "posted_at": posted_at, "duration": duration}
                 )
                 results["fetched"] += 1
             except Exception as e:
@@ -1052,19 +1098,29 @@ async def import_account(
                     clip_db_id = str(close_clips[0]["id"])
                     match_method = "duration_closest"
 
+            # Convert create_time to posted_at
+            posted_at = None
+            if create_time:
+                try:
+                    from datetime import timezone as _tz
+                    posted_at = datetime.fromtimestamp(int(create_time), tz=_tz.utc)
+                except (ValueError, TypeError, OSError):
+                    pass
+
             try:
                 async with get_session() as session:
                     result = await session.execute(
                         text("""
                             INSERT INTO tiktok_tracked_videos
-                                (tiktok_url, tiktok_video_id, account_name, title, cover_url, clip_db_id, label, status)
-                            VALUES (:url, :vid, :account, :title, :cover, :clip_db_id, :label, 'active')
+                                (tiktok_url, tiktok_video_id, account_name, title, cover_url, clip_db_id, label, status, posted_at, duration)
+                            VALUES (:url, :vid, :account, :title, :cover, :clip_db_id, :label, 'active', :posted_at, :duration)
                             RETURNING id
                         """),
                         {
                             "url": tiktok_url, "vid": video_id, "account": account_name,
                             "title": title, "cover": cover_url, "clip_db_id": clip_db_id,
                             "label": title[:100] if title else None,
+                            "posted_at": posted_at, "duration": duration,
                         }
                     )
                     new_id = result.scalar()
