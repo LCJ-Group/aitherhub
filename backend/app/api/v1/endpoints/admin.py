@@ -123,6 +123,39 @@ async def _get_dashboard_data(db: AsyncSession) -> dict:
         daily_uploads_rows = daily_uploads_raw.fetchall()
         daily_uploads = [{"date": str(r.dt), "count": r.cnt, "duration_seconds": 0} for r in daily_uploads_rows]
 
+    # ── Monthly uploads (past 6 months) ──
+    try:
+        monthly_uploads_raw = await db.execute(
+            text("""
+                SELECT TO_CHAR(created_at, 'YYYY-MM') as month,
+                       COUNT(*) as cnt,
+                       COALESCE(SUM(duration), 0) as total_duration
+                FROM videos
+                WHERE created_at >= CURRENT_DATE - INTERVAL '6 months'
+                GROUP BY TO_CHAR(created_at, 'YYYY-MM')
+                ORDER BY month ASC
+            """)
+        )
+        monthly_uploads_rows = monthly_uploads_raw.fetchall()
+        monthly_uploads = [{"month": r.month, "count": r.cnt, "duration_seconds": int(r.total_duration)} for r in monthly_uploads_rows]
+    except Exception:
+        await db.rollback()
+        try:
+            monthly_uploads_raw = await db.execute(
+                text("""
+                    SELECT TO_CHAR(created_at, 'YYYY-MM') as month,
+                           COUNT(*) as cnt
+                    FROM videos
+                    WHERE created_at >= CURRENT_DATE - INTERVAL '6 months'
+                    GROUP BY TO_CHAR(created_at, 'YYYY-MM')
+                    ORDER BY month ASC
+                """)
+            )
+            monthly_uploads_rows = monthly_uploads_raw.fetchall()
+            monthly_uploads = [{"month": r.month, "count": r.cnt, "duration_seconds": 0} for r in monthly_uploads_rows]
+        except Exception:
+            monthly_uploads = []
+
     return {
         "data_volume": {
             "total_videos": total_videos,
@@ -131,6 +164,7 @@ async def _get_dashboard_data(db: AsyncSession) -> dict:
             "total_duration_seconds": total_duration_seconds,
             "total_duration_display": f"{total_hours}時間{total_minutes}分",
             "daily_uploads": daily_uploads,
+            "monthly_uploads": monthly_uploads,
         },
         "video_types": {
             "screen_recording_count": screen_recording_count,

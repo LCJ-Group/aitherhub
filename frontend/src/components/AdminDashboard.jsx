@@ -685,7 +685,7 @@ export default function AdminDashboard() {
               </div>
               {/* 毎日のアップロード数 */}
               {data_volume.daily_uploads && (
-                <DailyUploadsChart dailyUploads={data_volume.daily_uploads} />
+                <DailyUploadsChart dailyUploads={data_volume.daily_uploads} monthlyUploads={data_volume.monthly_uploads} />
               )}
             </section>
 
@@ -2510,7 +2510,9 @@ function formatSeconds(sec) {
 }
 
 // ─── Daily Uploads Chart ───
-function DailyUploadsChart({ dailyUploads }) {
+function DailyUploadsChart({ dailyUploads, monthlyUploads }) {
+  const [viewMode, setViewMode] = useState('monthly'); // 'daily' | 'monthly'
+
   if (!dailyUploads || dailyUploads.length === 0) return null;
 
   // Fill in missing dates with count=0 to create a complete 30-day range
@@ -2529,10 +2531,6 @@ function DailyUploadsChart({ dailyUploads }) {
     return result;
   }, [dailyUploads]);
 
-  // Y軸スケール: データの最大値に合わせて動的に調整（切り上げ）
-  const rawMax = Math.max(...filledData.map(d => d.count), 1);
-  // 美しい切り上げ値を計算（最大値+20%、最低でもmax+1）
-  const maxCount = rawMax <= 5 ? rawMax + 1 : Math.ceil(rawMax * 1.2);
   const totalCount = filledData.reduce((sum, d) => sum + d.count, 0);
   const totalDuration = filledData.reduce((sum, d) => sum + d.duration_seconds, 0);
 
@@ -2544,77 +2542,162 @@ function DailyUploadsChart({ dailyUploads }) {
     return m > 0 ? `${h}時間${m}分` : `${h}時間`;
   };
 
+  // Monthly data with growth calculation
+  const monthlyData = useMemo(() => {
+    if (!monthlyUploads || monthlyUploads.length === 0) return [];
+    return monthlyUploads.map((m, i) => {
+      const prev = i > 0 ? monthlyUploads[i - 1].count : null;
+      const growth = prev ? Math.round(((m.count - prev) / prev) * 100) : null;
+      const monthLabel = (() => {
+        const [y, mo] = m.month.split('-');
+        return `${parseInt(mo)}月`;
+      })();
+      return { ...m, growth, monthLabel };
+    });
+  }, [monthlyUploads]);
+
+  const monthlyMax = monthlyData.length > 0 ? Math.max(...monthlyData.map(m => m.count), 1) : 1;
+
   return (
     <div className="mt-4 bg-white rounded-xl border border-gray-200 p-5">
-      {/* Header with title and summary stats */}
+      {/* Header */}
       <div className="flex items-center justify-between mb-4">
-        <h3 className="text-sm font-bold text-gray-700">📅 毎日のアップロード（過去30日）</h3>
+        <div className="flex items-center gap-3">
+          <h3 className="text-sm font-bold text-gray-700">📈 アップロード推移</h3>
+          <div className="flex bg-gray-100 rounded-lg p-0.5">
+            <button
+              onClick={() => setViewMode('monthly')}
+              className={`px-2.5 py-1 text-[10px] font-bold rounded-md transition-all ${
+                viewMode === 'monthly' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >月別</button>
+            <button
+              onClick={() => setViewMode('daily')}
+              className={`px-2.5 py-1 text-[10px] font-bold rounded-md transition-all ${
+                viewMode === 'daily' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >30日</button>
+          </div>
+        </div>
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-1.5 bg-blue-50 px-2.5 py-1 rounded-lg">
-            <span className="text-blue-500 text-xs">🎥</span>
-            <span className="text-xs font-bold text-blue-700">{totalCount}本</span>
+            <span className="text-xs font-bold text-blue-700">🎥 {totalCount}本</span>
           </div>
           <div className="flex items-center gap-1.5 bg-purple-50 px-2.5 py-1 rounded-lg">
-            <span className="text-purple-500 text-xs">⏱️</span>
-            <span className="text-xs font-bold text-purple-700">{formatDuration(totalDuration)}</span>
+            <span className="text-xs font-bold text-purple-700">⏱️ {formatDuration(totalDuration)}</span>
           </div>
         </div>
       </div>
 
-      {/* Y-axis labels + Chart */}
-      <div className="flex gap-2">
-        {/* Y-axis */}
-        <div className="flex flex-col justify-between h-36 text-[9px] text-gray-400 font-mono py-0.5">
-          <span>{maxCount}</span>
-          <span>{Math.round(maxCount * 0.75)}</span>
-          <span>{Math.round(maxCount * 0.5)}</span>
-          <span>{Math.round(maxCount * 0.25)}</span>
-          <span>0</span>
-        </div>
+      {/* Monthly View */}
+      {viewMode === 'monthly' && monthlyData.length > 0 && (
+        <div>
+          {/* Monthly summary cards */}
+          <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${monthlyData.length}, 1fr)` }}>
+            {monthlyData.map((m, i) => (
+              <div key={i} className="bg-gradient-to-b from-blue-50 to-white border border-blue-100 rounded-xl p-3 text-center relative overflow-hidden">
+                <div className="text-[10px] text-gray-500 font-medium mb-1">{m.monthLabel}</div>
+                <div className="text-lg font-black text-blue-700">{m.count}</div>
+                <div className="text-[9px] text-gray-400">本</div>
+                {m.growth !== null && (
+                  <div className={`text-[10px] font-bold mt-1 ${
+                    m.growth > 0 ? 'text-green-600' : m.growth < 0 ? 'text-red-500' : 'text-gray-400'
+                  }`}>
+                    {m.growth > 0 ? `▲ +${m.growth}%` : m.growth < 0 ? `▼ ${m.growth}%` : '→ 0%'}
+                  </div>
+                )}
+                {/* Background bar indicator */}
+                <div
+                  className="absolute bottom-0 left-0 right-0 bg-blue-100 opacity-30"
+                  style={{ height: `${(m.count / monthlyMax) * 60}%` }}
+                />
+              </div>
+            ))}
+          </div>
 
-        {/* Chart area */}
-        <div className="flex-1">
-          <div className="flex items-end gap-[3px] h-36 border-b border-l border-gray-200 pb-0.5 pl-0.5 relative">
-            {/* Grid lines */}
-            <div className="absolute inset-0 flex flex-col justify-between pointer-events-none">
-              <div className="border-b border-dashed border-gray-100 w-full" />
-              <div className="border-b border-dashed border-gray-100 w-full" />
-              <div className="border-b border-dashed border-gray-100 w-full" />
-              <div className="border-b border-dashed border-gray-100 w-full" />
-              <div />
+          {/* Monthly duration row */}
+          <div className="grid gap-2 mt-2" style={{ gridTemplateColumns: `repeat(${monthlyData.length}, 1fr)` }}>
+            {monthlyData.map((m, i) => (
+              <div key={i} className="text-center text-[9px] text-gray-400">
+                {m.duration_seconds > 0 ? formatDuration(m.duration_seconds) : '-'}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Daily View (Area Chart style) */}
+      {viewMode === 'daily' && (
+        <div>
+          {/* Area chart using SVG */}
+          <div className="relative h-40">
+            <svg width="100%" height="100%" viewBox="0 0 600 160" preserveAspectRatio="none" className="overflow-visible">
+              {/* Grid lines */}
+              <line x1="0" y1="40" x2="600" y2="40" stroke="#f3f4f6" strokeWidth="1" strokeDasharray="4 4" />
+              <line x1="0" y1="80" x2="600" y2="80" stroke="#f3f4f6" strokeWidth="1" strokeDasharray="4 4" />
+              <line x1="0" y1="120" x2="600" y2="120" stroke="#f3f4f6" strokeWidth="1" strokeDasharray="4 4" />
+
+              {/* Area fill */}
+              {(() => {
+                const maxVal = Math.max(...filledData.map(d => d.count), 1);
+                const points = filledData.map((d, i) => {
+                  const x = (i / (filledData.length - 1)) * 600;
+                  const y = 155 - (d.count / maxVal) * 140;
+                  return `${x},${y}`;
+                });
+                const areaPath = `M0,155 L${points.join(' L')} L600,155 Z`;
+                const linePath = `M${points.join(' L')}`;
+                return (
+                  <>
+                    <path d={areaPath} fill="url(#blueGradient)" opacity="0.3" />
+                    <path d={linePath} fill="none" stroke="#3b82f6" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                    {/* Data points */}
+                    {filledData.map((d, i) => {
+                      const x = (i / (filledData.length - 1)) * 600;
+                      const y = 155 - (d.count / maxVal) * 140;
+                      return d.count > 0 ? (
+                        <circle key={i} cx={x} cy={y} r="3" fill="#3b82f6" stroke="white" strokeWidth="1.5" className="opacity-0 hover:opacity-100 transition-opacity" />
+                      ) : null;
+                    })}
+                  </>
+                );
+              })()}
+
+              {/* Gradient definition */}
+              <defs>
+                <linearGradient id="blueGradient" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#3b82f6" />
+                  <stop offset="100%" stopColor="#3b82f6" stopOpacity="0.05" />
+                </linearGradient>
+              </defs>
+            </svg>
+
+            {/* Y-axis labels */}
+            <div className="absolute left-0 top-0 bottom-0 flex flex-col justify-between text-[9px] text-gray-400 font-mono -ml-6">
+              <span>{Math.max(...filledData.map(d => d.count), 1)}</span>
+              <span>{Math.round(Math.max(...filledData.map(d => d.count), 1) / 2)}</span>
+              <span>0</span>
             </div>
 
-            {filledData.map((d, i) => {
-              const height = d.count > 0 ? Math.max((d.count / maxCount) * 100, 6) : 2;
-              const dateLabel = new Date(d.date + 'T00:00:00').toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' });
-              const dayDuration = formatDuration(d.duration_seconds);
-              return (
-                <div key={i} className="flex-1 flex flex-col items-center group relative">
-                  {/* Tooltip */}
-                  <div className="absolute -top-14 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-[10px] px-2 py-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-10 shadow-lg">
-                    <div className="font-bold">{dateLabel}</div>
-                    <div className="flex items-center gap-2 mt-0.5">
-                      <span>🎥 {d.count}本</span>
-                      {d.duration_seconds > 0 && <span>⏱ {dayDuration}</span>}
+            {/* Hover overlay for tooltips */}
+            <div className="absolute inset-0 flex">
+              {filledData.map((d, i) => {
+                const dateLabel = new Date(d.date + 'T00:00:00').toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' });
+                return (
+                  <div key={i} className="flex-1 group relative cursor-pointer">
+                    <div className="absolute -top-10 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-[10px] px-2 py-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-10 shadow-lg pointer-events-none">
+                      <div className="font-bold">{dateLabel}</div>
+                      <div>🎥 {d.count}本{d.duration_seconds > 0 ? ` ・ ⏱ ${formatDuration(d.duration_seconds)}` : ''}</div>
+                      <div className="absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-1/2 w-2 h-2 bg-gray-800 rotate-45" />
                     </div>
-                    <div className="absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-1/2 w-2 h-2 bg-gray-800 rotate-45" />
                   </div>
-                  {/* Bar */}
-                  <div
-                    className={`w-full rounded-t-sm transition-all duration-200 cursor-pointer ${
-                      d.count > 0
-                        ? 'bg-gradient-to-t from-blue-500 to-blue-400 hover:from-blue-600 hover:to-blue-500 shadow-sm'
-                        : 'bg-gray-100'
-                    }`}
-                    style={{ height: `${height}%`, minHeight: d.count > 0 ? '6px' : '2px' }}
-                  />
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
 
           {/* X-axis date labels */}
-          <div className="flex justify-between mt-1.5 px-0.5">
+          <div className="flex justify-between mt-2 px-0.5">
             {filledData.filter((_, i) => i % 7 === 0 || i === filledData.length - 1).map((d, i) => (
               <span key={i} className="text-[9px] text-gray-400 font-mono">
                 {new Date(d.date + 'T00:00:00').toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' })}
@@ -2622,7 +2705,7 @@ function DailyUploadsChart({ dailyUploads }) {
             ))}
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
