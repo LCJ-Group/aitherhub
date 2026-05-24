@@ -702,12 +702,16 @@ async def swap_frame(req: SwapFrameRequest, auth: bool = Depends(verify_api_key)
         cmd = build_facefusion_headless_cmd(input_path, output_path)
         logger.info(f"Processing single frame: {' '.join(cmd)}")
 
+        import os as _os
+        _env = _os.environ.copy()
+        _env["LD_LIBRARY_PATH"] = "/usr/lib/x86_64-linux-gnu:" + _env.get("LD_LIBRARY_PATH", "")
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=90,
             cwd=FACEFUSION_DIR,
+            env=_env,
         )
 
         # Restore config
@@ -1241,12 +1245,16 @@ async def preview_stream(websocket: WebSocket, api_key: str = Query(...)):
                 
                 # Run FaceFusion headless on single frame
                 cmd = build_facefusion_headless_cmd(input_path, output_path)
+                import os as _os
+                _env = _os.environ.copy()
+                _env["LD_LIBRARY_PATH"] = "/usr/lib/x86_64-linux-gnu:" + _env.get("LD_LIBRARY_PATH", "")
                 result = subprocess.run(
                     cmd,
                     capture_output=True,
                     text=True,
-                    timeout=10,  # 10s timeout per frame
+                    timeout=30,  # 30s timeout per frame (CUDA init may take longer)
                     cwd=FACEFUSION_DIR,
+                    env=_env,
                 )
                 
                 if result.returncode != 0 or not Path(output_path).exists():
@@ -1315,13 +1323,17 @@ async def preview_frame(req: SwapFrameRequest, auth: bool = Depends(verify_api_k
         cmd = build_facefusion_headless_cmd(input_path, output_path)
         logger.info(f"[Preview] Processing frame: {' '.join(cmd[:6])}...")
         
+        import os as _os
+        _env = _os.environ.copy()
+        _env["LD_LIBRARY_PATH"] = "/usr/lib/x86_64-linux-gnu:" + _env.get("LD_LIBRARY_PATH", "")
         start_time = time.time()
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=90,
             cwd=FACEFUSION_DIR,
+            env=_env,
         )
         elapsed_ms = int((time.time() - start_time) * 1000)
         
