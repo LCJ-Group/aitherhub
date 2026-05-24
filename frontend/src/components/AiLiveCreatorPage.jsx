@@ -62,7 +62,9 @@ export default function AiLiveCreatorPage() {
   const [viewMode, setViewMode] = useState("studio"); // "studio" | "setup"
 
   // ── Engine Mode ──
-  const [engine, setEngine] = useState("heygen"); // "musetalk" | "imtalker" | "heygen"
+  const [engine, setEngine] = useState(() => {
+    try { return localStorage.getItem("aiLive_engine") || "heygen"; } catch { return "heygen"; }
+  });
 
   // ── Input Mode ──
   const [inputMode, setInputMode] = useState("text"); // "text" | "audio"
@@ -77,10 +79,14 @@ export default function AiLiveCreatorPage() {
 
   // ── Text Mode ──
   const [scriptText, setScriptText] = useState("");
-  const [selectedVoiceId, setSelectedVoiceId] = useState("");
+  const [selectedVoiceId, setSelectedVoiceId] = useState(() => {
+    try { return localStorage.getItem("aiLive_voiceId") || ""; } catch { return ""; }
+  });
   const [voices, setVoices] = useState([]);
   const [loadingVoices, setLoadingVoices] = useState(false);
-  const [languageCode, setLanguageCode] = useState("ja");
+  const [languageCode, setLanguageCode] = useState(() => {
+    try { return localStorage.getItem("aiLive_languageCode") || "ja"; } catch { return "ja"; }
+  });
 
   // ── Audio Mode ──
   const [audioFile, setAudioFile] = useState(null);
@@ -127,7 +133,9 @@ export default function AiLiveCreatorPage() {
 
   // ── HeyGen Avatar State ──
   const [heygenAvatars, setHeygenAvatars] = useState([]);
-  const [selectedAvatarId, setSelectedAvatarId] = useState("");
+  const [selectedAvatarId, setSelectedAvatarId] = useState(() => {
+    try { return localStorage.getItem("aiLive_avatarId") || ""; } catch { return ""; }
+  });
   const [loadingAvatars, setLoadingAvatars] = useState(false);
   const [avatarError, setAvatarError] = useState(null);
 
@@ -176,6 +184,24 @@ export default function AiLiveCreatorPage() {
       if (saved) setJobHistory(JSON.parse(saved));
     } catch {}
   }, []);
+
+  // ── Persist user settings to localStorage ──
+  useEffect(() => {
+    try { localStorage.setItem("aiLive_engine", engine); } catch {}
+  }, [engine]);
+  useEffect(() => {
+    if (selectedVoiceId) {
+      try { localStorage.setItem("aiLive_voiceId", selectedVoiceId); } catch {}
+    }
+  }, [selectedVoiceId]);
+  useEffect(() => {
+    try { localStorage.setItem("aiLive_languageCode", languageCode); } catch {}
+  }, [languageCode]);
+  useEffect(() => {
+    if (selectedAvatarId) {
+      try { localStorage.setItem("aiLive_avatarId", selectedAvatarId); } catch {}
+    }
+  }, [selectedAvatarId]);
 
   // ── Listen for OBS window messages (obs-ready = OBS loaded, send creds) ──
   useEffect(() => {
@@ -267,14 +293,21 @@ export default function AiLiveCreatorPage() {
       const res = await aiLiveCreatorService.listVoices();
       if (res.success && res.voices) {
         setVoices(res.voices);
-        // Prefer Japanese cloned voice, then any cloned voice, then first available
-        const jaClone = res.voices.find(
-          (v) => v.is_cloned && /日本語|japanese|ja/i.test(v.name || "")
-        );
-        const anyClone = res.voices.find((v) => v.is_cloned);
-        const preferred = jaClone || anyClone;
-        if (preferred) setSelectedVoiceId(preferred.voice_id);
-        else if (res.voices.length > 0) setSelectedVoiceId(res.voices[0].voice_id);
+        // If user has a saved voice preference, use it (if still available)
+        const savedVoiceId = localStorage.getItem("aiLive_voiceId");
+        const savedVoiceExists = savedVoiceId && res.voices.some(v => v.voice_id === savedVoiceId);
+        if (savedVoiceExists) {
+          setSelectedVoiceId(savedVoiceId);
+        } else {
+          // Prefer Japanese cloned voice, then any cloned voice, then first available
+          const jaClone = res.voices.find(
+            (v) => v.is_cloned && /日本語|japanese|ja/i.test(v.name || "")
+          );
+          const anyClone = res.voices.find((v) => v.is_cloned);
+          const preferred = jaClone || anyClone;
+          if (preferred) setSelectedVoiceId(preferred.voice_id);
+          else if (res.voices.length > 0) setSelectedVoiceId(res.voices[0].voice_id);
+        }
       }
     } catch (err) {
       console.error("Failed to load voices:", err);
@@ -307,10 +340,17 @@ export default function AiLiveCreatorPage() {
       if (res.avatars && res.avatars.length > 0) {
         setHeygenAvatars(res.avatars);
         setAvatarError(null);
-        // Default to first 'kg' avatar if available
-        const kgAvatar = res.avatars.find(a => (a.avatar_name || '').toLowerCase().trim() === 'kg');
-        if (kgAvatar) setSelectedAvatarId(kgAvatar.avatar_id);
-        else setSelectedAvatarId(res.avatars[0].avatar_id);
+        // If user has a saved avatar preference, use it (if still available)
+        const savedAvatarId = localStorage.getItem("aiLive_avatarId");
+        const savedAvatarExists = savedAvatarId && res.avatars.some(a => a.avatar_id === savedAvatarId);
+        if (savedAvatarExists) {
+          setSelectedAvatarId(savedAvatarId);
+        } else {
+          // Default to first 'kg' avatar if available
+          const kgAvatar = res.avatars.find(a => (a.avatar_name || '').toLowerCase().trim() === 'kg');
+          if (kgAvatar) setSelectedAvatarId(kgAvatar.avatar_id);
+          else setSelectedAvatarId(res.avatars[0].avatar_id);
+        }
       } else if (res.avatars && res.avatars.length === 0) {
         // No custom avatars found - try fetching all avatars
         const allRes = await aiLiveCreatorService.heygenListAvatars(false);
