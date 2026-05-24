@@ -1496,8 +1496,84 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
   const [playbackSpeed, setPlaybackSpeed] = useState(2);
   const speedOptions = [1, 1.5, 2, 3];
   const [guideOpen, setGuideOpen] = useState(false);
+  // AI Clip Generation state
+  const [clipGenerating, setClipGenerating] = useState(false);
+  const [clipJobId, setClipJobId] = useState(null);
+  const [clipJobStatus, setClipJobStatus] = useState(null); // null, 'queued', 'processing', 'done', 'failed'
+  const [clipJobProgress, setClipJobProgress] = useState(0);
+  const [clipJobResult, setClipJobResult] = useState(null);
 
-  // Scoring guideline: "売上貢献度" axis
+  // Poll job status
+  useEffect(() => {
+    if (!clipJobId || clipJobStatus === 'done' || clipJobStatus === 'failed') return;
+    const interval = setInterval(async () => {
+      try {
+        const baseURL = import.meta.env.VITE_API_BASE_URL;
+        const res = await axios.get(`${baseURL}/api/v1/ai-clip/jobs/${clipJobId}`, {
+          headers: { "X-Admin-Key": "aither:hub" },
+        });
+        const job = res.data;
+        setClipJobStatus(job.status);
+        setClipJobProgress(job.progress_pct || 0);
+        if (job.status === 'done') {
+          setClipJobResult(job.results?.[0] || null);
+          clearInterval(interval);
+        } else if (job.status === 'failed') {
+          setClipJobResult({ error: job.error });
+          clearInterval(interval);
+        }
+      } catch (e) {
+        console.error('Job poll error:', e);
+      }
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [clipJobId, clipJobStatus]);
+
+  const handleGenerateAIClip = async () => {
+    if (clipGenerating) return;
+    const clipId = fb.clip_id;
+    if (!clipId) {
+      alert('このフェーズにはクリップがありません。先にクリップを生成してください。');
+      return;
+    }
+    setClipGenerating(true);
+    setClipJobStatus('queued');
+    setClipJobProgress(0);
+    setClipJobResult(null);
+    try {
+      const baseURL = import.meta.env.VITE_API_BASE_URL;
+      const res = await axios.post(`${baseURL}/api/v1/ai-clip/generate-from-clip`, {
+        clip_id: clipId,
+        subtitle_style: 'auto',
+        enable_sfx: true,
+        enable_transitions: true,
+        transition_type: 'fade',
+        transition_duration: 0.5,
+        enable_hook: true,
+        enable_thumbnail: true,
+        target_language: 'auto',
+        position_y: 75,
+        enable_silence_cut: true,
+        enable_zoom_pulse: true,
+        enable_progress_bar: true,
+        enable_flash_intro: true,
+        enable_loop_fade: true,
+        enable_cta: true,
+        enable_keyword_highlight: true,
+        enable_subtitle_animation: true,
+      }, {
+        headers: { "X-Admin-Key": "aither:hub" },
+      });
+      setClipJobId(res.data.job_id);
+    } catch (e) {
+      alert('AIクリップ生成に失敗しました: ' + (e.response?.data?.detail || e.message));
+      setClipJobStatus(null);
+    } finally {
+      setClipGenerating(false);
+    }
+  };
+
+  // Scoring guideline: "売上貢献度" axiss
   const STAR_GUIDELINES = {
     1: { short: '買いたくならない', detail: '商品と無関係 / 雑談 / 技術トラブル / 無言' },
     2: { short: 'ほぼ買いたくならない', detail: '商品名は出るが具体的な説明なし' },
@@ -1889,6 +1965,83 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
                   }}
                 />
               </SectionErrorBoundary>
+
+              {/* AI Clip Generation */}
+              {fb.clip_id && (
+                <div className="mt-4 p-3 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-lg border border-indigo-200">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs font-bold text-indigo-700">🎬 全自動AIクリップ生成</p>
+                      <p className="text-[10px] text-gray-500 mt-0.5">字幕・エフェクト・フック付きの完成動画を自動生成</p>
+                    </div>
+                    {!clipJobStatus && (
+                      <button
+                        onClick={handleGenerateAIClip}
+                        disabled={clipGenerating}
+                        className="px-4 py-2 text-xs font-bold rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white transition-all disabled:opacity-50 shadow-sm"
+                      >
+                        {clipGenerating ? '開始中...' : '🚀 生成開始'}
+                      </button>
+                    )}
+                  </div>
+                  {/* Job Progress */}
+                  {clipJobStatus && clipJobStatus !== 'done' && clipJobStatus !== 'failed' && (
+                    <div className="mt-3">
+                      <div className="flex items-center justify-between text-[10px] text-indigo-600 mb-1">
+                        <span>⏳ {clipJobStatus === 'queued' ? 'キュー待ち...' : '処理中...'}</span>
+                        <span className="font-bold">{clipJobProgress}%</span>
+                      </div>
+                      <div className="w-full bg-indigo-100 rounded-full h-2">
+                        <div
+                          className="bg-indigo-600 h-2 rounded-full transition-all duration-500"
+                          style={{ width: `${clipJobProgress}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
+                  {/* Job Done */}
+                  {clipJobStatus === 'done' && clipJobResult && (
+                    <div className="mt-3 p-2 bg-green-50 border border-green-200 rounded-lg">
+                      <p className="text-xs font-bold text-green-700">✅ 生成完了！</p>
+                      {clipJobResult.output_url && (
+                        <div className="mt-2">
+                          <video
+                            src={clipJobResult.output_url}
+                            controls
+                            className="w-full max-h-[200px] rounded-lg"
+                          />
+                          <a
+                            href={clipJobResult.output_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-block mt-2 text-[10px] text-indigo-600 hover:text-indigo-800 underline"
+                          >
+                            ⬇️ ダウンロード
+                          </a>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {/* Job Failed */}
+                  {clipJobStatus === 'failed' && (
+                    <div className="mt-3 p-2 bg-red-50 border border-red-200 rounded-lg">
+                      <p className="text-xs font-bold text-red-700">❌ 生成失敗</p>
+                      <p className="text-[10px] text-red-600 mt-1">{clipJobResult?.error || '不明なエラー'}</p>
+                      <button
+                        onClick={() => { setClipJobStatus(null); setClipJobId(null); setClipJobResult(null); }}
+                        className="mt-2 px-3 py-1 text-[10px] font-medium rounded bg-red-100 hover:bg-red-200 text-red-700 transition-all"
+                      >
+                        🔄 リトライ
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+              {!fb.clip_id && (
+                <div className="mt-4 p-3 bg-gray-50 rounded-lg border border-gray-200">
+                  <p className="text-[10px] text-gray-500">💡 AIクリップ生成するには、先にクリップが必要です（クリップDBで生成済みのフェーズのみ対応）</p>
+                </div>
+              )}
 
               {/* Navigation: Prev / Next */}
               <div className="flex items-center justify-between mt-4 pt-3 border-t border-gray-200">
