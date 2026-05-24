@@ -2026,6 +2026,9 @@ class GenerateFromClipRequest(BaseModel):
     enable_subtitle_animation: bool = Field(True, description="字幕出現アニメーション")
     zoom_intensity: float = Field(1.08, ge=1.0, le=1.3, description="ズーム倍率")
     silence_threshold_db: float = Field(-30.0, ge=-60.0, le=-10.0, description="無音検出閾値(dB)")
+    # V3: 映像モード選択
+    video_mode: str = Field("original", description="映像モード: original=そのまま, product_overlay=商品画像オーバーレイ, audio_only=音声+商品スライドショー")
+    product_image_urls: Optional[list] = Field(None, description="商品画像URLリスト（video_mode=product_overlay/audio_onlyの場合に使用）")
 
 
 class JobStatusResponse(BaseModel):
@@ -2501,6 +2504,37 @@ async def generate_ai_clip_from_clip(
         "captions": row.captions, "subtitle_style": row.subtitle_style,
         "liver_name": row.liver_name,
     }
+
+    # V3: video_mode対応 — 商品画像を取得
+    product_image_urls = req.product_image_urls or []
+    if req.video_mode in ("product_overlay", "audio_only") and not product_image_urls:
+        # widget_clip_assignmentsから商品画像を取得する
+        async with get_session() as session:
+            img_result = await session.execute(text("""
+                SELECT DISTINCT wca.product_image_url
+                FROM widget_clip_assignments wca
+                WHERE wca.clip_id = :clip_id_str
+                  AND wca.product_image_url IS NOT NULL
+                  AND wca.product_image_url != ''
+                  AND wca.is_active = TRUE
+            """), {"clip_id_str": req.clip_id})
+            img_rows = img_result.fetchall()
+            product_image_urls = [r.product_image_url for r in img_rows]
+        # フォールバック: video_product_exposuresからも取得
+        if not product_image_urls:
+            async with get_session() as session:
+                exp_result = await session.execute(text("""
+                    SELECT DISTINCT product_image_url
+                    FROM video_product_exposures
+                    WHERE video_id = CAST(:video_id AS uuid)
+                      AND product_image_url IS NOT NULL
+                      AND product_image_url != ''
+                    LIMIT 5
+                """), {"video_id": str(row.video_id)})
+                exp_rows = exp_result.fetchall()
+                product_image_urls = [r.product_image_url for r in exp_rows]
+    clip_data["video_mode"] = req.video_mode
+    clip_data["product_image_urls"] = product_image_urls
 
     # GenerateRequestに変換（_process_single_clip_v2が受け取る形式）
     gen_req = GenerateRequest(
@@ -3357,9 +3391,32 @@ async def _process_single_clip_v2(job_id: str, clip: dict, req: GenerateRequest,
         except Exception as ass_err:
             logger.warning(f"[ai-clip {job_id}] ASS generation failed (non-fatal): {ass_err}")
 
-        # ── 10. Build advanced ffmpeg command (V2.10 Pillow overlay) ── (60%)
-        await _update_job(job_id, progress_pct=60, current_step=f"クリップ {idx+1}/{total}: エンコード中（Pillow overlay適用）...")
+        # ── 10. Video mode processing & Build ffmpeg command ── (60%)
+        video_mode = clip.get("video_mode", "original")
+        product_imgs = clip.get("product_image_urls") or []
         output_path = os.path.join(tmp_dir, "output.mp4")
+
+        if video_mode == "audio_only" and product_imgs:
+            # 音声+商品スライドショーモード: 元映像の音声を保持し、商品画像のスライドショーを映像として使用
+            await _update_job(job_id, progress_pct=58, current_step=f"クリップ {idx+1}/{total}: 商品スライドショー生成中...")
+            slideshow_path = await _generate_product_slideshow(
+                product_imgs, duration, video_width, video_height, tmp_dir, job_id
+            )
+            if slideshow_path and os.path.exists(slideshow_path):
+                video_path = slideshow_path  # 映像をスライドショーに差し替え
+                logger.info(f"[ai-clip {job_id}] Using product slideshow as video source")
+
+        elif video_mode == "product_overlay" and product_imgs:
+            # PiPモード: 元映像を小さくして右下に配置、商品画像をメインに
+            await _update_job(job_id, progress_pct=58, current_step=f"クリップ {idx+1}/{total}: PiP合成中（商品メイン+配信者ワイプ）...")
+            pip_path = await _generate_pip_video(
+                video_path, product_imgs, duration, video_width, video_height, tmp_dir, job_id
+            )
+            if pip_path and os.path.exists(pip_path):
+                video_path = pip_path
+                logger.info(f"[ai-clip {job_id}] Using PiP composite as video source")
+
+        await _update_job(job_id, progress_pct=60, current_step=f"クリップ {idx+1}/{total}: エンコード中（Pillow overlay適用）...")
         ffmpeg_cmd = _build_advanced_ffmpeg_command(
             video_path, ass_path, output_path,
             video_width, video_height, duration, req,
@@ -3814,3 +3871,283 @@ async def _save_export_record(clip_id: str, blob_url: str, thumbnail_url: Option
             logger.info(f"[ai-clip] Saved export record for clip {clip_id}")
     except Exception as e:
         logger.warning(f"[ai-clip] Failed to save export record: {e}")
+
+
+
+# ─── V3: Video Mode Helpers (product_overlay / audio_only) ─────────────────────
+
+async def _generate_product_slideshow(
+    product_image_urls: list, duration: float,
+    width: int, height: int, tmp_dir: str, job_id: str
+) -> Optional[str]:
+    """商品画像のスライドショー動画を生成する（音声なし）。
+    元動画の音声と後で合成される。
+    """
+    import httpx
+    from PIL import Image, ImageFilter
+
+    if not product_image_urls:
+        return None
+
+    # Download product images
+    downloaded_images = []
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        for i, url in enumerate(product_image_urls[:10]):  # Max 10 images
+            try:
+                resp = await client.get(url)
+                resp.raise_for_status()
+                img_path = os.path.join(tmp_dir, f"product_{i}.jpg")
+                with open(img_path, "wb") as f:
+                    f.write(resp.content)
+                downloaded_images.append(img_path)
+            except Exception as e:
+                logger.warning(f"[ai-clip {job_id}] Failed to download product image {i}: {e}")
+
+    if not downloaded_images:
+        logger.warning(f"[ai-clip {job_id}] No product images downloaded, skipping slideshow")
+        return None
+
+    # Generate slideshow frames using Pillow
+    # Each image shows for (duration / num_images) seconds with crossfade
+    num_images = len(downloaded_images)
+    display_time = max(2.0, duration / num_images)  # At least 2 seconds per image
+    fps = 30
+    total_frames = int(duration * fps)
+    frames_per_image = int(display_time * fps)
+    fade_frames = min(15, frames_per_image // 4)  # 0.5s crossfade
+
+    # Create processed product images (centered on blurred background)
+    processed_images = []
+    for img_path in downloaded_images:
+        try:
+            img = Image.open(img_path).convert("RGBA")
+            # Create background (dark gradient)
+            bg = Image.new("RGBA", (width, height), (15, 15, 25, 255))
+            # Blur a scaled version of the product image as background
+            bg_blur = img.copy().resize((width, height), Image.LANCZOS)
+            bg_blur = bg_blur.filter(ImageFilter.GaussianBlur(radius=30))
+            bg_blur = bg_blur.convert("RGBA")
+            # Darken the blurred background
+            from PIL import ImageEnhance
+            enhancer = ImageEnhance.Brightness(bg_blur)
+            bg_blur = enhancer.enhance(0.3)
+            bg.paste(bg_blur, (0, 0))
+            # Scale product image to fit (80% of canvas, maintaining aspect ratio)
+            max_w = int(width * 0.8)
+            max_h = int(height * 0.7)
+            img_w, img_h = img.size
+            scale = min(max_w / img_w, max_h / img_h)
+            new_w = int(img_w * scale)
+            new_h = int(img_h * scale)
+            img_resized = img.resize((new_w, new_h), Image.LANCZOS)
+            # Center the product image
+            x_offset = (width - new_w) // 2
+            y_offset = (height - new_h) // 2
+            bg.paste(img_resized, (x_offset, y_offset), img_resized)
+            processed_images.append(bg.convert("RGB"))
+        except Exception as e:
+            logger.warning(f"[ai-clip {job_id}] Failed to process product image: {e}")
+
+    if not processed_images:
+        return None
+
+    # Write frames as individual PNGs and use ffmpeg to create video
+    # More efficient: write a concat file with image durations
+    slideshow_path = os.path.join(tmp_dir, "slideshow.mp4")
+
+    # Create a concat demuxer file
+    concat_file = os.path.join(tmp_dir, "concat.txt")
+    frame_paths = []
+    for i, pimg in enumerate(processed_images):
+        frame_path = os.path.join(tmp_dir, f"slide_{i:03d}.png")
+        pimg.save(frame_path, "PNG")
+        frame_paths.append(frame_path)
+
+    # Use ffmpeg to create slideshow with crossfade transitions
+    if len(frame_paths) == 1:
+        # Single image: just loop it for the duration
+        cmd = [
+            "ffmpeg", "-y", "-loop", "1", "-i", frame_paths[0],
+            "-t", str(duration), "-vf", f"scale={width}:{height}",
+            "-c:v", "libx264", "-preset", "fast", "-pix_fmt", "yuv420p",
+            "-r", str(fps), slideshow_path
+        ]
+    else:
+        # Multiple images: use xfade filter for crossfade transitions
+        inputs = []
+        for fp in frame_paths:
+            inputs.extend(["-loop", "1", "-t", str(display_time), "-i", fp])
+
+        # Build xfade filter chain
+        filter_parts = []
+        current_input = "[0:v]"
+        fade_duration = 0.5
+        for i in range(1, len(frame_paths)):
+            next_input = f"[{i}:v]"
+            offset = display_time * i - fade_duration * i
+            if offset < 0:
+                offset = display_time * i * 0.8
+            out_label = f"[v{i}]" if i < len(frame_paths) - 1 else "[outv]"
+            filter_parts.append(
+                f"{current_input}{next_input}xfade=transition=fade:duration={fade_duration}:offset={offset:.2f}{out_label}"
+            )
+            current_input = out_label
+
+        if not filter_parts:
+            # Fallback: single image
+            cmd = [
+                "ffmpeg", "-y", "-loop", "1", "-i", frame_paths[0],
+                "-t", str(duration), "-c:v", "libx264", "-preset", "fast",
+                "-pix_fmt", "yuv420p", "-r", str(fps), slideshow_path
+            ]
+        else:
+            filter_complex = ";".join(filter_parts)
+            cmd = ["ffmpeg", "-y"] + inputs + [
+                "-filter_complex", filter_complex,
+                "-map", "[outv]",
+                "-t", str(duration),
+                "-c:v", "libx264", "-preset", "fast", "-pix_fmt", "yuv420p",
+                "-r", str(fps), slideshow_path
+            ]
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
+    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+    if proc.returncode != 0:
+        logger.error(f"[ai-clip {job_id}] Slideshow ffmpeg failed: {stderr.decode()[-500:]}")
+        return None
+
+    # Now merge audio from original video with slideshow video
+    merged_path = os.path.join(tmp_dir, "slideshow_with_audio.mp4")
+    original_video = os.path.join(tmp_dir, "input.mp4")
+    merge_cmd = [
+        "ffmpeg", "-y",
+        "-i", slideshow_path,
+        "-i", original_video,
+        "-map", "0:v", "-map", "1:a",
+        "-c:v", "copy", "-c:a", "aac", "-shortest",
+        merged_path
+    ]
+    proc2 = await asyncio.create_subprocess_exec(
+        *merge_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
+    stdout2, stderr2 = await asyncio.wait_for(proc2.communicate(), timeout=60)
+    if proc2.returncode != 0:
+        logger.warning(f"[ai-clip {job_id}] Audio merge failed, using slideshow without audio: {stderr2.decode()[-300:]}")
+        return slideshow_path
+
+    return merged_path
+
+
+async def _generate_pip_video(
+    video_path: str, product_image_urls: list, duration: float,
+    width: int, height: int, tmp_dir: str, job_id: str
+) -> Optional[str]:
+    """PiP (Picture-in-Picture) 合成: 商品画像をメイン表示、配信者映像を右下ワイプに。
+    """
+    import httpx
+    from PIL import Image, ImageFilter, ImageDraw
+
+    if not product_image_urls:
+        return None
+
+    # Download first product image for background
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        try:
+            resp = await client.get(product_image_urls[0])
+            resp.raise_for_status()
+            product_img_path = os.path.join(tmp_dir, "pip_product.jpg")
+            with open(product_img_path, "wb") as f:
+                f.write(resp.content)
+        except Exception as e:
+            logger.warning(f"[ai-clip {job_id}] Failed to download product image for PiP: {e}")
+            return None
+
+    # Create product background image
+    try:
+        product_img = Image.open(product_img_path).convert("RGBA")
+        bg = Image.new("RGBA", (width, height), (15, 15, 25, 255))
+        # Blurred background
+        bg_blur = product_img.copy().resize((width, height), Image.LANCZOS)
+        bg_blur = bg_blur.filter(ImageFilter.GaussianBlur(radius=25))
+        from PIL import ImageEnhance
+        enhancer = ImageEnhance.Brightness(bg_blur.convert("RGBA"))
+        bg_blur = enhancer.enhance(0.4)
+        bg.paste(bg_blur, (0, 0))
+        # Product image centered in upper 70%
+        max_w = int(width * 0.85)
+        max_h = int(height * 0.6)
+        img_w, img_h = product_img.size
+        scale = min(max_w / img_w, max_h / img_h)
+        new_w = int(img_w * scale)
+        new_h = int(img_h * scale)
+        product_resized = product_img.resize((new_w, new_h), Image.LANCZOS)
+        x_offset = (width - new_w) // 2
+        y_offset = int(height * 0.08)
+        bg.paste(product_resized, (x_offset, y_offset), product_resized)
+        bg_rgb = bg.convert("RGB")
+        bg_path = os.path.join(tmp_dir, "pip_bg.png")
+        bg_rgb.save(bg_path, "PNG")
+    except Exception as e:
+        logger.warning(f"[ai-clip {job_id}] Failed to create PiP background: {e}")
+        return None
+
+    # Use ffmpeg to create PiP: product background + original video as small overlay in bottom-right
+    pip_output = os.path.join(tmp_dir, "pip_output.mp4")
+    # Wipe size: 30% of width, positioned at bottom-right with margin
+    wipe_w = int(width * 0.30)
+    wipe_h = int(height * 0.25)
+    wipe_x = width - wipe_w - int(width * 0.04)
+    wipe_y = height - wipe_h - int(height * 0.15)
+    # Round corners via overlay
+    corner_radius = 20
+
+    pip_cmd = [
+        "ffmpeg", "-y",
+        "-loop", "1", "-i", bg_path,  # Background (product)
+        "-i", video_path,  # Original video (will be scaled to wipe)
+        "-filter_complex",
+        f"[1:v]scale={wipe_w}:{wipe_h}:force_original_aspect_ratio=decrease,"
+        f"pad={wipe_w}:{wipe_h}:(ow-iw)/2:(oh-ih)/2:color=black,"
+        f"format=yuva420p,geq=lum='lum(X,Y)':a='if(gt(abs(X-{wipe_w}/2),{wipe_w}/2-{corner_radius})*gt(abs(Y-{wipe_h}/2),{wipe_h}/2-{corner_radius}),if(lte(hypot(abs(X-{wipe_w}/2)-({wipe_w}/2-{corner_radius}),abs(Y-{wipe_h}/2)-({wipe_h}/2-{corner_radius})),{corner_radius}),255,0),255)'[wipe];"
+        f"[0:v]scale={width}:{height}[bg];"
+        f"[bg][wipe]overlay={wipe_x}:{wipe_y}:shortest=1[outv]",
+        "-map", "[outv]", "-map", "1:a",
+        "-t", str(duration),
+        "-c:v", "libx264", "-preset", "fast", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-r", "30",
+        pip_output
+    ]
+
+    proc = await asyncio.create_subprocess_exec(
+        *pip_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
+    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180)
+    if proc.returncode != 0:
+        logger.error(f"[ai-clip {job_id}] PiP ffmpeg failed: {stderr.decode()[-500:]}")
+        # Fallback: simpler PiP without rounded corners
+        pip_cmd_simple = [
+            "ffmpeg", "-y",
+            "-loop", "1", "-i", bg_path,
+            "-i", video_path,
+            "-filter_complex",
+            f"[1:v]scale={wipe_w}:{wipe_h}:force_original_aspect_ratio=decrease,"
+            f"pad={wipe_w}:{wipe_h}:(ow-iw)/2:(oh-ih)/2:color=black[wipe];"
+            f"[0:v]scale={width}:{height}[bg];"
+            f"[bg][wipe]overlay={wipe_x}:{wipe_y}:shortest=1[outv]",
+            "-map", "[outv]", "-map", "1:a",
+            "-t", str(duration),
+            "-c:v", "libx264", "-preset", "fast", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-r", "30",
+            pip_output
+        ]
+        proc2 = await asyncio.create_subprocess_exec(
+            *pip_cmd_simple, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+        stdout2, stderr2 = await asyncio.wait_for(proc2.communicate(), timeout=180)
+        if proc2.returncode != 0:
+            logger.error(f"[ai-clip {job_id}] PiP simple ffmpeg also failed: {stderr2.decode()[-500:]}")
+            return None
+
+    return pip_output

@@ -1502,6 +1502,7 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
   const [clipJobStatus, setClipJobStatus] = useState(null); // null, 'queued', 'processing', 'done', 'failed'
   const [clipJobProgress, setClipJobProgress] = useState(0);
   const [clipJobResult, setClipJobResult] = useState(null);
+  const [clipVideoMode, setClipVideoMode] = useState('original'); // original, product_overlay, audio_only
 
   // Poll job status
   useEffect(() => {
@@ -1561,6 +1562,7 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
         enable_cta: true,
         enable_keyword_highlight: true,
         enable_subtitle_animation: true,
+        video_mode: clipVideoMode,
       }, {
         headers: { "X-Admin-Key": "aither:hub" },
       });
@@ -1984,6 +1986,35 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
                       </button>
                     )}
                   </div>
+                  {/* V3: 映像モード選択 */}
+                  {!clipJobStatus && (
+                    <div className="mt-2 flex items-center gap-2 flex-wrap">
+                      <span className="text-[10px] text-gray-600 font-medium">映像モード:</span>
+                      {[
+                        { value: 'original', label: '🎬 そのまま', desc: '元映像をそのまま使用' },
+                        { value: 'product_overlay', label: '📱 PiP合成', desc: '商品メイン+配信者ワイプ' },
+                        { value: 'audio_only', label: '🔊 音声+商品', desc: '音声のみ使用+商品スライド' },
+                      ].map(mode => (
+                        <button
+                          key={mode.value}
+                          onClick={() => setClipVideoMode(mode.value)}
+                          title={mode.desc}
+                          className={`px-2 py-1 text-[10px] font-medium rounded-md border transition-all ${
+                            clipVideoMode === mode.value
+                              ? 'bg-indigo-100 border-indigo-400 text-indigo-700 shadow-sm'
+                              : 'bg-white border-gray-200 text-gray-600 hover:border-indigo-300 hover:bg-indigo-50'
+                          }`}
+                        >
+                          {mode.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {!clipJobStatus && clipVideoMode !== 'original' && (
+                    <p className="mt-1 text-[9px] text-amber-600 bg-amber-50 px-2 py-1 rounded">
+                      💡 {clipVideoMode === 'product_overlay' ? '商品画像をメイン表示し、配信者は右下ワイプに。商品が映ってない時に最適。' : '音声のみ保持し、商品画像のスライドショーを映像に。トーク力が高いが商品が映ってない時に。'}
+                    </p>
+                  )}
                   {/* Job Progress */}
                   {clipJobStatus && clipJobStatus !== 'done' && clipJobStatus !== 'failed' && (
                     <div className="mt-3">
@@ -2277,7 +2308,10 @@ function DailyUploadsChart({ dailyUploads }) {
     return result;
   }, [dailyUploads]);
 
-  const maxCount = Math.max(...filledData.map(d => d.count), 1);
+  // Y軸スケール: データの最大値に合わせて動的に調整（切り上げ）
+  const rawMax = Math.max(...filledData.map(d => d.count), 1);
+  // 美しい切り上げ値を計算（最大値+20%、最低でもmax+1）
+  const maxCount = rawMax <= 5 ? rawMax + 1 : Math.ceil(rawMax * 1.2);
   const totalCount = filledData.reduce((sum, d) => sum + d.count, 0);
   const totalDuration = filledData.reduce((sum, d) => sum + d.duration_seconds, 0);
 
@@ -2311,7 +2345,9 @@ function DailyUploadsChart({ dailyUploads }) {
         {/* Y-axis */}
         <div className="flex flex-col justify-between h-36 text-[9px] text-gray-400 font-mono py-0.5">
           <span>{maxCount}</span>
-          <span>{Math.round(maxCount / 2)}</span>
+          <span>{Math.round(maxCount * 0.75)}</span>
+          <span>{Math.round(maxCount * 0.5)}</span>
+          <span>{Math.round(maxCount * 0.25)}</span>
           <span>0</span>
         </div>
 
@@ -2320,6 +2356,8 @@ function DailyUploadsChart({ dailyUploads }) {
           <div className="flex items-end gap-[3px] h-36 border-b border-l border-gray-200 pb-0.5 pl-0.5 relative">
             {/* Grid lines */}
             <div className="absolute inset-0 flex flex-col justify-between pointer-events-none">
+              <div className="border-b border-dashed border-gray-100 w-full" />
+              <div className="border-b border-dashed border-gray-100 w-full" />
               <div className="border-b border-dashed border-gray-100 w-full" />
               <div className="border-b border-dashed border-gray-100 w-full" />
               <div />
