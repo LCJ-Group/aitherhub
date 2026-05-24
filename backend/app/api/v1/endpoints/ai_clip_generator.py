@@ -4215,7 +4215,9 @@ async def upload_product_image(
 
 
 class AnalyzeProductImageRequest(BaseModel):
-    image_url: str = Field(..., description="分析する商品画像のURL")
+    image_url: Optional[str] = Field(None, description="分析する商品画像のURL")
+    image_base64: Optional[str] = Field(None, description="Base64エンコードされた画像データ")
+    content_type: Optional[str] = Field("image/jpeg", description="画像のContent-Type")
 
 
 @router.post("/analyze-product-image")
@@ -4231,28 +4233,36 @@ async def analyze_product_image(
     from app.services.storage_service import generate_read_sas_from_url
 
     try:
-        # Generate SAS URL for private blob access
-        access_url = req.image_url
-        if "blob.core.windows.net" in req.image_url and "?" not in req.image_url:
-            sas_url = generate_read_sas_from_url(req.image_url)
-            if sas_url:
-                access_url = sas_url
-                logger.info(f"[ai-clip] Generated SAS URL for analysis: {req.image_url[:60]}...")
+        # Method 1: Base64 image data provided directly
+        if req.image_base64:
+            b64_image = req.image_base64
+            content_type = req.content_type or "image/jpeg"
+            data_url = f"data:{content_type};base64,{b64_image}"
+            logger.info(f"[ai-clip] Analyzing product image from base64 ({len(b64_image)} chars)")
+        # Method 2: Download from URL (with SAS if needed)
+        elif req.image_url:
+            access_url = req.image_url
+            if "blob.core.windows.net" in req.image_url and "?" not in req.image_url:
+                sas_url = generate_read_sas_from_url(req.image_url)
+                if sas_url:
+                    access_url = sas_url
+                    logger.info(f"[ai-clip] Generated SAS URL for analysis: {req.image_url[:60]}...")
 
-        # Download image and convert to base64
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(access_url)
-            resp.raise_for_status()
-            image_content = resp.content
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.get(access_url)
+                resp.raise_for_status()
+                image_content = resp.content
 
-        content_type = "image/jpeg"
-        if req.image_url.lower().endswith(".png"):
-            content_type = "image/png"
-        elif req.image_url.lower().endswith(".webp"):
-            content_type = "image/webp"
+            content_type = "image/jpeg"
+            if req.image_url.lower().endswith(".png"):
+                content_type = "image/png"
+            elif req.image_url.lower().endswith(".webp"):
+                content_type = "image/webp"
 
-        b64_image = base64.b64encode(image_content).decode("utf-8")
-        data_url = f"data:{content_type};base64,{b64_image}"
+            b64_image = base64.b64encode(image_content).decode("utf-8")
+            data_url = f"data:{content_type};base64,{b64_image}"
+        else:
+            raise HTTPException(status_code=400, detail="image_url または image_base64 が必要です")
 
         ai_client = openai.AsyncOpenAI()
         response = await ai_client.chat.completions.create(

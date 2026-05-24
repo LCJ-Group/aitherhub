@@ -1559,9 +1559,9 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
         setProductImages(prev => prev.map((img, idx) =>
           img.preview === newImages[i].preview ? { ...img, uploading: false, url: res.data.blob_url, readUrl } : img
         ));
-        // Auto-analyze first image
+        // Auto-analyze first image using base64
         if (productImages.length === 0 && i === 0) {
-          handleAnalyzeImage(readUrl);
+          handleAnalyzeImageFromFile(newImages[i].file);
         }
       } catch (e) {
         console.error('Image upload failed:', e);
@@ -1572,7 +1572,36 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
     }
   };
 
-  // AI image analysis
+  // AI image analysis - from file (base64)
+  const handleAnalyzeImageFromFile = async (file) => {
+    if (!file) return;
+    setAnalyzingImage(true);
+    setImageAnalysis(null);
+    try {
+      const baseURL = import.meta.env.VITE_API_BASE_URL;
+      // Convert file to base64
+      const reader = new FileReader();
+      const base64Data = await new Promise((resolve, reject) => {
+        reader.onload = () => resolve(reader.result.split(',')[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      const res = await axios.post(`${baseURL}/api/v1/ai-clip/analyze-product-image`, {
+        image_base64: base64Data,
+        content_type: file.type || 'image/jpeg',
+      }, {
+        headers: { 'X-Admin-Key': 'aither:hub' },
+      });
+      setImageAnalysis(res.data);
+    } catch (e) {
+      console.error('Image analysis failed:', e);
+      setImageAnalysis({ error: e.response?.data?.detail || e.message });
+    } finally {
+      setAnalyzingImage(false);
+    }
+  };
+
+  // AI image analysis - from URL (fallback)
   const handleAnalyzeImage = async (imageUrl) => {
     if (!imageUrl) return;
     setAnalyzingImage(true);
