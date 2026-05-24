@@ -1308,16 +1308,28 @@ async def preview_frame(req: SwapFrameRequest, auth: bool = Depends(verify_api_k
         with open(input_path, "wb") as f:
             f.write(content)
         
+        # Apply quality settings temporarily
+        original_enhancer = current_config["face_enhancer_enabled"]
+        current_config["face_enhancer_enabled"] = req.face_enhancer
+        
         cmd = build_facefusion_headless_cmd(input_path, output_path)
+        logger.info(f"[Preview] Processing frame: {' '.join(cmd[:6])}...")
+        
+        start_time = time.time()
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=60,
             cwd=FACEFUSION_DIR,
         )
+        elapsed_ms = int((time.time() - start_time) * 1000)
+        
+        # Restore config
+        current_config["face_enhancer_enabled"] = original_enhancer
         
         if result.returncode != 0:
+            logger.error(f"[Preview] FaceFusion error: {result.stderr[:300]}")
             raise HTTPException(500, f"FaceFusion error: {result.stderr[:300]}")
         if not Path(output_path).exists():
             raise HTTPException(500, "Output not generated")
@@ -1325,10 +1337,11 @@ async def preview_frame(req: SwapFrameRequest, auth: bool = Depends(verify_api_k
         with open(output_path, "rb") as f:
             output_base64 = base64.b64encode(f.read()).decode()
         
+        logger.info(f"[Preview] Frame processed in {elapsed_ms}ms")
         return {
             "status": "ok",
             "image_base64": output_base64,
-            "processing_time_ms": 0,  # TODO: measure
+            "processing_time_ms": elapsed_ms,
         }
     finally:
         for p in (input_path, output_path):

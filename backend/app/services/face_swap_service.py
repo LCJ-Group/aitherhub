@@ -284,10 +284,14 @@ class FaceSwapService:
                 params=query,
             )
         elif image_base64:
-            query["image_base64"] = image_base64
+            # Convert base64 to bytes and send as file upload
+            # (query param would exceed URL length limits via Cloudflare)
+            import base64 as b64
+            image_data = b64.b64decode(image_base64)
+            files = {"file": ("source_face.jpg", image_data, "image/jpeg")}
             return await self._request(
                 "POST", "/api/set-source",
-                params=query,
+                params=query, files=files,
             )
         else:
             raise FaceSwapError("Provide image_bytes, image_url, or image_base64")
