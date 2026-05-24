@@ -2655,18 +2655,26 @@ async def get_job_status(job_id: str, x_admin_key: Optional[str] = Header(None))
 @router.get("/jobs")
 async def list_jobs(
     limit: int = Query(20, ge=1, le=100),
+    source_clip_id: Optional[str] = Query(None, description="Filter by source clip_id"),
     x_admin_key: Optional[str] = Header(None),
 ):
     verify_admin(x_admin_key)
     # Get from DB (persistent) and merge with file-based (in-progress)
-    db_jobs = await _list_jobs_db(limit=limit)
-    file_jobs = _list_jobs(limit=limit)
+    db_jobs = await _list_jobs_db(limit=500 if source_clip_id else limit)
+    file_jobs = _list_jobs(limit=500 if source_clip_id else limit)
     # Merge: DB is source of truth, but file may have more recent progress
     db_ids = {j["job_id"] for j in db_jobs}
     merged = list(db_jobs)
     for fj in file_jobs:
         if fj.get("job_id") not in db_ids:
             merged.append(fj)
+    # Filter by source_clip_id if specified
+    if source_clip_id:
+        merged = [
+            j for j in merged
+            if (j.get("config") or {}).get("clip_id") == source_clip_id
+            or (j.get("source_clip") or {}).get("clip_id") == source_clip_id
+        ]
     merged.sort(key=lambda j: j.get("created_at", ""), reverse=True)
     merged = merged[:limit]
     return {"jobs": merged, "total": len(merged)}
@@ -3885,14 +3893,25 @@ async def _generate_product_slideshow(
     """
     import httpx
     from PIL import Image, ImageFilter
+    from app.services.storage_service import generate_read_sas_from_url
 
     if not product_image_urls:
         return None
 
+    # Resolve SAS URLs for blob storage access (blob_url without SAS returns 409)
+    resolved_urls = []
+    for url in product_image_urls[:10]:
+        if "blob.core.windows.net" in url and "?" not in url:
+            sas_url = generate_read_sas_from_url(url, expires_hours=2)
+            resolved_urls.append(sas_url or url)
+        else:
+            resolved_urls.append(url)
+    logger.info(f"[ai-clip {job_id}] Slideshow: resolved {len(resolved_urls)} product image URLs")
+
     # Download product images
     downloaded_images = []
     async with httpx.AsyncClient(timeout=30.0) as client:
-        for i, url in enumerate(product_image_urls[:10]):  # Max 10 images
+        for i, url in enumerate(resolved_urls):  # Max 10 images
             try:
                 resp = await client.get(url)
                 resp.raise_for_status()
@@ -3901,7 +3920,7 @@ async def _generate_product_slideshow(
                     f.write(resp.content)
                 downloaded_images.append(img_path)
             except Exception as e:
-                logger.warning(f"[ai-clip {job_id}] Failed to download product image {i}: {e}")
+                logger.warning(f"[ai-clip {job_id}] Failed to download product image {i}: {e} (URL: {url[:80]})")
 
     if not downloaded_images:
         logger.warning(f"[ai-clip {job_id}] No product images downloaded, skipping slideshow")
@@ -4048,20 +4067,31 @@ async def _generate_pip_video(
     """
     import httpx
     from PIL import Image, ImageFilter, ImageDraw
+    from app.services.storage_service import generate_read_sas_from_url
 
     if not product_image_urls:
         return None
 
     # Download first product image for background
+    # Resolve SAS URLs for blob storage access (blob_url without SAS returns 409)
+    resolved_urls = []
+    for url in product_image_urls:
+        if "blob.core.windows.net" in url and "?" not in url:
+            sas_url = generate_read_sas_from_url(url, expires_hours=2)
+            resolved_urls.append(sas_url or url)
+        else:
+            resolved_urls.append(url)
+    logger.info(f"[ai-clip {job_id}] PiP: resolved {len(resolved_urls)} product image URLs")
+
     async with httpx.AsyncClient(timeout=30.0) as client:
         try:
-            resp = await client.get(product_image_urls[0])
+            resp = await client.get(resolved_urls[0])
             resp.raise_for_status()
             product_img_path = os.path.join(tmp_dir, "pip_product.jpg")
             with open(product_img_path, "wb") as f:
                 f.write(resp.content)
         except Exception as e:
-            logger.warning(f"[ai-clip {job_id}] Failed to download product image for PiP: {e}")
+            logger.error(f"[ai-clip {job_id}] Failed to download product image for PiP: {e} (URL: {resolved_urls[0][:100]})")
             return None
 
     # Create product background image

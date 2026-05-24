@@ -1507,8 +1507,32 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
   const [productImages, setProductImages] = useState([]); // [{file, preview, uploading, url, analyzed}]
   const [imageAnalysis, setImageAnalysis] = useState(null); // AI analysis result
   const [analyzingImage, setAnalyzingImage] = useState(false);
-
-  // Poll job status
+  // AI Clip generation history for this clip
+  const [clipHistory, setClipHistory] = useState([]); // past generation jobs
+  const [clipHistoryLoading, setClipHistoryLoading] = useState(false);
+  // Fetch generation history when card expands
+  useEffect(() => {
+    if (!expanded || !fb.clip_id) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        setClipHistoryLoading(true);
+        const baseURL = import.meta.env.VITE_API_BASE_URL;
+        const res = await axios.get(`${baseURL}/api/v1/ai-clip/jobs`, {
+          headers: { 'X-Admin-Key': 'aither:hub' },
+          params: { source_clip_id: fb.clip_id, limit: 10 },
+          timeout: 15000,
+        });
+        if (!cancelled) setClipHistory((res.data.jobs || []).filter(j => j.status === 'done' || j.status === 'failed'));
+      } catch (e) {
+        console.error('Failed to fetch clip history:', e);
+      } finally {
+        if (!cancelled) setClipHistoryLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [expanded, fb.clip_id]);
+  // Poll job statuss
   useEffect(() => {
     if (!clipJobId || clipJobStatus === 'done' || clipJobStatus === 'failed') return;
     const interval = setInterval(async () => {
@@ -1556,8 +1580,10 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
           headers: { 'X-Admin-Key': 'aither:hub', 'Content-Type': 'multipart/form-data' },
         });
         const readUrl = res.data.read_url || res.data.blob_url;
+        // Use read_url (SAS-signed) for product_image_urls sent to backend
+        // blob_url without SAS returns 409 from Azure Blob Storage
         setProductImages(prev => prev.map((img, idx) =>
-          img.preview === newImages[i].preview ? { ...img, uploading: false, url: res.data.blob_url, readUrl } : img
+          img.preview === newImages[i].preview ? { ...img, uploading: false, url: readUrl, blobUrl: res.data.blob_url } : img
         ));
         // Auto-analyze first image using base64
         if (productImages.length === 0 && i === 0) {
@@ -2080,9 +2106,16 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
               {fb.clip_id && (
                 <div className="mt-4 p-3 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-lg border border-indigo-200">
                   <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-xs font-bold text-indigo-700">🎬 全自動AIクリップ生成</p>
-                      <p className="text-[10px] text-gray-500 mt-0.5">字幕・エフェクト・フック付きの完成動画を自動生成</p>
+                    <div className="flex items-center gap-2">
+                      <div>
+                        <p className="text-xs font-bold text-indigo-700">🎬 全自動AIクリップ生成</p>
+                        <p className="text-[10px] text-gray-500 mt-0.5">字幕・エフェクト・フック付きの完成動画を自動生成</p>
+                      </div>
+                      {clipHistory.length > 0 && (
+                        <span className="px-2 py-0.5 text-[9px] font-bold rounded-full bg-green-100 text-green-700 border border-green-300">
+                          ✅ {clipHistory.filter(j => j.status === 'done').length}件生成済
+                        </span>
+                      )}
                     </div>
                     {!clipJobStatus && (
                       <button
@@ -2286,6 +2319,54 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
                         🔄 リトライ
                       </button>
                     </div>
+                  )}
+                  {/* Generation History */}
+                  {clipHistory.length > 0 && (
+                    <div className="mt-3 border-t border-indigo-200 pt-3">
+                      <p className="text-[10px] font-bold text-indigo-600 mb-2">📋 生成履歴 ({clipHistory.length}件)</p>
+                      <div className="space-y-2 max-h-[200px] overflow-y-auto">
+                        {clipHistory.map((job) => {
+                          const result = (job.results || [])[0];
+                          const videoMode = (job.config || {}).video_mode || 'original';
+                          const modeLabel = videoMode === 'product_overlay' ? 'PiP合成' : videoMode === 'audio_only' ? '音声+商品' : 'オリジナル';
+                          const createdAt = job.created_at ? new Date(job.created_at).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+                          return (
+                            <div key={job.job_id} className={`p-2 rounded-lg border ${job.status === 'done' ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                  <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-medium ${job.status === 'done' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                                    {job.status === 'done' ? '✅ 成功' : '❌ 失敗'}
+                                  </span>
+                                  <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700">{modeLabel}</span>
+                                  <span className="text-[9px] text-gray-500">{createdAt}</span>
+                                </div>
+                                {job.status === 'done' && result?.blob_url && (
+                                  <a
+                                    href={result.blob_url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-[9px] text-indigo-600 hover:text-indigo-800 underline"
+                                  >
+                                    🎬 再生
+                                  </a>
+                                )}
+                              </div>
+                              {job.status === 'done' && result?.blob_url && (
+                                <video
+                                  src={result.blob_url}
+                                  controls
+                                  className="w-full max-h-[120px] rounded mt-1.5"
+                                  preload="metadata"
+                                />
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                  {clipHistoryLoading && (
+                    <div className="mt-2 text-[9px] text-gray-400 animate-pulse">📋 履歴を読み込み中...</div>
                   )}
                 </div>
               )}
