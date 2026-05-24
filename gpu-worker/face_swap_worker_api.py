@@ -306,7 +306,7 @@ def build_facefusion_headless_cmd(input_path: str, output_path: str) -> list:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
-    global face_analyzer, face_swapper_model, source_face_embedding
+    global face_analyzer, face_swapper_model, source_face_embedding, source_face_path
 
     logger.info("FaceFusion GPU Worker starting up...")
     logger.info(f"FaceFusion directory: {FACEFUSION_DIR}")
@@ -346,6 +346,7 @@ async def lifespan(app: FastAPI):
         if existing_faces and face_analyzer:
             import cv2
             latest_face = str(existing_faces[0])
+            source_face_path = latest_face  # Also set the global path
             img = cv2.imread(latest_face)
             if img is not None:
                 faces = face_analyzer.get(img)
