@@ -59,7 +59,7 @@ logger = logging.getLogger(__name__)
 
 # ── Environment Configuration ────────────────────────────────────────────────
 LIVER_CLONE_WORKER_URL = os.getenv("LIVER_CLONE_WORKER_URL", "")
-LIVER_CLONE_WORKER_API_KEY = os.getenv("LIVER_CLONE_WORKER_API_KEY", "")
+LIVER_CLONE_WORKER_API_KEY = os.getenv("LIVER_CLONE_WORKER_API_KEY", "aitherhub")
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
 DEFAULT_VAD_THRESHOLD = float(os.getenv("LIVER_CLONE_VAD_THRESHOLD", "0.3"))
 DEFAULT_SILENCE_TIMEOUT = float(os.getenv("LIVER_CLONE_SILENCE_TIMEOUT", "5.0"))
