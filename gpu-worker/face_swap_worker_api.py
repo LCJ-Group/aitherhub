@@ -501,10 +501,11 @@ def enhance_face_gfpgan(face_crop_128, target_size=512):
     Enhance a face crop using GFPGAN 1.4.
     
     Input: 128x128 BGR face crop (uint8)
-    Output: 512x512 enhanced BGR face (uint8)
+    Output: target_size x target_size enhanced BGR face (uint8)
     
-    GFPGAN restores skin detail (pores, texture, wrinkles) that is lost
-    when inswapper_128 generates at 128x128 resolution.
+    Uses FaceFusion-compatible preprocessing:
+      - Input normalization: BGR→RGB, /255, then (x - 0.5) / 0.5 → [-1, 1]
+      - Output denormalization: clip [-1, 1], (x + 1) / 2 → [0, 1], *255, RGB→BGR
     """
     import cv2
     import numpy as np
@@ -516,18 +517,21 @@ def enhance_face_gfpgan(face_crop_128, target_size=512):
     # Resize to 512x512 for GFPGAN input
     face_512 = cv2.resize(face_crop_128, (target_size, target_size), interpolation=cv2.INTER_CUBIC)
 
-    # Prepare input: BGR→RGB, /255, HWC→CHW, add batch dim
+    # Prepare input: BGR→RGB, normalize to [-1, 1] (FaceFusion-compatible)
     input_tensor = face_512[:, :, ::-1].astype(np.float32) / 255.0
-    input_tensor = input_tensor.transpose(2, 0, 1)
-    input_tensor = np.expand_dims(input_tensor, axis=0)
+    input_tensor = (input_tensor - 0.5) / 0.5  # [0,1] → [-1,1]
+    input_tensor = input_tensor.transpose(2, 0, 1)  # HWC→CHW
+    input_tensor = np.expand_dims(input_tensor, axis=0)  # add batch dim
 
     # Run GFPGAN inference
     output = gfpgan_session.run(None, {'input': input_tensor})[0][0]
 
-    # Post-process: CHW→HWC, clip, RGB→BGR, *255
-    output = output.transpose(1, 2, 0)
-    output = output.clip(0, 1)
-    output = (output[:, :, ::-1] * 255).astype(np.uint8)
+    # Post-process: CHW→HWC, denormalize [-1,1]→[0,1], *255, RGB→BGR
+    output = output.transpose(1, 2, 0)  # CHW→HWC
+    output = np.clip(output, -1, 1)  # clip to valid range
+    output = (output + 1) / 2  # [-1,1] → [0,1]
+    output = (output * 255.0).round().astype(np.uint8)
+    output = output[:, :, ::-1]  # RGB→BGR
 
     return output
 
