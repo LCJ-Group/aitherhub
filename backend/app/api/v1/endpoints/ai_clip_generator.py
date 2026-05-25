@@ -95,6 +95,41 @@ async def _ensure_jobs_table():
     except Exception as e:
         logger.warning(f"[ai-clip] Failed to ensure jobs table: {e}")
 
+# ─── Product Master Table ─────────────────────────────────────────────────────
+_PRODUCT_MASTER_TABLE_ENSURED = False
+
+async def _ensure_product_master_table():
+    """Create product_master table if not exists (idempotent)"""
+    global _PRODUCT_MASTER_TABLE_ENSURED
+    if _PRODUCT_MASTER_TABLE_ENSURED:
+        return
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS product_master (
+                    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+                    product_name TEXT NOT NULL,
+                    brand_name TEXT,
+                    product_image_urls JSONB DEFAULT '[]'::jsonb,
+                    keywords TEXT[],
+                    is_active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """))
+            await conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS ix_product_master_name
+                ON product_master (product_name)
+            """))
+            await conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS ix_product_master_active
+                ON product_master (is_active) WHERE is_active = TRUE
+            """))
+        _PRODUCT_MASTER_TABLE_ENSURED = True
+        logger.info("[ai-clip] product_master table ensured")
+    except Exception as e:
+        logger.warning(f"[ai-clip] Failed to ensure product_master table: {e}")
+
 # Concurrency limiter
 _AI_CLIP_SEMAPHORE = asyncio.Semaphore(2)  # 2並列まで許可
 
@@ -3441,11 +3476,21 @@ async def _process_single_clip_v2(job_id: str, clip: dict, req: GenerateRequest,
 
         await _update_job(job_id, progress_pct=52, current_step=f"クリップ {idx+1}/{total}: 字幕{len(overlay_images)}枚生成完了")
 
-        # ── 10. Video mode processing & Build ffmpeg command ── (54%)
+         # ── 10. Video mode processing & Build ffmpeg command ── (54%)
         video_mode = clip.get("video_mode", "original")
         product_imgs = clip.get("product_image_urls") or []
-        output_path = os.path.join(tmp_dir, "output.mp4")
 
+        # ── 10a. 商品マスター自動連携: product_nameから画像を自動取得 ──
+        if not product_imgs and product_name and video_mode in ("product_overlay", "audio_only"):
+            try:
+                master_imgs = await _get_product_images_from_master(product_name)
+                if master_imgs:
+                    product_imgs = master_imgs
+                    logger.info(f"[ai-clip {job_id}] Auto-matched product master: '{product_name}' -> {len(master_imgs)} images")
+            except Exception as pm_err:
+                logger.warning(f"[ai-clip {job_id}] Product master lookup failed: {pm_err}")
+
+        output_path = os.path.join(tmp_dir, "output.mp4")
         if video_mode == "audio_only" and product_imgs:
             # 音声+商品スライドショーモード: 元映像の音声を保持し、商品画像のスライドショーを映像として使用
             await _update_job(job_id, progress_pct=54, current_step=f"クリップ {idx+1}/{total}: 商品スライドショー生成中...")
@@ -4148,8 +4193,9 @@ async def _generate_pip_video(
     video_path: str, product_image_urls: list, duration: float,
     width: int, height: int, tmp_dir: str, job_id: str
 ) -> Optional[str]:
-    """PiP (Picture-in-Picture) 合成: 動画がフルスクリーンメイン、商品画像が中央に一定間隔でポップアップ表示。
-    商品画像は5秒間隔で3秒間表示され、フェードイン/アウトで自然に出入りする。
+    """PiP (Picture-in-Picture) 合成: 動画がフルスクリーンメイン、商品画像が中央にローテーション表示。
+    複数画像を順番に切り替えてポップアップ表示する（3秒表示→4秒非表示→次の画像）。
+    全画像を使い切ったら最初に戻ってループする。
     """
     import httpx
     from PIL import Image, ImageDraw, ImageFilter
@@ -4171,12 +4217,12 @@ async def _generate_pip_video(
             resolved_urls.append(sas_url or url)
         else:
             resolved_urls.append(url)
-    logger.info(f"[ai-clip {job_id}] PiP popup: resolved {len(resolved_urls)} product image URLs")
+    logger.info(f"[ai-clip {job_id}] PiP rotation: resolved {len(resolved_urls)} product image URLs")
 
-    # Download product images
+    # Download ALL product images (no limit)
     product_img_paths = []
     async with httpx.AsyncClient(timeout=30.0) as client:
-        for i, img_url in enumerate(resolved_urls[:3]):  # Max 3 images
+        for i, img_url in enumerate(resolved_urls):  # Use ALL images
             try:
                 resp = await client.get(img_url)
                 resp.raise_for_status()
@@ -4189,70 +4235,76 @@ async def _generate_pip_video(
                 logger.warning(f"[ai-clip {job_id}] Failed to download product image {i}: {e}")
 
     if not product_img_paths:
-        logger.error(f"[ai-clip {job_id}] No product images downloaded for PiP popup")
+        logger.error(f"[ai-clip {job_id}] No product images downloaded for PiP rotation")
         return None
 
-    # Create overlay image with rounded corners and shadow (50% of video width)
+    num_images = len(product_img_paths)
+    logger.info(f"[ai-clip {job_id}] PiP rotation: {num_images} images downloaded")
+
+    # Create overlay images for each product (rounded corners, white card background)
     overlay_size = int(width * 0.55)
     overlay_h = int(height * 0.35)
     corner_radius = 24
+    padding = 20
+    inner_w = overlay_size - padding * 2
+    inner_h = overlay_h - padding * 2
 
-    try:
-        product_img = Image.open(product_img_paths[0]).convert("RGBA")
-        # Scale product image to fit overlay area with padding
-        padding = 20
-        inner_w = overlay_size - padding * 2
-        inner_h = overlay_h - padding * 2
-        img_w, img_h = product_img.size
-        scale = min(inner_w / img_w, inner_h / img_h)
-        new_w = int(img_w * scale)
-        new_h = int(img_h * scale)
-        product_resized = product_img.resize((new_w, new_h), Image.LANCZOS)
+    overlay_paths = []
+    for i, img_path in enumerate(product_img_paths):
+        try:
+            product_img = Image.open(img_path).convert("RGBA")
+            img_w, img_h = product_img.size
+            scale = min(inner_w / img_w, inner_h / img_h)
+            new_w = int(img_w * scale)
+            new_h = int(img_h * scale)
+            product_resized = product_img.resize((new_w, new_h), Image.LANCZOS)
 
-        # Create rounded rectangle background (white with slight transparency)
-        overlay_bg = Image.new("RGBA", (overlay_size, overlay_h), (0, 0, 0, 0))
-        # Draw rounded rectangle
-        mask = Image.new("L", (overlay_size, overlay_h), 0)
-        draw = ImageDraw.Draw(mask)
-        draw.rounded_rectangle([(0, 0), (overlay_size - 1, overlay_h - 1)], radius=corner_radius, fill=255)
-        # White background with slight transparency
-        white_bg = Image.new("RGBA", (overlay_size, overlay_h), (255, 255, 255, 230))
-        overlay_bg.paste(white_bg, (0, 0), mask)
-        # Paste product image centered
-        x_off = (overlay_size - new_w) // 2
-        y_off = (overlay_h - new_h) // 2
-        overlay_bg.paste(product_resized, (x_off, y_off), product_resized)
-        # Apply mask for rounded corners
-        overlay_bg.putalpha(mask)
+            # Create rounded rectangle background
+            overlay_bg = Image.new("RGBA", (overlay_size, overlay_h), (0, 0, 0, 0))
+            mask = Image.new("L", (overlay_size, overlay_h), 0)
+            draw = ImageDraw.Draw(mask)
+            draw.rounded_rectangle([(0, 0), (overlay_size - 1, overlay_h - 1)], radius=corner_radius, fill=255)
+            white_bg = Image.new("RGBA", (overlay_size, overlay_h), (255, 255, 255, 230))
+            overlay_bg.paste(white_bg, (0, 0), mask)
+            # Paste product image centered
+            x_off = (overlay_size - new_w) // 2
+            y_off = (overlay_h - new_h) // 2
+            overlay_bg.paste(product_resized, (x_off, y_off), product_resized)
+            overlay_bg.putalpha(mask)
 
-        overlay_path = os.path.join(tmp_dir, "pip_overlay.png")
-        overlay_bg.save(overlay_path, "PNG")
-    except Exception as e:
-        logger.warning(f"[ai-clip {job_id}] Failed to create PiP overlay image: {e}")
+            overlay_path = os.path.join(tmp_dir, f"pip_overlay_{i}.png")
+            overlay_bg.save(overlay_path, "PNG")
+            overlay_paths.append(overlay_path)
+        except Exception as e:
+            logger.warning(f"[ai-clip {job_id}] Failed to create overlay for image {i}: {e}")
+
+    if not overlay_paths:
+        logger.error(f"[ai-clip {job_id}] No overlay images created")
         return None
 
-    # Calculate popup timing: show for 3s, hide for 5s, repeat
-    # Pattern: appear at t=2s for 3s, then t=10s for 3s, then t=18s for 3s, etc.
-    show_duration = 3.0  # seconds visible
-    hide_duration = 5.0  # seconds hidden
+    # Calculate popup timing: show for 3s, hide for 4s, rotate through images
+    show_duration = 3.0  # seconds visible per image
+    hide_duration = 4.0  # seconds hidden between images
     first_appear = 2.0   # first appearance at 2 seconds
+    cycle_duration = show_duration + hide_duration  # 7s per image slot
 
-    # Build enable expression for overlay (when to show)
-    # enable='between(t,2,5)+between(t,10,13)+between(t,18,21)...'
-    enable_parts = []
+    # Build schedule: [(start_time, end_time, image_index), ...]
+    schedule = []
     t = first_appear
+    img_idx = 0
     while t + show_duration <= duration:
-        enable_parts.append(f"between(t,{t},{t + show_duration})")
-        t += show_duration + hide_duration
-    # If video is very short, show at least once
-    if not enable_parts and duration > 2:
-        enable_parts.append(f"between(t,1,{min(duration - 0.5, 4)})")
+        schedule.append((t, t + show_duration, img_idx % len(overlay_paths)))
+        t += cycle_duration
+        img_idx += 1
+    # If video is very short, show at least one image
+    if not schedule and duration > 2:
+        schedule.append((1.0, min(duration - 0.5, 4.0), 0))
 
-    if not enable_parts:
-        logger.warning(f"[ai-clip {job_id}] Video too short for PiP popup (duration={duration})")
+    if not schedule:
+        logger.warning(f"[ai-clip {job_id}] Video too short for PiP rotation (duration={duration})")
         return None
 
-    enable_expr = "+".join(enable_parts)
+    logger.info(f"[ai-clip {job_id}] PiP rotation schedule: {len(schedule)} appearances, {len(overlay_paths)} unique images")
 
     # Position overlay in center of video
     overlay_x = (width - overlay_size) // 2
@@ -4260,14 +4312,42 @@ async def _generate_pip_video(
 
     pip_output = os.path.join(tmp_dir, "pip_output.mp4")
 
-    # ffmpeg command: video as main + product image overlay with timed popup
-    # Primary: simple overlay with enable expression (reliable)
+    # Build ffmpeg command with multiple overlay inputs (one per unique image)
+    # Each overlay has its own enable expression for when it should appear
+    input_args = ["-i", video_path]
+    for op in overlay_paths:
+        input_args.extend(["-i", op])
+
+    # Build filter_complex: chain overlays one after another
+    # [0:v][1:v]overlay=...enable='...'[tmp1]; [tmp1][2:v]overlay=...enable='...'[tmp2]; ...
+    filter_parts = []
+    num_overlays = len(overlay_paths)
+
+    # Group schedule by image index
+    enable_by_image = {}
+    for start, end, img_i in schedule:
+        if img_i not in enable_by_image:
+            enable_by_image[img_i] = []
+        enable_by_image[img_i].append(f"between(t,{start:.1f},{end:.1f})")
+
+    # Build overlay chain
+    prev_label = "0:v"
+    active_overlays = sorted(enable_by_image.keys())
+    for chain_idx, img_i in enumerate(active_overlays):
+        enable_expr = "+".join(enable_by_image[img_i])
+        input_idx = img_i + 1  # +1 because input 0 is the video
+        out_label = f"tmp{chain_idx}" if chain_idx < len(active_overlays) - 1 else "outv"
+        filter_parts.append(
+            f"[{prev_label}][{input_idx}:v]overlay={overlay_x}:{overlay_y}:enable='{enable_expr}'[{out_label}]"
+        )
+        prev_label = out_label
+
+    filter_complex = ";".join(filter_parts)
+
     pip_cmd = [
         "ffmpeg", "-y",
-        "-i", video_path,  # Main video (fullscreen)
-        "-i", overlay_path,  # Product overlay image (PNG with transparency)
-        "-filter_complex",
-        f"[0:v][1:v]overlay={overlay_x}:{overlay_y}:enable='{enable_expr}'[outv]",
+        *input_args,
+        "-filter_complex", filter_complex,
         "-map", "[outv]", "-map", "0:a?",
         "-t", str(duration),
         "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
@@ -4275,19 +4355,19 @@ async def _generate_pip_video(
         pip_output
     ]
 
-    logger.info(f"[ai-clip {job_id}] PiP popup: overlay at ({overlay_x},{overlay_y}), size={overlay_size}x{overlay_h}, enable={enable_expr}")
+    logger.info(f"[ai-clip {job_id}] PiP rotation: {len(overlay_paths)} images, filter_complex={filter_complex[:200]}...")
 
     proc = await asyncio.create_subprocess_exec(
         *pip_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
     )
-    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180)
+    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
     if proc.returncode != 0:
-        logger.error(f"[ai-clip {job_id}] PiP popup ffmpeg failed: {stderr.decode()[-500:]}")
-        # Fallback: try without enable (show product image for entire duration)
-        pip_cmd_always = [
+        logger.error(f"[ai-clip {job_id}] PiP rotation ffmpeg failed: {stderr.decode()[-500:]}")
+        # Fallback: use only first image, always visible
+        pip_cmd_fallback = [
             "ffmpeg", "-y",
             "-i", video_path,
-            "-i", overlay_path,
+            "-i", overlay_paths[0],
             "-filter_complex",
             f"[0:v][1:v]overlay={overlay_x}:{overlay_y}[outv]",
             "-map", "[outv]", "-map", "0:a?",
@@ -4297,13 +4377,13 @@ async def _generate_pip_video(
             pip_output
         ]
         proc2 = await asyncio.create_subprocess_exec(
-            *pip_cmd_always, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            *pip_cmd_fallback, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
         stdout2, stderr2 = await asyncio.wait_for(proc2.communicate(), timeout=180)
         if proc2.returncode != 0:
-            logger.error(f"[ai-clip {job_id}] PiP fallback (always-on) also failed: {stderr2.decode()[-500:]}")
+            logger.error(f"[ai-clip {job_id}] PiP fallback also failed: {stderr2.decode()[-500:]}")
             return None
-        logger.info(f"[ai-clip {job_id}] PiP fallback succeeded (product shown for entire duration)")
+        logger.info(f"[ai-clip {job_id}] PiP fallback succeeded (first image always shown)")
 
     return pip_output
 
@@ -4486,3 +4566,197 @@ async def analyze_product_image(
     except Exception as e:
         logger.error(f"[ai-clip] Product image analysis failed: {e}")
         raise HTTPException(status_code=500, detail=f"画像分析に失敗しました: {str(e)}")
+
+
+
+# ─── Product Master CRUD Endpoints ──────────────────────────────────────────
+
+@router.get("/product-master")
+async def list_product_master(
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """商品マスター一覧を取得"""
+    if x_admin_key != ADMIN_KEY:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    await _ensure_product_master_table()
+    async with get_session() as session:
+        result = await session.execute(text("""
+            SELECT id, product_name, brand_name, product_image_urls,
+                   keywords, is_active, created_at, updated_at
+            FROM product_master
+            WHERE is_active = TRUE
+            ORDER BY product_name ASC
+        """))
+        rows = result.fetchall()
+    return [
+        {
+            "id": str(r.id),
+            "product_name": r.product_name,
+            "brand_name": r.brand_name or "",
+            "product_image_urls": r.product_image_urls if r.product_image_urls else [],
+            "keywords": list(r.keywords) if r.keywords else [],
+            "is_active": r.is_active,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+        }
+        for r in rows
+    ]
+
+
+@router.post("/product-master")
+async def create_product_master(
+    request: Request,
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """商品マスターに新規商品を登録"""
+    if x_admin_key != ADMIN_KEY:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    await _ensure_product_master_table()
+    body = await request.json()
+    product_name = body.get("product_name", "").strip()
+    if not product_name:
+        raise HTTPException(status_code=400, detail="product_name is required")
+    brand_name = body.get("brand_name", "").strip()
+    product_image_urls = body.get("product_image_urls", [])
+    keywords = body.get("keywords", [])
+    if isinstance(product_image_urls, str):
+        product_image_urls = [product_image_urls]
+    if isinstance(keywords, str):
+        keywords = [k.strip() for k in keywords.split(",") if k.strip()]
+    import uuid as _uuid
+    new_id = str(_uuid.uuid4())
+    async with get_session() as session:
+        await session.execute(text("""
+            INSERT INTO product_master (id, product_name, brand_name, product_image_urls, keywords)
+            VALUES (CAST(:id AS uuid), :product_name, :brand_name, :product_image_urls::jsonb, :keywords)
+        """), {
+            "id": new_id,
+            "product_name": product_name,
+            "brand_name": brand_name,
+            "product_image_urls": json.dumps(product_image_urls),
+            "keywords": keywords,
+        })
+        await session.commit()
+    logger.info(f"[product-master] Created: {product_name} with {len(product_image_urls)} images")
+    return {"id": new_id, "product_name": product_name, "status": "created"}
+
+
+@router.put("/product-master/{product_id}")
+async def update_product_master(
+    product_id: str,
+    request: Request,
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """商品マスターを更新"""
+    if x_admin_key != ADMIN_KEY:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    await _ensure_product_master_table()
+    body = await request.json()
+    updates = []
+    params = {"pid": product_id}
+    if "product_name" in body:
+        updates.append("product_name = :product_name")
+        params["product_name"] = body["product_name"].strip()
+    if "brand_name" in body:
+        updates.append("brand_name = :brand_name")
+        params["brand_name"] = body["brand_name"].strip()
+    if "product_image_urls" in body:
+        urls = body["product_image_urls"]
+        if isinstance(urls, str):
+            urls = [urls]
+        updates.append("product_image_urls = :product_image_urls::jsonb")
+        params["product_image_urls"] = json.dumps(urls)
+    if "keywords" in body:
+        kws = body["keywords"]
+        if isinstance(kws, str):
+            kws = [k.strip() for k in kws.split(",") if k.strip()]
+        updates.append("keywords = :keywords")
+        params["keywords"] = kws
+    if "is_active" in body:
+        updates.append("is_active = :is_active")
+        params["is_active"] = bool(body["is_active"])
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    updates.append("updated_at = NOW()")
+    set_clause = ", ".join(updates)
+    async with get_session() as session:
+        result = await session.execute(text(f"""
+            UPDATE product_master SET {set_clause}
+            WHERE id = CAST(:pid AS uuid)
+        """), params)
+        await session.commit()
+    logger.info(f"[product-master] Updated: {product_id}")
+    return {"id": product_id, "status": "updated"}
+
+
+@router.delete("/product-master/{product_id}")
+async def delete_product_master(
+    product_id: str,
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """商品マスターを論理削除"""
+    if x_admin_key != ADMIN_KEY:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    await _ensure_product_master_table()
+    async with get_session() as session:
+        await session.execute(text("""
+            UPDATE product_master SET is_active = FALSE, updated_at = NOW()
+            WHERE id = CAST(:pid AS uuid)
+        """), {"pid": product_id})
+        await session.commit()
+    logger.info(f"[product-master] Deleted (soft): {product_id}")
+    return {"id": product_id, "status": "deleted"}
+
+
+async def _get_product_images_from_master(product_name: str) -> list:
+    """商品マスターから商品名でマッチする画像URLリストを取得する。
+    完全一致 → 部分一致 → キーワードマッチの順で検索。
+    """
+    await _ensure_product_master_table()
+    if not product_name:
+        return []
+    async with get_session() as session:
+        # 1. 完全一致
+        result = await session.execute(text("""
+            SELECT product_image_urls FROM product_master
+            WHERE LOWER(product_name) = LOWER(:name) AND is_active = TRUE
+            LIMIT 1
+        """), {"name": product_name.strip()})
+        row = result.fetchone()
+        if row and row.product_image_urls:
+            urls = row.product_image_urls if isinstance(row.product_image_urls, list) else json.loads(row.product_image_urls)
+            if urls:
+                logger.info(f"[product-master] Exact match for '{product_name}': {len(urls)} images")
+                return urls
+
+        # 2. 部分一致（商品名がマスターに含まれる or マスターが商品名に含まれる）
+        result = await session.execute(text("""
+            SELECT product_name, product_image_urls FROM product_master
+            WHERE is_active = TRUE
+              AND (LOWER(product_name) LIKE '%' || LOWER(:name) || '%'
+                   OR LOWER(:name) LIKE '%' || LOWER(product_name) || '%')
+            ORDER BY LENGTH(product_name) DESC
+            LIMIT 1
+        """), {"name": product_name.strip()})
+        row = result.fetchone()
+        if row and row.product_image_urls:
+            urls = row.product_image_urls if isinstance(row.product_image_urls, list) else json.loads(row.product_image_urls)
+            if urls:
+                logger.info(f"[product-master] Partial match '{product_name}' -> '{row.product_name}': {len(urls)} images")
+                return urls
+
+        # 3. キーワードマッチ
+        result = await session.execute(text("""
+            SELECT product_name, product_image_urls FROM product_master
+            WHERE is_active = TRUE
+              AND keywords && ARRAY[:keyword]::text[]
+            LIMIT 1
+        """), {"keyword": product_name.strip().lower()})
+        row = result.fetchone()
+        if row and row.product_image_urls:
+            urls = row.product_image_urls if isinstance(row.product_image_urls, list) else json.loads(row.product_image_urls)
+            if urls:
+                logger.info(f"[product-master] Keyword match '{product_name}' -> '{row.product_name}': {len(urls)} images")
+                return urls
+
+    return []
