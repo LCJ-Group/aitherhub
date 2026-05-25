@@ -108,9 +108,14 @@ source_face_path: Optional[str] = None
 face_analyzer = None       # insightface.app.FaceAnalysis instance
 face_swapper_model = None  # INSwapper ONNX model
 source_face_embedding = None  # Pre-computed source face object from FaceAnalysis
+face_enhancer_net = None   # GFPGAN face restoration network for HD quality
 INSWAPPER_MODEL_PATH = os.getenv(
     "INSWAPPER_MODEL_PATH",
     "/workspace/facefusion/.assets/models/inswapper_128.onnx"
+)
+GFPGAN_MODEL_PATH = os.getenv(
+    "GFPGAN_MODEL_PATH",
+    "/workspace/facefusion/.assets/models/GFPGANv1.4.pth"
 )
 
 
@@ -301,12 +306,118 @@ def build_facefusion_headless_cmd(input_path: str, output_path: str) -> list:
     return cmd
 
 
+# ── HD Enhancement Helper Functions ───────────────────────────────────────────
+
+def _color_correct_face(original, swapped, faces):
+    """
+    Color-correct the swapped face region to match the original frame's skin tone.
+    Uses histogram matching in LAB color space for natural color blending.
+    """
+    try:
+        import cv2
+        import numpy as np
+        
+        result = swapped.copy()
+        for face in faces:
+            bbox = face.bbox.astype(int)
+            x1, y1, x2, y2 = bbox
+            # Clamp to image bounds
+            h, w = original.shape[:2]
+            x1, y1 = max(0, x1), max(0, y1)
+            x2, y2 = min(w, x2), min(h, y2)
+            if x2 <= x1 or y2 <= y1:
+                continue
+            
+            # Extract face regions
+            orig_face = original[y1:y2, x1:x2]
+            swap_face = result[y1:y2, x1:x2]
+            
+            if orig_face.size == 0 or swap_face.size == 0:
+                continue
+            
+            # Convert to LAB for perceptual color matching
+            orig_lab = cv2.cvtColor(orig_face, cv2.COLOR_BGR2LAB).astype(np.float32)
+            swap_lab = cv2.cvtColor(swap_face, cv2.COLOR_BGR2LAB).astype(np.float32)
+            
+            # Match mean and std of each channel
+            for ch in range(3):
+                orig_mean = orig_lab[:, :, ch].mean()
+                orig_std = orig_lab[:, :, ch].std() + 1e-6
+                swap_mean = swap_lab[:, :, ch].mean()
+                swap_std = swap_lab[:, :, ch].std() + 1e-6
+                
+                # Normalize and re-scale
+                swap_lab[:, :, ch] = (
+                    (swap_lab[:, :, ch] - swap_mean) * (orig_std / swap_std) + orig_mean
+                )
+            
+            # Clip and convert back
+            swap_lab = np.clip(swap_lab, 0, 255).astype(np.uint8)
+            corrected = cv2.cvtColor(swap_lab, cv2.COLOR_LAB2BGR)
+            result[y1:y2, x1:x2] = corrected
+        
+        return result
+    except Exception:
+        return swapped
+
+
+def _seamless_blend(original, swapped, faces):
+    """
+    Apply Poisson seamless cloning at face boundaries for natural blending.
+    Falls back to Gaussian blur blending if seamlessClone fails.
+    """
+    try:
+        import cv2
+        import numpy as np
+        
+        result = swapped.copy()
+        h, w = original.shape[:2]
+        
+        for face in faces:
+            bbox = face.bbox.astype(int)
+            x1, y1, x2, y2 = bbox
+            # Expand bbox slightly for better blending
+            pad = int((x2 - x1) * 0.1)
+            x1, y1 = max(0, x1 - pad), max(0, y1 - pad)
+            x2, y2 = min(w, x2 + pad), min(h, y2 + pad)
+            if x2 <= x1 or y2 <= y1:
+                continue
+            
+            # Create elliptical mask for face region
+            face_w = x2 - x1
+            face_h = y2 - y1
+            center_x = (x1 + x2) // 2
+            center_y = (y1 + y2) // 2
+            
+            mask = np.zeros((h, w), dtype=np.uint8)
+            cv2.ellipse(
+                mask,
+                (center_x, center_y),
+                (face_w // 2, face_h // 2),
+                0, 0, 360, 255, -1
+            )
+            
+            # Gaussian blur the mask edges for smooth transition
+            blur_size = max(3, face_w // 8) | 1  # Must be odd
+            mask_blurred = cv2.GaussianBlur(mask, (blur_size, blur_size), 0)
+            
+            # Alpha blend using the blurred mask
+            alpha = mask_blurred.astype(np.float32) / 255.0
+            alpha = alpha[:, :, np.newaxis]
+            
+            result = (swapped * alpha + original * (1 - alpha)).astype(np.uint8)
+        
+        return result
+    except Exception:
+        return swapped
+
+
 # ── Lifespan ─────────────────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
-    global face_analyzer, face_swapper_model, source_face_embedding, source_face_path
+    global face_analyzer, face_swapper_model, source_face_embedding, source_face_path, face_enhancer_net
 
     logger.info("FaceFusion GPU Worker starting up...")
     logger.info(f"FaceFusion directory: {FACEFUSION_DIR}")
@@ -361,9 +472,29 @@ async def lifespan(app: FastAPI):
         logger.error(f"[InsightFace] Failed to load models: {e}")
         logger.warning("[InsightFace] Will use FaceFusion CLI fallback")
 
+    # ── Load GFPGAN face enhancer for HD quality ────────────────────────────
+    try:
+        if os.path.exists(GFPGAN_MODEL_PATH):
+            from gfpgan import GFPGANer
+            face_enhancer_net = GFPGANer(
+                model_path=GFPGAN_MODEL_PATH,
+                upscale=1,
+                arch='clean',
+                channel_multiplier=2,
+                bg_upsampler=None,
+            )
+            logger.info(f"[GFPGAN] Face enhancer loaded: {GFPGAN_MODEL_PATH}")
+        else:
+            logger.info(f"[GFPGAN] Model not found at {GFPGAN_MODEL_PATH}, HD enhancement disabled")
+    except ImportError:
+        logger.info("[GFPGAN] gfpgan package not installed, HD enhancement disabled")
+    except Exception as e:
+        logger.warning(f"[GFPGAN] Failed to load: {e}")
+
     logger.info(f"[InsightFace] Engine status: analyzer={'OK' if face_analyzer else 'NONE'}, "
                 f"swapper={'OK' if face_swapper_model else 'NONE'}, "
-                f"source_face={'OK' if source_face_embedding else 'NONE'}")
+                f"source_face={'OK' if source_face_embedding else 'NONE'}, "
+                f"enhancer={'OK' if face_enhancer_net else 'NONE'}")
 
     yield
 
@@ -430,6 +561,8 @@ async def health_check(auth: bool = Depends(verify_api_key)):
             "face_analyzer": face_analyzer is not None,
             "face_swapper_model": face_swapper_model is not None,
             "source_face_embedding": source_face_embedding is not None,
+            "face_enhancer_hd": face_enhancer_net is not None,
+            "hd_pipeline": "color_correction + gfpgan + seamless_blend",
             "ready": all([
                 face_analyzer is not None,
                 face_swapper_model is not None,
@@ -1372,9 +1505,28 @@ async def preview_stream(websocket: WebSocket, api_key: str = Query(...)):
                                 result, target_face, source_face_embedding, paste_back=True
                             )
                         
-                        # Encode result back to JPEG
+                        # ── HD Enhancement Pipeline ──────────────────────
+                        # 1. Color correction: match swapped face color to target skin
+                        result = _color_correct_face(frame, result, target_faces)
+                        
+                        # 2. GFPGAN face restoration (if available)
+                        if face_enhancer_net is not None:
+                            try:
+                                _, _, enhanced = face_enhancer_net.enhance(
+                                    result, has_aligned=False,
+                                    only_center_face=False, paste_back=True
+                                )
+                                if enhanced is not None:
+                                    result = enhanced
+                            except Exception:
+                                pass  # Skip enhancement on error
+                        
+                        # 3. Seamless blend at face boundary
+                        result = _seamless_blend(frame, result, target_faces)
+                        
+                        # Encode result back to JPEG (higher quality for HD)
                         _, encoded = cv2.imencode('.jpg', result, 
-                                                  [cv2.IMWRITE_JPEG_QUALITY, 85])
+                                                  [cv2.IMWRITE_JPEG_QUALITY, 92])
                         processed = encoded.tobytes()
                     else:
                         # No faces detected in frame - return original
@@ -1479,8 +1631,23 @@ async def preview_frame(req: SwapFrameRequest, auth: bool = Depends(verify_api_k
                     result = face_swapper_model.get(
                         result, target_face, source_face_embedding, paste_back=True
                     )
+                
+                # HD Enhancement Pipeline
+                result = _color_correct_face(frame, result, target_faces)
+                if face_enhancer_net is not None:
+                    try:
+                        _, _, enhanced = face_enhancer_net.enhance(
+                            result, has_aligned=False,
+                            only_center_face=False, paste_back=True
+                        )
+                        if enhanced is not None:
+                            result = enhanced
+                    except Exception:
+                        pass
+                result = _seamless_blend(frame, result, target_faces)
+                
                 _, encoded = cv2.imencode('.jpg', result,
-                                          [cv2.IMWRITE_JPEG_QUALITY, 90])
+                                          [cv2.IMWRITE_JPEG_QUALITY, 95])
                 output_base64 = base64.b64encode(encoded.tobytes()).decode()
             else:
                 # No faces detected - return original

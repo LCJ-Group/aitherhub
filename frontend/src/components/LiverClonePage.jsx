@@ -22,6 +22,9 @@ import {
   Sliders,
   Send,
   Trash2,
+  Download,
+  Circle,
+  StopCircle,
 } from "lucide-react";
 import liverCloneService from "../base/services/liverCloneService";
 import { useTranslation } from "react-i18next";
@@ -98,6 +101,15 @@ export default function LiverClonePage() {
   const previewIntervalRef = useRef(null);
   const frameCountRef = useRef(0);
   const lastFpsTimeRef = useRef(Date.now());
+
+  // Recording (9:16 vertical video)
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordedChunks, setRecordedChunks] = useState([]);
+  const [recordingDuration, setRecordingDuration] = useState(0);
+  const mediaRecorderRef = useRef(null);
+  const recordingCanvasRef = useRef(null);
+  const recordingTimerRef = useRef(null);
+  const recordedFramesRef = useRef([]);
 
   // Tabs
   const [activeTab, setActiveTab] = useState("config"); // config, comments, autopilot, metrics
@@ -309,9 +321,116 @@ export default function LiverClonePage() {
     setPreviewLatency(0);
   };
 
+  // ── Recording Functions (9:16 vertical video) ──
+  const startRecording = () => {
+    if (!previewActive) return;
+    
+    // Create a canvas for 9:16 recording (1080x1920)
+    const recCanvas = document.createElement('canvas');
+    recCanvas.width = 1080;
+    recCanvas.height = 1920;
+    recordingCanvasRef.current = recCanvas;
+    recordedFramesRef.current = [];
+    
+    // Use canvas stream for MediaRecorder
+    const stream = recCanvas.captureStream(30);
+    const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
+      ? 'video/webm;codecs=vp9'
+      : 'video/webm';
+    
+    const recorder = new MediaRecorder(stream, {
+      mimeType,
+      videoBitsPerSecond: 8000000, // 8Mbps for high quality
+    });
+    
+    const chunks = [];
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) chunks.push(e.data);
+    };
+    recorder.onstop = () => {
+      setRecordedChunks(chunks);
+    };
+    
+    recorder.start(100); // Collect data every 100ms
+    mediaRecorderRef.current = recorder;
+    setIsRecording(true);
+    setRecordingDuration(0);
+    
+    // Timer for duration display
+    recordingTimerRef.current = setInterval(() => {
+      setRecordingDuration(prev => prev + 1);
+    }, 1000);
+    
+    // Draw frames to recording canvas at 30fps
+    const drawFrame = () => {
+      if (!mediaRecorderRef.current || mediaRecorderRef.current.state !== 'recording') return;
+      const ctx = recCanvas.getContext('2d');
+      // Find the preview image element
+      const previewImg = document.querySelector('[data-preview-frame]');
+      if (previewImg && previewImg.complete && previewImg.naturalWidth > 0) {
+        // Draw in 9:16 aspect ratio (center crop from 16:9 source)
+        const srcW = previewImg.naturalWidth;
+        const srcH = previewImg.naturalHeight;
+        // Calculate crop area for 9:16 from center
+        const targetAspect = 9 / 16;
+        const srcAspect = srcW / srcH;
+        let cropX = 0, cropY = 0, cropW = srcW, cropH = srcH;
+        if (srcAspect > targetAspect) {
+          // Source is wider - crop sides
+          cropW = srcH * targetAspect;
+          cropX = (srcW - cropW) / 2;
+        } else {
+          // Source is taller - crop top/bottom
+          cropH = srcW / targetAspect;
+          cropY = (srcH - cropH) / 2;
+        }
+        ctx.drawImage(previewImg, cropX, cropY, cropW, cropH, 0, 0, 1080, 1920);
+      } else {
+        // Fallback: black frame with text
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, 1080, 1920);
+      }
+      requestAnimationFrame(drawFrame);
+    };
+    requestAnimationFrame(drawFrame);
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+      mediaRecorderRef.current.stop();
+    }
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+    setIsRecording(false);
+  };
+
+  const downloadRecording = () => {
+    if (recordedChunks.length === 0) return;
+    const blob = new Blob(recordedChunks, { type: 'video/webm' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `face_swap_${new Date().toISOString().slice(0,19).replace(/[:-]/g,'')}_9x16.webm`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const formatDuration = (seconds) => {
+    const m = Math.floor(seconds / 60).toString().padStart(2, '0');
+    const s = (seconds % 60).toString().padStart(2, '0');
+    return `${m}:${s}`;
+  };
+
   // Cleanup on unmount
   useEffect(() => {
-    return () => stopPreview();
+    return () => {
+      stopPreview();
+      if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+    };
   }, []);
 
   const handleCreateSession = async () => {
@@ -511,9 +630,9 @@ export default function LiverClonePage() {
           </div>
         )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* ── Left: Stream Status & Preview ── */}
-          <div className="space-y-4">
+        <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+          {/* ── Left: Stream Preview (larger) ── */}
+          <div className="lg:col-span-3 space-y-4">
             {/* Stream Preview */}
             <div className="bg-[#12121a] rounded-xl border border-gray-800 overflow-hidden">
               <div className="aspect-video bg-black flex items-center justify-center relative">
@@ -525,6 +644,8 @@ export default function LiverClonePage() {
                   <img
                     src={previewFrame}
                     alt="Preview"
+                    data-preview-frame="true"
+                    crossOrigin="anonymous"
                     className="w-full h-full object-contain"
                   />
                 ) : isStreaming ? (
@@ -590,12 +711,42 @@ export default function LiverClonePage() {
                     プレビュー開始
                   </button>
                 ) : (
+                  <>
+                    <button
+                      onClick={stopPreview}
+                      className="flex-1 flex items-center justify-center gap-2 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm font-medium transition"
+                    >
+                      <Square className="w-4 h-4 text-red-400" />
+                      停止
+                    </button>
+                    {!isRecording ? (
+                      <button
+                        onClick={startRecording}
+                        className="flex items-center justify-center gap-2 py-2 px-4 bg-red-600 hover:bg-red-700 rounded-lg text-sm font-medium transition"
+                        title="9:16縦動画で録画開始"
+                      >
+                        <Circle className="w-4 h-4 fill-current" />
+                        録画
+                      </button>
+                    ) : (
+                      <button
+                        onClick={stopRecording}
+                        className="flex items-center justify-center gap-2 py-2 px-4 bg-red-700 hover:bg-red-800 rounded-lg text-sm font-medium transition animate-pulse"
+                      >
+                        <StopCircle className="w-4 h-4" />
+                        {formatDuration(recordingDuration)}
+                      </button>
+                    )}
+                  </>
+                )}
+                {recordedChunks.length > 0 && !isRecording && (
                   <button
-                    onClick={stopPreview}
-                    className="flex-1 flex items-center justify-center gap-2 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm font-medium transition"
+                    onClick={downloadRecording}
+                    className="flex items-center justify-center gap-2 py-2 px-4 bg-green-600 hover:bg-green-700 rounded-lg text-sm font-medium transition"
+                    title="9:16縦動画をダウンロード"
                   >
-                    <Square className="w-4 h-4 text-red-400" />
-                    プレビュー停止
+                    <Download className="w-4 h-4" />
+                    DL
                   </button>
                 )}
               </div>
@@ -673,7 +824,7 @@ export default function LiverClonePage() {
           </div>
 
           {/* ── Right: Configuration Panel ── */}
-          <div className="lg:col-span-2 space-y-4">
+          <div className="lg:col-span-2 space-y-4 max-h-[calc(100vh-140px)] overflow-y-auto">
             {/* Tab Navigation */}
             <div className="flex gap-1 bg-[#12121a] rounded-xl border border-gray-800 p-1">
               {[
