@@ -87,8 +87,13 @@ export default function AutoAIClipPanel({ adminKey }) {
   const [editHook, setEditHook] = useState("");
   const [editCta, setEditCta] = useState("");
   const [captionLoading, setCaptionLoading] = useState(false);
-  const [regenerating, setRegenerating] = useState(false);
-
+   const [regenerating, setRegenerating] = useState(false);
+  // ── Delete with feedback state ──
+  const [deleteTarget, setDeleteTarget] = useState(null); // { jobId, clipId }
+  const [deleteReason, setDeleteReason] = useState("");
+  const [deleteCategory, setDeleteCategory] = useState("quality");
+  const [deleting, setDeleting] = useState(false);
+  const [copiedUrl, setCopiedUrl] = useState(null);
   const headers = { "X-Admin-Key": adminKey };
 
   // ── Fetch initial data ──
@@ -313,6 +318,42 @@ export default function AutoAIClipPanel({ adminKey }) {
     setEditCaptions([]);
     setEditHook("");
     setEditCta("");
+  };
+
+  // ── Delete clip with feedback ──
+  const handleDeleteClip = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    try {
+      await axios.post(
+        `${API_BASE}/api/v1/ai-clip/clips/${deleteTarget.jobId}/${deleteTarget.clipId}/delete`,
+        { reason: deleteReason, reason_category: deleteCategory },
+        { headers }
+      );
+      // Refresh active job data
+      if (activeJob && activeJob.job_id === deleteTarget.jobId) {
+        const res = await axios.get(`${API_BASE}/api/v1/ai-clip/jobs/${deleteTarget.jobId}`, { headers });
+        setActiveJob(res.data);
+      }
+      // Also refresh jobs list
+      const jobsRes = await axios.get(`${API_BASE}/api/v1/ai-clip/jobs?limit=20`, { headers });
+      setJobs(jobsRes.data.jobs || []);
+      setDeleteTarget(null);
+      setDeleteReason("");
+      setDeleteCategory("quality");
+    } catch (e) {
+      alert(`削除失敗: ${e.response?.data?.detail || e.message}`);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  // ── Copy share link ──
+  const copyShareLink = (url) => {
+    navigator.clipboard.writeText(url).then(() => {
+      setCopiedUrl(url);
+      setTimeout(() => setCopiedUrl(null), 2000);
+    });
   };
 
   // ── Loading ──
@@ -1048,14 +1089,39 @@ export default function AutoAIClipPanel({ adminKey }) {
                           {r.duration_sec && <div>⏱️ 長さ: {r.duration_sec.toFixed(1)}秒</div>}
                         </div>
                       )}
-                      {/* Caption Edit Button */}
-                      {r.status === "done" && r.captions_count > 0 && (
-                        <button
-                          onClick={() => openCaptionEditor(activeJob.job_id, r.clip_id, r.download_url)}
-                          className="mt-2 px-3 py-1.5 bg-yellow-50 text-yellow-700 border border-yellow-300 rounded-md text-xs font-medium hover:bg-yellow-100 transition-colors"
-                        >
-                          ✏️ 字幕を編集
-                        </button>
+                      {/* Action Buttons */}
+                      {r.status === "done" && (
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {/* Edit captions */}
+                          {r.captions_count > 0 && (
+                            <button
+                              onClick={() => openCaptionEditor(activeJob.job_id, r.clip_id, r.download_url)}
+                              className="px-3 py-1.5 bg-yellow-50 text-yellow-700 border border-yellow-300 rounded-md text-xs font-medium hover:bg-yellow-100 transition-colors"
+                            >
+                              ✏️ 編集
+                            </button>
+                          )}
+                          {/* Share link */}
+                          {r.download_url && (
+                            <button
+                              onClick={() => copyShareLink(r.download_url)}
+                              className={`px-3 py-1.5 border rounded-md text-xs font-medium transition-colors ${
+                                copiedUrl === r.download_url
+                                  ? "bg-green-50 text-green-700 border-green-300"
+                                  : "bg-blue-50 text-blue-700 border-blue-300 hover:bg-blue-100"
+                              }`}
+                            >
+                              {copiedUrl === r.download_url ? "✅ コピー済" : "🔗 共有リンク"}
+                            </button>
+                          )}
+                          {/* Delete with reason */}
+                          <button
+                            onClick={() => setDeleteTarget({ jobId: activeJob.job_id, clipId: r.clip_id })}
+                            className="px-3 py-1.5 bg-red-50 text-red-700 border border-red-300 rounded-md text-xs font-medium hover:bg-red-100 transition-colors"
+                          >
+                            🗑 削除
+                          </button>
+                        </div>
                       )}
                     </div>
                   ))}
@@ -1273,6 +1339,22 @@ export default function AutoAIClipPanel({ adminKey }) {
                             ⬇️ DL
                           </a>
                         )}
+                        {(clip.download_url || clip.blob_url) && (
+                          <button
+                            onClick={() => copyShareLink(clip.download_url || clip.blob_url)}
+                            className="text-green-600 hover:text-green-800 font-medium"
+                          >
+                            {copiedUrl === (clip.download_url || clip.blob_url) ? "✅" : "🔗 共有"}
+                          </button>
+                        )}
+                        {clip.job_id && clip.clip_id && (
+                          <button
+                            onClick={() => setDeleteTarget({ jobId: clip.job_id, clipId: clip.clip_id })}
+                            className="text-red-500 hover:text-red-700 font-medium"
+                          >
+                            🗑
+                          </button>
+                        )}
                         {clip.blob_url && (
                           <a
                             href={clip.blob_url}
@@ -1396,6 +1478,59 @@ export default function AutoAIClipPanel({ adminKey }) {
               ))}
             </div>
           )}
+        </div>
+      )}
+      {/* Delete Confirmation Modal */}
+      {deleteTarget && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setDeleteTarget(null)}>
+          <div className="bg-white rounded-xl p-6 max-w-md w-full mx-4 shadow-2xl" onClick={e => e.stopPropagation()}>
+            <h3 className="text-lg font-bold text-gray-800 mb-4">🗑 クリップを削除</h3>
+            <p className="text-sm text-gray-600 mb-4">削除理由を記録すると、AIが学習して今後の生成品質が向上します。</p>
+            
+            <div className="mb-4">
+              <label className="block text-xs font-medium text-gray-700 mb-1">カテゴリ</label>
+              <select
+                value={deleteCategory}
+                onChange={e => setDeleteCategory(e.target.value)}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-red-300 focus:border-red-400"
+              >
+                <option value="quality">📹 画質が悪い</option>
+                <option value="subtitle">📝 字幕がおかしい</option>
+                <option value="content">🚧 内容が不適切</option>
+                <option value="audio">🔊 音声が悪い</option>
+                <option value="timing">⏱️ タイミングが悪い</option>
+                <option value="product">📦 商品と関係ない</option>
+                <option value="duplicate">🔁 重複している</option>
+                <option value="other">❓ その他</option>
+              </select>
+            </div>
+            
+            <div className="mb-4">
+              <label className="block text-xs font-medium text-gray-700 mb-1">詳細理由（任意）</label>
+              <textarea
+                value={deleteReason}
+                onChange={e => setDeleteReason(e.target.value)}
+                placeholder="例: 字幕がズレている、商品が見えない..."
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm h-20 resize-none focus:ring-2 focus:ring-red-300 focus:border-red-400"
+              />
+            </div>
+            
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setDeleteTarget(null)}
+                className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 font-medium"
+              >
+                キャンセル
+              </button>
+              <button
+                onClick={handleDeleteClip}
+                disabled={deleting}
+                className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-50 transition-colors"
+              >
+                {deleting ? "削除中..." : "🗑 削除してAIに学習させる"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

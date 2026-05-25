@@ -130,6 +130,41 @@ async def _ensure_product_master_table():
     except Exception as e:
         logger.warning(f"[ai-clip] Failed to ensure product_master table: {e}")
 
+# ─── Clip Feedback Table (AI Learning) ────────────────────────────────────────
+_FEEDBACK_TABLE_ENSURED = False
+
+async def _ensure_feedback_table():
+    """Create clip_feedback table for AI learning from deletions (idempotent)"""
+    global _FEEDBACK_TABLE_ENSURED
+    if _FEEDBACK_TABLE_ENSURED:
+        return
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS clip_feedback (
+                    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+                    job_id TEXT NOT NULL,
+                    clip_id TEXT,
+                    action TEXT NOT NULL DEFAULT 'delete',
+                    reason TEXT,
+                    reason_category TEXT,
+                    clip_metadata JSONB DEFAULT '{}'::jsonb,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """))
+            await conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS ix_clip_feedback_job
+                ON clip_feedback (job_id)
+            """))
+            await conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS ix_clip_feedback_category
+                ON clip_feedback (reason_category)
+            """))
+        _FEEDBACK_TABLE_ENSURED = True
+        logger.info("[ai-clip] clip_feedback table ensured")
+    except Exception as e:
+        logger.warning(f"[ai-clip] Failed to ensure clip_feedback table: {e}")
+
 # Concurrency limiter
 _AI_CLIP_SEMAPHORE = asyncio.Semaphore(2)  # 2並列まで許可
 
@@ -4760,3 +4795,127 @@ async def _get_product_images_from_master(product_name: str) -> list:
                 return urls
 
     return []
+
+
+# ─── Clip Feedback / Delete API ──────────────────────────────────────────────
+
+@router.post("/ai-clip/clips/{job_id}/{clip_id}/delete")
+async def delete_clip_with_feedback(
+    job_id: str,
+    clip_id: str,
+    request: Request,
+    x_admin_key: str = Header(None, alias="X-Admin-Key"),
+):
+    """Delete a clip from job results and save feedback for AI learning"""
+    if x_admin_key != ADMIN_KEY:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    
+    await _ensure_feedback_table()
+    await _ensure_jobs_table()
+    
+    body = await request.json()
+    reason = body.get("reason", "")
+    reason_category = body.get("reason_category", "other")
+    
+    try:
+        async with AsyncSession(engine) as session:
+            # Get current job data
+            result = await session.execute(
+                text("SELECT results, config FROM ai_clip_jobs WHERE job_id = :jid"),
+                {"jid": job_id}
+            )
+            row = result.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Job not found")
+            
+            results = row.results if isinstance(row.results, list) else json.loads(row.results or "[]")
+            
+            # Find the clip to delete and save its metadata
+            clip_metadata = {}
+            new_results = []
+            for r in results:
+                if r.get("clip_id") == clip_id:
+                    clip_metadata = r
+                else:
+                    new_results.append(r)
+            
+            if not clip_metadata:
+                raise HTTPException(status_code=404, detail="Clip not found in job results")
+            
+            # Save feedback for AI learning
+            await session.execute(text("""
+                INSERT INTO clip_feedback (job_id, clip_id, action, reason, reason_category, clip_metadata)
+                VALUES (:job_id, :clip_id, 'delete', :reason, :reason_category, :metadata::jsonb)
+            """), {
+                "job_id": job_id,
+                "clip_id": clip_id,
+                "reason": reason,
+                "reason_category": reason_category,
+                "metadata": json.dumps(clip_metadata, ensure_ascii=False),
+            })
+            
+            # Update job results (remove the clip)
+            await session.execute(text("""
+                UPDATE ai_clip_jobs
+                SET results = :results::jsonb,
+                    clips_completed = GREATEST(clips_completed - 1, 0),
+                    updated_at = NOW()
+                WHERE job_id = :jid
+            """), {
+                "results": json.dumps(new_results, ensure_ascii=False),
+                "jid": job_id,
+            })
+            
+            await session.commit()
+            
+        logger.info(f"[ai-clip] Clip {clip_id} deleted from job {job_id}. Reason: {reason_category} - {reason}")
+        return {"status": "deleted", "reason_saved": True, "remaining_clips": len(new_results)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[ai-clip] Failed to delete clip: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/ai-clip/feedback")
+async def get_clip_feedback(
+    limit: int = 50,
+    category: str = None,
+    x_admin_key: str = Header(None, alias="X-Admin-Key"),
+):
+    """Get clip feedback history for AI learning analysis"""
+    if x_admin_key != ADMIN_KEY:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    
+    await _ensure_feedback_table()
+    
+    try:
+        async with AsyncSession(engine) as session:
+            query = "SELECT * FROM clip_feedback"
+            params = {}
+            if category:
+                query += " WHERE reason_category = :cat"
+                params["cat"] = category
+            query += " ORDER BY created_at DESC LIMIT :limit"
+            params["limit"] = limit
+            
+            result = await session.execute(text(query), params)
+            rows = result.fetchall()
+            
+            feedback_list = []
+            for row in rows:
+                feedback_list.append({
+                    "id": str(row.id),
+                    "job_id": row.job_id,
+                    "clip_id": row.clip_id,
+                    "action": row.action,
+                    "reason": row.reason,
+                    "reason_category": row.reason_category,
+                    "clip_metadata": row.clip_metadata,
+                    "created_at": row.created_at.isoformat() if row.created_at else None,
+                })
+            
+            return {"feedback": feedback_list, "total": len(feedback_list)}
+    except Exception as e:
+        logger.error(f"[ai-clip] Failed to get feedback: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
