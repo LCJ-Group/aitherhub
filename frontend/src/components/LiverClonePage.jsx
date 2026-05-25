@@ -230,9 +230,9 @@ export default function LiverClonePage() {
   const startPreview = async () => {
     try {
       setPreviewError(null);
-      // Get webcam access
+      // Get webcam access - HD resolution for better face swap quality
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: 640, height: 480, facingMode: "user" },
+        video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" },
         audio: false,
       });
       if (videoRef.current) {
@@ -304,17 +304,29 @@ export default function LiverClonePage() {
     if (!canvas || !video) return;
 
     const ctx = canvas.getContext("2d");
-    canvas.width = 640;
-    canvas.height = 480;
+    // Use native webcam resolution (up to 1280x720) for HD quality
+    canvas.width = video.videoWidth || 1280;
+    canvas.height = video.videoHeight || 720;
 
-    // Send frames at ~5fps (every 200ms) to avoid overloading GPU
+    // Adaptive frame sending: start at ~10fps, GPU can handle it with RTX 5090
+    // InsightFace processes in 50-200ms, so 10fps is sustainable
+    let pendingFrame = false;
     previewIntervalRef.current = setInterval(() => {
       if (!previewWsRef.current || previewWsRef.current.readyState !== WebSocket.OPEN) return;
       if (!video.videoWidth) return;
+      if (pendingFrame) return; // Skip if previous frame still processing
+
+      // Update canvas size if video resolution changed
+      if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+      }
 
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      pendingFrame = true;
       canvas.toBlob(
         (blob) => {
+          pendingFrame = false;
           if (blob && previewWsRef.current?.readyState === WebSocket.OPEN) {
             blob.arrayBuffer().then((buf) => {
               previewWsRef.current.send(buf);
@@ -322,9 +334,9 @@ export default function LiverClonePage() {
           }
         },
         "image/jpeg",
-        0.8
+        0.92  // High quality JPEG for better face detection and swap quality
       );
-    }, 200); // 5 fps
+    }, 100); // ~10fps target - RTX 5090 can handle this easily
   };
 
   const stopPreview = () => {
@@ -722,8 +734,11 @@ export default function LiverClonePage() {
                 {/* Preview stats overlay */}
                 {previewActive && (
                   <div className="absolute bottom-3 left-3 right-3 flex justify-between text-xs">
-                    <span className="bg-black/70 px-2 py-1 rounded text-green-400">
+                    <span className={`bg-black/70 px-2 py-1 rounded ${previewFps >= 8 ? 'text-green-400' : previewFps >= 5 ? 'text-yellow-400' : 'text-red-400'}`}>
                       {previewFps} FPS
+                    </span>
+                    <span className="bg-black/70 px-2 py-1 rounded text-cyan-400">
+                      HD 720p
                     </span>
                     <span className="bg-black/70 px-2 py-1 rounded text-yellow-400">
                       GPU: RTX 5090
