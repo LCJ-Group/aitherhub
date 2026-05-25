@@ -5106,3 +5106,145 @@ async def get_clip_feedback(
     except Exception as e:
         logger.error(f"[ai-clip] Failed to get feedback: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── AI Clip Download Tracking ────────────────────────────────────────────────
+
+@router.post("/track-download")
+async def track_ai_clip_download(
+    request: Request,
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """AIクリップのダウンロードを記録する（管理画面DL + 共有リンク経由）"""
+    body = await request.json()
+    job_id = body.get("job_id")
+    clip_id = body.get("clip_id")
+    source = body.get("source", "admin")  # admin, share_link
+
+    if not job_id:
+        raise HTTPException(status_code=422, detail="job_id is required")
+    if source not in ("admin", "share_link"):
+        source = "admin"
+
+    try:
+        async with get_session() as session:
+            # Ensure table exists (idempotent)
+            await session.execute(text("""
+                CREATE TABLE IF NOT EXISTS ai_clip_download_log (
+                    id BIGSERIAL PRIMARY KEY,
+                    job_id TEXT NOT NULL,
+                    clip_id TEXT,
+                    source TEXT NOT NULL DEFAULT 'admin',
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """))
+            await session.execute(text("""
+                INSERT INTO ai_clip_download_log (job_id, clip_id, source)
+                VALUES (:job_id, :clip_id, :source)
+            """), {"job_id": job_id, "clip_id": clip_id, "source": source})
+            await session.commit()
+
+            # Return updated count
+            result = await session.execute(text("""
+                SELECT COUNT(*) as cnt FROM ai_clip_download_log
+                WHERE job_id = :job_id AND (:clip_id IS NULL OR clip_id = :clip_id)
+            """), {"job_id": job_id, "clip_id": clip_id})
+            row = result.fetchone()
+            count = row.cnt if row else 1
+
+        logger.info(f"[ai-clip] Download tracked: job={job_id} clip={clip_id} source={source} total={count}")
+        return {"ok": True, "download_count": count}
+    except Exception as e:
+        logger.error(f"[ai-clip] Failed to track download: {e}")
+        raise HTTPException(status_code=500, detail=str(e)[:200])
+
+
+@router.get("/download-counts")
+async def get_ai_clip_download_counts(
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """全AIクリップのダウンロード回数を一括取得する"""
+    verify_admin(x_admin_key)
+    try:
+        async with get_session() as session:
+            # Ensure table exists
+            await session.execute(text("""
+                CREATE TABLE IF NOT EXISTS ai_clip_download_log (
+                    id BIGSERIAL PRIMARY KEY,
+                    job_id TEXT NOT NULL,
+                    clip_id TEXT,
+                    source TEXT NOT NULL DEFAULT 'admin',
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """))
+            result = await session.execute(text("""
+                SELECT job_id, clip_id, COUNT(*) as download_count
+                FROM ai_clip_download_log
+                GROUP BY job_id, clip_id
+            """))
+            rows = result.fetchall()
+
+        counts = {}
+        for r in rows:
+            key = f"{r.job_id}_{r.clip_id}" if r.clip_id else r.job_id
+            counts[key] = r.download_count
+        return {"counts": counts}
+    except Exception as e:
+        logger.error(f"[ai-clip] Failed to get download counts: {e}")
+        return {"counts": {}}
+
+
+# ─── Product Master Search (for AI Clip Generation UI) ────────────────────────
+
+@router.get("/product-master/search")
+async def search_product_master(
+    q: str = Query("", description="Search query (product name or brand name)"),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """商品マスターを検索する（名前・ブランド名で部分一致検索）"""
+    verify_admin(x_admin_key)
+    await _ensure_product_master_table()
+
+    try:
+        async with get_session() as session:
+            if q.strip():
+                result = await session.execute(text("""
+                    SELECT id, product_name, brand_name, product_image_urls,
+                           keywords, is_active, created_at
+                    FROM product_master
+                    WHERE is_active = TRUE
+                      AND (
+                        product_name ILIKE :q
+                        OR brand_name ILIKE :q
+                        OR EXISTS (SELECT 1 FROM unnest(keywords) kw WHERE kw ILIKE :q)
+                      )
+                    ORDER BY product_name ASC
+                    LIMIT 20
+                """), {"q": f"%{q.strip()}%"})
+            else:
+                # Return all active products (limited)
+                result = await session.execute(text("""
+                    SELECT id, product_name, brand_name, product_image_urls,
+                           keywords, is_active, created_at
+                    FROM product_master
+                    WHERE is_active = TRUE
+                    ORDER BY updated_at DESC
+                    LIMIT 30
+                """))
+            rows = result.fetchall()
+
+        return {
+            "products": [
+                {
+                    "id": str(r.id),
+                    "product_name": r.product_name,
+                    "brand_name": r.brand_name or "",
+                    "product_image_urls": r.product_image_urls if r.product_image_urls else [],
+                    "keywords": list(r.keywords) if r.keywords else [],
+                }
+                for r in rows
+            ]
+        }
+    except Exception as e:
+        logger.error(f"[ai-clip] Product master search failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e)[:200])

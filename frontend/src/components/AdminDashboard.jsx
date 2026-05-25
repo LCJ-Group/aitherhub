@@ -1534,6 +1534,11 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
   const [analyzingImage, setAnalyzingImage] = useState(false);
   const [registeringToMaster, setRegisteringToMaster] = useState(false);
   const [masterRegistered, setMasterRegistered] = useState(false);
+  // Product master search state (for selecting product from master)
+  const [productMasterSearch, setProductMasterSearch] = useState('');
+  const [productMasterResults, setProductMasterResults] = useState([]);
+  const [productMasterSearching, setProductMasterSearching] = useState(false);
+  const [showProductMasterDropdown, setShowProductMasterDropdown] = useState(false);
   // AI Clip generation history for this clip
   const [clipHistory, setClipHistory] = useState([]); // past generation jobs
   const [clipHistoryLoading, setClipHistoryLoading] = useState(false);
@@ -1680,6 +1685,52 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
   const handleRemoveProductImage = (index) => {
     setProductImages(prev => prev.filter((_, i) => i !== index));
     if (productImages.length <= 1) setImageAnalysis(null);
+  };
+
+  // Product master search for auto-filling product images
+  const searchProductMaster = async (query) => {
+    setProductMasterSearch(query);
+    if (!query.trim()) {
+      setProductMasterResults([]);
+      setShowProductMasterDropdown(false);
+      return;
+    }
+    setProductMasterSearching(true);
+    setShowProductMasterDropdown(true);
+    try {
+      const baseURL = import.meta.env.VITE_API_BASE_URL;
+      const res = await axios.get(`${baseURL}/api/v1/ai-clip/product-master/search`, {
+        params: { q: query },
+        headers: { 'X-Admin-Key': 'aither:hub' },
+      });
+      setProductMasterResults(res.data.products || []);
+    } catch (e) {
+      console.error('Product master search error:', e);
+      setProductMasterResults([]);
+    } finally {
+      setProductMasterSearching(false);
+    }
+  };
+
+  const selectProductFromMaster = (product) => {
+    // Set product images from master
+    if (product.product_image_urls && product.product_image_urls.length > 0) {
+      const newImages = product.product_image_urls.map(url => ({
+        file: null,
+        preview: url,
+        uploading: false,
+        url: url,
+        analyzed: false,
+      }));
+      setProductImages(newImages);
+    }
+    setProductMasterSearch(product.product_name);
+    setShowProductMasterDropdown(false);
+    // Set image analysis info
+    setImageAnalysis({
+      product_name: product.product_name,
+      brand_name: product.brand_name,
+    });
   };
 
   const handleGenerateAIClip = async () => {
@@ -2188,6 +2239,48 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
                     <p className="mt-1 text-[9px] text-amber-600 bg-amber-50 px-2 py-1 rounded">
                       💡 {clipVideoMode === 'product_overlay' ? '商品画像をメイン表示し、配信者は右下ワイプに。商品が映ってない時に最適。' : '音声のみ保持し、商品画像のスライドショーを映像に。トーク力が高いが商品が映ってない時に。'}
                     </p>
+                  )}
+                  {/* Product Master Search (for PiP / audio+product modes) */}
+                  {!clipJobStatus && clipVideoMode !== 'original' && (
+                    <div className="mt-2 p-2 border border-indigo-200 rounded-lg bg-gradient-to-r from-indigo-50 to-purple-50">
+                      <div className="text-[10px] font-bold text-indigo-700 mb-1">📦 商品マスターから選択</div>
+                      <div className="relative">
+                        <input
+                          type="text"
+                          value={productMasterSearch}
+                          onChange={(e) => searchProductMaster(e.target.value)}
+                          onFocus={() => { if (productMasterResults.length > 0) setShowProductMasterDropdown(true); }}
+                          placeholder="商品名・ブランド名で検索..."
+                          className="w-full px-2 py-1.5 text-[10px] border border-indigo-200 rounded-md focus:outline-none focus:border-indigo-400 bg-white"
+                        />
+                        {productMasterSearching && (
+                          <span className="absolute right-2 top-1.5 text-[9px] text-gray-400">検索中...</span>
+                        )}
+                        {showProductMasterDropdown && productMasterResults.length > 0 && (
+                          <div className="absolute z-50 w-full mt-1 bg-white border border-indigo-200 rounded-md shadow-lg max-h-48 overflow-y-auto">
+                            {productMasterResults.map(p => (
+                              <button
+                                key={p.id}
+                                onClick={() => selectProductFromMaster(p)}
+                                className="w-full text-left px-2 py-1.5 hover:bg-indigo-50 border-b border-gray-100 last:border-0 flex items-center gap-2"
+                              >
+                                {p.product_image_urls && p.product_image_urls[0] && (
+                                  <img src={p.product_image_urls[0]} alt="" className="w-8 h-8 object-cover rounded" />
+                                )}
+                                <div>
+                                  <div className="text-[10px] font-medium text-gray-800">{p.product_name}</div>
+                                  {p.brand_name && <div className="text-[8px] text-gray-500">{p.brand_name}</div>}
+                                  <div className="text-[8px] text-indigo-500">{p.product_image_urls?.length || 0}枚の画像</div>
+                                </div>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      {productMasterResults.length === 0 && productMasterSearch && !productMasterSearching && (
+                        <div className="text-[8px] text-gray-400 mt-1">該当する商品が見つかりません</div>
+                      )}
+                    </div>
                   )}
                   {/* Product Image Upload Area (for PiP / audio+product modes) */}
                   {!clipJobStatus && clipVideoMode !== 'original' && (

@@ -741,6 +741,24 @@ async def run_all_ddl_migrations():
         except Exception as e:
             logger.warning(f"[DDL] tiktok_performance_snapshots: {e}")
 
+        # ── ai_clip_download_log (download count tracking for AI clips) ──
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(_text("""
+                    CREATE TABLE IF NOT EXISTS ai_clip_download_log (
+                        id BIGSERIAL PRIMARY KEY,
+                        job_id TEXT NOT NULL,
+                        clip_id TEXT,
+                        source TEXT NOT NULL DEFAULT 'admin',
+                        created_at TIMESTAMPTZ DEFAULT NOW()
+                    )
+                """))
+                await conn.execute(_text("CREATE INDEX IF NOT EXISTS ix_acdl_job_id ON ai_clip_download_log(job_id)"))
+                await conn.execute(_text("CREATE INDEX IF NOT EXISTS ix_acdl_clip_id ON ai_clip_download_log(clip_id) WHERE clip_id IS NOT NULL"))
+                logger.info("[DDL] ai_clip_download_log \u2713")
+        except Exception as e:
+            logger.warning(f"[DDL] ai_clip_download_log: {e}")
+
         elapsed = time.time() - ddl_start
         logger.info(f"[DDL] All migrations completed in {elapsed:.1f}s")
 

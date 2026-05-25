@@ -94,7 +94,35 @@ export default function AutoAIClipPanel({ adminKey }) {
   const [deleteCategory, setDeleteCategory] = useState("quality");
   const [deleting, setDeleting] = useState(false);
   const [copiedUrl, setCopiedUrl] = useState(null);
+  const [downloadCounts, setDownloadCounts] = useState({}); // { "jobId_clipId": count }
   const headers = { "X-Admin-Key": adminKey };
+
+  // ── Fetch download counts ──
+  const fetchDownloadCounts = useCallback(async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/api/v1/ai-clip/download-counts`, { headers });
+      setDownloadCounts(res.data.counts || {});
+    } catch (e) {
+      console.error("Download counts fetch error:", e);
+    }
+  }, [adminKey]);
+
+  // Track a download event
+  const trackDownload = async (jobId, clipId, source = 'admin') => {
+    try {
+      const res = await axios.post(`${API_BASE}/api/v1/ai-clip/track-download`, {
+        job_id: jobId,
+        clip_id: clipId,
+        source: source,
+      }, { headers });
+      if (res.data.ok) {
+        const key = clipId ? `${jobId}_${clipId}` : jobId;
+        setDownloadCounts(prev => ({ ...prev, [key]: res.data.download_count }));
+      }
+    } catch (e) {
+      console.error("Track download error:", e);
+    }
+  };
 
   // ── Fetch initial data ──
   const fetchData = useCallback(async () => {
@@ -161,8 +189,9 @@ export default function AutoAIClipPanel({ adminKey }) {
   useEffect(() => {
     if (activeTab === "completed") {
       fetchCompletedClips();
+      fetchDownloadCounts();
     }
-  }, [activeTab, fetchCompletedClips]);
+  }, [activeTab, fetchCompletedClips, fetchDownloadCounts]);
 
   // ── Poll active job with stall detection ──
   const [jobStalled, setJobStalled] = useState(false);
@@ -1104,7 +1133,10 @@ export default function AutoAIClipPanel({ adminKey }) {
                           {/* Share link */}
                           {r.download_url && (
                             <button
-                              onClick={() => copyShareLink(r.download_url)}
+                              onClick={() => {
+                                copyShareLink(r.download_url);
+                                trackDownload(activeJob.job_id, r.clip_id, 'share_link');
+                              }}
                               className={`px-3 py-1.5 border rounded-md text-xs font-medium transition-colors ${
                                 copiedUrl === r.download_url
                                   ? "bg-green-50 text-green-700 border-green-300"
@@ -1319,7 +1351,18 @@ export default function AutoAIClipPanel({ adminKey }) {
                     )}
                     {/* Date & Actions */}
                     <div className="flex items-center justify-between text-xs text-gray-400 border-t pt-1">
-                      <span>{clip.created_at ? new Date(clip.created_at).toLocaleDateString('ja-JP') : ''}</span>
+                      <div className="flex items-center gap-2">
+                        <span>{clip.created_at ? new Date(clip.created_at).toLocaleDateString('ja-JP') : ''}</span>
+                        {(() => {
+                          const key = clip.clip_id ? `${clip.job_id}_${clip.clip_id}` : clip.job_id;
+                          const count = downloadCounts[key];
+                          return count ? (
+                            <span className="bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded text-[10px] font-medium">
+                              ⬇️ {count}回
+                            </span>
+                          ) : null;
+                        })()}
+                      </div>
                       <div className="flex gap-2">
                         {clip.captions_count > 0 && clip.job_id && (
                           <button
@@ -1335,13 +1378,19 @@ export default function AutoAIClipPanel({ adminKey }) {
                             target="_blank"
                             rel="noopener noreferrer"
                             className="text-blue-500 hover:text-blue-700"
+                            onClick={() => trackDownload(clip.job_id, clip.clip_id, 'admin')}
                           >
                             ⬇️ DL
                           </a>
                         )}
                         {(clip.download_url || clip.blob_url) && (
                           <button
-                            onClick={() => copyShareLink(clip.download_url || clip.blob_url)}
+                            onClick={() => {
+                              // Copy share link with tracking param
+                              const shareUrl = (clip.download_url || clip.blob_url);
+                              copyShareLink(shareUrl);
+                              trackDownload(clip.job_id, clip.clip_id, 'share_link');
+                            }}
                             className="text-green-600 hover:text-green-800 font-medium"
                           >
                             {copiedUrl === (clip.download_url || clip.blob_url) ? "✅" : "🔗 共有"}
