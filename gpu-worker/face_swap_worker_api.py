@@ -536,6 +536,10 @@ def color_transfer(source, target, mask=None):
     """
     Transfer color statistics from target to source for seamless blending.
     Uses mean/std matching in LAB color space.
+    
+    IMPORTANT: Only applies color correction to masked (non-zero) pixels.
+    The source image may have large black (0,0,0) regions from warpAffine
+    which must be excluded from both statistics AND transformation.
     """
     import cv2
     import numpy as np
@@ -543,36 +547,47 @@ def color_transfer(source, target, mask=None):
     if source.shape != target.shape:
         return source
 
+    # Determine valid region: where source actually has face pixels (not black from warp)
+    source_gray = cv2.cvtColor(source, cv2.COLOR_BGR2GRAY)
+    valid_pixels = source_gray > 5  # Exclude near-black warp border pixels
+
+    if mask is not None:
+        # Combine: only pixels that are both in mask AND have actual content
+        mask_bool = (mask > 0.5) & valid_pixels
+    else:
+        mask_bool = valid_pixels
+
+    if mask_bool.sum() < 100:
+        return source
+
     # Convert to LAB
     source_lab = cv2.cvtColor(source, cv2.COLOR_BGR2LAB).astype(np.float32)
     target_lab = cv2.cvtColor(target, cv2.COLOR_BGR2LAB).astype(np.float32)
 
-    if mask is not None:
-        # Only compute stats from masked region
-        mask_bool = mask > 0.5
-        if mask_bool.sum() < 100:
-            return source
-        s_mean = source_lab[mask_bool].mean(axis=0)
-        s_std = source_lab[mask_bool].std(axis=0) + 1e-6
-        t_mean = target_lab[mask_bool].mean(axis=0)
-        t_std = target_lab[mask_bool].std(axis=0) + 1e-6
-    else:
-        s_mean = source_lab.mean(axis=(0, 1))
-        s_std = source_lab.std(axis=(0, 1)) + 1e-6
-        t_mean = target_lab.mean(axis=(0, 1))
-        t_std = target_lab.std(axis=(0, 1)) + 1e-6
+    # Compute stats ONLY from valid masked region
+    s_mean = source_lab[mask_bool].mean(axis=0)
+    s_std = source_lab[mask_bool].std(axis=0) + 1e-6
+    t_mean = target_lab[mask_bool].mean(axis=0)
+    t_std = target_lab[mask_bool].std(axis=0) + 1e-6
 
     # Transfer: normalize source, then apply target stats
-    # Blend factor: 0.3 = subtle color correction (not too aggressive)
-    blend = 0.3
+    # Blend factor: 0.2 = subtle color correction (conservative to avoid color shift)
+    blend = 0.2
     result_lab = source_lab.copy()
     for i in range(3):
         result_lab[:, :, i] = (result_lab[:, :, i] - s_mean[i]) * (t_std[i] / s_std[i]) * blend + \
                                result_lab[:, :, i] * (1 - blend) + \
                                (t_mean[i] - s_mean[i]) * blend
 
-    result_lab = result_lab.clip(0, 255).astype(np.uint8)
-    return cv2.cvtColor(result_lab, cv2.COLOR_LAB2BGR)
+    # CRITICAL: Only apply color correction to valid pixels, keep black regions unchanged
+    result_lab_uint8 = result_lab.clip(0, 255).astype(np.uint8)
+    result_bgr = cv2.cvtColor(result_lab_uint8, cv2.COLOR_LAB2BGR)
+
+    # Restore original black regions (don't color-correct warp borders)
+    output = source.copy()
+    output[valid_pixels] = result_bgr[valid_pixels]
+
+    return output
 
 
 def direct_swap_frame(frame, detect_score: float = 0.5, use_enhancer: bool = True):
