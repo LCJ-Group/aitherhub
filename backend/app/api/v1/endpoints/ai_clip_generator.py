@@ -4082,122 +4082,162 @@ async def _generate_pip_video(
     video_path: str, product_image_urls: list, duration: float,
     width: int, height: int, tmp_dir: str, job_id: str
 ) -> Optional[str]:
-    """PiP (Picture-in-Picture) 合成: 商品画像をメイン表示、配信者映像を右下ワイプに。
+    """PiP (Picture-in-Picture) 合成: 動画がフルスクリーンメイン、商品画像が中央に一定間隔でポップアップ表示。
+    商品画像は5秒間隔で3秒間表示され、フェードイン/アウトで自然に出入りする。
     """
     import httpx
-    from PIL import Image, ImageFilter, ImageDraw
+    from PIL import Image, ImageDraw, ImageFilter
     from app.services.storage_service import generate_read_sas_from_url
 
     if not product_image_urls:
         return None
 
-    # Download first product image for background
     # Resolve SAS URLs for blob storage access (blob_url without SAS returns 409)
     resolved_urls = []
     for url in product_image_urls:
         if "blob.core.windows.net" in url and "?" not in url:
             sas_url = generate_read_sas_from_url(url, expires_hours=2)
             resolved_urls.append(sas_url or url)
+        elif "cdn.aitherhub.com" in url:
+            # CDN URL -> convert to blob URL and generate SAS
+            blob_url = url.replace("https://cdn.aitherhub.com", "https://aitherhub.blob.core.windows.net")
+            sas_url = generate_read_sas_from_url(blob_url, expires_hours=2)
+            resolved_urls.append(sas_url or url)
         else:
             resolved_urls.append(url)
-    logger.info(f"[ai-clip {job_id}] PiP: resolved {len(resolved_urls)} product image URLs")
+    logger.info(f"[ai-clip {job_id}] PiP popup: resolved {len(resolved_urls)} product image URLs")
 
+    # Download product images
+    product_img_paths = []
     async with httpx.AsyncClient(timeout=30.0) as client:
-        try:
-            resp = await client.get(resolved_urls[0])
-            resp.raise_for_status()
-            product_img_path = os.path.join(tmp_dir, "pip_product.jpg")
-            with open(product_img_path, "wb") as f:
-                f.write(resp.content)
-        except Exception as e:
-            logger.error(f"[ai-clip {job_id}] Failed to download product image for PiP: {e} (URL: {resolved_urls[0][:100]})")
-            return None
+        for i, img_url in enumerate(resolved_urls[:3]):  # Max 3 images
+            try:
+                resp = await client.get(img_url)
+                resp.raise_for_status()
+                ext = "png" if "png" in img_url.lower() else "jpg"
+                img_path = os.path.join(tmp_dir, f"pip_product_{i}.{ext}")
+                with open(img_path, "wb") as f:
+                    f.write(resp.content)
+                product_img_paths.append(img_path)
+            except Exception as e:
+                logger.warning(f"[ai-clip {job_id}] Failed to download product image {i}: {e}")
 
-    # Create product background image
+    if not product_img_paths:
+        logger.error(f"[ai-clip {job_id}] No product images downloaded for PiP popup")
+        return None
+
+    # Create overlay image with rounded corners and shadow (50% of video width)
+    overlay_size = int(width * 0.55)
+    overlay_h = int(height * 0.35)
+    corner_radius = 24
+
     try:
-        product_img = Image.open(product_img_path).convert("RGBA")
-        bg = Image.new("RGBA", (width, height), (15, 15, 25, 255))
-        # Blurred background
-        bg_blur = product_img.copy().resize((width, height), Image.LANCZOS)
-        bg_blur = bg_blur.filter(ImageFilter.GaussianBlur(radius=25))
-        from PIL import ImageEnhance
-        enhancer = ImageEnhance.Brightness(bg_blur.convert("RGBA"))
-        bg_blur = enhancer.enhance(0.4)
-        bg.paste(bg_blur, (0, 0))
-        # Product image centered in upper 70%
-        max_w = int(width * 0.85)
-        max_h = int(height * 0.6)
+        product_img = Image.open(product_img_paths[0]).convert("RGBA")
+        # Scale product image to fit overlay area with padding
+        padding = 20
+        inner_w = overlay_size - padding * 2
+        inner_h = overlay_h - padding * 2
         img_w, img_h = product_img.size
-        scale = min(max_w / img_w, max_h / img_h)
+        scale = min(inner_w / img_w, inner_h / img_h)
         new_w = int(img_w * scale)
         new_h = int(img_h * scale)
         product_resized = product_img.resize((new_w, new_h), Image.LANCZOS)
-        x_offset = (width - new_w) // 2
-        y_offset = int(height * 0.08)
-        bg.paste(product_resized, (x_offset, y_offset), product_resized)
-        bg_rgb = bg.convert("RGB")
-        bg_path = os.path.join(tmp_dir, "pip_bg.png")
-        bg_rgb.save(bg_path, "PNG")
+
+        # Create rounded rectangle background (white with slight transparency)
+        overlay_bg = Image.new("RGBA", (overlay_size, overlay_h), (0, 0, 0, 0))
+        # Draw rounded rectangle
+        mask = Image.new("L", (overlay_size, overlay_h), 0)
+        draw = ImageDraw.Draw(mask)
+        draw.rounded_rectangle([(0, 0), (overlay_size - 1, overlay_h - 1)], radius=corner_radius, fill=255)
+        # White background with slight transparency
+        white_bg = Image.new("RGBA", (overlay_size, overlay_h), (255, 255, 255, 230))
+        overlay_bg.paste(white_bg, (0, 0), mask)
+        # Paste product image centered
+        x_off = (overlay_size - new_w) // 2
+        y_off = (overlay_h - new_h) // 2
+        overlay_bg.paste(product_resized, (x_off, y_off), product_resized)
+        # Apply mask for rounded corners
+        overlay_bg.putalpha(mask)
+
+        overlay_path = os.path.join(tmp_dir, "pip_overlay.png")
+        overlay_bg.save(overlay_path, "PNG")
     except Exception as e:
-        logger.warning(f"[ai-clip {job_id}] Failed to create PiP background: {e}")
+        logger.warning(f"[ai-clip {job_id}] Failed to create PiP overlay image: {e}")
         return None
 
-    # Use ffmpeg to create PiP: product background + original video as small overlay in bottom-right
-    pip_output = os.path.join(tmp_dir, "pip_output.mp4")
-    # Wipe size: 30% of width, positioned at bottom-right with margin
-    wipe_w = int(width * 0.30)
-    wipe_h = int(height * 0.25)
-    wipe_x = width - wipe_w - int(width * 0.04)
-    wipe_y = height - wipe_h - int(height * 0.15)
-    # Round corners via overlay
-    corner_radius = 20
+    # Calculate popup timing: show for 3s, hide for 5s, repeat
+    # Pattern: appear at t=2s for 3s, then t=10s for 3s, then t=18s for 3s, etc.
+    show_duration = 3.0  # seconds visible
+    hide_duration = 5.0  # seconds hidden
+    first_appear = 2.0   # first appearance at 2 seconds
 
+    # Build enable expression for overlay (when to show)
+    # enable='between(t,2,5)+between(t,10,13)+between(t,18,21)...'
+    enable_parts = []
+    t = first_appear
+    while t + show_duration <= duration:
+        enable_parts.append(f"between(t,{t},{t + show_duration})")
+        t += show_duration + hide_duration
+    # If video is very short, show at least once
+    if not enable_parts and duration > 2:
+        enable_parts.append(f"between(t,1,{min(duration - 0.5, 4)})")
+
+    if not enable_parts:
+        logger.warning(f"[ai-clip {job_id}] Video too short for PiP popup (duration={duration})")
+        return None
+
+    enable_expr = "+".join(enable_parts)
+
+    # Position overlay in center of video
+    overlay_x = (width - overlay_size) // 2
+    overlay_y = (height - overlay_h) // 2
+
+    pip_output = os.path.join(tmp_dir, "pip_output.mp4")
+
+    # ffmpeg command: video as main + product image overlay with timed popup
+    # Primary: simple overlay with enable expression (reliable)
     pip_cmd = [
         "ffmpeg", "-y",
-        "-loop", "1", "-i", bg_path,  # Background (product)
-        "-i", video_path,  # Original video (will be scaled to wipe)
+        "-i", video_path,  # Main video (fullscreen)
+        "-i", overlay_path,  # Product overlay image (PNG with transparency)
         "-filter_complex",
-        f"[1:v]scale={wipe_w}:{wipe_h}:force_original_aspect_ratio=decrease,"
-        f"pad={wipe_w}:{wipe_h}:(ow-iw)/2:(oh-ih)/2:color=black,"
-        f"format=yuva420p,geq=lum='lum(X,Y)':a='if(gt(abs(X-{wipe_w}/2),{wipe_w}/2-{corner_radius})*gt(abs(Y-{wipe_h}/2),{wipe_h}/2-{corner_radius}),if(lte(hypot(abs(X-{wipe_w}/2)-({wipe_w}/2-{corner_radius}),abs(Y-{wipe_h}/2)-({wipe_h}/2-{corner_radius})),{corner_radius}),255,0),255)'[wipe];"
-        f"[0:v]scale={width}:{height}[bg];"
-        f"[bg][wipe]overlay={wipe_x}:{wipe_y}:shortest=1[outv]",
-        "-map", "[outv]", "-map", "1:a",
+        f"[0:v][1:v]overlay={overlay_x}:{overlay_y}:enable='{enable_expr}'[outv]",
+        "-map", "[outv]", "-map", "0:a?",
         "-t", str(duration),
         "-c:v", "libx264", "-preset", "fast", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-r", "30",
         pip_output
     ]
 
+    logger.info(f"[ai-clip {job_id}] PiP popup: overlay at ({overlay_x},{overlay_y}), size={overlay_size}x{overlay_h}, enable={enable_expr}")
+
     proc = await asyncio.create_subprocess_exec(
         *pip_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
     )
     stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180)
     if proc.returncode != 0:
-        logger.error(f"[ai-clip {job_id}] PiP ffmpeg failed: {stderr.decode()[-500:]}")
-        # Fallback: simpler PiP without rounded corners
-        pip_cmd_simple = [
+        logger.error(f"[ai-clip {job_id}] PiP popup ffmpeg failed: {stderr.decode()[-500:]}")
+        # Fallback: try without enable (show product image for entire duration)
+        pip_cmd_always = [
             "ffmpeg", "-y",
-            "-loop", "1", "-i", bg_path,
             "-i", video_path,
+            "-i", overlay_path,
             "-filter_complex",
-            f"[1:v]scale={wipe_w}:{wipe_h}:force_original_aspect_ratio=decrease,"
-            f"pad={wipe_w}:{wipe_h}:(ow-iw)/2:(oh-ih)/2:color=black[wipe];"
-            f"[0:v]scale={width}:{height}[bg];"
-            f"[bg][wipe]overlay={wipe_x}:{wipe_y}:shortest=1[outv]",
-            "-map", "[outv]", "-map", "1:a",
+            f"[0:v][1:v]overlay={overlay_x}:{overlay_y}[outv]",
+            "-map", "[outv]", "-map", "0:a?",
             "-t", str(duration),
             "-c:v", "libx264", "-preset", "fast", "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-r", "30",
             pip_output
         ]
         proc2 = await asyncio.create_subprocess_exec(
-            *pip_cmd_simple, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            *pip_cmd_always, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
         stdout2, stderr2 = await asyncio.wait_for(proc2.communicate(), timeout=180)
         if proc2.returncode != 0:
-            logger.error(f"[ai-clip {job_id}] PiP simple ffmpeg also failed: {stderr2.decode()[-500:]}")
+            logger.error(f"[ai-clip {job_id}] PiP fallback (always-on) also failed: {stderr2.decode()[-500:]}")
             return None
+        logger.info(f"[ai-clip {job_id}] PiP fallback succeeded (product shown for entire duration)")
 
     return pip_output
 
