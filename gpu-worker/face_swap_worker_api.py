@@ -595,7 +595,7 @@ def color_transfer(source, target, mask=None):
     return output
 
 
-def direct_swap_frame(frame, detect_score: float = 0.5, use_enhancer: bool = True):
+def direct_swap_frame(frame, detect_score: float = 0.5, use_enhancer: bool = True, mouth_open: float = 0.0):
     """
     Process a single frame through the Direct ONNX Pipeline v3.1.
     
@@ -683,6 +683,56 @@ def direct_swap_frame(frame, detect_score: float = 0.5, use_enhancer: bool = Tru
             affine_matrix_large = affine_matrix
             enhanced = cv2.resize(enhanced, (128, 128), interpolation=cv2.INTER_AREA)
             paste_size = 128
+
+        # Step 7b: Apply mouth opening if TTS is speaking
+        if mouth_open > 0.05 and hasattr(target_face, 'landmark_2d_106') and target_face.landmark_2d_106 is not None:
+            try:
+                lm106 = target_face.landmark_2d_106.astype(np.float32)
+                # Mouth landmarks in 106-point model:
+                # Upper lip: indices 84-95, Lower lip: indices 96-103
+                # We'll shift lower lip/jaw landmarks downward based on mouth_open
+                
+                # Get mouth center and jaw area
+                upper_lip_center = lm106[90]  # Center of upper lip
+                lower_lip_center = lm106[99]  # Center of lower lip
+                mouth_center = (upper_lip_center + lower_lip_center) / 2
+                
+                # Calculate displacement for mouth opening
+                face_height = np.linalg.norm(lm106[0] - lm106[16])  # Approximate face height
+                max_displacement = face_height * 0.08  # Max 8% of face height
+                displacement = max_displacement * mouth_open
+                
+                # Create deformation: move lower part of face down
+                # Use thin-plate-spline-like approach with simple pixel shifting
+                h_frame, w_frame = result.shape[:2]
+                
+                # Define mouth region to deform
+                mouth_y = int(mouth_center[1])
+                mouth_x = int(mouth_center[0])
+                region_h = int(face_height * 0.3)
+                region_w = int(face_height * 0.4)
+                
+                y_start = max(0, mouth_y - region_h // 4)
+                y_end = min(h_frame, mouth_y + region_h)
+                x_start = max(0, mouth_x - region_w // 2)
+                x_end = min(w_frame, mouth_x + region_w // 2)
+                
+                if y_end > y_start and x_end > x_start:
+                    # Create vertical displacement map for the mouth region
+                    region = result[y_start:y_end, x_start:x_end].copy()
+                    region_height = y_end - y_start
+                    
+                    # Displacement gradient: 0 at top, max at bottom
+                    for row_idx in range(region_height):
+                        progress = row_idx / max(1, region_height - 1)
+                        # Only affect lower half of region (below mouth center)
+                        if y_start + row_idx > mouth_y:
+                            shift_amount = displacement * progress * 0.5
+                            src_row = int(row_idx - shift_amount)
+                            if 0 <= src_row < region_height:
+                                result[y_start + row_idx, x_start:x_end] = region[src_row]
+            except Exception as e:
+                pass  # Silently skip mouth animation on error
 
         # Step 8: Create landmark-based mask (protects hair/forehead)
         h, w = result.shape[:2]
@@ -1726,16 +1776,29 @@ async def preview_stream(websocket: WebSocket, api_key: str = Query(...)):
         # Latest frame buffer - only process the most recent frame
         latest_frame_data = None
         frame_lock = asyncio.Lock()
+        
+        # Lip-sync: mouth openness value (0.0 = closed, 1.0 = fully open)
+        current_mouth_open = 0.0
 
         async def receiver():
-            """Continuously receive frames, keeping only the latest."""
-            nonlocal latest_frame_data, frame_count
+            """Continuously receive frames and control messages, keeping only the latest frame."""
+            nonlocal latest_frame_data, frame_count, current_mouth_open
             try:
                 while True:
-                    data = await websocket.receive_bytes()
-                    frame_count += 1
-                    async with frame_lock:
-                        latest_frame_data = data
+                    msg = await websocket.receive()
+                    if "bytes" in msg and msg["bytes"]:
+                        # Binary = JPEG frame
+                        frame_count += 1
+                        async with frame_lock:
+                            latest_frame_data = msg["bytes"]
+                    elif "text" in msg and msg["text"]:
+                        # Text = JSON control message
+                        try:
+                            ctrl = json.loads(msg["text"])
+                            if ctrl.get("type") == "mouth_open":
+                                current_mouth_open = float(ctrl.get("value", 0.0))
+                        except (json.JSONDecodeError, ValueError):
+                            pass
             except WebSocketDisconnect:
                 pass
             except Exception:
@@ -1786,7 +1849,7 @@ async def preview_stream(websocket: WebSocket, api_key: str = Query(...)):
                         gfpgan_interval = current_config.get("gfpgan_interval", 3)
                         apply_gfpgan = use_enhancer and (frames_processed % gfpgan_interval == 0)
                         
-                        result = direct_swap_frame(frame, use_enhancer=apply_gfpgan)
+                        result = direct_swap_frame(frame, use_enhancer=apply_gfpgan, mouth_open=current_mouth_open)
 
                         if result is not None:
                             # Lower JPEG quality for faster transfer (75% is visually identical at 640x360)

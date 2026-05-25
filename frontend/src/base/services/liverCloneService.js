@@ -211,6 +211,29 @@ class LiverCloneService {
     );
     return res.data;
   }
+
+  /**
+   * Generate TTS audio for preview mode (no session required).
+   * Returns base64-encoded MP3 audio for browser playback.
+   * @param {string} text - Text to speak
+   * @param {string} voiceId - ElevenLabs voice ID
+   * @param {Object} options - { voice_stability, voice_similarity, language }
+   * @returns {Promise<Object>} { status, audio_base64, audio_format, text }
+   */
+  async previewSpeak(text, voiceId, options = {}) {
+    const res = await axios.post(
+      `${this.baseURL}/api/v1/liver-clone/preview/speak`,
+      {
+        text,
+        voice_id: voiceId,
+        voice_stability: options.voice_stability || 0.5,
+        voice_similarity: options.voice_similarity || 0.75,
+        language: options.language || "ja",
+      },
+      { headers: this._headers(), timeout: 30000 }
+    );
+    return res.data;
+  }
 }
 
 export default new LiverCloneService();

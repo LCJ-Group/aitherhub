@@ -107,6 +107,13 @@ export default function LiverClonePage() {
   const audioStreamRef = useRef(null);
   const audioGainRef = useRef(null);
 
+  // TTS & Lip-sync refs
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [speakQueue, setSpeakQueue] = useState([]);
+  const ttsAudioRef = useRef(null);
+  const ttsAnalyserRef = useRef(null);
+  const lipSyncIntervalRef = useRef(null);
+
   // Recording (9:16 vertical video)
   const [isRecording, setIsRecording] = useState(false);
   const [recordedChunks, setRecordedChunks] = useState([]);
@@ -646,34 +653,198 @@ export default function LiverClonePage() {
   };
 
   const handleSendComment = async () => {
-    if (!sessionId || !commentText.trim()) return;
-    try {
-      const result = await liverCloneService.respondToComment(
-        sessionId,
-        commentText
-      );
-      setCommentHistory((prev) => [
-        ...prev,
-        {
-          comment: commentText,
-          response: result.response,
-          time: new Date().toLocaleTimeString(),
-        },
-      ]);
-      setCommentText("");
-    } catch (err) {
-      setError("コメント返答に失敗しました");
+    if (!commentText.trim()) return;
+    const text = commentText.trim();
+    setCommentText("");
+
+    // If streaming with session, use session-based comment response
+    if (sessionId && isStreaming) {
+      try {
+        const result = await liverCloneService.respondToComment(sessionId, text);
+        setCommentHistory((prev) => [
+          ...prev,
+          {
+            comment: text,
+            response: result.response,
+            time: new Date().toLocaleTimeString(),
+          },
+        ]);
+      } catch (err) {
+        setError("コメント返答に失敗しました");
+      }
+      return;
     }
+
+    // Preview mode: directly speak the comment text via TTS
+    setCommentHistory((prev) => [
+      ...prev,
+      {
+        comment: text,
+        response: "🗣️ 読み上げ中...",
+        time: new Date().toLocaleTimeString(),
+      },
+    ]);
+    await speakWithTTS(text);
+    // Update the last comment entry to show completion
+    setCommentHistory((prev) => {
+      const updated = [...prev];
+      if (updated.length > 0) {
+        updated[updated.length - 1].response = "✅ 読み上げ完了";
+      }
+      return updated;
+    });
   };
 
   const handleSpeak = async () => {
-    if (!sessionId || !speakText.trim()) return;
-    try {
-      await liverCloneService.pushSpeakText(sessionId, speakText);
-      setSpeakText("");
-    } catch (err) {
-      setError("テキスト送信に失敗しました");
+    if (!speakText.trim()) return;
+    const text = speakText.trim();
+    setSpeakText("");
+
+    // If streaming with session, use session-based speak
+    if (sessionId && isStreaming) {
+      try {
+        await liverCloneService.pushSpeakText(sessionId, text);
+      } catch (err) {
+        setError("テキスト送信に失敗しました");
+      }
+      return;
     }
+
+    // Preview mode: use preview/speak API + browser playback + lip-sync
+    await speakWithTTS(text);
+  };
+
+  /**
+   * Generate TTS audio via backend and play it in browser.
+   * During playback, detect volume levels and send mouth_open to GPU Worker.
+   */
+  const speakWithTTS = async (text) => {
+    if (!voiceId) {
+      setError("Voice IDが設定されていません");
+      return;
+    }
+    if (isSpeaking) {
+      // Queue the text if already speaking
+      setSpeakQueue((prev) => [...prev, text]);
+      return;
+    }
+
+    setIsSpeaking(true);
+    try {
+      // Call backend TTS API
+      const result = await liverCloneService.previewSpeak(text, voiceId, {
+        voice_stability: voiceStability,
+        voice_similarity: voiceSimilarity,
+        language: language,
+      });
+
+      if (result.status === "ok" && result.audio_base64) {
+        await playTTSAudio(result.audio_base64, result.audio_format || "mp3");
+      }
+    } catch (err) {
+      console.error("[TTS] Speak failed:", err);
+      setError("音声生成に失敗しました: " + (err.response?.data?.detail || err.message));
+    } finally {
+      setIsSpeaking(false);
+      // Process queue
+      setSpeakQueue((prev) => {
+        if (prev.length > 0) {
+          const [next, ...rest] = prev;
+          setTimeout(() => speakWithTTS(next), 100);
+          return rest;
+        }
+        return prev;
+      });
+    }
+  };
+
+  /**
+   * Play TTS audio and send lip-sync data to GPU Worker via WebSocket.
+   */
+  const playTTSAudio = (audioBase64, format) => {
+    return new Promise((resolve) => {
+      try {
+        // Create audio context if not exists
+        const audioCtx = audioContextRef.current || new (window.AudioContext || window.webkitAudioContext)();
+        if (!audioContextRef.current) audioContextRef.current = audioCtx;
+
+        // Decode base64 to audio buffer
+        const audioData = atob(audioBase64);
+        const audioArray = new Uint8Array(audioData.length);
+        for (let i = 0; i < audioData.length; i++) {
+          audioArray[i] = audioData.charCodeAt(i);
+        }
+
+        // Create audio element for playback
+        const blob = new Blob([audioArray], { type: `audio/${format}` });
+        const audioUrl = URL.createObjectURL(blob);
+        const audio = new Audio(audioUrl);
+        ttsAudioRef.current = audio;
+
+        // Create analyser for lip-sync
+        const source = audioCtx.createMediaElementSource(audio);
+        const analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 256;
+        analyser.smoothingTimeConstant = 0.3;
+        source.connect(analyser);
+        analyser.connect(audioCtx.destination);
+        ttsAnalyserRef.current = analyser;
+
+        // Start lip-sync monitoring
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+        lipSyncIntervalRef.current = setInterval(() => {
+          analyser.getByteFrequencyData(dataArray);
+          // Calculate mouth openness from low-mid frequency energy (voice range)
+          let sum = 0;
+          const voiceRange = Math.min(32, dataArray.length); // Focus on 0-2kHz
+          for (let i = 0; i < voiceRange; i++) {
+            sum += dataArray[i];
+          }
+          const avg = sum / voiceRange / 255; // Normalize to 0-1
+          const mouthOpen = Math.min(1.0, avg * 2.5); // Amplify for visible effect
+
+          // Send mouth_open to GPU Worker via WebSocket
+          if (previewWsRef.current?.readyState === WebSocket.OPEN && mouthOpen > 0.05) {
+            const msg = JSON.stringify({ type: "mouth_open", value: mouthOpen });
+            previewWsRef.current.send(msg);
+          }
+        }, 50); // 20Hz lip-sync update rate
+
+        audio.onended = () => {
+          // Stop lip-sync
+          if (lipSyncIntervalRef.current) {
+            clearInterval(lipSyncIntervalRef.current);
+            lipSyncIntervalRef.current = null;
+          }
+          // Send mouth closed
+          if (previewWsRef.current?.readyState === WebSocket.OPEN) {
+            previewWsRef.current.send(JSON.stringify({ type: "mouth_open", value: 0 }));
+          }
+          URL.revokeObjectURL(audioUrl);
+          ttsAudioRef.current = null;
+          ttsAnalyserRef.current = null;
+          resolve();
+        };
+
+        audio.onerror = (e) => {
+          console.error("[TTS] Audio playback error:", e);
+          if (lipSyncIntervalRef.current) {
+            clearInterval(lipSyncIntervalRef.current);
+            lipSyncIntervalRef.current = null;
+          }
+          URL.revokeObjectURL(audioUrl);
+          resolve();
+        };
+
+        audio.play().catch((e) => {
+          console.error("[TTS] Audio play failed:", e);
+          resolve();
+        });
+      } catch (err) {
+        console.error("[TTS] playTTSAudio error:", err);
+        resolve();
+      }
+    });
   };
 
   // ── Status helpers ──
@@ -936,12 +1107,12 @@ export default function LiverClonePage() {
               </div>
             )}
 
-            {/* Quick Speak */}
-            {isStreaming && (
+            {/* Quick Speak - available in both streaming and preview modes */}
+            {(isStreaming || previewActive) && (
               <div className="bg-[#12121a] rounded-xl border border-gray-800 p-4">
                 <h3 className="text-sm font-semibold mb-2 flex items-center gap-2">
                   <Volume2 className="w-4 h-4 text-purple-400" />
-                  手動発話
+                  {isSpeaking ? "🗣️ 発話中..." : "手動発話"}
                 </h3>
                 <div className="flex gap-2">
                   <input
@@ -949,15 +1120,15 @@ export default function LiverClonePage() {
                     value={speakText}
                     onChange={(e) => setSpeakText(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && handleSpeak()}
-                    placeholder="テキストを入力..."
+                    placeholder="テキストを入力して読み上げ..."
                     className="flex-1 bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-purple-500"
                   />
                   <button
                     onClick={handleSpeak}
-                    disabled={!speakText.trim()}
+                    disabled={!speakText.trim() || isSpeaking}
                     className="px-3 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-700 rounded-lg transition"
                   >
-                    <Send className="w-4 h-4" />
+                    {isSpeaking ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                   </button>
                 </div>
               </div>
@@ -1321,7 +1492,7 @@ export default function LiverClonePage() {
                     />
                     <button
                       onClick={handleSendComment}
-                      disabled={!commentText.trim() || !isStreaming}
+                      disabled={!commentText.trim() || (!isStreaming && !previewActive)}
                       className="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-700 rounded-lg transition"
                     >
                       <Send className="w-4 h-4" />

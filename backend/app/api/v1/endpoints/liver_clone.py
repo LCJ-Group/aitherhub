@@ -374,3 +374,66 @@ async def preview_set_source(req: PreviewFrameRequest):
     except Exception as e:
         logger.exception("[LiverClone API] Preview set-source failed")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class PreviewSpeakRequest(BaseModel):
+    """Request to generate TTS audio for preview mode."""
+    text: str
+    voice_id: str = ""
+    voice_stability: float = 0.5
+    voice_similarity: float = 0.75
+    language: str = "ja"
+
+
+@router.post("/preview/speak")
+async def preview_speak(req: PreviewSpeakRequest):
+    """
+    Generate TTS audio for preview mode (no session required).
+    Returns base64-encoded MP3 audio that the frontend can play directly.
+    The frontend should detect volume levels and send mouth_open to GPU Worker.
+    """
+    import base64
+    from app.services.elevenlabs_tts_service import ElevenLabsTTSService
+
+    if not req.text.strip():
+        raise HTTPException(status_code=400, detail="Text is required")
+
+    voice_id = req.voice_id
+    if not voice_id:
+        import os
+        voice_id = os.getenv("ELEVENLABS_VOICE_ID", "")
+    if not voice_id:
+        raise HTTPException(status_code=400, detail="voice_id is required")
+
+    try:
+        tts = ElevenLabsTTSService()
+        # Generate MP3 audio (easier for browser playback)
+        audio_bytes = await tts.text_to_speech(
+            text=req.text,
+            voice_id=voice_id,
+            language_code=req.language,
+            output_format="mp3_44100_128",
+            voice_settings={
+                "stability": req.voice_stability,
+                "similarity_boost": req.voice_similarity,
+            },
+        )
+
+        audio_base64 = base64.b64encode(audio_bytes).decode("utf-8")
+        duration_ms = len(audio_bytes) / 128 * 8  # rough estimate for MP3
+
+        logger.info(
+            f"[LiverClone API] Preview speak: text_len={len(req.text)}, "
+            f"audio_size={len(audio_bytes)}, voice={voice_id[:8]}..."
+        )
+
+        return {
+            "status": "ok",
+            "audio_base64": audio_base64,
+            "audio_format": "mp3",
+            "text": req.text,
+            "audio_size": len(audio_bytes),
+        }
+    except Exception as e:
+        logger.exception("[LiverClone API] Preview speak failed")
+        raise HTTPException(status_code=500, detail=str(e))
