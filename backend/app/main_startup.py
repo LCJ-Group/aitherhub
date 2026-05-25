@@ -103,6 +103,7 @@ async def run_all_ddl_migrations():
                         "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS unusable_reason TEXT",
                         "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS unusable_at TIMESTAMPTZ",
                         "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS processing_logs JSONB DEFAULT '[]'::jsonb",
+                        "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS exported_duration FLOAT",
                     ]
                     for col_sql in video_clips_columns:
                         try:
