@@ -1504,14 +1504,17 @@ async def preview_stream(websocket: WebSocket, api_key: str = Query(...)):
     """
     WebSocket endpoint for real-time face swap preview.
     
+    OPTIMIZED for maximum FPS:
+    - Processes at 640x480 internally regardless of input resolution
+    - Upscales result back to original resolution
+    - Skips heavy enhancement pipeline for real-time (color_correct only)
+    - Uses async producer/consumer pattern to avoid blocking
+    
     Protocol:
       1. Client connects with ?api_key=xxx
       2. Client sends JPEG frames as binary messages
       3. Server processes each frame through InsightFace in-memory engine
       4. Server returns processed JPEG frame as binary message
-    
-    Uses InsightFace in-memory engine (50-200ms/frame) instead of
-    FaceFusion CLI subprocess (14-35s/frame).
     """
     # Verify API key
     if api_key not in VALID_API_KEYS:
@@ -1525,13 +1528,18 @@ async def preview_stream(websocket: WebSocket, api_key: str = Query(...)):
     error_count = 0
     MAX_ERRORS = 10
     
+    # Processing resolution - sweet spot for speed vs quality
+    # inswapper_128 works on 128x128 face crops internally anyway
+    PROCESS_W = 640
+    PROCESS_H = 480
+    
     # Check if InsightFace engine is available
     use_insightface = (face_analyzer is not None and 
                        face_swapper_model is not None and 
                        source_face_embedding is not None)
     
     if use_insightface:
-        logger.info("[Preview] Using InsightFace in-memory engine (fast mode)")
+        logger.info("[Preview] Using InsightFace in-memory engine (FAST mode - 640x480 internal)")
     else:
         logger.warning("[Preview] InsightFace engine not ready, using FaceFusion CLI fallback")
     
@@ -1543,139 +1551,189 @@ async def preview_stream(websocket: WebSocket, api_key: str = Query(...)):
         total_process_time = 0
         frames_processed = 0
         
-        while True:
-            # Receive frame from client (binary JPEG)
-            data = await websocket.receive_bytes()
-            frame_count += 1
-            
-            if source_face_embedding is None and (source_face_path is None or not Path(source_face_path).exists()):
-                await websocket.send_json({
-                    "type": "error",
-                    "message": "Source face not set. Upload a face image first."
-                })
-                continue
-            
+        # Latest frame buffer - only process the most recent frame
+        latest_frame_data = None
+        frame_lock = asyncio.Lock()
+        
+        async def receiver():
+            """Continuously receive frames, keeping only the latest."""
+            nonlocal latest_frame_data, frame_count
             try:
-                start_time = time.time()
+                while True:
+                    data = await websocket.receive_bytes()
+                    frame_count += 1
+                    async with frame_lock:
+                        latest_frame_data = data
+            except WebSocketDisconnect:
+                pass
+            except Exception:
+                pass
+        
+        async def processor():
+            """Process the latest frame and send result back."""
+            nonlocal latest_frame_data, error_count, total_process_time, frames_processed
+            
+            last_data = None
+            
+            while True:
+                # Get latest frame
+                async with frame_lock:
+                    data = latest_frame_data
                 
-                if use_insightface and source_face_embedding is not None:
-                    # ── InsightFace In-Memory Processing ──────────────────
-                    # Decode JPEG to numpy array
-                    nparr = np.frombuffer(data, np.uint8)
-                    frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                if data is None or data == last_data:
+                    await asyncio.sleep(0.005)  # 5ms poll
+                    continue
+                
+                last_data = data
+                
+                if source_face_embedding is None and (source_face_path is None or not Path(source_face_path).exists()):
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "Source face not set. Upload a face image first."
+                    })
+                    await asyncio.sleep(0.1)
+                    continue
+                
+                try:
+                    start_time = time.time()
                     
-                    if frame is None:
-                        error_count += 1
-                        await websocket.send_bytes(data)
-                        continue
-                    
-                    h_orig, w_orig = frame.shape[:2]
-                    
-                    # For 1080p+ input, process at native resolution for max quality
-                    # InsightFace det_size is internal - it handles any input size
-                    process_frame = frame
-                    
-                    # Detect faces in target frame
-                    target_faces = face_analyzer.get(process_frame)
-                    
-                    if target_faces:
-                        # Swap all detected faces with source face
-                        result = process_frame.copy()
-                        for target_face in target_faces:
-                            result = face_swapper_model.get(
-                                result, target_face, source_face_embedding, paste_back=True
-                            )
+                    if use_insightface and source_face_embedding is not None:
+                        # ── FAST InsightFace Processing ──────────────────────
+                        # Decode JPEG
+                        nparr = np.frombuffer(data, np.uint8)
+                        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
                         
-                        # ── HD Enhancement Pipeline ──────────────────────
-                        # 1. Color correction: match swapped face color to target skin
-                        result = _color_correct_face(process_frame, result, target_faces)
+                        if frame is None:
+                            error_count += 1
+                            await websocket.send_bytes(data)
+                            continue
                         
-                        # 2. OpenCV HD face enhancement (sharpen + denoise)
-                        if face_enhancer_net is not None:
-                            try:
-                                result = _enhance_face_opencv(result, target_faces)
-                            except Exception:
-                                pass
+                        h_orig, w_orig = frame.shape[:2]
                         
-                        # 3. Seamless blend at face boundary
-                        result = _seamless_blend(process_frame, result, target_faces)
+                        # ── KEY OPTIMIZATION: Downscale for processing ──────
+                        # Face swap quality depends on face crop (128x128), not input res
+                        need_resize = w_orig > PROCESS_W or h_orig > PROCESS_H
+                        if need_resize:
+                            process_frame = cv2.resize(frame, (PROCESS_W, PROCESS_H), 
+                                                       interpolation=cv2.INTER_AREA)
+                        else:
+                            process_frame = frame
                         
-                        # Encode result - quality based on resolution
-                        # Higher resolution = higher quality encoding
-                        jpeg_quality = 96 if w_orig >= 1920 else 95
-                        _, encoded = cv2.imencode('.jpg', result, 
-                                                  [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
-                        processed = encoded.tobytes()
-                    else:
-                        # No faces detected - return original
-                        processed = data
-                    
-                    elapsed_ms = int((time.time() - start_time) * 1000)
-                    total_process_time += elapsed_ms
-                    frames_processed += 1
-                    
-                    if frame_count % 50 == 0:
-                        avg_ms = total_process_time / max(1, frames_processed)
-                        logger.info(f"[Preview] Frame {frame_count}: {elapsed_ms}ms "
-                                    f"(avg: {avg_ms:.0f}ms, {len(target_faces)} faces, "
-                                    f"{w_orig}x{h_orig})")
-                    
-                    await websocket.send_bytes(processed)
-                    error_count = 0
-                    
-                else:
-                    # ── FaceFusion CLI Fallback (14-35s) ─────────────────────
-                    input_path = os.path.join(TEMP_DIR, f"preview_in_{frame_count % 10}.jpg")
-                    output_path = os.path.join(TEMP_DIR, f"preview_out_{frame_count % 10}.jpg")
-                    
-                    with open(input_path, "wb") as f:
-                        f.write(data)
-                    
-                    cmd = build_facefusion_headless_cmd(input_path, output_path)
-                    _env = os.environ.copy()
-                    _env["LD_LIBRARY_PATH"] = "/usr/lib/x86_64-linux-gnu:" + _env.get("LD_LIBRARY_PATH", "")
-                    result = subprocess.run(
-                        cmd, capture_output=True, text=True,
-                        timeout=90, cwd=FACEFUSION_DIR, env=_env,
-                    )
-                    
-                    if result.returncode == 0 and Path(output_path).exists():
-                        with open(output_path, "rb") as f:
-                            processed = f.read()
+                        # Detect faces in downscaled frame
+                        target_faces = face_analyzer.get(process_frame)
+                        
+                        if target_faces:
+                            # Swap faces
+                            result = process_frame.copy()
+                            for target_face in target_faces:
+                                result = face_swapper_model.get(
+                                    result, target_face, source_face_embedding, paste_back=True
+                                )
+                            
+                            # ── LIGHTWEIGHT post-processing (real-time safe) ──
+                            # Only color correction - fast and essential
+                            result = _color_correct_face(process_frame, result, target_faces)
+                            
+                            # Skip _enhance_face_opencv and _seamless_blend for speed
+                            # These add 50-100ms each and aren't needed for preview
+                            
+                            # ── Upscale back to original resolution ──────────
+                            if need_resize:
+                                result = cv2.resize(result, (w_orig, h_orig),
+                                                    interpolation=cv2.INTER_LANCZOS4)
+                            
+                            # Encode - use 90% quality for speed (smaller payload = faster transfer)
+                            _, encoded = cv2.imencode('.jpg', result, 
+                                                      [cv2.IMWRITE_JPEG_QUALITY, 90])
+                            processed = encoded.tobytes()
+                        else:
+                            # No faces detected - return original
+                            processed = data
+                        
+                        elapsed_ms = int((time.time() - start_time) * 1000)
+                        total_process_time += elapsed_ms
+                        frames_processed += 1
+                        
+                        if frames_processed % 100 == 0:
+                            avg_ms = total_process_time / max(1, frames_processed)
+                            theoretical_fps = 1000.0 / max(1, avg_ms)
+                            logger.info(f"[Preview] Frame {frames_processed}: {elapsed_ms}ms "
+                                        f"(avg: {avg_ms:.0f}ms, ~{theoretical_fps:.1f} FPS, "
+                                        f"{len(target_faces) if target_faces else 0} faces, "
+                                        f"process@{PROCESS_W}x{PROCESS_H}, output@{w_orig}x{h_orig})")
+                        
                         await websocket.send_bytes(processed)
                         error_count = 0
+                        
                     else:
-                        error_count += 1
-                        await websocket.send_bytes(data)
+                        # ── FaceFusion CLI Fallback (14-35s) ─────────────────────
+                        input_path = os.path.join(TEMP_DIR, f"preview_in_{frames_processed % 10}.jpg")
+                        output_path = os.path.join(TEMP_DIR, f"preview_out_{frames_processed % 10}.jpg")
+                        
+                        with open(input_path, "wb") as f:
+                            f.write(data)
+                        
+                        cmd = build_facefusion_headless_cmd(input_path, output_path)
+                        _env = os.environ.copy()
+                        _env["LD_LIBRARY_PATH"] = "/usr/lib/x86_64-linux-gnu:" + _env.get("LD_LIBRARY_PATH", "")
+                        proc_result = subprocess.run(
+                            cmd, capture_output=True, text=True,
+                            timeout=90, cwd=FACEFUSION_DIR, env=_env,
+                        )
+                        
+                        if proc_result.returncode == 0 and Path(output_path).exists():
+                            with open(output_path, "rb") as f:
+                                processed = f.read()
+                            await websocket.send_bytes(processed)
+                            error_count = 0
+                        else:
+                            error_count += 1
+                            await websocket.send_bytes(data)
+                        
+                        for p in (input_path, output_path):
+                            try:
+                                os.unlink(p)
+                            except (FileNotFoundError, OSError):
+                                pass
                     
-                    # Cleanup temp files
-                    for p in (input_path, output_path):
-                        try:
-                            os.unlink(p)
-                        except (FileNotFoundError, OSError):
-                            pass
+                except subprocess.TimeoutExpired:
+                    error_count += 1
+                    await websocket.send_bytes(data)
+                except Exception as e:
+                    error_count += 1
+                    logger.error(f"[Preview] Frame processing error: {e}")
+                    try:
+                        await websocket.send_bytes(data)
+                    except Exception:
+                        break
                 
-            except subprocess.TimeoutExpired:
-                error_count += 1
-                await websocket.send_bytes(data)
-            except Exception as e:
-                error_count += 1
-                logger.error(f"[Preview] Frame processing error: {e}")
-                await websocket.send_bytes(data)
-            
-            if error_count >= MAX_ERRORS:
-                await websocket.send_json({
-                    "type": "error",
-                    "message": "Too many processing errors. Check GPU Worker logs."
-                })
-                break
+                if error_count >= MAX_ERRORS:
+                    try:
+                        await websocket.send_json({
+                            "type": "error",
+                            "message": "Too many processing errors. Check GPU Worker logs."
+                        })
+                    except Exception:
+                        pass
+                    break
+        
+        # Run receiver and processor concurrently
+        receiver_task = asyncio.create_task(receiver())
+        try:
+            await processor()
+        finally:
+            receiver_task.cancel()
+            try:
+                await receiver_task
+            except asyncio.CancelledError:
+                pass
     
     except WebSocketDisconnect:
         logger.info(f"[Preview] Client disconnected after {frame_count} frames")
     except Exception as e:
         logger.error(f"[Preview] WebSocket error: {e}")
     finally:
-        logger.info(f"[Preview] Session ended. Frames processed: {frame_count}")
+        logger.info(f"[Preview] Session ended. Frames received: {frame_count}, processed: {frames_processed}")
 
 
 @app.post("/api/preview-frame")

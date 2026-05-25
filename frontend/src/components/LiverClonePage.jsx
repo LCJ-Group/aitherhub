@@ -249,10 +249,10 @@ export default function LiverClonePage() {
   const startPreview = async () => {
     try {
       setPreviewError(null);
-      const { w, h } = getResolutionDims();
-      // Get webcam access at selected resolution
+      // Get webcam at 640x480 - we process at this resolution for max FPS
+      // Higher webcam resolution wastes CPU on downscaling
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: w }, height: { ideal: h }, facingMode: "user" },
+        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" },
         audio: false,
       });
       if (videoRef.current) {
@@ -324,43 +324,36 @@ export default function LiverClonePage() {
     if (!canvas || !video) return;
 
     const ctx = canvas.getContext("2d");
-    const { w, h } = getResolutionDims();
-    // Set canvas to target resolution (may differ from webcam native)
-    canvas.width = w;
-    canvas.height = h;
+    // Send at 640x480 for maximum speed - GPU Worker processes at this resolution
+    // and upscales back. This dramatically reduces network payload.
+    const SEND_W = 640;
+    const SEND_H = 480;
+    canvas.width = SEND_W;
+    canvas.height = SEND_H;
 
-    const frameInterval = getFrameInterval();
-    let pendingFrame = false;
-    let lastSendTime = 0;
+    // Send frames at a fixed rate - GPU Worker handles backpressure via latest-frame-only
+    const SEND_INTERVAL_MS = 50; // 20 FPS send rate
 
     previewIntervalRef.current = setInterval(() => {
       if (!previewWsRef.current || previewWsRef.current.readyState !== WebSocket.OPEN) return;
       if (!video.videoWidth) return;
-      if (pendingFrame) return; // Skip if previous frame still being encoded
+      // Check WebSocket buffer - skip if too much queued (backpressure)
+      if (previewWsRef.current.bufferedAmount > 100000) return;
 
-      const now = Date.now();
-      if (now - lastSendTime < frameInterval * 0.8) return; // Rate limit
+      // Draw video frame at processing resolution (fast, small payload)
+      ctx.drawImage(video, 0, 0, SEND_W, SEND_H);
 
-      // Draw video frame scaled to target resolution
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      pendingFrame = true;
-      lastSendTime = now;
-
-      // Use high quality JPEG - RTX 5090 has plenty of bandwidth
-      const jpegQuality = resolution === "1080p" ? 0.95 : 0.93;
+      // Lower JPEG quality for speed - GPU Worker will output at 90%
       canvas.toBlob(
         (blob) => {
-          pendingFrame = false;
           if (blob && previewWsRef.current?.readyState === WebSocket.OPEN) {
-            blob.arrayBuffer().then((buf) => {
-              previewWsRef.current.send(buf);
-            });
+            previewWsRef.current.send(blob);
           }
         },
         "image/jpeg",
-        jpegQuality
+        0.80 // 80% quality = ~30-50KB per frame at 640x480
       );
-    }, Math.max(16, frameInterval / 2)); // Poll at 2x target rate, rate-limited above
+    }, SEND_INTERVAL_MS);
   };
 
   const stopPreview = () => {
@@ -762,7 +755,7 @@ export default function LiverClonePage() {
                       {previewFps} FPS
                     </span>
                     <span className="bg-black/70 px-2 py-1 rounded text-cyan-400">
-                      {resolution === "1080p" ? "Full HD 1080p" : resolution === "720p" ? "HD 720p" : "SD 480p"}
+                      {"Fast 640p"}
                     </span>
                     <span className="bg-black/70 px-2 py-1 rounded text-yellow-400">
                       GPU: RTX 5090
