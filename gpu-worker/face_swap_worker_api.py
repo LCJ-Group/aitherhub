@@ -484,6 +484,23 @@ async def lifespan(app: FastAPI):
             ff_compute_source_face(latest_face)
             if ff_source_face is not None:
                 logger.info(f"[FaceFusion] Pre-loaded source face from {latest_face}")
+                # Warmup: run a full swap to pre-load ALL models into GPU memory
+                # (inswapper_128, face_masker/xseg_1, face_masker/bisenet)
+                try:
+                    import cv2 as _cv2
+                    import time as _time
+                    _warmup_start = _time.time()
+                    _warmup_img = _cv2.imread(latest_face)
+                    if _warmup_img is not None:
+                        _warmup_result = ff_swap_single_frame(_warmup_img, use_enhancer=False)
+                        _warmup_elapsed = (_time.time() - _warmup_start) * 1000
+                        if _warmup_result is not None:
+                            logger.info(f"[FaceFusion] Full pipeline warmup complete in {_warmup_elapsed:.0f}ms")
+                            logger.info(f"[FaceFusion] All models now in GPU memory (detector, analyser, swapper, masker)")
+                        else:
+                            logger.warning(f"[FaceFusion] Warmup swap returned None (face not found in warmup image?)")
+                except Exception as _e:
+                    logger.warning(f"[FaceFusion] Warmup swap failed (non-fatal): {_e}")
 
     logger.info(f"[FaceFusion] Engine status: ready={ff_engine_ready}, "
                 f"source_face={'OK' if ff_source_face else 'NONE'}")
