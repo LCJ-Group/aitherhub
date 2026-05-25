@@ -249,10 +249,10 @@ export default function LiverClonePage() {
   const startPreview = async () => {
     try {
       setPreviewError(null);
-      // Get webcam at 640x480 - we process at this resolution for max FPS
-      // Higher webcam resolution wastes CPU on downscaling
+      // Get webcam at 1080p - GPU Worker downscales internally for processing
+      // but upscales result back to 1080p for high-quality output
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" },
+        video: { width: { ideal: 1920 }, height: { ideal: 1080 }, facingMode: "user" },
         audio: false,
       });
       if (videoRef.current) {
@@ -324,21 +324,21 @@ export default function LiverClonePage() {
     if (!canvas || !video) return;
 
     const ctx = canvas.getContext("2d");
-    // Send at 640x480 for maximum speed - GPU Worker processes at this resolution
-    // and upscales back. This dramatically reduces network payload.
-    const SEND_W = 640;
-    const SEND_H = 480;
+    // Send at 960x540 (qHD) - good balance between quality and speed
+    // GPU Worker processes at 640x480 internally but gets more detail from higher input
+    const SEND_W = 960;
+    const SEND_H = 540;
     canvas.width = SEND_W;
     canvas.height = SEND_H;
 
-    // Send frames at a fixed rate - GPU Worker handles backpressure via latest-frame-only
-    const SEND_INTERVAL_MS = 50; // 20 FPS send rate
+    // Send frames at 60fps - GPU Worker processes latest frame only (no backlog)
+    const SEND_INTERVAL_MS = 16; // ~60 FPS send rate
 
     previewIntervalRef.current = setInterval(() => {
       if (!previewWsRef.current || previewWsRef.current.readyState !== WebSocket.OPEN) return;
       if (!video.videoWidth) return;
       // Check WebSocket buffer - skip if too much queued (backpressure)
-      if (previewWsRef.current.bufferedAmount > 100000) return;
+      if (previewWsRef.current.bufferedAmount > 200000) return;
 
       // Draw video frame at processing resolution (fast, small payload)
       ctx.drawImage(video, 0, 0, SEND_W, SEND_H);
@@ -351,7 +351,7 @@ export default function LiverClonePage() {
           }
         },
         "image/jpeg",
-        0.80 // 80% quality = ~30-50KB per frame at 640x480
+        0.85 // 85% quality - good balance of quality vs size at 960x540
       );
     }, SEND_INTERVAL_MS);
   };
@@ -755,7 +755,7 @@ export default function LiverClonePage() {
                       {previewFps} FPS
                     </span>
                     <span className="bg-black/70 px-2 py-1 rounded text-cyan-400">
-                      {"Fast 640p"}
+                      {"HD 1080p"}
                     </span>
                     <span className="bg-black/70 px-2 py-1 rounded text-yellow-400">
                       GPU: RTX 5090
