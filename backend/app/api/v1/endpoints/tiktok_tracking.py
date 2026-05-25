@@ -108,10 +108,11 @@ async def auto_match_clip(
         from app.services.audio_fingerprint import find_matching_clip, download_audio_to_temp, generate_fingerprint_from_file
 
         async with get_session() as session:
-            # Get all completed clips with duration
+            # Get all completed clips with duration + exported info
             result = await session.execute(
                 text("""
-                    SELECT id, clip_url, duration_sec, audio_fingerprint
+                    SELECT id, clip_url, duration_sec, audio_fingerprint,
+                           exported_url, exported_duration
                     FROM video_clips
                     WHERE status = 'completed'
                       AND clip_url IS NOT NULL
@@ -127,7 +128,24 @@ async def auto_match_clip(
             logger.info("No ClipDB candidates found for auto-matching")
             return None
 
-        # Use the video play URL for fingerprint matching (has original audio)
+        # Priority 1: Match by exported_duration (AI-generated clips have different duration)
+        # These are clips that went through silence trimming, so their exported duration
+        # is different from original duration_sec
+        exported_candidates = [c for c in candidates if c.get('exported_url') and c.get('exported_duration')]
+        if exported_candidates:
+            for ec in exported_candidates:
+                exp_dur = float(ec['exported_duration'])
+                if abs(exp_dur - tiktok_duration) <= 2.0:  # Tighter tolerance for exported
+                    match = dict(ec)
+                    match['similarity'] = 0.95
+                    match['match_method'] = 'exported_duration'
+                    logger.info(
+                        f"Auto-matched via exported_duration: clip {match['id']} "
+                        f"(exported_dur={exp_dur:.1f}s, tiktok_dur={tiktok_duration:.1f}s)"
+                    )
+                    return match
+
+        # Priority 2: Audio fingerprint matching (original method)
         audio_url = tiktok_play_url or tiktok_music_url
         if not audio_url:
             logger.warning("No audio URL available for matching")
@@ -496,6 +514,128 @@ async def fetch_now(video_id: int, x_admin_key: Optional[str] = Header(None)):
                 "collect_count": collect_count,
             }
         }
+
+
+@router.post("/videos/{video_id}/rematch")
+async def rematch_video(video_id: int, x_admin_key: Optional[str] = Header(None)):
+    """Re-run auto-match for a tracked video that has no clip_db_id or is marked as non-AH."""
+    verify_admin(x_admin_key)
+
+    async with get_session() as session:
+        result = await session.execute(
+            text("SELECT id, tiktok_url, duration FROM tiktok_tracked_videos WHERE id = :id"),
+            {"id": video_id}
+        )
+        video = result.fetchone()
+        if not video:
+            raise HTTPException(status_code=404, detail="Tracked video not found")
+
+        tiktok_url = video[1]
+        duration = video[2] or 0
+
+        if duration <= 0:
+            # Try to get duration from API
+            try:
+                video_data = await fetch_video_data_from_rapidapi(tiktok_url)
+                duration = video_data.get("duration", 0)
+            except Exception:
+                pass
+
+        if duration <= 0:
+            return {"success": False, "message": "Cannot rematch: no duration available"}
+
+        # Try auto-match
+        try:
+            video_data = await fetch_video_data_from_rapidapi(tiktok_url)
+            play_url = video_data.get("play", "")
+            music_url = video_data.get("music", "")
+        except Exception:
+            play_url = ""
+            music_url = ""
+
+        match_result = await auto_match_clip(
+            tiktok_duration=float(duration),
+            tiktok_play_url=play_url,
+            tiktok_music_url=music_url,
+        )
+
+        if match_result:
+            clip_db_id = str(match_result["id"])
+            await session.execute(
+                text("UPDATE tiktok_tracked_videos SET clip_db_id = :cid, updated_at = NOW() WHERE id = :id"),
+                {"id": video_id, "cid": clip_db_id}
+            )
+            return {
+                "success": True,
+                "clip_db_id": clip_db_id,
+                "similarity": match_result.get("similarity", 0),
+                "match_method": match_result.get("match_method", "unknown"),
+            }
+        else:
+            return {"success": False, "message": "No matching clip found"}
+
+
+@router.post("/videos/rematch-all")
+async def rematch_all_unmatched(x_admin_key: Optional[str] = Header(None)):
+    """Re-run auto-match for all tracked videos that don't have a valid clip_db_id or are not AH-edited."""
+    verify_admin(x_admin_key)
+
+    results = {"matched": 0, "failed": 0, "skipped": 0}
+
+    async with get_session() as session:
+        # Get videos without clip_db_id OR with clip_db_id but not AH-edited
+        result = await session.execute(
+            text("""
+                SELECT tv.id, tv.tiktok_url, tv.duration, tv.clip_db_id
+                FROM tiktok_tracked_videos tv
+                WHERE tv.status = 'active'
+                  AND (
+                    tv.clip_db_id IS NULL
+                    OR NOT EXISTS (
+                      SELECT 1 FROM video_clips vc
+                      WHERE vc.id = CAST(tv.clip_db_id AS uuid)
+                        AND vc.exported_url IS NOT NULL
+                    )
+                  )
+                ORDER BY tv.created_at DESC
+                LIMIT 50
+            """)
+        )
+        videos = result.fetchall()
+
+    for video in videos:
+        vid_id, tiktok_url, duration, existing_clip_id = video
+        if not duration or duration <= 0:
+            results["skipped"] += 1
+            continue
+
+        try:
+            video_data = await fetch_video_data_from_rapidapi(tiktok_url)
+            play_url = video_data.get("play", "")
+            music_url = video_data.get("music", "")
+
+            match_result = await auto_match_clip(
+                tiktok_duration=float(duration),
+                tiktok_play_url=play_url,
+                tiktok_music_url=music_url,
+            )
+
+            if match_result:
+                clip_db_id = str(match_result["id"])
+                async with get_session() as session:
+                    await session.execute(
+                        text("UPDATE tiktok_tracked_videos SET clip_db_id = :cid, updated_at = NOW() WHERE id = :id"),
+                        {"id": vid_id, "cid": clip_db_id}
+                    )
+                results["matched"] += 1
+                logger.info(f"Rematch success: video {vid_id} -> clip {clip_db_id}")
+            else:
+                results["failed"] += 1
+        except Exception as e:
+            logger.error(f"Rematch error for video {vid_id}: {e}")
+            results["failed"] += 1
+
+    return results
 
 
 @router.patch("/videos/{video_id}/stop")

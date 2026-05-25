@@ -409,6 +409,44 @@ export default function TikTokTrackingPanel({ adminKey }) {
     }
   };
 
+  // ── Rematch ──
+  const [rematchingId, setRematchingId] = useState(null);
+  const handleRematch = async (videoId) => {
+    setRematchingId(videoId);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/v1/tiktok-tracking/videos/${videoId}/rematch`,
+        { method: "POST", headers }
+      );
+      const data = await res.json();
+      if (data.success) {
+        alert(`マッチ成功！ (${data.match_method}, 類似度: ${(data.similarity * 100).toFixed(0)}%)`);
+        fetchVideos();
+      } else {
+        alert(`マッチ失敗: ${data.message || '該当クリップが見つかりません'}`);
+      }
+    } catch (e) {
+      alert(`エラー: ${e.message}`);
+    } finally {
+      setRematchingId(null);
+    }
+  };
+
+  const handleRematchAll = async () => {
+    if (!confirm('未マッチ/対象外の全動画を再マッチしますか？')) return;
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/v1/tiktok-tracking/videos/rematch-all`,
+        { method: "POST", headers }
+      );
+      const data = await res.json();
+      alert(`再マッチ完了: ${data.matched}件マッチ / ${data.failed}件失敗 / ${data.skipped}件スキップ`);
+      fetchVideos();
+    } catch (e) {
+      alert(`エラー: ${e.message}`);
+    }
+  };
+
   // ── Stop / Resume ──
   const handleToggleStatus = async (videoId, currentStatus) => {
     const action = currentStatus === "active" ? "stop" : "resume";
@@ -1155,9 +1193,22 @@ export default function TikTokTrackingPanel({ adminKey }) {
                           </span>
                         )}
                         {video.clip_db_id && !video.is_aitherhub_edited && (
-                          <span className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-gray-100 text-gray-400">
-                            📎 対象外
-                          </span>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleRematch(video.id); }}
+                            disabled={rematchingId === video.id}
+                            className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-orange-100 text-orange-600 hover:bg-orange-200 disabled:opacity-50 transition-colors"
+                          >
+                            {rematchingId === video.id ? "🔄..." : "🔄 再マッチ"}
+                          </button>
+                        )}
+                        {!video.clip_db_id && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleRematch(video.id); }}
+                            disabled={rematchingId === video.id}
+                            className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-orange-100 text-orange-600 hover:bg-orange-200 disabled:opacity-50 transition-colors"
+                          >
+                            {rematchingId === video.id ? "🔄..." : "🔄 マッチ"}
+                          </button>
                         )}
                       </div>
                     </div>
@@ -1255,6 +1306,22 @@ export default function TikTokTrackingPanel({ adminKey }) {
           })}
         </div>
       )}
+
+      {/* Rematch all button */}
+      <div className="bg-white rounded-xl border border-gray-200 p-3 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <span className="text-xs font-medium text-gray-600">🔄 クリップマッチング</span>
+          <span className="text-[10px] text-gray-400">
+            対象外・未マッチの動画をAIクリップと再紐付け
+          </span>
+        </div>
+        <button
+          onClick={handleRematchAll}
+          className="px-3 py-1.5 text-[10px] font-medium bg-orange-50 text-orange-600 rounded-lg hover:bg-orange-100 transition-colors"
+        >
+          🔄 一括再マッチ
+        </button>
+      </div>
 
       {/* Fingerprint status bar */}
       {fpStatus && (

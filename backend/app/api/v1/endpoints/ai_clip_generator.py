@@ -293,13 +293,22 @@ _CTA_KEYWORDS = [
     '買', '購入', 'リンク', 'url', 'クーポン', '割引', '限定', '今すぐ',
     '下單', '購買', '連結', '優惠', '折扣', 'セール', '特別', '無料',
     'プレゼント', 'お得', '半額', 'キャンペーン', '期間限定',
+    '送料無料', '初回限定', '定期便', 'ポイント', '返金保証',
+    '即購入', '今だけ', '数量限定', '先着', 'ラスト',
+    # 中国語追加
+    '免费', '秒杀', '抢购', '包邮', '专属',
 ]
-
 # Product/emphasis keywords
 _EMPHASIS_KEYWORDS = [
     '商品', '製品', '成分', '効果', '使い方', 'すごい', 'やばい',
     '最高', 'おすすめ', '人気', '話題', 'プロ', '美容師', 'サロン',
     'KYOGOKU', '京極', 'ケラチン', 'コラーゲン', 'アミノ酸',
+    'ヒアルロン酸', 'トリートメント', 'ダメージケア',
+    'ツヤツヤ', 'サラサラ', 'ふわふわ', 'しっとり',
+    'ビフォーアフター', '変わる', '感動', '神',
+    'リピート', 'リピ', 'リアル', 'ガチ', '毎日', '継続',
+    # 中国語追加
+    '好用', '推荐', '回购', '效果', '成分', '天然',
 ]
 
 
@@ -754,9 +763,12 @@ def _detect_silence_periods(video_path: str, noise_db: float = -30.0,
 
 # ─── V2: Smart Silence Trimming ──────────────────────────────────────────────
 def _build_silence_trim_segments(duration: float, silence_periods: list,
-                                  captions: list, keep_margin: float = 0.15) -> list:
-    """無音区間をカットするためのセグメントリストを構築。
-    字幕がある区間は絶対にカットしない。
+                                  captions: list, keep_margin: float = 0.12) -> list:
+    """無音区間をカットするためのセグメントリストを構築（V2.1改善版）。
+    - 字幕がある区間は絶対にカットしない
+    - 1.5秒以上の無音は積極的にカット（自然なポーズ0.3秒残す）
+    - 0.6〜1.5秒の無音は部分カット（40%除去）
+    - 最大カット量は元の動画の30%まで（テンポ良くしつつ不自然にならない）
     Returns list of (start, end) tuples representing segments to KEEP.
     """
     if not silence_periods:
@@ -768,7 +780,7 @@ def _build_silence_trim_segments(duration: float, silence_periods: list,
         s = float(cap.get("start", 0))
         e = float(cap.get("end", 0))
         if e > s:
-            protected.append((max(0, s - 0.2), min(duration, e + 0.2)))
+            protected.append((max(0, s - 0.15), min(duration, e + 0.15)))
 
     # Merge overlapping protected intervals
     protected.sort()
@@ -786,37 +798,68 @@ def _build_silence_trim_segments(duration: float, silence_periods: list,
         return False
 
     # Determine which silence periods to actually cut
+    # Sort by length (longest first) to prioritize removing the most impactful silences
     cuttable = []
-    for s_start, s_end in silence_periods:
-        # Don't cut first 0.5s or last 0.5s
-        if s_start < 0.5 or s_end > duration - 0.5:
+    total_cut_time = 0.0
+    max_cut_ratio = 0.30  # 最大30%カット
+    max_cut_time = duration * max_cut_ratio
+
+    for s_start, s_end in sorted(silence_periods, key=lambda x: x[1]-x[0], reverse=True):
+        silence_len = s_end - s_start
+        # Don't cut first 0.3s or last 0.3s of video
+        if s_start < 0.3 or s_end > duration - 0.3:
             continue
         # Don't cut if overlaps with caption
         if _is_protected(s_start, s_end):
             continue
-        # Only cut silences longer than 0.8s (keep natural pauses)
-        if s_end - s_start < 0.8:
+        # Skip very short silences (natural breathing pauses)
+        if silence_len < 0.6:
             continue
-        # Keep a small margin at start and end of silence
-        cut_start = s_start + keep_margin
-        cut_end = s_end - keep_margin
+        # Check max cut limit
+        if total_cut_time >= max_cut_time:
+            break
+
+        if silence_len >= 1.5:
+            # Long silence: aggressive cut, keep only 0.3s natural pause
+            cut_start = s_start + 0.15
+            cut_end = s_end - 0.15
+        elif silence_len >= 0.6:
+            # Medium silence: partial cut (remove 40% from center)
+            mid = (s_start + s_end) / 2
+            half_cut = silence_len * 0.4 / 2
+            cut_start = mid - half_cut
+            cut_end = mid + half_cut
+        else:
+            continue
+
         if cut_end > cut_start:
+            actual_cut = cut_end - cut_start
+            if total_cut_time + actual_cut > max_cut_time:
+                # Trim to fit within budget
+                cut_end = cut_start + (max_cut_time - total_cut_time)
+                if cut_end <= cut_start:
+                    break
             cuttable.append((cut_start, cut_end))
+            total_cut_time += (cut_end - cut_start)
 
     if not cuttable:
         return [(0, duration)]
 
-    # Build keep segments (inverse of cuttable)
+    # Build keep segments (inverse of cuttable, sorted by time)
+    cuttable.sort(key=lambda x: x[0])
     keep_segments = []
     prev_end = 0
-    for cut_start, cut_end in sorted(cuttable):
+    for cut_start, cut_end in cuttable:
         if cut_start > prev_end:
             keep_segments.append((prev_end, cut_start))
         prev_end = cut_end
     if prev_end < duration:
         keep_segments.append((prev_end, duration))
 
-    logger.info(f"[ai-clip] Silence trim: {len(cuttable)} cuts, {len(keep_segments)} keep segments")
+    total_kept = sum(e - s for s, e in keep_segments)
+    logger.info(f"[ai-clip] Silence trim V2.1: {len(cuttable)} cuts, "
+                f"{total_cut_time:.1f}s removed ({total_cut_time/duration*100:.0f}%), "
+                f"{total_kept:.1f}s kept, {len(keep_segments)} segments")
     return keep_segments
 
 
@@ -1450,6 +1493,100 @@ def _generate_overlay_images(
     return overlays
 
 
+# ─── V2.1: Sound Effect (SE) Insertion ────────────────────────────────────────
+_SE_ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'assets', 'sound_effects')
+
+# SE categories and their files
+_SE_HOOK_FILES = ['hook_impact.mp3', 'hook_shine.mp3', 'hook_pop.mp3']
+_SE_TRANSITION_FILES = ['whoosh_transition.mp3']
+_SE_CTA_FILES = ['cta_attention.mp3']
+_SE_PRICE_FILES = ['price_reveal.mp3']
+
+
+async def _apply_sound_effects(video_path: str, output_path: str, duration: float,
+                               hook_time: float = 0.0, cta_time: float = None,
+                               enable_hook_se: bool = True, enable_cta_se: bool = True) -> bool:
+    """効果音（SE）を動画にミックスする。
+    - フック表示時（0秒付近）: インパクト音
+    - CTA表示時（最後3秒）: アテンション音
+    音量は元動画の声を邪魔しないように低めに設定。
+    Returns True if SE was applied, False if skipped.
+    """
+    se_dir = os.path.normpath(_SE_ASSETS_DIR)
+    if not os.path.isdir(se_dir):
+        logger.warning(f"[ai-clip] SE assets dir not found: {se_dir}")
+        return False
+
+    # Select SE files
+    se_inputs = []  # (file_path, start_time, volume)
+
+    if enable_hook_se:
+        hook_se_file = random.choice(_SE_HOOK_FILES)
+        hook_se_path = os.path.join(se_dir, hook_se_file)
+        if os.path.exists(hook_se_path):
+            se_inputs.append((hook_se_path, hook_time, 0.4))  # 40% volume
+
+    if enable_cta_se and cta_time is not None:
+        cta_se_file = random.choice(_SE_CTA_FILES)
+        cta_se_path = os.path.join(se_dir, cta_se_file)
+        if os.path.exists(cta_se_path):
+            se_inputs.append((cta_se_path, cta_time, 0.35))  # 35% volume
+
+    if not se_inputs:
+        return False
+
+    # Build ffmpeg command to mix SE with video
+    input_args = ["-i", video_path]
+    filter_parts = []
+    amix_inputs = ["[0:a]"]
+
+    for i, (se_path, start_t, vol) in enumerate(se_inputs):
+        input_idx = i + 1
+        input_args.extend(["-i", se_path])
+        # Delay SE to start_time and adjust volume
+        delay_ms = int(start_t * 1000)
+        filter_parts.append(
+            f"[{input_idx}:a]adelay={delay_ms}|{delay_ms},volume={vol}[se{i}]"
+        )
+        amix_inputs.append(f"[se{i}]")
+
+    # Mix all audio streams
+    n_inputs = len(amix_inputs)
+    mix_expr = "".join(amix_inputs)
+    filter_parts.append(f"{mix_expr}amix=inputs={n_inputs}:duration=first:dropout_transition=2[aout]")
+
+    filter_str = ";".join(filter_parts)
+
+    cmd = [
+        "ffmpeg", "-y",
+        *input_args,
+        "-filter_complex", filter_str,
+        "-map", "0:v",
+        "-map", "[aout]",
+        "-c:v", "copy",  # Don't re-encode video
+        "-c:a", "aac",
+        "-b:a", "128k",
+        "-movflags", "+faststart",
+        output_path,
+    ]
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+        if proc.returncode != 0:
+            logger.warning(f"[ai-clip] SE mix failed: {stderr.decode(errors='replace')[-300:]}")
+            return False
+        logger.info(f"[ai-clip] SE applied: {len(se_inputs)} effects mixed")
+        return True
+    except (asyncio.TimeoutError, Exception) as e:
+        logger.warning(f"[ai-clip] SE mix error: {e}")
+        return False
+
+
 # ─── V2: Build Advanced ffmpeg Filter Chain ──────────────────────────────────────────
 def _build_advanced_ffmpeg_command(video_path: str, ass_path: str, output_path: str,
     video_width: int, video_height: int, duration: float,
@@ -1653,33 +1790,51 @@ def _build_advanced_ffmpeg_command(video_path: str, ass_path: str, output_path: 
 
 
 # ─── V2: Enhanced ASS with Animations & Highlights ──────────────────────────
-def _highlight_keywords(text_content: str, product_name: str = "") -> str:
-    """キーワードをASS override tagでハイライトする"""
+def _highlight_keywords(text_content: str, product_name: str = "",
+                        product_keywords: list = None) -> str:
+    """キーワードをASS override tagでハイライトする（V2.1強化版）
+    - 商品名: 黄色+太字
+    - CTAキーワード: 緑色+太字
+    - 強調キーワード: 黄色
+    - 商品マスターからの動的キーワードも対応
+    """
     result = text_content
-
     # Build keyword list (product name first, then CTA, then emphasis)
+    # Format: {keyword: (color, bold)}
     highlight_map = {}
+    # 1. Product name keywords (highest priority - yellow + bold)
     if product_name:
-        for word in product_name.split():
+        # Split by common separators
+        parts = re.split(r'[\s　/・\-]+', product_name)
+        for word in parts:
             if len(word) >= 2:
-                highlight_map[word] = _HIGHLIGHT_COLOR
-
+                highlight_map[word] = (_HIGHLIGHT_COLOR, True)
+    # 2. Product master keywords (from DB)
+    if product_keywords:
+        for kw in product_keywords:
+            if kw and len(kw) >= 2 and kw in result:
+                highlight_map[kw] = (_HIGHLIGHT_COLOR, True)
+    # 3. CTA keywords (green + bold)
     for kw in _CTA_KEYWORDS:
-        if kw in result:
-            highlight_map[kw] = _HIGHLIGHT_CTA_COLOR
-
+        if kw in result and kw not in highlight_map:
+            highlight_map[kw] = (_HIGHLIGHT_CTA_COLOR, True)
+    # 4. Emphasis keywords (yellow, no bold)
     for kw in _EMPHASIS_KEYWORDS:
-        if kw in result:
-            highlight_map[kw] = _HIGHLIGHT_COLOR
-
-    # Apply highlights (ASS override tags)
-    for keyword, color in highlight_map.items():
+        if kw in result and kw not in highlight_map:
+            highlight_map[kw] = (_HIGHLIGHT_COLOR, False)
+    # Apply highlights (ASS override tags) - longest keywords first to avoid partial matches
+    for keyword, (color, bold) in sorted(highlight_map.items(), key=lambda x: len(x[0]), reverse=True):
         if keyword in result:
-            result = result.replace(
-                keyword,
-                f"{{\\c{color}}}{keyword}{{\\c}}"
-            )
-
+            if bold:
+                result = result.replace(
+                    keyword,
+                    f"{{\\c{color}\\b1}}{keyword}{{\\b0\\c}}"
+                )
+            else:
+                result = result.replace(
+                    keyword,
+                    f"{{\\c{color}}}{keyword}{{\\c}}"
+                )
     return result
 
 
@@ -3634,8 +3789,30 @@ async def _process_single_clip_v2(job_id: str, clip: dict, req: GenerateRequest,
         except Exception:
             pass
 
-        await _update_job(job_id, progress_pct=75, current_step=f"クリップ {idx+1}/{total}: エンコード完了 ({output_size//1024}KB)")
+        # ── 10.5. Sound Effects (SE) insertion ──
+        if getattr(req, 'enable_sfx', True):
+            se_output = output_path + ".se.mp4"
+            cta_start_time = max(0, actual_duration - 3.0) if cta_text else None
+            se_applied = await _apply_sound_effects(
+                video_path=output_path,
+                output_path=se_output,
+                duration=actual_duration,
+                hook_time=0.0,
+                cta_time=cta_start_time,
+                enable_hook_se=bool(hook_text),
+                enable_cta_se=bool(cta_text),
+            )
+            if se_applied and os.path.exists(se_output) and os.path.getsize(se_output) > 1000:
+                os.replace(se_output, output_path)
+                output_size = os.path.getsize(output_path)
+                logger.info(f"[ai-clip {job_id}] SE applied, new size: {output_size} bytes")
+            else:
+                # Clean up failed SE output
+                if os.path.exists(se_output):
+                    os.unlink(se_output)
+                logger.info(f"[ai-clip {job_id}] SE skipped (not available or failed)")
 
+        await _update_job(job_id, progress_pct=75, current_step=f"クリップ {idx+1}/{total}: エンコード完了 ({output_size//1024}KB)")
         # ── 11. Enhanced thumbnail (V2) ── (80%)
         thumbnail_url = None
         if req.enable_thumbnail:
@@ -3652,7 +3829,8 @@ async def _process_single_clip_v2(job_id: str, clip: dict, req: GenerateRequest,
 
         # ── 13. Save to DB ── (95%)
         await _update_job(job_id, progress_pct=95, current_step=f"クリップ {idx+1}/{total}: DB保存中...")
-        await _save_export_record(clip_id, blob_url, thumbnail_url)
+        await _save_export_record(clip_id, blob_url, thumbnail_url,
+                                      exported_duration=actual_duration)
 
         return {
             "clip_id": clip_id,
@@ -4027,16 +4205,27 @@ async def _upload_to_blob(output_path: str, clip_id: str, job_id: str) -> tuple:
     return download_url, blob_url
 
 
-async def _save_export_record(clip_id: str, blob_url: str, thumbnail_url: Optional[str]):
+async def _save_export_record(clip_id: str, blob_url: str, thumbnail_url: Optional[str],
+                              exported_duration: Optional[float] = None):
     try:
         async with get_session() as session:
-            await session.execute(text("""
-                UPDATE video_clips
-                SET exported_url = :exported_url,
-                    exported_at = NOW()
-                WHERE id = CAST(:clip_id AS uuid)
-            """), {"clip_id": clip_id, "exported_url": blob_url})
-            logger.info(f"[ai-clip] Saved export record for clip {clip_id}")
+            if exported_duration is not None:
+                await session.execute(text("""
+                    UPDATE video_clips
+                    SET exported_url = :exported_url,
+                        exported_at = NOW(),
+                        exported_duration = :exported_duration
+                    WHERE id = CAST(:clip_id AS uuid)
+                """), {"clip_id": clip_id, "exported_url": blob_url,
+                       "exported_duration": exported_duration})
+            else:
+                await session.execute(text("""
+                    UPDATE video_clips
+                    SET exported_url = :exported_url,
+                        exported_at = NOW()
+                    WHERE id = CAST(:clip_id AS uuid)
+                """), {"clip_id": clip_id, "exported_url": blob_url})
+            logger.info(f"[ai-clip] Saved export record for clip {clip_id} (duration={exported_duration})")
     except Exception as e:
         logger.warning(f"[ai-clip] Failed to save export record: {e}")
 
