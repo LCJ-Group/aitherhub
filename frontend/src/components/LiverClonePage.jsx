@@ -58,20 +58,20 @@ export default function LiverClonePage() {
   const [sourceFacePreview, setSourceFacePreview] = useState(null);
   const [inputRtmp, setInputRtmp] = useState("");
   const [outputRtmp, setOutputRtmp] = useState("");
-  const [voiceId, setVoiceId] = useState("");
-  const [mode, setMode] = useState("hybrid");
-  const [quality, setQuality] = useState("high");
-  const [language, setLanguage] = useState("en");
-  const [resolution, setResolution] = useState("720p");
-  const [fps, setFps] = useState(30);
+  const [voiceId, setVoiceId] = useState(() => localStorage.getItem("liverClone_voiceId") || "");
+  const [mode, setMode] = useState(() => localStorage.getItem("liverClone_mode") || "hybrid");
+  const [quality, setQuality] = useState(() => localStorage.getItem("liverClone_quality") || "high");
+  const [language, setLanguage] = useState(() => localStorage.getItem("liverClone_language") || "en");
+  const [resolution, setResolution] = useState(() => localStorage.getItem("liverClone_resolution") || "720p");
+  const [fps, setFps] = useState(() => Number(localStorage.getItem("liverClone_fps")) || 30);
 
   // Voice settings
-  const [voiceStability, setVoiceStability] = useState(0.5);
-  const [voiceSimilarity, setVoiceSimilarity] = useState(0.75);
+  const [voiceStability, setVoiceStability] = useState(() => Number(localStorage.getItem("liverClone_voiceStability")) || 0.5);
+  const [voiceSimilarity, setVoiceSimilarity] = useState(() => Number(localStorage.getItem("liverClone_voiceSimilarity")) || 0.75);
 
   // VAD settings
-  const [vadThreshold, setVadThreshold] = useState(0.3);
-  const [silenceTimeout, setSilenceTimeout] = useState(5.0);
+  const [vadThreshold, setVadThreshold] = useState(() => Number(localStorage.getItem("liverClone_vadThreshold")) || 0.3);
+  const [silenceTimeout, setSilenceTimeout] = useState(() => Number(localStorage.getItem("liverClone_silenceTimeout")) || 5.0);
 
   // Persona (Auto-pilot)
   const [personaName, setPersonaName] = useState("");
@@ -122,6 +122,38 @@ export default function LiverClonePage() {
     checkHealth();
     loadExistingSessions();
   }, []);
+
+  // ── Persist voice/config settings to localStorage ──
+  useEffect(() => {
+    localStorage.setItem("liverClone_voiceId", voiceId);
+  }, [voiceId]);
+  useEffect(() => {
+    localStorage.setItem("liverClone_mode", mode);
+  }, [mode]);
+  useEffect(() => {
+    localStorage.setItem("liverClone_quality", quality);
+  }, [quality]);
+  useEffect(() => {
+    localStorage.setItem("liverClone_language", language);
+  }, [language]);
+  useEffect(() => {
+    localStorage.setItem("liverClone_resolution", resolution);
+  }, [resolution]);
+  useEffect(() => {
+    localStorage.setItem("liverClone_fps", String(fps));
+  }, [fps]);
+  useEffect(() => {
+    localStorage.setItem("liverClone_voiceStability", String(voiceStability));
+  }, [voiceStability]);
+  useEffect(() => {
+    localStorage.setItem("liverClone_voiceSimilarity", String(voiceSimilarity));
+  }, [voiceSimilarity]);
+  useEffect(() => {
+    localStorage.setItem("liverClone_vadThreshold", String(vadThreshold));
+  }, [vadThreshold]);
+  useEffect(() => {
+    localStorage.setItem("liverClone_silenceTimeout", String(silenceTimeout));
+  }, [silenceTimeout]);
 
   // ── Poll session status ──
   useEffect(() => {
