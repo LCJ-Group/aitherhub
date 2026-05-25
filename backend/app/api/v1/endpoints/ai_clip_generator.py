@@ -3388,9 +3388,16 @@ async def _run_ai_clip_generation_inner(job_id: str, req: GenerateRequest):
         await _update_job(job_id, status="failed", error="条件に合うクリップが見つかりませんでした")
         return
 
+    # ── V9 Quality Filter: 品質スコアリング + GPT検証 ──
+    await _update_job(job_id, progress_pct=3, current_step="品質フィルタリング中...")
+    candidates = await _validate_and_filter_candidates(candidates, req, job_id)
+    if not candidates:
+        await _update_job(job_id, status="failed", error="品質基準を満たすクリップが見つかりませんでした")
+        return
+
     clips_total = min(len(candidates), req.max_clips)
     await _update_job(job_id, clips_total=clips_total, progress_pct=5,
-                current_step=f"{clips_total}件の候補クリップを選定完了")
+                current_step=f"{clips_total}件の高品質クリップを選定完了")
 
     results = []
     PARALLEL_BATCH = 2  # 2クリップずつ並列処理
@@ -3406,7 +3413,10 @@ async def _run_ai_clip_generation_inner(job_id: str, req: GenerateRequest):
         async def _safe_process(clip, idx):
             clip_id = str(clip["clip_id"])
             try:
-                return await _process_single_clip_v2(job_id, clip, req, idx, clips_total)
+                result = await _process_single_clip_v2(job_id, clip, req, idx, clips_total)
+                # V9: Post-generation quality check
+                result = await _post_generation_quality_check(result, clip, job_id)
+                return result
             except Exception as e:
                 logger.error(f"[ai-clip {job_id}] Clip {idx+1} failed: {e}", exc_info=True)
                 return {"clip_id": clip_id, "status": "failed", "error": str(e)[:200]}
@@ -3434,8 +3444,13 @@ async def _select_candidates(req: GenerateRequest) -> list:
         "vc.status = 'completed'",
         "vc.clip_url IS NOT NULL",
         "COALESCE(vc.is_unusable, FALSE) = FALSE",
+        # V9: Exclude clips with empty/too-short transcript (likely unusable)
+        "COALESCE(LENGTH(vc.transcript_text), 0) >= 10",
+        # V9: Minimum duration filter (too short clips are rarely useful)
+        "COALESCE(vc.duration_sec, 0) >= 8",
     ]
-    params: dict = {"limit": req.max_clips * 3}
+    # V9: Fetch more candidates (5x) to allow quality filtering to work effectively
+    params: dict = {"limit": req.max_clips * 5}
 
     if req.brand_id:
         conditions.append("""
@@ -3477,8 +3492,9 @@ async def _select_candidates(req: GenerateRequest) -> list:
                    vc.captions, vc.subtitle_style, vc.liver_name
             FROM video_clips vc
             WHERE {where_clause}
-            ORDER BY COALESCE(vc.importance_score, 0) DESC,
-                     COALESCE(vc.cta_score, 0) DESC,
+            ORDER BY COALESCE(vc.cta_score, 0) DESC,
+                     COALESCE(vc.importance_score, 0) DESC,
+                     COALESCE(LENGTH(vc.transcript_text), 0) DESC,
                      vc.created_at DESC
             LIMIT :limit
         """), params)
@@ -3497,6 +3513,301 @@ async def _select_candidates(req: GenerateRequest) -> list:
         }
         for r in rows
     ]
+
+
+# ─── V9 Quality Scoring & Content Validation ─────────────────────────────────
+
+def _compute_clip_quality_score(clip: dict) -> float:
+    """
+    V9品質スコアリング: 各クリップの「動画として使える品質」を0-100でスコアリング。
+    高スコア = 商品紹介として有効、低スコア = 雑談/無関係/無音。
+    """
+    score = 0.0
+    transcript = clip.get("transcript_text") or ""
+    product_name = clip.get("product_name") or ""
+    cta_score = float(clip.get("cta_score") or 0)
+    importance = float(clip.get("importance_score") or 0)
+    duration = float(clip.get("duration_sec") or 0)
+    captions = clip.get("captions")
+    if isinstance(captions, str):
+        try:
+            captions = json.loads(captions)
+        except Exception:
+            captions = []
+    captions_count = len(captions) if captions else 0
+
+    # ── 1. Transcript quality (0-30 points) ──
+    transcript_len = len(transcript.strip())
+    if transcript_len == 0:
+        score += 0  # 無音/無字幕は0点
+    elif transcript_len < 20:
+        score += 5  # 極短すぎる
+    elif transcript_len < 50:
+        score += 12
+    elif transcript_len < 150:
+        score += 20
+    else:
+        score += 30  # 十分な発話量
+
+    # ── 2. CTA score contribution (0-25 points) ──
+    score += (cta_score / 5.0) * 25
+
+    # ── 3. Importance score contribution (0-15 points) ──
+    if importance > 0:
+        score += min(importance / 15.0, 1.0) * 15
+
+    # ── 4. Product relevance (0-15 points) ──
+    if product_name:
+        score += 10
+        # 商品名がtranscriptに含まれていればボーナス
+        if product_name.lower() in transcript.lower():
+            score += 5
+    else:
+        # 商品名がなくても、商品関連キーワードがあればポイント
+        product_keywords = [
+            "商品", "セット", "限定", "在庫", "購入", "お得", "割引", "送料",
+            "プレゼント", "キャンペーン", "今だけ", "残り", "ラスト",
+            "産品", "限量", "優惠", "折扣", "免運", "搶購", "最後",
+            "product", "limited", "discount", "sale", "buy",
+            "使い方", "効果", "成分", "おすすめ", "人気", "ランキング",
+            "塗る", "つける", "洗う", "乾かす", "仕上がり",
+        ]
+        keyword_hits = sum(1 for kw in product_keywords if kw in transcript)
+        score += min(keyword_hits * 3, 12)
+
+    # ── 5. Duration appropriateness (0-10 points) ──
+    if 15 <= duration <= 90:
+        score += 10  # 理想的な長さ
+    elif 10 <= duration < 15 or 90 < duration <= 180:
+        score += 6
+    elif duration < 10:
+        score += 2  # 短すぎ
+    else:
+        score += 4  # 長すぎ
+
+    # ── 6. Captions density (0-5 points) ──
+    if captions_count > 0 and duration > 0:
+        captions_per_sec = captions_count / duration
+        if captions_per_sec >= 0.3:  # 10秒に3字幕以上 = 活発
+            score += 5
+        elif captions_per_sec >= 0.15:
+            score += 3
+        else:
+            score += 1
+
+    # ── Penalty: Repetitive content ──
+    if transcript_len > 30:
+        words = transcript.split()
+        if len(words) > 5:
+            unique_ratio = len(set(words)) / len(words)
+            if unique_ratio < 0.3:  # 70%以上が重複 = 繰り返し
+                score -= 15
+            elif unique_ratio < 0.5:
+                score -= 8
+
+    # ── Penalty: Filler/chat content ──
+    filler_patterns = [
+        "こんにちは", "おはよう", "ありがとう", "お疲れ", "バイバイ",
+        "聞こえますか", "見えてますか", "コメント読み", "ちょっと待って",
+        "大家好", "謝謝", "掰掰", "等一下", "聽得到嗎",
+        "hello", "thank you", "bye",
+    ]
+    filler_count = sum(1 for p in filler_patterns if p in transcript.lower())
+    if filler_count >= 3:
+        score -= 10  # 挨拶/雑談が多い
+    elif filler_count >= 2:
+        score -= 5
+
+    return max(0.0, min(100.0, score))
+
+
+async def _validate_and_filter_candidates(
+    candidates: list, req: GenerateRequest, job_id: str
+) -> list:
+    """
+    V9品質フィルター: 候補クリップを品質スコアでフィルタリング＋GPT検証。
+    低品質クリップを除外し、高品質なもののみ返す。
+    """
+    if not candidates:
+        return []
+
+    MIN_QUALITY_SCORE = 35  # この閾値以下は自動除外
+    GPT_VALIDATE_THRESHOLD = 55  # この閾値以下はGPT検証を実施
+
+    scored_candidates = []
+    for clip in candidates:
+        quality_score = _compute_clip_quality_score(clip)
+        clip["_quality_score"] = quality_score
+        if quality_score >= MIN_QUALITY_SCORE:
+            scored_candidates.append(clip)
+        else:
+            logger.info(
+                f"[ai-clip {job_id}] Rejected clip {clip['clip_id']} "
+                f"(quality_score={quality_score:.1f} < {MIN_QUALITY_SCORE})"
+            )
+
+    if not scored_candidates:
+        logger.warning(f"[ai-clip {job_id}] All candidates rejected by quality filter")
+        return []
+
+    # GPT検証: 中間スコアのクリップに対してGPTで内容を検証
+    borderline = [c for c in scored_candidates if c["_quality_score"] < GPT_VALIDATE_THRESHOLD]
+    if borderline and len(borderline) <= 5:
+        validated = await _gpt_validate_clips(borderline, job_id)
+        # GPTが「無効」と判断したクリップを除外
+        rejected_ids = {v["clip_id"] for v in validated if not v["is_valid"]}
+        if rejected_ids:
+            scored_candidates = [
+                c for c in scored_candidates
+                if str(c["clip_id"]) not in rejected_ids
+            ]
+            logger.info(
+                f"[ai-clip {job_id}] GPT rejected {len(rejected_ids)} borderline clips"
+            )
+
+    # 品質スコア順にソート（高い順）
+    scored_candidates.sort(key=lambda c: c["_quality_score"], reverse=True)
+
+    top_scores = [f"{c.get('_quality_score', 0):.0f}" for c in scored_candidates[:5]]
+    logger.info(
+        f"[ai-clip {job_id}] Quality filter: {len(candidates)} -> {len(scored_candidates)} candidates "
+        f"(top scores: {top_scores})"
+    )
+    return scored_candidates
+
+
+async def _gpt_validate_clips(clips: list, job_id: str) -> list:
+    """
+    GPTを使って、クリップの内容が「商品紹介・セールス動画」として有効かどうかを判定。
+    """
+    results = []
+    try:
+        import openai
+        azure_key = os.getenv("AZURE_OPENAI_KEY", "")
+        azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
+        azure_model = os.getenv("GPT5_MODEL") or os.getenv("GPT5_DEPLOYMENT") or "gpt-4.1-mini"
+        if not azure_key or not azure_endpoint:
+            return [{"clip_id": str(c["clip_id"]), "is_valid": True} for c in clips]
+
+        from urllib.parse import urlparse as _urlparse
+        _parsed = _urlparse(azure_endpoint)
+        clean_endpoint = f"{_parsed.scheme}://{_parsed.netloc}/"
+        client = openai.AzureOpenAI(
+            api_key=azure_key,
+            azure_endpoint=clean_endpoint,
+            api_version=os.getenv("GPT5_API_VERSION", "2025-04-01-preview"),
+        )
+
+        # バッチで検証（1回のAPI呼び出しで複数クリップを判定）
+        clips_info = []
+        for i, clip in enumerate(clips):
+            transcript = (clip.get("transcript_text") or "")[:200]
+            product = clip.get("product_name") or "不明"
+            clips_info.append(
+                f"クリップ{i+1}: 商品={product}, 内容=「{transcript}」"
+            )
+
+        prompt = f"""以下のライブ配信クリップが「商品紹介・セールス動画」として有効かどうかを判定してください。
+
+【有効の基準】
+- 主播（配信者）が商品について具体的に説明している
+- 商品のデモンストレーション・使い方を見せている
+- 購入を促すCTA（行動喚起）がある
+- 商品の特徴・効果・価格について言及している
+
+【無効の基準】
+- 単なる挨拶・雑談・コメント読み上げのみ
+- 商品と無関係な話題
+- 音声が不明瞭で内容が判別できない
+- 同じフレーズの無意味な繰り返し
+- 技術トラブル・配信準備中
+
+{chr(10).join(clips_info)}
+
+各クリップについて、JSON配列で回答してください。
+形式: [{{"clip": 1, "valid": true/false, "reason": "理由"}}]
+回答（JSONのみ）:"""
+
+        response = client.responses.create(
+            model=azure_model,
+            input=[{"role": "user", "content": prompt}],
+            max_output_tokens=500,
+        )
+
+        result_text = ""
+        if hasattr(response, "output_text") and response.output_text:
+            result_text = response.output_text.strip()
+        elif hasattr(response, "output") and response.output:
+            for item in response.output:
+                if hasattr(item, "content"):
+                    for part in item.content:
+                        if hasattr(part, "text"):
+                            result_text += part.text
+            result_text = result_text.strip()
+
+        # JSONパース
+        json_match = re.search(r'\[.*\]', result_text, re.DOTALL)
+        if json_match:
+            validations = json.loads(json_match.group())
+            for i, clip in enumerate(clips):
+                is_valid = True
+                for v in validations:
+                    if v.get("clip") == i + 1:
+                        is_valid = v.get("valid", True)
+                        if not is_valid:
+                            logger.info(
+                                f"[ai-clip {job_id}] GPT rejected clip {clip['clip_id']}: "
+                                f"{v.get('reason', 'unknown')}"
+                            )
+                        break
+                results.append({"clip_id": str(clip["clip_id"]), "is_valid": is_valid})
+        else:
+            results = [{"clip_id": str(c["clip_id"]), "is_valid": True} for c in clips]
+
+    except Exception as e:
+        logger.warning(f"[ai-clip {job_id}] GPT validation failed: {e}")
+        results = [{"clip_id": str(c["clip_id"]), "is_valid": True} for c in clips]
+
+    return results
+
+
+async def _post_generation_quality_check(
+    result: dict, clip: dict, job_id: str
+) -> dict:
+    """
+    V9生成後品質チェック: 生成されたクリップの最終品質を検証。
+    - 出力動画の尺が短すぎないか
+    - 字幕数が適切か
+    - フックテキストが生成されているか
+    """
+    if result.get("status") != "done":
+        return result
+
+    quality_flags = []
+    duration = result.get("duration_sec", 0)
+    captions_count = result.get("captions_count", 0)
+    hook_text = result.get("hook_text", "")
+
+    # 尺チェック
+    if duration < 5:
+        quality_flags.append("too_short")
+    # 字幕チェック
+    if captions_count == 0 and duration > 10:
+        quality_flags.append("no_captions")
+    # フックチェック
+    if not hook_text:
+        quality_flags.append("no_hook")
+
+    if quality_flags:
+        result["quality_warnings"] = quality_flags
+        logger.warning(
+            f"[ai-clip {job_id}] Quality warnings for clip {result.get('clip_id')}: {quality_flags}"
+        )
+
+    # 品質スコアを結果に含める
+    result["quality_score"] = clip.get("_quality_score", 0)
+
+    return result
 
 
 async def _process_single_clip_v2(job_id: str, clip: dict, req: GenerateRequest,
