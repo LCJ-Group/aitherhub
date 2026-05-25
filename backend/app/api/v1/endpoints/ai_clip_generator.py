@@ -2677,6 +2677,25 @@ async def list_jobs(
         ]
     merged.sort(key=lambda j: j.get("created_at", ""), reverse=True)
     merged = merged[:limit]
+    # Refresh SAS tokens for download_url in results (may be expired)
+    import os as _os
+    from app.services.storage_service import generate_read_sas_from_url
+    _cdn_host = _os.getenv("CDN_HOST", "https://cdn.aitherhub.com")
+    _blob_host_prefix = f"https://{_os.getenv('AZURE_STORAGE_ACCOUNT_NAME', 'aitherhub')}.blob.core.windows.net"
+    for job in merged:
+        for r in (job.get("results") or []):
+            blob_url = r.get("blob_url", "")
+            # Convert CDN URL to blob URL for SAS generation
+            actual_blob_url = blob_url
+            if blob_url and _cdn_host and blob_url.startswith(_cdn_host):
+                actual_blob_url = blob_url.replace(_cdn_host, _blob_host_prefix)
+            if actual_blob_url and "blob.core.windows.net" in actual_blob_url:
+                try:
+                    fresh_url = generate_read_sas_from_url(actual_blob_url, expires_hours=2)
+                    if fresh_url:
+                        r["download_url"] = fresh_url
+                except Exception:
+                    pass
     return {"jobs": merged, "total": len(merged)}
 
 

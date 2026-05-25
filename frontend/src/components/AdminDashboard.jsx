@@ -1876,6 +1876,11 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
                 ✂️ {Math.floor(fb.clip_duration_sec / 60)}:{String(Math.floor(fb.clip_duration_sec % 60)).padStart(2, '0')}
               </span>
             )}
+            {fb.ai_clip_count > 0 && (
+              <span className="text-[10px] font-medium px-2 py-0.5 rounded-full text-indigo-700 bg-indigo-100 border border-indigo-300">
+                🎬 AI生成済 ({fb.ai_clip_count})
+              </span>
+            )}
             {fb.download_count > 0 && (
               <span className="text-xs font-semibold text-blue-600 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-full">
                 ⬇️ {fb.download_count}回
@@ -2340,9 +2345,9 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
                                   <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700">{modeLabel}</span>
                                   <span className="text-[9px] text-gray-500">{createdAt}</span>
                                 </div>
-                                {job.status === 'done' && result?.blob_url && (
+                                {job.status === 'done' && (result?.download_url || result?.blob_url) && (
                                   <a
-                                    href={result.blob_url}
+                                    href={result.download_url || result.blob_url}
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     className="text-[9px] text-indigo-600 hover:text-indigo-800 underline"
@@ -2351,9 +2356,9 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
                                   </a>
                                 )}
                               </div>
-                              {job.status === 'done' && result?.blob_url && (
+                              {job.status === 'done' && (result?.download_url || result?.blob_url) && (
                                 <video
-                                  src={result.blob_url}
+                                  src={result.download_url || result.blob_url}
                                   controls
                                   className="w-full max-h-[120px] rounded mt-1.5"
                                   preload="metadata"

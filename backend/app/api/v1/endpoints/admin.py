@@ -344,7 +344,8 @@ async def get_all_feedbacks(
                 vc.id as clip_id,
                 vc.generation_source as generation_source,
                 vc.duration_sec as clip_duration_sec,
-                v.created_at as video_uploaded_at
+                v.created_at as video_uploaded_at,
+                COALESCE(acj.ai_clip_count, 0) as ai_clip_count
             FROM video_phases vp
             JOIN videos v ON CAST(vp.video_id AS UUID) = v.id
             LEFT JOIN users u ON v.user_id = u.id
@@ -364,6 +365,15 @@ async def get_all_feedbacks(
                 ORDER BY created_at DESC
                 LIMIT 1
             ) vc ON true
+            LEFT JOIN LATERAL (
+                SELECT COUNT(*) as ai_clip_count
+                FROM ai_clip_jobs
+                WHERE status = 'done'
+                    AND (
+                        config->>'clip_id' = CAST(vc.id AS TEXT)
+                        OR source_clip->>  'clip_id' = CAST(vc.id AS TEXT)
+                    )
+            ) acj ON true
             {clip_join_sql}
             {where_clause}
             ORDER BY {_feedback_order_clause(sort_by, sort_order)}
@@ -476,6 +486,7 @@ async def get_all_feedbacks(
                 "rated_by_reviewer_id": r.rated_by_reviewer_id,
                 "reviewer_name": r.reviewer_name,
                 "video_uploaded_at": str(r.video_uploaded_at) if r.video_uploaded_at else None,
+                "ai_clip_count": r.ai_clip_count if hasattr(r, 'ai_clip_count') else 0,
             })
 
         total_pages = max(1, -(-total_filtered // per_page))  # ceil division
