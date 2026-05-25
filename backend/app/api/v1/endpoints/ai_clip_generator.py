@@ -5144,6 +5144,16 @@ async def regenerate_clip_from_source(
 ):
     """V10: clip-dbの既存クリップから元動画を参照し、最新AIで再生成する"""
     verify_admin(x_admin_key)
+    try:
+        return await _regenerate_clip_from_source_impl(clip_id, req, background_tasks)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[v10-regen] Endpoint error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"V10 regeneration error: {type(e).__name__}: {str(e)[:300]}")
+
+async def _regenerate_clip_from_source_impl(clip_id: str, req: RegenFromSourceRequest, background_tasks: BackgroundTasks):
+    """V10: 実装本体"""
     # 1. Get clip info from video_clips
     async with engine.connect() as conn:
         result = await conn.execute(text("""
