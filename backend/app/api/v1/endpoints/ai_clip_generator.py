@@ -5145,8 +5145,8 @@ async def regenerate_clip_from_source(
     """V10: clip-dbの既存クリップから元動画を参照し、最新AIで再生成する"""
     verify_admin(x_admin_key)
     # 1. Get clip info from video_clips
-    async with get_session() as session:
-        result = await session.execute(text("""
+    async with engine.connect() as conn:
+        result = await conn.execute(text("""
             SELECT vc.id, vc.video_id, vc.phase_index, vc.time_start, vc.time_end,
                    vc.duration_sec, vc.clip_url, vc.clip_url_hd, vc.transcript_text,
                    vc.product_name, vc.cta_score, vc.importance_score, vc.captions,
@@ -5159,31 +5159,33 @@ async def regenerate_clip_from_source(
             WHERE vc.id = CAST(:clip_id AS uuid)
         """), {"clip_id": clip_id})
         clip_row = result.fetchone()
-    if not clip_row:
+        # Convert SQLAlchemy Row to dict INSIDE session (Row can't be accessed after session close)
+        clip_data = None
+        if clip_row:
+            clip_data = {
+                "id": str(clip_row.id),
+                "video_id": str(clip_row.video_id) if clip_row.video_id else None,
+                "phase_index": clip_row.phase_index,
+                "time_start": clip_row.time_start,
+                "time_end": clip_row.time_end,
+                "duration_sec": clip_row.duration_sec,
+                "clip_url": clip_row.clip_url,
+                "clip_url_hd": clip_row.clip_url_hd,
+                "transcript_text": clip_row.transcript_text,
+                "product_name": clip_row.product_name,
+                "cta_score": clip_row.cta_score,
+                "importance_score": clip_row.importance_score,
+                "captions": clip_row.captions,
+                "subtitle_style": clip_row.subtitle_style,
+                "liver_name": clip_row.liver_name,
+                "tags": clip_row.tags,
+                "compressed_blob_url": clip_row.compressed_blob_url,
+                "user_id": str(clip_row.user_id) if clip_row.user_id else None,
+                "original_filename": clip_row.original_filename,
+                "user_email": clip_row.user_email,
+            }
+    if not clip_data:
         raise HTTPException(status_code=404, detail="クリップが見つかりません")
-    # Convert SQLAlchemy Row to dict (Row can't be accessed after session close)
-    clip_data = {
-        "id": str(clip_row.id),
-        "video_id": str(clip_row.video_id) if clip_row.video_id else None,
-        "phase_index": clip_row.phase_index,
-        "time_start": clip_row.time_start,
-        "time_end": clip_row.time_end,
-        "duration_sec": clip_row.duration_sec,
-        "clip_url": clip_row.clip_url,
-        "clip_url_hd": clip_row.clip_url_hd,
-        "transcript_text": clip_row.transcript_text,
-        "product_name": clip_row.product_name,
-        "cta_score": clip_row.cta_score,
-        "importance_score": clip_row.importance_score,
-        "captions": clip_row.captions,
-        "subtitle_style": clip_row.subtitle_style,
-        "liver_name": clip_row.liver_name,
-        "tags": clip_row.tags,
-        "compressed_blob_url": clip_row.compressed_blob_url,
-        "user_id": str(clip_row.user_id) if clip_row.user_id else None,
-        "original_filename": clip_row.original_filename,
-        "user_email": clip_row.user_email,
-    }
     # 2. Compute original quality score for comparison
     original_clip_data = {
         "transcript_text": clip_data["transcript_text"],
