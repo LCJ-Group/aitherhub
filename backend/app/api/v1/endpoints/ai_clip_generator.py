@@ -5697,6 +5697,30 @@ async def _run_regeneration_from_source_inner(job_id: str, clip_row, req: RegenF
             "is_full_video": is_full_video,
         },
     }
+    # Update video_clips with V10 regeneration mark and new exported_url
+    from datetime import date as _date
+    v10_version_tag = f"v10.{_date.today().strftime('%Y%m%d')}"
+    try:
+        async with get_session() as session:
+            await session.execute(text("""
+                UPDATE video_clips
+                SET ml_model_version = :version_tag,
+                    exported_url = :exported_url,
+                    exported_at = NOW(),
+                    exported_duration = :duration,
+                    quality_score = :quality_score
+                WHERE id = CAST(:clip_id AS uuid)
+            """), {
+                "clip_id": clip_id,
+                "version_tag": v10_version_tag,
+                "exported_url": blob_url,
+                "duration": actual_duration,
+                "quality_score": new_quality_score,
+            })
+            await session.commit()
+        logger.info(f"[v10-regen {job_id}] Updated clip {clip_id} with version={v10_version_tag}")
+    except Exception as e:
+        logger.warning(f"[v10-regen {job_id}] Failed to update clip version: {e}")
     # Save final result
     await _update_job(job_id, status="done", progress_pct=100, current_step="V10再生成完了")
     job_data = _load_job(job_id)
