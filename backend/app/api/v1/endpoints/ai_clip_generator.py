@@ -5161,14 +5161,37 @@ async def regenerate_clip_from_source(
         clip_row = result.fetchone()
     if not clip_row:
         raise HTTPException(status_code=404, detail="クリップが見つかりません")
-    # 2. Compute original quality score for comparison
-    original_clip_data = {
+    # Convert SQLAlchemy Row to dict (Row can't be accessed after session close)
+    clip_data = {
+        "id": str(clip_row.id),
+        "video_id": str(clip_row.video_id) if clip_row.video_id else None,
+        "phase_index": clip_row.phase_index,
+        "time_start": clip_row.time_start,
+        "time_end": clip_row.time_end,
+        "duration_sec": clip_row.duration_sec,
+        "clip_url": clip_row.clip_url,
+        "clip_url_hd": clip_row.clip_url_hd,
         "transcript_text": clip_row.transcript_text,
         "product_name": clip_row.product_name,
         "cta_score": clip_row.cta_score,
         "importance_score": clip_row.importance_score,
-        "duration_sec": clip_row.duration_sec,
         "captions": clip_row.captions,
+        "subtitle_style": clip_row.subtitle_style,
+        "liver_name": clip_row.liver_name,
+        "tags": clip_row.tags,
+        "compressed_blob_url": clip_row.compressed_blob_url,
+        "user_id": str(clip_row.user_id) if clip_row.user_id else None,
+        "original_filename": clip_row.original_filename,
+        "user_email": clip_row.user_email,
+    }
+    # 2. Compute original quality score for comparison
+    original_clip_data = {
+        "transcript_text": clip_data["transcript_text"],
+        "product_name": clip_data["product_name"],
+        "cta_score": clip_data["cta_score"],
+        "importance_score": clip_data["importance_score"],
+        "duration_sec": clip_data["duration_sec"],
+        "captions": clip_data["captions"],
     }
     original_quality_score = _compute_clip_quality_score(original_clip_data)
     # 3. Create regeneration job
@@ -5182,9 +5205,9 @@ async def regenerate_clip_from_source(
         "config": {
             "type": "regenerate_from_source",
             "source_clip_id": clip_id,
-            "video_id": str(clip_row.video_id) if clip_row.video_id else None,
-            "original_time_start": clip_row.time_start,
-            "original_time_end": clip_row.time_end,
+            "video_id": clip_data["video_id"],
+            "original_time_start": clip_data["time_start"],
+            "original_time_end": clip_data["time_end"],
             "expand_before_sec": req.expand_before_sec,
             "expand_after_sec": req.expand_after_sec,
             "target_duration": req.target_duration,
@@ -5193,10 +5216,10 @@ async def regenerate_clip_from_source(
         },
         "source_clip": {
             "clip_id": clip_id,
-            "video_id": str(clip_row.video_id) if clip_row.video_id else None,
-            "product_name": clip_row.product_name or "",
-            "liver_name": clip_row.liver_name or "",
-            "original_duration": clip_row.duration_sec,
+            "video_id": clip_data["video_id"],
+            "product_name": clip_data["product_name"] or "",
+            "liver_name": clip_data["liver_name"] or "",
+            "original_duration": clip_data["duration_sec"],
             "original_quality_score": original_quality_score,
         },
         "results": [],
@@ -5205,7 +5228,7 @@ async def regenerate_clip_from_source(
     # 4. Start background regeneration
     background_tasks.add_task(
         _run_regeneration_from_source,
-        regen_job_id, clip_row, req,
+        regen_job_id, clip_data, req,
     )
     return {
         "job_id": regen_job_id,
@@ -5343,8 +5366,8 @@ async def _run_regeneration_from_source(job_id: str, clip_row, req: RegenFromSou
 async def _run_regeneration_from_source_inner(job_id: str, clip_row, req: RegenFromSourceRequest):
     """V10: 再生成の実際の処理"""
     import httpx
-    clip_id = str(clip_row.id)
-    video_id = str(clip_row.video_id) if clip_row.video_id else None
+    clip_id = str(clip_row["id"] if isinstance(clip_row, dict) else clip_row.id)
+    video_id = str(clip_row["video_id"] if isinstance(clip_row, dict) else clip_row.video_id) if (clip_row.get("video_id") if isinstance(clip_row, dict) else clip_row.video_id) else None
     logger.info(f"[v10-regen {job_id}] Starting regeneration for clip {clip_id} from video {video_id}")
     await _update_job(job_id, progress_pct=5, current_step="元動画URL取得中...")
     # ── Step 1: Get the FULL original video URL ──
@@ -5355,8 +5378,8 @@ async def _run_regeneration_from_source_inner(job_id: str, clip_row, req: RegenF
             from app.services.storage_service import (
                 generate_read_sas_from_url, ACCOUNT_NAME, CONTAINER_NAME,
             )
-            compressed_blob = getattr(clip_row, 'compressed_blob_url', None)
-            user_email = getattr(clip_row, 'user_email', None)
+            compressed_blob = clip_row.get('compressed_blob_url') if isinstance(clip_row, dict) else getattr(clip_row, 'compressed_blob_url', None)
+            user_email = clip_row.get('user_email') if isinstance(clip_row, dict) else getattr(clip_row, 'user_email', None)
             if compressed_blob:
                 # Build full URL from compressed_blob_url
                 import re as _re
@@ -5390,7 +5413,7 @@ async def _run_regeneration_from_source_inner(job_id: str, clip_row, req: RegenF
             logger.warning(f"[v10-regen {job_id}] Failed to get full video URL: {e}")
     # Fallback: Use the clip_url directly (already-cut segment)
     if not video_url:
-        raw_url = getattr(clip_row, 'clip_url_hd', None) or clip_row.clip_url
+        raw_url = (clip_row.get('clip_url_hd') if isinstance(clip_row, dict) else getattr(clip_row, 'clip_url_hd', None)) or (clip_row["clip_url"] if isinstance(clip_row, dict) else clip_row.clip_url)
         if raw_url:
             try:
                 from app.services.storage_service import generate_read_sas_from_url
@@ -5449,8 +5472,8 @@ async def _run_regeneration_from_source_inner(job_id: str, clip_row, req: RegenF
             if fmt_dur:
                 full_video_duration = float(fmt_dur)
     # ── Step 4: Calculate expanded time range ──
-    original_start = float(clip_row.time_start or 0)
-    original_end = float(clip_row.time_end or original_start + 30)
+    original_start = float((clip_row["time_start"] if isinstance(clip_row, dict) else clip_row.time_start) or 0)
+    original_end = float((clip_row["time_end"] if isinstance(clip_row, dict) else clip_row.time_end) or original_start + 30)
     # Determine if we have the full video or just the clip segment
     is_full_video = full_video_duration > (original_end - original_start) * 1.5
     if is_full_video:
@@ -5509,7 +5532,7 @@ async def _run_regeneration_from_source_inner(job_id: str, clip_row, req: RegenF
     except Exception as e:
         logger.warning(f"[v10-regen {job_id}] Whisper failed, using original captions: {e}")
         # Fallback: use original captions if available
-        orig_captions = clip_row.captions
+        orig_captions = clip_row["captions"] if isinstance(clip_row, dict) else clip_row.captions
         if orig_captions:
             if isinstance(orig_captions, str):
                 try:
@@ -5524,8 +5547,8 @@ async def _run_regeneration_from_source_inner(job_id: str, clip_row, req: RegenF
     # Build a clip dict compatible with _generate_hook / _generate_cta_text
     clip_dict = {
         "clip_id": clip_id,
-        "product_name": clip_row.product_name or "",
-        "liver_name": clip_row.liver_name or "",
+        "product_name": (clip_row["product_name"] if isinstance(clip_row, dict) else clip_row.product_name) or "",
+        "liver_name": (clip_row["liver_name"] if isinstance(clip_row, dict) else clip_row.liver_name) or "",
         "transcript_text": transcript_text,
     }
     # Build a GenerateRequest for hook generation
@@ -5571,7 +5594,7 @@ async def _run_regeneration_from_source_inner(job_id: str, clip_row, req: RegenF
         tmp_dir=tmp_dir,
         position_y=req.position_y,
         clip_duration=actual_duration,
-        product_name=clip_row.product_name or "",
+        product_name=(clip_row["product_name"] if isinstance(clip_row, dict) else clip_row.product_name) or "",
     )
     logger.info(f"[v10-regen {job_id}] Generated {len(overlay_images)} overlay images")
     # ── Step 9: Build ffmpeg command and encode ──
@@ -5630,19 +5653,19 @@ async def _run_regeneration_from_source_inner(job_id: str, clip_row, req: RegenF
     # ── Step 11: Compute new quality score ──
     new_quality_score = _compute_clip_quality_score({
         "transcript_text": transcript_text,
-        "product_name": clip_row.product_name or "",
-        "cta_score": clip_row.cta_score or 0,
-        "importance_score": clip_row.importance_score or 0,
+        "product_name": (clip_row["product_name"] if isinstance(clip_row, dict) else clip_row.product_name) or "",
+        "cta_score": (clip_row["cta_score"] if isinstance(clip_row, dict) else clip_row.cta_score) or 0,
+        "importance_score": (clip_row["importance_score"] if isinstance(clip_row, dict) else clip_row.importance_score) or 0,
         "duration_sec": actual_duration,
         "captions": captions,
     })
     original_quality_score = _compute_clip_quality_score({
-        "transcript_text": clip_row.transcript_text,
-        "product_name": clip_row.product_name,
-        "cta_score": clip_row.cta_score,
-        "importance_score": clip_row.importance_score,
-        "duration_sec": clip_row.duration_sec,
-        "captions": clip_row.captions,
+        "transcript_text": clip_row["transcript_text"] if isinstance(clip_row, dict) else clip_row.transcript_text,
+        "product_name": clip_row["product_name"] if isinstance(clip_row, dict) else clip_row.product_name,
+        "cta_score": clip_row["cta_score"] if isinstance(clip_row, dict) else clip_row.cta_score,
+        "importance_score": clip_row["importance_score"] if isinstance(clip_row, dict) else clip_row.importance_score,
+        "duration_sec": clip_row["duration_sec"] if isinstance(clip_row, dict) else clip_row.duration_sec,
+        "captions": clip_row["captions"] if isinstance(clip_row, dict) else clip_row.captions,
     })
     regen_result = {
         "clip_id": clip_id,
@@ -5712,6 +5735,29 @@ async def _run_batch_regeneration(batch_job_id: str, req: BatchRegenRequest):
                 if not clip_row:
                     results.append({"clip_id": clip_id, "status": "error", "error": "クリップが見つかりません"})
                     continue
+                # Convert Row to dict for safe access after session close
+                clip_row = {
+                    "id": str(clip_row.id),
+                    "video_id": str(clip_row.video_id) if clip_row.video_id else None,
+                    "phase_index": clip_row.phase_index,
+                    "time_start": clip_row.time_start,
+                    "time_end": clip_row.time_end,
+                    "duration_sec": clip_row.duration_sec,
+                    "clip_url": clip_row.clip_url,
+                    "clip_url_hd": clip_row.clip_url_hd,
+                    "transcript_text": clip_row.transcript_text,
+                    "product_name": clip_row.product_name,
+                    "cta_score": clip_row.cta_score,
+                    "importance_score": clip_row.importance_score,
+                    "captions": clip_row.captions,
+                    "subtitle_style": clip_row.subtitle_style,
+                    "liver_name": clip_row.liver_name,
+                    "tags": clip_row.tags,
+                    "compressed_blob_url": clip_row.compressed_blob_url,
+                    "user_id": str(clip_row.user_id) if clip_row.user_id else None,
+                    "original_filename": clip_row.original_filename,
+                    "user_email": clip_row.user_email,
+                }
                 # Create individual regen request
                 single_req = RegenFromSourceRequest(
                     subtitle_style=req.subtitle_style,
