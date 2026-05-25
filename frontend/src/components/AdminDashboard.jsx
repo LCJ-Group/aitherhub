@@ -2315,13 +2315,14 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
                                 setRegisteringToMaster(true);
                                 try {
                                   const urls = productImages.filter(img => img.url).map(img => img.url);
-                                  const res = await fetch('/api/v1/ai-clip/product-master', {
+                                  const apiBase = import.meta.env.VITE_API_BASE_URL;
+                                  const res = await fetch(`${apiBase}/api/v1/ai-clip/product-master`, {
                                     method: 'POST',
                                     headers: { 'Content-Type': 'application/json', 'X-Admin-Key': localStorage.getItem('adminKey') || 'aither:hub' },
                                     body: JSON.stringify({
                                       product_name: name,
                                       brand_name: imageAnalysis?.brand_name || '',
-                                      image_urls: urls,
+                                      product_image_urls: urls,
                                       keywords: imageAnalysis?.product_name ? [imageAnalysis.product_name] : []
                                     })
                                   });
