@@ -4844,16 +4844,18 @@ async def create_product_master(
         keywords = [k.strip() for k in keywords.split(",") if k.strip()]
     import uuid as _uuid
     new_id = str(_uuid.uuid4())
+    # Convert keywords list to PostgreSQL array literal for TEXT[] column
+    keywords_pg = "{" + ",".join(f'"{k}"' for k in keywords) + "}" if keywords else "{}"
     async with get_session() as session:
         await session.execute(text("""
             INSERT INTO product_master (id, product_name, brand_name, product_image_urls, keywords)
-            VALUES (CAST(:id AS uuid), :product_name, :brand_name, :product_image_urls::jsonb, :keywords)
+            VALUES (CAST(:id AS uuid), :product_name, :brand_name, :product_image_urls::jsonb, CAST(:keywords AS TEXT[]))
         """), {
             "id": new_id,
             "product_name": product_name,
             "brand_name": brand_name,
             "product_image_urls": json.dumps(product_image_urls),
-            "keywords": keywords,
+            "keywords": keywords_pg,
         })
         await session.commit()
     logger.info(f"[product-master] Created: {product_name} with {len(product_image_urls)} images")
@@ -4889,8 +4891,8 @@ async def update_product_master(
         kws = body["keywords"]
         if isinstance(kws, str):
             kws = [k.strip() for k in kws.split(",") if k.strip()]
-        updates.append("keywords = :keywords")
-        params["keywords"] = kws
+        updates.append("keywords = CAST(:keywords AS TEXT[])")
+        params["keywords"] = "{" + ",".join('"' + k + '"' for k in kws) + "}" if kws else "{}"
     if "is_active" in body:
         updates.append("is_active = :is_active")
         params["is_active"] = bool(body["is_active"])
