@@ -4850,7 +4850,7 @@ async def create_product_master(
         async with get_session() as session:
             await session.execute(text("""
                 INSERT INTO product_master (id, product_name, brand_name, product_image_urls, keywords)
-                VALUES (CAST(:id AS uuid), :product_name, :brand_name, :product_image_urls::jsonb, CAST(:keywords AS TEXT[]))
+                VALUES (CAST(:id AS uuid), :product_name, :brand_name, CAST(:product_image_urls AS jsonb), CAST(:keywords AS TEXT[]))
             """), {
                 "id": new_id,
                 "product_name": product_name,
@@ -4888,7 +4888,7 @@ async def update_product_master(
         urls = body["product_image_urls"]
         if isinstance(urls, str):
             urls = [urls]
-        updates.append("product_image_urls = :product_image_urls::jsonb")
+        updates.append("product_image_urls = CAST(:product_image_urls AS jsonb)")
         params["product_image_urls"] = json.dumps(urls)
     if "keywords" in body:
         kws = body["keywords"]
@@ -5034,7 +5034,7 @@ async def delete_clip_with_feedback(
             # Save feedback for AI learning
             await session.execute(text("""
                 INSERT INTO clip_feedback (job_id, clip_id, action, reason, reason_category, clip_metadata)
-                VALUES (:job_id, :clip_id, 'delete', :reason, :reason_category, :metadata::jsonb)
+                VALUES (:job_id, :clip_id, 'delete', :reason, :reason_category, CAST(:metadata AS jsonb))
             """), {
                 "job_id": job_id,
                 "clip_id": clip_id,
@@ -5046,7 +5046,7 @@ async def delete_clip_with_feedback(
             # Update job results (remove the clip)
             await session.execute(text("""
                 UPDATE ai_clip_jobs
-                SET results = :results::jsonb,
+                SET results = CAST(:results AS jsonb),
                     clips_completed = GREATEST(clips_completed - 1, 0),
                     updated_at = NOW()
                 WHERE job_id = :jid
