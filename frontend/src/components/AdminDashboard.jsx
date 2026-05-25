@@ -2374,23 +2374,41 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
                   )}
                   {/* Job Done */}
                   {clipJobStatus === 'done' && clipJobResult && (
-                    <div className="mt-3 p-2 bg-green-50 border border-green-200 rounded-lg">
+                    <div className="mt-3 p-3 bg-green-50 border border-green-200 rounded-lg">
                       <p className="text-xs font-bold text-green-700">✅ 生成完了！</p>
-                      {clipJobResult.output_url && (
+                      {(clipJobResult.download_url || clipJobResult.blob_url) && (
                         <div className="mt-2">
                           <video
-                            src={clipJobResult.output_url}
+                            src={clipJobResult.download_url || clipJobResult.blob_url}
                             controls
-                            className="w-full max-h-[200px] rounded-lg"
+                            className="w-full max-h-[300px] rounded-lg shadow-md"
+                            preload="metadata"
                           />
-                          <a
-                            href={clipJobResult.output_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-block mt-2 text-[10px] text-indigo-600 hover:text-indigo-800 underline"
-                          >
-                            ⬇️ ダウンロード
-                          </a>
+                          <div className="flex items-center gap-3 mt-2">
+                            <a
+                              href={clipJobResult.download_url || clipJobResult.blob_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 px-3 py-1.5 text-[11px] font-medium rounded-full bg-indigo-100 text-indigo-700 hover:bg-indigo-200 transition-all"
+                            >
+                              ⬇️ ダウンロード
+                            </a>
+                            {clipJobResult.duration_sec && (
+                              <span className="text-[10px] text-gray-500">⏱ {Math.round(clipJobResult.duration_sec)}秒</span>
+                            )}
+                            {clipJobResult.hook_text && (
+                              <span className="text-[10px] text-purple-600">🎣 {clipJobResult.hook_text}</span>
+                            )}
+                          </div>
+                          {clipJobResult.effects_applied && (
+                            <div className="flex flex-wrap gap-1.5 mt-2">
+                              {clipJobResult.effects_applied.silence_cut && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700">✂️ 無音カット</span>}
+                              {clipJobResult.effects_applied.sfx && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-orange-100 text-orange-700">🔊 SE挿入</span>}
+                              {clipJobResult.effects_applied.keyword_highlight && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-yellow-100 text-yellow-700">✨ キーワード強調</span>}
+                              {clipJobResult.captions_count > 0 && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700">💬 字幕{clipJobResult.captions_count}件</span>}
+                              {clipJobResult.zoom_points > 0 && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-pink-100 text-pink-700">🔍 ズーム{clipJobResult.zoom_points}箇所</span>}
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
