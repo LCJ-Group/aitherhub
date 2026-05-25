@@ -227,12 +227,32 @@ export default function LiverClonePage() {
   };
 
   // ── Preview Functions ──
+  // Helper: get resolution dimensions from setting
+  const getResolutionDims = () => {
+    switch (resolution) {
+      case "480p": return { w: 854, h: 480 };
+      case "1080p": return { w: 1920, h: 1080 };
+      case "720p":
+      default: return { w: 1280, h: 720 };
+    }
+  };
+
+  // Helper: get frame interval from FPS setting
+  const getFrameInterval = () => {
+    // RTX 5090 can handle higher FPS, but face swap takes ~80-150ms per frame
+    // So max practical FPS is ~12-15 for face swap processing
+    // We send at target rate, GPU Worker will skip if overloaded
+    const targetFps = Math.min(fps, 20); // Cap at 20fps for face swap
+    return Math.floor(1000 / targetFps);
+  };
+
   const startPreview = async () => {
     try {
       setPreviewError(null);
-      // Get webcam access - HD resolution for better face swap quality
+      const { w, h } = getResolutionDims();
+      // Get webcam access at selected resolution
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" },
+        video: { width: { ideal: w }, height: { ideal: h }, facingMode: "user" },
         audio: false,
       });
       if (videoRef.current) {
@@ -304,26 +324,30 @@ export default function LiverClonePage() {
     if (!canvas || !video) return;
 
     const ctx = canvas.getContext("2d");
-    // Use native webcam resolution (up to 1280x720) for HD quality
-    canvas.width = video.videoWidth || 1280;
-    canvas.height = video.videoHeight || 720;
+    const { w, h } = getResolutionDims();
+    // Set canvas to target resolution (may differ from webcam native)
+    canvas.width = w;
+    canvas.height = h;
 
-    // Adaptive frame sending: start at ~10fps, GPU can handle it with RTX 5090
-    // InsightFace processes in 50-200ms, so 10fps is sustainable
+    const frameInterval = getFrameInterval();
     let pendingFrame = false;
+    let lastSendTime = 0;
+
     previewIntervalRef.current = setInterval(() => {
       if (!previewWsRef.current || previewWsRef.current.readyState !== WebSocket.OPEN) return;
       if (!video.videoWidth) return;
-      if (pendingFrame) return; // Skip if previous frame still processing
+      if (pendingFrame) return; // Skip if previous frame still being encoded
 
-      // Update canvas size if video resolution changed
-      if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-      }
+      const now = Date.now();
+      if (now - lastSendTime < frameInterval * 0.8) return; // Rate limit
 
+      // Draw video frame scaled to target resolution
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       pendingFrame = true;
+      lastSendTime = now;
+
+      // Use high quality JPEG - RTX 5090 has plenty of bandwidth
+      const jpegQuality = resolution === "1080p" ? 0.95 : 0.93;
       canvas.toBlob(
         (blob) => {
           pendingFrame = false;
@@ -334,9 +358,9 @@ export default function LiverClonePage() {
           }
         },
         "image/jpeg",
-        0.92  // High quality JPEG for better face detection and swap quality
+        jpegQuality
       );
-    }, 100); // ~10fps target - RTX 5090 can handle this easily
+    }, Math.max(16, frameInterval / 2)); // Poll at 2x target rate, rate-limited above
   };
 
   const stopPreview = () => {
@@ -734,11 +758,11 @@ export default function LiverClonePage() {
                 {/* Preview stats overlay */}
                 {previewActive && (
                   <div className="absolute bottom-3 left-3 right-3 flex justify-between text-xs">
-                    <span className={`bg-black/70 px-2 py-1 rounded ${previewFps >= 8 ? 'text-green-400' : previewFps >= 5 ? 'text-yellow-400' : 'text-red-400'}`}>
+                    <span className={`bg-black/70 px-2 py-1 rounded ${previewFps >= 15 ? 'text-green-400' : previewFps >= 8 ? 'text-yellow-400' : 'text-red-400'}`}>
                       {previewFps} FPS
                     </span>
                     <span className="bg-black/70 px-2 py-1 rounded text-cyan-400">
-                      HD 720p
+                      {resolution === "1080p" ? "Full HD 1080p" : resolution === "720p" ? "HD 720p" : "SD 480p"}
                     </span>
                     <span className="bg-black/70 px-2 py-1 rounded text-yellow-400">
                       GPU: RTX 5090

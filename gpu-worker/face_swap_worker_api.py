@@ -369,8 +369,8 @@ def _color_correct_face(original, swapped, faces):
 def _seamless_blend(original, swapped, faces):
     """
     Apply smooth alpha blending at face boundaries for natural integration.
-    Uses an elliptical mask with wide Gaussian blur for seamless transitions.
-    Optimized for real-time: ~2-5ms per face.
+    Uses an elliptical mask with Gaussian blur for seamless transitions.
+    Adapts blur radius to input resolution for consistent quality.
     """
     try:
         import cv2
@@ -378,12 +378,14 @@ def _seamless_blend(original, swapped, faces):
         
         result = swapped.copy()
         h, w = original.shape[:2]
+        is_hd = w >= 1920
         
         for face in faces:
             bbox = face.bbox.astype(int)
             x1, y1, x2, y2 = bbox
             # Expand bbox for better blending coverage
-            pad = int((x2 - x1) * 0.15)
+            pad_ratio = 0.18 if is_hd else 0.15
+            pad = int((x2 - x1) * pad_ratio)
             x1, y1 = max(0, x1 - pad), max(0, y1 - pad)
             x2, y2 = min(w, x2 + pad), min(h, y2 + pad)
             if x2 <= x1 or y2 <= y1:
@@ -396,16 +398,18 @@ def _seamless_blend(original, swapped, faces):
             center_y = (y1 + y2) // 2
             
             mask = np.zeros((h, w), dtype=np.uint8)
-            # Slightly smaller ellipse for tighter face coverage
+            # Ellipse size: slightly larger for HD to cover more area
+            ellipse_scale = 0.48 if is_hd else 0.45
             cv2.ellipse(
                 mask,
                 (center_x, center_y),
-                (int(face_w * 0.45), int(face_h * 0.45)),
+                (int(face_w * ellipse_scale), int(face_h * ellipse_scale)),
                 0, 0, 360, 255, -1
             )
             
-            # Wider Gaussian blur for smoother transition at edges
-            blur_size = max(5, face_w // 5) | 1  # Must be odd
+            # Gaussian blur for smooth transition - wider for HD
+            blur_divisor = 4 if is_hd else 5
+            blur_size = max(5, face_w // blur_divisor) | 1  # Must be odd
             mask_blurred = cv2.GaussianBlur(mask, (blur_size, blur_size), 0)
             
             # Alpha blend using the blurred mask
@@ -425,7 +429,11 @@ def _enhance_face_opencv(image, faces):
     Applies bilateral filtering (denoise while preserving edges),
     unsharp masking (sharpen details), and CLAHE contrast enhancement
     to face regions only.
-    Optimized for real-time: ~5-15ms per face on CPU.
+    
+    Parameters adapt to input resolution:
+    - 1080p+: Stronger enhancement, larger kernels for more detail
+    - 720p: Balanced enhancement
+    - 480p: Lighter touch to avoid artifacts
     """
     try:
         import cv2
@@ -434,12 +442,16 @@ def _enhance_face_opencv(image, faces):
         result = image.copy()
         h, w = image.shape[:2]
         
+        # Adapt parameters based on resolution
+        is_hd = w >= 1920  # 1080p or higher
+        is_sd = w < 1000   # 480p or lower
+        
         for face in faces:
             bbox = face.bbox.astype(int)
             x1, y1, x2, y2 = bbox
             # Expand slightly to include forehead/chin
-            pad_x = int((x2 - x1) * 0.08)
-            pad_y = int((y2 - y1) * 0.08)
+            pad_x = int((x2 - x1) * 0.10)
+            pad_y = int((y2 - y1) * 0.10)
             x1, y1 = max(0, x1 - pad_x), max(0, y1 - pad_y)
             x2, y2 = min(w, x2 + pad_x), min(h, y2 + pad_y)
             if x2 <= x1 or y2 <= y1:
@@ -450,18 +462,32 @@ def _enhance_face_opencv(image, faces):
                 continue
             
             # Step 1: Bilateral filter - removes noise while keeping edges sharp
-            # d=7 for stronger denoising, higher sigma for smoother skin
-            denoised = cv2.bilateralFilter(face_region, d=7, sigmaColor=50, sigmaSpace=50)
+            # Stronger for HD (more pixels = more detail to preserve)
+            if is_hd:
+                denoised = cv2.bilateralFilter(face_region, d=9, sigmaColor=60, sigmaSpace=60)
+            elif is_sd:
+                denoised = cv2.bilateralFilter(face_region, d=5, sigmaColor=40, sigmaSpace=40)
+            else:
+                denoised = cv2.bilateralFilter(face_region, d=7, sigmaColor=50, sigmaSpace=50)
             
             # Step 2: Unsharp mask - enhances fine details (eyes, lips, skin texture)
-            # Stronger sharpening for HD output
-            gaussian = cv2.GaussianBlur(denoised, (0, 0), 1.5)
-            sharpened = cv2.addWeighted(denoised, 1.6, gaussian, -0.6, 0)
+            # HD gets stronger sharpening since there's more detail to enhance
+            if is_hd:
+                gaussian = cv2.GaussianBlur(denoised, (0, 0), 2.0)
+                sharpened = cv2.addWeighted(denoised, 1.8, gaussian, -0.8, 0)
+            elif is_sd:
+                gaussian = cv2.GaussianBlur(denoised, (0, 0), 1.0)
+                sharpened = cv2.addWeighted(denoised, 1.4, gaussian, -0.4, 0)
+            else:
+                gaussian = cv2.GaussianBlur(denoised, (0, 0), 1.5)
+                sharpened = cv2.addWeighted(denoised, 1.6, gaussian, -0.6, 0)
             
             # Step 3: Contrast enhancement via CLAHE on L channel
             lab = cv2.cvtColor(sharpened, cv2.COLOR_BGR2LAB)
             l_channel = lab[:, :, 0]
-            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4, 4))
+            clip_limit = 2.5 if is_hd else 2.0 if not is_sd else 1.5
+            tile_size = (8, 8) if is_hd else (4, 4)
+            clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_size)
             lab[:, :, 0] = clahe.apply(l_channel)
             enhanced = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
             
@@ -1513,9 +1539,9 @@ async def preview_stream(websocket: WebSocket, api_key: str = Query(...)):
         import cv2
         import numpy as np
         
-        # Frame queue for backpressure handling - only process latest frame
-        latest_frame_data = None
-        processing = False
+        # Performance tracking
+        total_process_time = 0
+        frames_processed = 0
         
         while True:
             # Receive frame from client (binary JPEG)
@@ -1523,7 +1549,6 @@ async def preview_stream(websocket: WebSocket, api_key: str = Query(...)):
             frame_count += 1
             
             if source_face_embedding is None and (source_face_path is None or not Path(source_face_path).exists()):
-                # No source face set - return original frame with warning
                 await websocket.send_json({
                     "type": "error",
                     "message": "Source face not set. Upload a face image first."
@@ -1534,7 +1559,7 @@ async def preview_stream(websocket: WebSocket, api_key: str = Query(...)):
                 start_time = time.time()
                 
                 if use_insightface and source_face_embedding is not None:
-                    # ── InsightFace In-Memory Processing (50-200ms) ──────────
+                    # ── InsightFace In-Memory Processing ──────────────────
                     # Decode JPEG to numpy array
                     nparr = np.frombuffer(data, np.uint8)
                     frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
@@ -1544,12 +1569,18 @@ async def preview_stream(websocket: WebSocket, api_key: str = Query(...)):
                         await websocket.send_bytes(data)
                         continue
                     
+                    h_orig, w_orig = frame.shape[:2]
+                    
+                    # For 1080p+ input, process at native resolution for max quality
+                    # InsightFace det_size is internal - it handles any input size
+                    process_frame = frame
+                    
                     # Detect faces in target frame
-                    target_faces = face_analyzer.get(frame)
+                    target_faces = face_analyzer.get(process_frame)
                     
                     if target_faces:
                         # Swap all detected faces with source face
-                        result = frame.copy()
+                        result = process_frame.copy()
                         for target_face in target_faces:
                             result = face_swapper_model.get(
                                 result, target_face, source_face_embedding, paste_back=True
@@ -1557,30 +1588,37 @@ async def preview_stream(websocket: WebSocket, api_key: str = Query(...)):
                         
                         # ── HD Enhancement Pipeline ──────────────────────
                         # 1. Color correction: match swapped face color to target skin
-                        result = _color_correct_face(frame, result, target_faces)
+                        result = _color_correct_face(process_frame, result, target_faces)
                         
                         # 2. OpenCV HD face enhancement (sharpen + denoise)
                         if face_enhancer_net is not None:
                             try:
                                 result = _enhance_face_opencv(result, target_faces)
                             except Exception:
-                                pass  # Skip enhancement on error
+                                pass
                         
                         # 3. Seamless blend at face boundary
-                        result = _seamless_blend(frame, result, target_faces)
+                        result = _seamless_blend(process_frame, result, target_faces)
                         
-                        # Encode result back to JPEG (high quality for HD output)
+                        # Encode result - quality based on resolution
+                        # Higher resolution = higher quality encoding
+                        jpeg_quality = 96 if w_orig >= 1920 else 95
                         _, encoded = cv2.imencode('.jpg', result, 
-                                                  [cv2.IMWRITE_JPEG_QUALITY, 95])
+                                                  [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
                         processed = encoded.tobytes()
                     else:
-                        # No faces detected in frame - return original
+                        # No faces detected - return original
                         processed = data
                     
                     elapsed_ms = int((time.time() - start_time) * 1000)
-                    if frame_count % 30 == 0:  # Log every 30 frames
+                    total_process_time += elapsed_ms
+                    frames_processed += 1
+                    
+                    if frame_count % 50 == 0:
+                        avg_ms = total_process_time / max(1, frames_processed)
                         logger.info(f"[Preview] Frame {frame_count}: {elapsed_ms}ms "
-                                    f"({len(target_faces)} faces)")
+                                    f"(avg: {avg_ms:.0f}ms, {len(target_faces)} faces, "
+                                    f"{w_orig}x{h_orig})")
                     
                     await websocket.send_bytes(processed)
                     error_count = 0
