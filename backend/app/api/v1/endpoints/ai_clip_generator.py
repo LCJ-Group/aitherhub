@@ -3185,12 +3185,12 @@ async def _run_regeneration(
         try:
             async with engine.connect() as conn:
                 row = await conn.execute(text(
-                    "SELECT clip_url, clip_url_hd FROM video_clips WHERE id = CAST(:cid AS uuid) LIMIT 1"
+                    "SELECT clip_url FROM video_clips WHERE id = CAST(:cid AS uuid) LIMIT 1"
                 ), {"cid": clip_id})
                 clip_row = row.fetchone()
                 if clip_row:
                     # Prefer HD URL, fallback to regular clip_url
-                    raw_url = clip_row.clip_url_hd or clip_row.clip_url
+                    raw_url = clip_row.clip_url
                     if raw_url:
                         # If URL is a blob URL without SAS, generate a fresh SAS token
                         if "blob.core.windows.net" in raw_url and "?" not in raw_url:
@@ -5158,7 +5158,7 @@ async def _regenerate_clip_from_source_impl(clip_id: str, req: RegenFromSourceRe
     async with engine.connect() as conn:
         result = await conn.execute(text("""
             SELECT vc.id, vc.video_id, vc.phase_index, vc.time_start, vc.time_end,
-                   vc.duration_sec, vc.clip_url, vc.clip_url_hd, vc.transcript_text,
+                   vc.duration_sec, vc.clip_url, vc.transcript_text,
                    vc.product_name, vc.cta_score, vc.importance_score, vc.captions,
                    vc.subtitle_style, vc.liver_name, vc.tags,
                    v.compressed_blob_url, v.user_id, v.original_filename,
@@ -5180,7 +5180,6 @@ async def _regenerate_clip_from_source_impl(clip_id: str, req: RegenFromSourceRe
                 "time_end": clip_row.time_end,
                 "duration_sec": clip_row.duration_sec,
                 "clip_url": clip_row.clip_url,
-                "clip_url_hd": clip_row.clip_url_hd,
                 "transcript_text": clip_row.transcript_text,
                 "product_name": clip_row.product_name,
                 "cta_score": clip_row.cta_score,
@@ -5425,7 +5424,7 @@ async def _run_regeneration_from_source_inner(job_id: str, clip_row, req: RegenF
             logger.warning(f"[v10-regen {job_id}] Failed to get full video URL: {e}")
     # Fallback: Use the clip_url directly (already-cut segment)
     if not video_url:
-        raw_url = (clip_row.get('clip_url_hd') if isinstance(clip_row, dict) else getattr(clip_row, 'clip_url_hd', None)) or (clip_row["clip_url"] if isinstance(clip_row, dict) else clip_row.clip_url)
+        raw_url = clip_row["clip_url"] if isinstance(clip_row, dict) else clip_row.clip_url
         if raw_url:
             try:
                 from app.services.storage_service import generate_read_sas_from_url
@@ -5733,7 +5732,7 @@ async def _run_batch_regeneration(batch_job_id: str, req: BatchRegenRequest):
                 async with get_session() as session:
                     result = await session.execute(text("""
                         SELECT vc.id, vc.video_id, vc.phase_index, vc.time_start, vc.time_end,
-                               vc.duration_sec, vc.clip_url, vc.clip_url_hd, vc.transcript_text,
+                               vc.duration_sec, vc.clip_url, vc.transcript_text,
                                vc.product_name, vc.cta_score, vc.importance_score, vc.captions,
                                vc.subtitle_style, vc.liver_name, vc.tags,
                                v.compressed_blob_url, v.user_id, v.original_filename,
@@ -5756,7 +5755,6 @@ async def _run_batch_regeneration(batch_job_id: str, req: BatchRegenRequest):
                     "time_end": clip_row.time_end,
                     "duration_sec": clip_row.duration_sec,
                     "clip_url": clip_row.clip_url,
-                    "clip_url_hd": clip_row.clip_url_hd,
                     "transcript_text": clip_row.transcript_text,
                     "product_name": clip_row.product_name,
                     "cta_score": clip_row.cta_score,
