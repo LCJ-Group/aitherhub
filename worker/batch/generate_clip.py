@@ -3444,6 +3444,29 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
 
         update_clip_progress(clip_id, 80, "creating_clip", log_message=f"\u2705 Vertical clip created: {clip_size_mb:.1f}MB")
 
+        # 4b. Adjust caption timestamps for speed change
+        # The vertical clip was created with setpts=PTS/speed_factor, so the video
+        # plays speed_factor times faster. Whisper timestamps are from the original
+        # (pre-speed) segment, so we must divide them by speed_factor to align with
+        # the sped-up video. This MUST happen before hook detection (which uses
+        # segment timestamps to locate moments in the sped-up clip).
+        if speed_factor != 1.0 and speed_factor > 0:
+            logger.info(f"[SPEED] Adjusting {len(segments)} caption timestamps for speed_factor={speed_factor}x (÷{speed_factor})")
+            segments = [
+                {
+                    **seg,
+                    "start": round(seg["start"] / speed_factor, 3),
+                    "end": round(seg["end"] / speed_factor, 3),
+                    "words": [
+                        {**w, "start": round(w["start"] / speed_factor, 3), "end": round(w["end"] / speed_factor, 3)}
+                        for w in seg.get("words", [])
+                    ] if seg.get("words") else seg.get("words"),
+                }
+                for seg in segments
+            ]
+            if segments:
+                logger.info(f"[SPEED] First caption after adjustment: [{segments[0]['start']:.3f}-{segments[0]['end']:.3f}] {segments[0].get('text', '')[:30]}")
+
         # 5. Hook intro insertion (climax at start) — ML-scored clips only
         hook_applied = False
         hook_duration_actual = 0.0
