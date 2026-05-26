@@ -1372,7 +1372,8 @@ async def list_tracked_accounts(
                     COALESCE(SUM(latest.play_count), 0) as total_plays,
                     COALESCE(SUM(latest.digg_count), 0) as total_diggs,
                     MIN(tv.created_at) as first_registered,
-                    MAX(tv.last_fetched_at) as last_fetched
+                    MAX(tv.last_fetched_at) as last_fetched,
+                    MAX(tv.posted_at) as last_posted_at
                 FROM tiktok_tracked_videos tv
                 LEFT JOIN LATERAL (
                     SELECT ps.play_count, ps.digg_count

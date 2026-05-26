@@ -726,6 +726,16 @@ export default function TikTokTrackingPanel({ adminKey }) {
                           登録: {acc.first_registered ? new Date(acc.first_registered).toLocaleDateString("ja-JP") : "—"}
                           {acc.last_fetched && ` | 最終取得: ${timeAgo(acc.last_fetched)}`}
                         </div>
+                        <div className="text-[10px] text-gray-500 font-medium">
+                          📅 最終投稿: {acc.last_posted_at ? new Date(acc.last_posted_at).toLocaleDateString("ja-JP") : "—"}
+                          {acc.last_posted_at && (() => {
+                            const days = Math.floor((Date.now() - new Date(acc.last_posted_at).getTime()) / 86400000);
+                            if (days === 0) return <span className="ml-1 text-green-500 font-bold">（今日）</span>;
+                            if (days === 1) return <span className="ml-1 text-green-500">（昨日）</span>;
+                            if (days <= 3) return <span className="ml-1 text-yellow-500">（{days}日前）</span>;
+                            return <span className="ml-1 text-red-400">（{days}日前）</span>;
+                          })()}
+                        </div>
                       </div>
                     </div>
                     <div className="flex items-center gap-1.5 flex-shrink-0">
