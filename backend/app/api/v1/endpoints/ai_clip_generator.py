@@ -1732,10 +1732,12 @@ def _build_advanced_ffmpeg_command(video_path: str, ass_path: str, output_path: 
         bar_w_expr = f"t/{duration:.2f}*iw"
         vf_parts.append(f"drawbox=x=0:y={bar_y}:w='{bar_w_expr}':h={bar_height}:color=red@0.9:t=fill")
 
-    # ── 6. Loop fade (last 1.5s fade to black) ──
-    if enable_loop_fade and duration > 5:
-        fade_start = max(0, duration - 1.5)
-        vf_parts.append(f"fade=t=out:st={fade_start:.2f}:d=1.5")
+    # ── 6. Loop fade (DISABLED - causes black screen while speaker is still talking) ──
+    # Previously: fade=t=out at the end of the video
+    # Removed because it cuts off the speaker mid-sentence
+    # if enable_loop_fade and duration > 5:
+    #     fade_start = max(0, duration - 1.5)
+    #     vf_parts.append(f"fade=t=out:st={fade_start:.2f}:d=1.5")
 
     # ── Assemble ffmpeg command ──
     # Strategy: Always use -filter_complex to combine video effects + overlay images.

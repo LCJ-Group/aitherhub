@@ -1901,7 +1901,29 @@ export default function AdminClipDB({ adminKey }) {
             </button>
           )}
         </div>
-
+        {/* Playlist filter - always visible */}
+        <div className="flex flex-wrap items-center gap-2 mt-2">
+          <select
+            value={selectedPlaylistFilter}
+            onChange={(e) => { setSelectedPlaylistFilter(e.target.value); setPage(1); }}
+            className="px-3 py-1.5 rounded-lg border border-purple-400 text-xs bg-purple-50 focus:outline-none focus:ring-2 focus:ring-purple-500 font-medium text-purple-700"
+          >
+            <option value="">📋 プレイリスト: すべて</option>
+            {playlists.map((pl) => (
+              <option key={pl.id} value={pl.id}>
+                {pl.name} ({pl.clip_count})
+              </option>
+            ))}
+          </select>
+          <button
+            onClick={() => setShowPlaylistManager(true)}
+            className="px-3 py-1.5 rounded-lg border border-purple-400 text-xs text-purple-700 hover:bg-purple-100 font-medium transition"
+            title="プレイリスト管理"
+          >
+            <ListPlus className="w-3.5 h-3.5 inline mr-0.5" />
+            管理
+          </button>
+        </div>
         {/* Filter row */}
         {showFilters && searchMode === "structured" && (
           <div className="flex flex-wrap gap-2 mt-3">
@@ -1978,28 +2000,6 @@ export default function AdminClipDB({ adminKey }) {
               <option value="v7.20260501">AI v7.20260501</option>
             </select>
 
-            {/* Playlist filter */}
-            <select
-              value={selectedPlaylistFilter}
-              onChange={(e) => { setSelectedPlaylistFilter(e.target.value); setPage(1); }}
-              className="px-3 py-1.5 rounded-lg border border-indigo-300 text-xs bg-indigo-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
-            >
-              <option value="">プレイリスト: すべて</option>
-              {playlists.map((pl) => (
-                <option key={pl.id} value={pl.id}>
-                  {pl.name} ({pl.clip_count})
-                </option>
-              ))}
-            </select>
-
-            <button
-              onClick={() => setShowPlaylistManager(true)}
-              className="px-2 py-1.5 rounded-lg border border-indigo-300 text-xs text-indigo-600 hover:bg-indigo-50 font-medium"
-              title="プレイリスト管理"
-            >
-              <ListPlus className="w-3.5 h-3.5 inline mr-0.5" />
-              管理
-            </button>
 
             <select
               value={sortBy}
@@ -3580,7 +3580,7 @@ function PipCompositionModal({ clip, onClose, adminKey, generating, setGeneratin
     if (!jobId) return;
     const poll = async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/v1/ai-clip/job-status/${jobId}`, {
+        const res = await fetch(`${API_BASE}/api/v1/ai-clip/jobs/${jobId}`, {
           headers: { "X-Admin-Key": adminKey },
         });
         if (res.ok) {
