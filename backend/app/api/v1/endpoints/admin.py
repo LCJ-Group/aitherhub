@@ -257,7 +257,8 @@ async def get_all_feedbacks(
                 COUNT(CASE WHEN vp.user_rating = 4 THEN 1 END) as r4,
                 COUNT(CASE WHEN vp.user_rating = 5 THEN 1 END) as r5,
                 COUNT(CASE WHEN vp.user_comment IS NOT NULL AND vp.user_comment != '' THEN 1 END) as with_comments,
-                COUNT(CASE WHEN vc_s.id IS NOT NULL THEN 1 END) as with_clip_count
+                COUNT(CASE WHEN vc_s.id IS NOT NULL THEN 1 END) as with_clip_count,
+                COUNT(CASE WHEN cfb_s.rating = 'material_only' THEN 1 END) as material_only_count
             FROM video_phases vp
             JOIN videos v ON CAST(vp.video_id AS UUID) = v.id
             LEFT JOIN (
@@ -267,6 +268,8 @@ async def get_all_feedbacks(
                 ORDER BY video_id, phase_index, created_at DESC
             ) vc_s ON CAST(vp.video_id AS VARCHAR) = CAST(vc_s.video_id AS VARCHAR)
                 AND vp.phase_index::text = vc_s.phase_index
+            LEFT JOIN clip_feedback cfb_s ON CAST(vp.video_id AS VARCHAR) = cfb_s.video_id
+                AND CAST(vp.phase_index AS VARCHAR) = cfb_s.phase_index
             {summary_where}
         """)
         summary_result = await db.execute(summary_sql)
@@ -346,11 +349,14 @@ async def get_all_feedbacks(
                 vc.generation_source as generation_source,
                 vc.duration_sec as clip_duration_sec,
                 v.created_at as video_uploaded_at,
-                COALESCE(acj.ai_clip_count, 0) as ai_clip_count
+                COALESCE(acj.ai_clip_count, 0) as ai_clip_count,
+                cfb.rating as clip_rating
             FROM video_phases vp
             JOIN videos v ON CAST(vp.video_id AS UUID) = v.id
             LEFT JOIN users u ON v.user_id = u.id
             LEFT JOIN users rv ON vp.rated_by_reviewer_id = rv.id
+            LEFT JOIN clip_feedback cfb ON CAST(vp.video_id AS VARCHAR) = cfb.video_id
+                AND CAST(vp.phase_index AS VARCHAR) = cfb.phase_index
             LEFT JOIN (
                 SELECT video_id, phase_index, COUNT(*) AS download_count
                 FROM clip_download_log
@@ -488,6 +494,7 @@ async def get_all_feedbacks(
                 "reviewer_name": r.reviewer_name,
                 "video_uploaded_at": str(r.video_uploaded_at) if r.video_uploaded_at else None,
                 "ai_clip_count": r.ai_clip_count if hasattr(r, 'ai_clip_count') else 0,
+                "clip_rating": r.clip_rating if hasattr(r, 'clip_rating') else None,
             })
 
         total_pages = max(1, -(-total_filtered // per_page))  # ceil division
@@ -506,6 +513,7 @@ async def get_all_feedbacks(
                 "without_clip_count": sr.total - sr.with_clip_count,
                 "downloaded_clips": dl.downloaded_clips if dl else 0,
                 "total_downloads": dl.total_downloads if dl else 0,
+                "material_only_count": sr.material_only_count if hasattr(sr, 'material_only_count') else 0,
             },
             "feedbacks": feedbacks,
             "pagination": {

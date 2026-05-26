@@ -91,6 +91,7 @@ const ClipFeedbackPanel = ({
   const [successMsg, setSuccessMsg] = useState(null);
   // Track if user has unsaved changes
   const [dirty, setDirty] = useState(false);
+  const [helpTooltip, setHelpTooltip] = useState(false);
   // Store initial loaded values to detect changes
   const loadedRef = useRef({ rating: null, salesConfirm: null, reasons: [] });
 
@@ -313,6 +314,19 @@ const ClipFeedbackPanel = ({
         >
           {'\uD83D\uDC4E'} {rating === 'bad' && submitted ? [window.__t('auto_340', '微妙')] : 'Fix'}
         </button>
+        <button
+          onClick={() => { handleRatingSelect('material_only'); }}
+          disabled={submitting}
+          style={{
+            padding: '4px 12px', borderRadius: '16px', border: 'none',
+            cursor: 'pointer', fontSize: '13px', fontWeight: 600,
+            background: rating === 'material_only' ? '#f59e0b' : '#f3f4f6',
+            color: rating === 'material_only' ? '#fff' : '#374151',
+            transition: 'all 0.2s',
+          }}
+        >
+          📦 {rating === 'material_only' && submitted ? '素材' : '素材'}
+        </button>
         {dirty && canSave && (
           <button
             onClick={handleSaveAll}
@@ -342,6 +356,18 @@ const ClipFeedbackPanel = ({
       }}>
         <span style={{ fontSize: '16px' }}>{'\uD83D\uDD04'}</span>
         {window.__t('cfp_clip_rating', 'クリップの評価')}
+        <span
+          onClick={() => setHelpTooltip(!helpTooltip)}
+          style={{
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            width: '16px', height: '16px', borderRadius: '50%',
+            background: '#e5e7eb', color: '#6b7280', fontSize: '10px', fontWeight: 700,
+            cursor: 'pointer', transition: 'all 0.2s',
+          }}
+          title="使い方ガイド"
+        >
+          ?
+        </span>
         {submitted && !dirty && (
           <span style={{
             fontSize: '11px', background: '#d1fae5', color: '#065f46',
@@ -360,21 +386,48 @@ const ClipFeedbackPanel = ({
         )}
       </div>
 
+      {/* Help Tooltip */}
+      {helpTooltip && (
+        <div style={{
+          marginBottom: '12px', padding: '12px', borderRadius: '10px',
+          background: '#fff', border: '1px solid #e5e7eb', boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+            <span style={{ fontSize: '12px', fontWeight: 700, color: '#374151' }}>📖 評価ガイド</span>
+            <span onClick={() => setHelpTooltip(false)} style={{ cursor: 'pointer', color: '#9ca3af', fontSize: '14px' }}>✕</span>
+          </div>
+          <div style={{ fontSize: '11px', color: '#4b5563', lineHeight: '1.6' }}>
+            <div style={{ padding: '6px 8px', background: '#d1fae5', borderRadius: '6px', marginBottom: '4px' }}>
+              <strong>👍 使えるクリップ</strong> — SNSにそのまま投稿できる品質。AI学習データに使用。
+            </div>
+            <div style={{ padding: '6px 8px', background: '#fee2e2', borderRadius: '6px', marginBottom: '4px' }}>
+              <strong>👎 微妙なクリップ</strong> — 始まり・終わりが中途半端。理由タグを選んでAI改善に活用。
+            </div>
+            <div style={{ padding: '6px 8px', background: '#fef3c7', borderRadius: '6px', marginBottom: '4px' }}>
+              <strong>📦 素材のみ</strong> — 売上貢献は高いがAI切り抜きに不向き。採点データとしてカウントされるが、AI生成候補からは除外。
+            </div>
+            <div style={{ padding: '6px 8px', background: '#eff6ff', borderRadius: '6px' }}>
+              <strong>💰 Sales DNA</strong> — 「売れた理由の部分か？」をYES/NOで判定。売上分析に活用。
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ① Quick Rating */}
       <div style={{
         fontSize: '10px', color: '#9ca3af', marginBottom: '4px', lineHeight: '1.4',
       }}>
-        👍 使える = SNSにそのまま投稿できる品質 / 👎 微妙 = 内容はOKだが始まり・終わりが中途半端または冗長
+        👍 使える = SNSにそのまま投稿できる品質 / 👎 微妙 = 始まり・終わりが中途半端 / 📦 素材のみ = 売上貢献は高いがAI切り抜き不向き
       </div>
       <div style={{
-        display: 'flex', gap: '8px', marginBottom: '12px',
+        display: 'flex', gap: '8px', marginBottom: '12px', flexWrap: 'wrap',
       }}>
         <button
           onClick={() => handleRatingSelect('good')}
           disabled={submitting}
           title="このまま切り出してSNSに投稿しても違和感がないクオリティ"
           style={{
-            flex: 1, padding: '10px 16px', borderRadius: '10px',
+            flex: 1, minWidth: '120px', padding: '10px 16px', borderRadius: '10px',
             border: rating === 'good' ? '2px solid #10b981' : '2px solid #e5e7eb',
             cursor: 'pointer', fontSize: '14px', fontWeight: 700,
             background: rating === 'good' ? '#d1fae5' : '#fff',
@@ -391,7 +444,7 @@ const ClipFeedbackPanel = ({
           disabled={submitting}
           title="内容は悪くないが、始まり/終わりが中途半端、または冗長"
           style={{
-            flex: 1, padding: '10px 16px', borderRadius: '10px',
+            flex: 1, minWidth: '120px', padding: '10px 16px', borderRadius: '10px',
             border: rating === 'bad' ? '2px solid #ef4444' : '2px solid #e5e7eb',
             cursor: 'pointer', fontSize: '14px', fontWeight: 700,
             background: rating === 'bad' ? '#fee2e2' : '#fff',
@@ -403,10 +456,27 @@ const ClipFeedbackPanel = ({
           <span style={{ fontSize: '20px' }}>{'\uD83D\uDC4E'}</span>
           {window.__t('cfp_bad_clip', '微妙なクリップ')}  
         </button>
+        <button
+          onClick={() => handleRatingSelect('material_only')}
+          disabled={submitting}
+          title="売上貢献度は高いが、切り抜き動画としてはAI生成に不向き（例：会話なし、音楽のみ、商品見せのみ）"
+          style={{
+            flex: 1, minWidth: '120px', padding: '10px 16px', borderRadius: '10px',
+            border: rating === 'material_only' ? '2px solid #f59e0b' : '2px solid #e5e7eb',
+            cursor: 'pointer', fontSize: '14px', fontWeight: 700,
+            background: rating === 'material_only' ? '#fef3c7' : '#fff',
+            color: rating === 'material_only' ? '#92400e' : '#374151',
+            transition: 'all 0.2s',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
+          }}
+        >
+          <span style={{ fontSize: '20px' }}>📦</span>
+          {window.__t('cfp_material_only', '素材のみ')}
+        </button>
       </div>
 
       {/* ② Reason Tags (show after rating) */}
-      {rating && (
+      {rating && rating !== 'material_only' && (
         <div style={{ marginBottom: '12px' }}>
           <div style={{
             fontSize: '12px', color: '#6b7280', marginBottom: '8px', fontWeight: 600,
@@ -438,6 +508,23 @@ const ClipFeedbackPanel = ({
                 </button>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {/* material_only info */}
+      {rating === 'material_only' && (
+        <div style={{
+          marginBottom: '12px', padding: '10px 12px', borderRadius: '8px',
+          background: '#fffbeb', border: '1px solid #fde68a',
+        }}>
+          <div style={{ fontSize: '12px', color: '#92400e', lineHeight: '1.5' }}>
+            📦 <strong>素材のみ</strong>を選択すると：
+            <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>
+              <li>採点データとしてはカウントされます（売上分析に活用）</li>
+              <li>AIクリップ生成の候補からは<strong>除外</strong>されます</li>
+              <li>例：会話なし、音楽のみ、アパレル見せのみなど</li>
+            </ul>
           </div>
         </div>
       )}

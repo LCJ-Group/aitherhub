@@ -2790,6 +2790,21 @@ async def generate_ai_clip_from_clip(
     if not row.clip_url:
         raise HTTPException(status_code=400, detail="このクリップにはclip_urlがありません")
 
+    # material_onlyのクリップはAI生成候補から除外
+    async with get_session() as session:
+        mat_check = await session.execute(text("""
+            SELECT rating FROM clip_feedback
+            WHERE video_id = CAST(:video_id AS uuid)
+              AND phase_index = :phase_index
+            ORDER BY created_at DESC LIMIT 1
+        """), {"video_id": str(row.video_id), "phase_index": row.phase_index})
+        mat_row = mat_check.fetchone()
+        if mat_row and mat_row.rating == 'material_only':
+            raise HTTPException(
+                status_code=400,
+                detail="このクリップは「素材のみ」と評価されているため、AIクリップ生成の対象外です。"
+            )
+
     clip_data = {
         "clip_id": row.clip_id, "video_id": row.video_id,
         "phase_index": row.phase_index, "time_start": row.time_start,

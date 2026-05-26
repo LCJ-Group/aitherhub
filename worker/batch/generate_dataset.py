@@ -248,16 +248,20 @@ def extract_ng_features(is_unusable, unusable_reason, feedback_rating, feedback_
     """
     clip_unusable = bool(is_unusable) if is_unusable is not None else False
     has_bad_feedback = (feedback_rating == 'bad') if feedback_rating else False
+    is_material_only = (feedback_rating == 'material_only') if feedback_rating else False
 
-    is_ng = 1 if (clip_unusable or has_bad_feedback) else 0
+    # material_onlyはAI生成候補から除外（NGと同等扱い）
+    is_ng = 1 if (clip_unusable or has_bad_feedback or is_material_only) else 0
 
     # Determine NG source
-    if clip_unusable and has_bad_feedback:
+    if clip_unusable and (has_bad_feedback or is_material_only):
         ng_source = "both"
     elif clip_unusable:
         ng_source = "unusable"
     elif has_bad_feedback:
         ng_source = "feedback"
+    elif is_material_only:
+        ng_source = "material_only"
     else:
         ng_source = "none"
 

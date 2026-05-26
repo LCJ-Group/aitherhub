@@ -1174,6 +1174,7 @@ function UploadHealthSection({ data, loading }) {
 function FeedbackSection({ data, loading, error, includeUnrated, setIncludeUnrated, onRefresh, filterRating, setFilterRating, clipFilter, setClipFilter, sortBy, setSortBy, page, setPage, reviewerInfo, onReviewerStatsUpdate }) {
   const { i18n } = useTranslation();
   const [expandedIdx, setExpandedIdx] = useState(-1);
+  const [helpOpen, setHelpOpen] = useState(false);
 
   if (loading) {
     return (
@@ -1216,6 +1217,49 @@ function FeedbackSection({ data, loading, error, includeUnrated, setIncludeUnrat
           <div className="flex items-center gap-2">
             <span className="text-lg">⭐</span>
             <h2 className="text-lg font-semibold text-gray-700">{window.__t('adminDashboard_446612', 'フィードバック概要')}</h2>
+            <div className="relative">
+              <button
+                onClick={() => setHelpOpen(!helpOpen)}
+                className="w-5 h-5 rounded-full bg-gray-200 hover:bg-orange-100 text-gray-500 hover:text-orange-600 text-xs font-bold flex items-center justify-center transition-all"
+                title="使い方ガイド"
+              >
+                ?
+              </button>
+              {helpOpen && (
+                <div className="absolute left-0 top-7 z-50 w-80 bg-white border border-gray-200 rounded-xl shadow-xl p-4 text-xs leading-relaxed">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-bold text-gray-700 text-sm">📖 フィードバック機能ガイド</span>
+                    <button onClick={() => setHelpOpen(false)} className="text-gray-400 hover:text-gray-600">✕</button>
+                  </div>
+                  <div className="space-y-2 text-gray-600">
+                    <div className="p-2 bg-orange-50 rounded-lg border border-orange-100">
+                      <p className="font-bold text-orange-700 mb-1">⭐ 星採点（1〜5）</p>
+                      <p>各クリップの「売上貢献度」を5段階で評価。★5=今すぐ買いたい、★1=商品と無関係。</p>
+                    </div>
+                    <div className="p-2 bg-green-50 rounded-lg border border-green-100">
+                      <p className="font-bold text-green-700 mb-1">👍 使えるクリップ</p>
+                      <p>SNSにそのまま投稿できる品質。AIクリップ生成の学習データに使用されます。</p>
+                    </div>
+                    <div className="p-2 bg-red-50 rounded-lg border border-red-100">
+                      <p className="font-bold text-red-700 mb-1">👎 微妙なクリップ</p>
+                      <p>始まり・終わりが中途半端。理由タグを選んでAIの改善に活用。</p>
+                    </div>
+                    <div className="p-2 bg-amber-50 rounded-lg border border-amber-100">
+                      <p className="font-bold text-amber-700 mb-1">📦 素材のみ</p>
+                      <p>売上貢献は高いがAI切り抜きに不向き（会話なし・音楽のみ等）。採点データとしてカウントされるが、AI生成候補からは除外。</p>
+                    </div>
+                    <div className="p-2 bg-indigo-50 rounded-lg border border-indigo-100">
+                      <p className="font-bold text-indigo-700 mb-1">🎬 AI生成</p>
+                      <p>★5のクリップから「AI生成」ボタンでショート動画を自動生成。生成後はダウンロード可能。</p>
+                    </div>
+                    <div className="p-2 bg-blue-50 rounded-lg border border-blue-100">
+                      <p className="font-bold text-blue-700 mb-1">⬇️ ダウンロード</p>
+                      <p>AI生成されたクリップのダウンロード回数。実際に活用されているかの指標。</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
@@ -1247,6 +1291,7 @@ function FeedbackSection({ data, loading, error, includeUnrated, setIncludeUnrat
           <StatCard label="未採点" value={unratedCount.toLocaleString()} unit={window.__t('errorLogCount', '件')} color="red" />
           <StatCard label={window.__t('adminDashboard_15e370', '平均スコア')} value={summary.average_rating} unit="/ 5" color="blue" />
           <StatCard label="クリップあり" value={(summary.with_clip_count || 0).toLocaleString()} unit={window.__t('errorLogCount', '件')} color="teal" />
+          <StatCard label="📦 素材のみ" value={(summary.material_only_count || 0).toLocaleString()} unit={window.__t('errorLogCount', '件')} color="amber" />
           <StatCard label={window.__t('adminDashboard_424176', 'コメント付き')} value={summary.with_comments} unit={window.__t('errorLogCount', '件')} color="green" />
           <div className="rounded-xl border p-4 border-purple-300 bg-purple-50 transition-all duration-200 hover:shadow-md">
             <p className="text-xs text-gray-500 mb-2">{window.__t('adminDashboard_804dd5', 'スコア分布')}</p>
@@ -1375,6 +1420,40 @@ function FeedbackSection({ data, loading, error, includeUnrated, setIncludeUnrat
           🤖 AI生成順
         </button>
       </div>
+
+      {/* ★5 Filter Status Banner */}
+      {filterRating === 5 && feedbacks.length > 0 && (() => {
+        const aiGenerated = feedbacks.filter(f => f.ai_clip_count > 0).length;
+        const downloaded = feedbacks.filter(f => f.download_count > 0).length;
+        const noAiYet = feedbacks.filter(f => !f.ai_clip_count || f.ai_clip_count === 0).length;
+        const totalDL = feedbacks.reduce((sum, f) => sum + (f.download_count || 0), 0);
+        return (
+          <div className="mb-4 p-3 rounded-xl bg-gradient-to-r from-indigo-50 to-blue-50 border border-indigo-200">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-sm">🏆</span>
+              <span className="text-xs font-bold text-indigo-700">★5 クリップ ステータス</span>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="text-center p-2 bg-white rounded-lg border border-indigo-100">
+                <p className="text-lg font-bold text-indigo-600">{aiGenerated}</p>
+                <p className="text-[10px] text-gray-500">🎬 AI生成済み</p>
+              </div>
+              <div className="text-center p-2 bg-white rounded-lg border border-orange-100">
+                <p className="text-lg font-bold text-orange-600">{noAiYet}</p>
+                <p className="text-[10px] text-gray-500">⏳ 未生成</p>
+              </div>
+              <div className="text-center p-2 bg-white rounded-lg border border-blue-100">
+                <p className="text-lg font-bold text-blue-600">{downloaded}</p>
+                <p className="text-[10px] text-gray-500">⬇️ DL済みクリップ</p>
+              </div>
+              <div className="text-center p-2 bg-white rounded-lg border border-green-100">
+                <p className="text-lg font-bold text-green-600">{totalDL}</p>
+                <p className="text-[10px] text-gray-500">📊 総DL回数</p>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Pagination Info */}
       <div className="flex items-center justify-between mb-3">
@@ -1953,6 +2032,11 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
             {fb.clip_duration_sec != null && fb.clip_duration_sec > 0 && (
               <span className="text-[10px] font-medium px-2 py-0.5 rounded-full text-teal-600 bg-teal-50">
                 ✂️ {Math.floor(fb.clip_duration_sec / 60)}:{String(Math.floor(fb.clip_duration_sec % 60)).padStart(2, '0')}
+              </span>
+            )}
+            {fb.clip_rating === 'material_only' && (
+              <span className="text-[10px] font-medium px-2 py-0.5 rounded-full text-amber-700 bg-amber-50 border border-amber-300">
+                📦 素材のみ
               </span>
             )}
             {fb.ai_clip_count > 0 && (

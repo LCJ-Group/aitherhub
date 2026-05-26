@@ -116,8 +116,8 @@ async def submit_clip_rating(
     Submit quick rating (👍 good / 👎 bad) with optional reason tags.
     This is the primary training signal for Clip Rank AI.
     """
-    if req.rating not in ("good", "bad"):
-        raise HTTPException(status_code=422, detail="rating must be 'good' or 'bad'")
+    if req.rating not in ("good", "bad", "material_only"):
+        raise HTTPException(status_code=422, detail="rating must be 'good', 'bad', or 'material_only'")
 
     valid_reasons = {
         "hook_weak", "too_long", "too_short", "cut_position",
@@ -139,7 +139,12 @@ async def submit_clip_rating(
     feedback_id = str(uuid.uuid4())
 
     # Map rating to feedback for backward compatibility with clip_feedback table
-    feedback_value = "adopted" if req.rating == "good" else "rejected"
+    if req.rating == "good":
+        feedback_value = "adopted"
+    elif req.rating == "material_only":
+        feedback_value = "material_only"
+    else:
+        feedback_value = "rejected"
 
     # Ensure phase_index has a value for ON CONFLICT (video_id, phase_index)
     # If not provided, use clip_id or generate from time range
