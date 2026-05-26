@@ -777,59 +777,82 @@ export default function LiverClonePage() {
    * a fresh Audio element and a dedicated TTS AudioContext each time.
    */
   const playTTSAudio = (audioBase64, format) => {
-    return new Promise((resolve) => {
+    return new Promise(async (resolve) => {
       try {
         // Create a DEDICATED AudioContext for TTS playback (separate from passthrough)
-        // This avoids the "MediaElementSource already connected" error
         const ttsCtx = new (window.AudioContext || window.webkitAudioContext)();
         console.log("[TTS] Created dedicated AudioContext, state:", ttsCtx.state);
 
-        // Resume AudioContext if suspended (autoplay policy)
+        // MUST await resume before proceeding
         if (ttsCtx.state === "suspended") {
-          ttsCtx.resume().then(() => console.log("[TTS] AudioContext resumed"));
+          await ttsCtx.resume();
+          console.log("[TTS] AudioContext resumed");
         }
 
-        // Decode base64 to audio buffer
+        // Decode base64 to ArrayBuffer
         const audioData = atob(audioBase64);
         const audioArray = new Uint8Array(audioData.length);
         for (let i = 0; i < audioData.length; i++) {
           audioArray[i] = audioData.charCodeAt(i);
         }
 
-        // Create audio element for playback
-        const blob = new Blob([audioArray], { type: `audio/${format}` });
-        const audioUrl = URL.createObjectURL(blob);
-        const audio = new Audio(audioUrl);
-        ttsAudioRef.current = audio;
+        // Decode audio data into AudioBuffer (bypasses CORS/MediaElement issues)
+        let audioBuffer;
+        try {
+          audioBuffer = await ttsCtx.decodeAudioData(audioArray.buffer.slice(0));
+          console.log("[TTS] Audio decoded:", audioBuffer.duration.toFixed(2), "s");
+        } catch (decodeErr) {
+          console.error("[TTS] decodeAudioData failed:", decodeErr);
+          // Fallback: use Audio element without lip-sync
+          const blob = new Blob([audioArray], { type: `audio/${format}` });
+          const audioUrl = URL.createObjectURL(blob);
+          const audio = new Audio(audioUrl);
+          audio.onended = () => { URL.revokeObjectURL(audioUrl); resolve(); };
+          audio.onerror = () => { URL.revokeObjectURL(audioUrl); resolve(); };
+          await audio.play().catch(() => {});
+          return;
+        }
 
-        // Create analyser for lip-sync using the dedicated TTS context
-        const source = ttsCtx.createMediaElementSource(audio);
-        const analyser = ttsCtx.createAnalyser();
-        analyser.fftSize = 256;
-        analyser.smoothingTimeConstant = 0.3;
-        source.connect(analyser);
-        analyser.connect(ttsCtx.destination);
-        ttsAnalyserRef.current = analyser;
+        // Pre-compute RMS envelope for lip-sync (analyze the entire buffer upfront)
+        const channelData = audioBuffer.getChannelData(0);
+        const sampleRate = audioBuffer.sampleRate;
+        const chunkSize = Math.floor(sampleRate / 20); // 20Hz analysis = 50ms chunks
+        const numChunks = Math.ceil(channelData.length / chunkSize);
+        const envelope = new Float32Array(numChunks);
+        for (let c = 0; c < numChunks; c++) {
+          let sum = 0;
+          const start = c * chunkSize;
+          const end = Math.min(start + chunkSize, channelData.length);
+          for (let i = start; i < end; i++) {
+            sum += channelData[i] * channelData[i];
+          }
+          const rms = Math.sqrt(sum / (end - start));
+          // Normalize: typical speech RMS is 0.01-0.15, map to 0-1
+          envelope[c] = Math.min(1.0, rms * 8.0);
+        }
+        console.log("[TTS] Envelope computed:", numChunks, "chunks, max:", Math.max(...envelope).toFixed(3));
 
-        // Start lip-sync monitoring at 20Hz
-        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+        // Play audio using AudioBufferSourceNode (guaranteed to work with AudioContext)
+        const sourceNode = ttsCtx.createBufferSource();
+        sourceNode.buffer = audioBuffer;
+        sourceNode.connect(ttsCtx.destination);
+
+        // Start lip-sync: send pre-computed envelope values at 20Hz
+        const startTime = ttsCtx.currentTime;
         let lipSyncActive = true;
         const lipSyncLoop = () => {
           if (!lipSyncActive) return;
-          analyser.getByteFrequencyData(dataArray);
-          // Calculate mouth openness from low-mid frequency energy (voice range 0-2kHz)
-          let sum = 0;
-          const voiceRange = Math.min(32, dataArray.length);
-          for (let i = 0; i < voiceRange; i++) {
-            sum += dataArray[i];
+          const elapsed = ttsCtx.currentTime - startTime;
+          const chunkIndex = Math.floor(elapsed * 20); // 20Hz
+          if (chunkIndex >= numChunks) {
+            // Audio should be done
+            return;
           }
-          const avg = sum / voiceRange / 255; // Normalize to 0-1
-          const mouthOpen = Math.min(1.0, avg * 3.0); // Amplify for visible effect
+          const mouthOpen = envelope[chunkIndex];
 
           // Send mouth_open to GPU Worker via WebSocket
           if (previewWsRef.current?.readyState === WebSocket.OPEN) {
-            const msg = JSON.stringify({ type: "mouth_open", value: mouthOpen });
-            previewWsRef.current.send(msg);
+            previewWsRef.current.send(JSON.stringify({ type: "mouth_open", value: mouthOpen }));
           }
         };
         lipSyncIntervalRef.current = setInterval(lipSyncLoop, 50); // 20Hz
@@ -844,30 +867,21 @@ export default function LiverClonePage() {
           if (previewWsRef.current?.readyState === WebSocket.OPEN) {
             previewWsRef.current.send(JSON.stringify({ type: "mouth_open", value: 0 }));
           }
-          URL.revokeObjectURL(audioUrl);
           ttsAudioRef.current = null;
           ttsAnalyserRef.current = null;
-          // Close the dedicated TTS AudioContext
           ttsCtx.close().catch(() => {});
+          console.log("[TTS] Playback complete, lip-sync stopped");
           resolve();
         };
 
-        audio.onended = () => {
+        sourceNode.onended = () => {
           console.log("[TTS] Audio playback ended");
           cleanup();
         };
 
-        audio.onerror = (e) => {
-          console.error("[TTS] Audio playback error:", e);
-          cleanup();
-        };
-
-        audio.play().then(() => {
-          console.log("[TTS] Audio playback started");
-        }).catch((e) => {
-          console.error("[TTS] Audio play failed (autoplay policy?):", e);
-          cleanup();
-        });
+        sourceNode.start(0);
+        ttsAudioRef.current = sourceNode;
+        console.log("[TTS] Audio playback started via AudioBufferSourceNode");
       } catch (err) {
         console.error("[TTS] playTTSAudio error:", err);
         resolve();
