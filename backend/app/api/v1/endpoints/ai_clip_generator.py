@@ -264,7 +264,7 @@ _HIGHLIGHT_CTA_COLOR = '&H0000FF00'  # Green for CTA words
 
 # Scene-based style mapping
 _SCENE_STYLE_MAP = {
-    'intro': 'pop',
+    'intro': 'box',  # Was 'pop' - changed because pop's colored text looked blurry
     'product': 'box',
     'demo': 'simple',
     'cta': 'gradient',
@@ -1338,9 +1338,9 @@ def _generate_overlay_images(
     MAX_SINGLE_LINE_CHARS = 16  # これ以上は自動でフォント縮小
     
     # キーワード強調用の色定義
-    KEYWORD_HIGHLIGHT_COLOR = (255, 215, 0, 255)  # Gold for keywords
-    KEYWORD_CTA_COLOR = (0, 255, 128, 255)  # Green for CTA
-    KEYWORD_NUMBER_COLOR = (255, 140, 0, 255)  # Orange for numbers/prices
+    KEYWORD_HIGHLIGHT_COLOR = (255, 255, 100, 255)  # Bright yellow for keywords (clear against dark outline)
+    KEYWORD_CTA_COLOR = (100, 255, 180, 255)  # Light green for CTA (readable)
+    KEYWORD_NUMBER_COLOR = (255, 255, 255, 255)  # White for numbers/prices (was orange - too blurry)
     
     # Build keyword set for highlighting
     highlight_keywords = set()
@@ -1385,11 +1385,15 @@ def _generate_overlay_images(
     
     # STRICT non-overlap enforcement: each caption ends before next begins
     # This is the ONLY place timing is finalized - no MIN_DISPLAY expansion that could cause overlap
+    # ALSO: Skip captions that would overlap with Hook text (0-3s) to avoid visual clutter
+    hook_end_time = 3.0 if hook_text else 0.0
+    
     processed_captions = []
     prev_end = -1.0
     for cap in raw_captions:
         # Ensure this caption starts after previous one ended (with gap)
-        actual_start = max(cap['start'], prev_end + SUBTITLE_GAP)
+        # Also ensure subtitles don't overlap with Hook text display period
+        actual_start = max(cap['start'], prev_end + SUBTITLE_GAP, hook_end_time if cap['start'] < hook_end_time else cap['start'])
         actual_end = cap['end']
         
         # If start was pushed forward, also push end forward proportionally
@@ -1449,9 +1453,9 @@ def _generate_overlay_images(
         
         # Determine style-based colors
         if style == 'pop':
-            text_color = (255, 225, 53, 255)  # Yellow
-            outline_clr = (255, 107, 53, 255)  # Orange
-            bg_clr = (0, 0, 0, 120)
+            text_color = (255, 255, 255, 255)  # White (was yellow - looked blurry)
+            outline_clr = (220, 50, 50, 255)  # Red outline (was orange - low contrast)
+            bg_clr = (0, 0, 0, 140)  # Slightly darker bg for readability
         elif style == 'gradient':
             text_color = (255, 255, 255, 255)
             outline_clr = (0, 0, 0, 255)
