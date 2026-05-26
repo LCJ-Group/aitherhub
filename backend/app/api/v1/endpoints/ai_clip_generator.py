@@ -49,6 +49,7 @@ from contextlib import asynccontextmanager
 from fastapi import APIRouter, HTTPException, Query, Header, BackgroundTasks, UploadFile, File, Form, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import AsyncSessionLocal, engine
 
@@ -6258,7 +6259,7 @@ async def _get_product_images_from_master(product_name: str) -> list:
 
 # ─── Clip Feedback / Delete API ──────────────────────────────────────────────
 
-@router.post("/ai-clip/clips/{job_id}/{clip_id}/delete")
+@router.post("/clips/{job_id}/{clip_id}/delete")
 async def delete_clip_with_feedback(
     job_id: str,
     clip_id: str,
@@ -6336,7 +6337,7 @@ async def delete_clip_with_feedback(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/ai-clip/feedback")
+@router.get("/feedback")
 async def get_clip_feedback(
     limit: int = 50,
     category: str = None,
