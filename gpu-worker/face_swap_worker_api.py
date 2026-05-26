@@ -723,17 +723,27 @@ def direct_swap_frame(frame, detect_score: float = 0.5, use_enhancer: bool = Tru
 
         # Step 11: Apply mouth opening AFTER face paste (critical: must be after Step 10)
         # Previously this was in Step 7b which got overwritten by Step 10's alpha blend.
-        if mouth_open > 0.05 and hasattr(target_face, 'landmark_2d_106') and target_face.landmark_2d_106 is not None:
+        if mouth_open > 0.05:
             try:
-                lm106 = target_face.landmark_2d_106.astype(np.float32)
-                # Get mouth landmarks
-                upper_lip_center = lm106[90]  # Center of upper lip
-                lower_lip_center = lm106[99]  # Center of lower lip
-                mouth_center_pt = (upper_lip_center + lower_lip_center) / 2
+                # Determine mouth center and face height
+                # Try 106-point landmarks first, fallback to 5-point kps
+                has_106 = hasattr(target_face, 'landmark_2d_106') and target_face.landmark_2d_106 is not None
+                
+                if has_106:
+                    lm106 = target_face.landmark_2d_106.astype(np.float32)
+                    upper_lip_center = lm106[90]
+                    lower_lip_center = lm106[99]
+                    mouth_center_pt = (upper_lip_center + lower_lip_center) / 2
+                    face_height_px = np.linalg.norm(lm106[1] - lm106[16])
+                else:
+                    # Fallback: use 5-point landmarks (kps)
+                    # kps[3] = left mouth corner, kps[4] = right mouth corner
+                    kps = target_face.kps.astype(np.float32)
+                    mouth_center_pt = (kps[3] + kps[4]) / 2
+                    # Estimate face height from eye-to-mouth distance * 2.5
+                    eye_center = (kps[0] + kps[1]) / 2
+                    face_height_px = np.linalg.norm(eye_center - mouth_center_pt) * 2.5
 
-                # Calculate face height for proportional displacement
-                # Use forehead to chin distance (indices 1 and 16 in 106-point model)
-                face_height_px = np.linalg.norm(lm106[1] - lm106[16])
                 # Max displacement: 15% of face height for clearly visible mouth opening
                 max_displacement = face_height_px * 0.15
                 displacement = max_displacement * min(1.0, mouth_open)
@@ -780,7 +790,7 @@ def direct_swap_frame(frame, detect_score: float = 0.5, use_enhancer: bool = Tru
                     )
                     result[y_start:y_end, x_start:x_end] = deformed
             except Exception as e:
-                pass  # Silently skip mouth animation on error
+                logger.warning(f"[LipSync] mouth_open error: {e}")
 
     return result
 
@@ -1856,11 +1866,10 @@ async def preview_stream(websocket: WebSocket, api_key: str = Query(...)):
 
                         h_orig, w_orig = frame.shape[:2]
 
-                        # GFPGAN skip strategy: apply enhancer every N frames for speed
-                        # This doubles effective FPS while maintaining quality
+                        # GFPGAN: apply every frame to avoid flickering
+                        # Previously used interval=3 which caused visible quality flickering
                         use_enhancer = current_config.get("face_enhancer_enabled", True)
-                        gfpgan_interval = current_config.get("gfpgan_interval", 3)
-                        apply_gfpgan = use_enhancer and (frames_processed % gfpgan_interval == 0)
+                        apply_gfpgan = use_enhancer
                         
                         result = direct_swap_frame(frame, use_enhancer=apply_gfpgan, mouth_open=current_mouth_open)
 
@@ -1881,7 +1890,7 @@ async def preview_stream(websocket: WebSocket, api_key: str = Query(...)):
                             fps = 1000.0 / avg_ms if avg_ms > 0 else 0
                             logger.info(f"[Preview] Frame {frames_processed}: {elapsed_ms}ms "
                                         f"(avg: {avg_ms:.0f}ms, ~{fps:.1f} FPS, "
-                                        f"{w_orig}x{h_orig}, gfpgan={apply_gfpgan})")
+                                        f"{w_orig}x{h_orig}, mouth={current_mouth_open:.2f})")
 
                         await websocket.send_bytes(processed)
                         error_count = 0
