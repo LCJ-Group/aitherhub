@@ -153,18 +153,20 @@ def _refresh_product_image_urls(urls: list) -> list:
         refreshed.append(fresh_url if fresh_url else base_url)
     return refreshed
 
-# ─── Clip Feedback Table (AI Learning) ────────────────────────────────────────
+# ─── AI Clip Deletion Feedback Table ─────────────────────────────────────────
+# NOTE: 'clip_feedback' table is used by clip_feedback.py for adopt/reject workflow.
+# We use a separate 'ai_clip_deletion_feedback' table to avoid schema conflicts.
 _FEEDBACK_TABLE_ENSURED = False
 
 async def _ensure_feedback_table():
-    """Create clip_feedback table for AI learning from deletions (idempotent)"""
+    """Create ai_clip_deletion_feedback table for AI learning from deletions (idempotent)"""
     global _FEEDBACK_TABLE_ENSURED
     if _FEEDBACK_TABLE_ENSURED:
         return
     try:
         async with engine.begin() as conn:
             await conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS clip_feedback (
+                CREATE TABLE IF NOT EXISTS ai_clip_deletion_feedback (
                     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
                     job_id TEXT NOT NULL,
                     clip_id TEXT,
@@ -175,30 +177,18 @@ async def _ensure_feedback_table():
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
             """))
-            # Ensure columns exist (table may have been created with older schema)
-            for col, col_def in [
-                ("job_id", "TEXT NOT NULL DEFAULT ''"),
-                ("clip_id", "TEXT"),
-                ("action", "TEXT NOT NULL DEFAULT 'delete'"),
-                ("reason", "TEXT"),
-                ("reason_category", "TEXT"),
-                ("clip_metadata", "JSONB DEFAULT '{}'::jsonb"),
-            ]:
-                await conn.execute(text(f"""
-                    ALTER TABLE clip_feedback ADD COLUMN IF NOT EXISTS {col} {col_def}
-                """))
             await conn.execute(text("""
-                CREATE INDEX IF NOT EXISTS ix_clip_feedback_job
-                ON clip_feedback (job_id)
+                CREATE INDEX IF NOT EXISTS ix_ai_clip_del_fb_job
+                ON ai_clip_deletion_feedback (job_id)
             """))
             await conn.execute(text("""
-                CREATE INDEX IF NOT EXISTS ix_clip_feedback_category
-                ON clip_feedback (reason_category)
+                CREATE INDEX IF NOT EXISTS ix_ai_clip_del_fb_category
+                ON ai_clip_deletion_feedback (reason_category)
             """))
         _FEEDBACK_TABLE_ENSURED = True
-        logger.info("[ai-clip] clip_feedback table ensured")
+        logger.info("[ai-clip] ai_clip_deletion_feedback table ensured")
     except Exception as e:
-        logger.warning(f"[ai-clip] Failed to ensure clip_feedback table: {e}")
+        logger.warning(f"[ai-clip] Failed to ensure ai_clip_deletion_feedback table: {e}")
 
 # Concurrency limiter
 _AI_CLIP_SEMAPHORE = asyncio.Semaphore(2)  # 2並列まで許可
@@ -6316,7 +6306,7 @@ async def delete_clip_with_feedback(
             
             # Save feedback for AI learning
             await session.execute(text("""
-                INSERT INTO clip_feedback (job_id, clip_id, action, reason, reason_category, clip_metadata)
+                INSERT INTO ai_clip_deletion_feedback (job_id, clip_id, action, reason, reason_category, clip_metadata)
                 VALUES (:job_id, :clip_id, 'delete', :reason, :reason_category, CAST(:metadata AS jsonb))
             """), {
                 "job_id": job_id,
@@ -6363,7 +6353,7 @@ async def get_clip_feedback(
     
     try:
         async with AsyncSession(engine) as session:
-            query = "SELECT * FROM clip_feedback"
+            query = "SELECT * FROM ai_clip_deletion_feedback"
             params = {}
             if category:
                 query += " WHERE reason_category = :cat"
