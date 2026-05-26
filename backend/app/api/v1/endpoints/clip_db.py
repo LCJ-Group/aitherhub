@@ -162,6 +162,8 @@ class ClipSearchResult(BaseModel):
     detected_language: Optional[str] = None
     # AI model version
     ml_model_version: Optional[str] = None
+    # Playlists
+    playlists: Optional[list] = None  # [{id, name, color, icon}]
 
 
 class ClipSearchResponse(BaseModel):
@@ -225,6 +227,7 @@ async def search_clips(
     not_downloaded: Optional[bool] = Query(None, description="Filter clips never downloaded (download_count=0)"),
     language: Optional[str] = Query(None, description="Filter by detected language: ja, zh-TW, zh-CN, en, ko, th"),
     ai_version: Optional[str] = Query(None, description="Filter by AI model version (e.g. v7.20260501, pre-ai for no version)"),
+    playlist_id: Optional[str] = Query(None, description="Filter by playlist ID (show only clips in this playlist)"),
     # Sorting
     sort_by: str = Query("uploaded_at", description="Sort field: uploaded_at, created_at, gmv, cta_score, importance_score, duration_sec, rating, stream_date"),
     sort_order: str = Query("desc", description="Sort order: asc or desc"),
@@ -390,6 +393,16 @@ async def search_clips(
             conditions.append("vc.ml_model_version = :ai_version")
             params["ai_version"] = ai_version
 
+    # Playlist filter
+    if playlist_id:
+        conditions.append("""
+            vc.id IN (
+                SELECT cpi.clip_id FROM clip_playlist_items cpi
+                WHERE cpi.playlist_id = CAST(:playlist_id AS uuid)
+            )
+        """)
+        params["playlist_id"] = playlist_id
+
     where_clause = " AND ".join(conditions)
 
     # Validate sort
@@ -536,6 +549,25 @@ async def search_clips(
                     brand_map[cid] = []
                 brand_map[cid].append({"client_id": br["client_id"], "brand_name": br["brand_name"]})
 
+        # Batch load playlist assignments for all clip_ids
+        playlist_map = {}  # clip_id -> [{id, name, color, icon}]
+        if clip_ids_for_brands:
+            try:
+                playlist_sql = text("""
+                    SELECT cpi.clip_id::text as clip_id, p.id::text as playlist_id, p.name, p.color, p.icon
+                    FROM clip_playlist_items cpi
+                    JOIN clip_playlists p ON p.id = cpi.playlist_id
+                    WHERE cpi.clip_id::text = ANY(:cids)
+                """)
+                pl_result = await db.execute(playlist_sql, {"cids": clip_ids_for_brands})
+                for pr in pl_result.mappings().all():
+                    cid = pr["clip_id"]
+                    if cid not in playlist_map:
+                        playlist_map[cid] = []
+                    playlist_map[cid].append({"id": pr["playlist_id"], "name": pr["name"], "color": pr["color"], "icon": pr["icon"]})
+            except Exception:
+                pass  # Table may not exist yet on first deploy
+
         clips = []
         for row in rows:
             # Build clip URL (with SAS if needed)
@@ -620,6 +652,7 @@ async def search_clips(
                 unusable_comment=row.unusable_comment if hasattr(row, 'unusable_comment') else None,
                 detected_language=row.detected_language if hasattr(row, 'detected_language') else None,
                 ml_model_version=row.ml_model_version if hasattr(row, 'ml_model_version') else None,
+                playlists=playlist_map.get(str(row.clip_id)),
             ))
 
         return ClipSearchResponse(
@@ -2031,3 +2064,270 @@ async def get_review_stats(
     except Exception as e:
         logger.error(f"[clip-db] Review stats failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Review stats failed: {str(e)}")
+# PLAYLIST FEATURE - Create/manage playlists and assign clips to them
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class PlaylistCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    color: str = Field(default="#6366f1")
+    icon: str = Field(default="tag")
+    description: Optional[str] = None
+
+class PlaylistUpdate(BaseModel):
+    name: Optional[str] = None
+    color: Optional[str] = None
+    icon: Optional[str] = None
+    description: Optional[str] = None
+
+class PlaylistResponse(BaseModel):
+    id: str
+    name: str
+    color: str
+    icon: str
+    description: Optional[str] = None
+    clip_count: int = 0
+    created_at: Optional[str] = None
+
+
+@router.get("/playlists")
+async def list_playlists(
+    db: AsyncSession = Depends(get_db),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """List all playlists with clip counts."""
+    if not _check_admin_or_user(x_admin_key=x_admin_key):
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    try:
+        result = await db.execute(text("""
+            SELECT p.id, p.name, p.color, p.icon, p.description, p.created_at,
+                   COALESCE(cnt.clip_count, 0) as clip_count
+            FROM clip_playlists p
+            LEFT JOIN (
+                SELECT playlist_id, COUNT(*) as clip_count
+                FROM clip_playlist_items
+                GROUP BY playlist_id
+            ) cnt ON cnt.playlist_id = p.id
+            ORDER BY p.name ASC
+        """))
+        rows = result.fetchall()
+        playlists = []
+        for row in rows:
+            playlists.append(PlaylistResponse(
+                id=str(row.id),
+                name=row.name,
+                color=row.color or "#6366f1",
+                icon=row.icon or "tag",
+                description=row.description,
+                clip_count=row.clip_count,
+                created_at=row.created_at.isoformat() if row.created_at else None,
+            ))
+        return {"playlists": playlists}
+    except Exception as e:
+        logger.error(f"[clip-db] List playlists failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/playlists")
+async def create_playlist(
+    body: PlaylistCreate,
+    db: AsyncSession = Depends(get_db),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """Create a new playlist."""
+    if not _check_admin_or_user(x_admin_key=x_admin_key):
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    try:
+        result = await db.execute(
+            text("""
+                INSERT INTO clip_playlists (name, color, icon, description)
+                VALUES (:name, :color, :icon, :description)
+                RETURNING id, name, color, icon, description, created_at
+            """),
+            {"name": body.name, "color": body.color, "icon": body.icon, "description": body.description}
+        )
+        row = result.fetchone()
+        await db.commit()
+        return PlaylistResponse(
+            id=str(row.id),
+            name=row.name,
+            color=row.color,
+            icon=row.icon,
+            description=row.description,
+            clip_count=0,
+            created_at=row.created_at.isoformat() if row.created_at else None,
+        )
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"[clip-db] Create playlist failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/playlists/{playlist_id}")
+async def update_playlist(
+    playlist_id: str,
+    body: PlaylistUpdate,
+    db: AsyncSession = Depends(get_db),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """Update a playlist's name, color, icon, or description."""
+    if not _check_admin_or_user(x_admin_key=x_admin_key):
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    updates = []
+    params = {"pid": playlist_id}
+    if body.name is not None:
+        updates.append("name = :name")
+        params["name"] = body.name
+    if body.color is not None:
+        updates.append("color = :color")
+        params["color"] = body.color
+    if body.icon is not None:
+        updates.append("icon = :icon")
+        params["icon"] = body.icon
+    if body.description is not None:
+        updates.append("description = :description")
+        params["description"] = body.description
+
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    updates.append("updated_at = NOW()")
+
+    try:
+        result = await db.execute(
+            text(f"UPDATE clip_playlists SET {', '.join(updates)} WHERE id = CAST(:pid AS uuid) RETURNING id"),
+            params
+        )
+        if not result.fetchone():
+            raise HTTPException(status_code=404, detail="Playlist not found")
+        await db.commit()
+        return {"status": "ok"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"[clip-db] Update playlist failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/playlists/{playlist_id}")
+async def delete_playlist(
+    playlist_id: str,
+    db: AsyncSession = Depends(get_db),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """Delete a playlist (cascade removes all clip assignments)."""
+    if not _check_admin_or_user(x_admin_key=x_admin_key):
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    try:
+        result = await db.execute(
+            text("DELETE FROM clip_playlists WHERE id = CAST(:pid AS uuid) RETURNING id"),
+            {"pid": playlist_id}
+        )
+        if not result.fetchone():
+            raise HTTPException(status_code=404, detail="Playlist not found")
+        await db.commit()
+        return {"status": "ok", "deleted": playlist_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"[clip-db] Delete playlist failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/playlists/{playlist_id}/clips")
+async def add_clip_to_playlist(
+    playlist_id: str,
+    clip_id: str = Query(..., description="Clip UUID to add"),
+    db: AsyncSession = Depends(get_db),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """Add a clip to a playlist."""
+    if not _check_admin_or_user(x_admin_key=x_admin_key):
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    try:
+        await db.execute(
+            text("""
+                INSERT INTO clip_playlist_items (clip_id, playlist_id)
+                VALUES (CAST(:clip_id AS uuid), CAST(:playlist_id AS uuid))
+                ON CONFLICT (clip_id, playlist_id) DO NOTHING
+            """),
+            {"clip_id": clip_id, "playlist_id": playlist_id}
+        )
+        await db.commit()
+        return {"status": "ok", "clip_id": clip_id, "playlist_id": playlist_id}
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"[clip-db] Add clip to playlist failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/playlists/{playlist_id}/clips")
+async def remove_clip_from_playlist(
+    playlist_id: str,
+    clip_id: str = Query(..., description="Clip UUID to remove"),
+    db: AsyncSession = Depends(get_db),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """Remove a clip from a playlist."""
+    if not _check_admin_or_user(x_admin_key=x_admin_key):
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    try:
+        await db.execute(
+            text("""
+                DELETE FROM clip_playlist_items
+                WHERE clip_id = CAST(:clip_id AS uuid)
+                  AND playlist_id = CAST(:playlist_id AS uuid)
+            """),
+            {"clip_id": clip_id, "playlist_id": playlist_id}
+        )
+        await db.commit()
+        return {"status": "ok", "clip_id": clip_id, "playlist_id": playlist_id}
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"[clip-db] Remove clip from playlist failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/playlists/clip/{clip_id}")
+async def get_clip_playlists(
+    clip_id: str,
+    db: AsyncSession = Depends(get_db),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """Get all playlists that a specific clip belongs to."""
+    if not _check_admin_or_user(x_admin_key=x_admin_key):
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    try:
+        result = await db.execute(
+            text("""
+                SELECT p.id, p.name, p.color, p.icon, p.description, cpi.added_at
+                FROM clip_playlist_items cpi
+                JOIN clip_playlists p ON p.id = cpi.playlist_id
+                WHERE cpi.clip_id = CAST(:clip_id AS uuid)
+                ORDER BY p.name ASC
+            """),
+            {"clip_id": clip_id}
+        )
+        rows = result.fetchall()
+        playlists = []
+        for row in rows:
+            playlists.append({
+                "id": str(row.id),
+                "name": row.name,
+                "color": row.color or "#6366f1",
+                "icon": row.icon or "tag",
+                "description": row.description,
+                "added_at": row.added_at.isoformat() if row.added_at else None,
+            })
+        return {"playlists": playlists}
+    except Exception as e:
+        logger.error(f"[clip-db] Get clip playlists failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))

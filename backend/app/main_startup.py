@@ -804,6 +804,36 @@ async def run_all_ddl_migrations():
         except Exception as e:
             logger.warning(f"[DDL] magic_cut_user_materials: {e}")
 
+        # ── clip_playlists + clip_playlist_items (playlist/tag organization for clips) ──
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(_text("""
+                    CREATE TABLE IF NOT EXISTS clip_playlists (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        name TEXT NOT NULL,
+                        color TEXT DEFAULT '#6366f1',
+                        icon TEXT DEFAULT 'tag',
+                        description TEXT,
+                        created_at TIMESTAMPTZ DEFAULT NOW(),
+                        updated_at TIMESTAMPTZ DEFAULT NOW()
+                    )
+                """))
+                await conn.execute(_text("""
+                    CREATE TABLE IF NOT EXISTS clip_playlist_items (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        clip_id UUID NOT NULL,
+                        playlist_id UUID NOT NULL REFERENCES clip_playlists(id) ON DELETE CASCADE,
+                        added_at TIMESTAMPTZ DEFAULT NOW(),
+                        UNIQUE(clip_id, playlist_id)
+                    )
+                """))
+                await conn.execute(_text("CREATE INDEX IF NOT EXISTS idx_clip_playlist_items_clip_id ON clip_playlist_items(clip_id)"))
+                await conn.execute(_text("CREATE INDEX IF NOT EXISTS idx_clip_playlist_items_playlist_id ON clip_playlist_items(playlist_id)"))
+                await conn.execute(_text("CREATE INDEX IF NOT EXISTS idx_clip_playlists_name ON clip_playlists(name)"))
+                logger.info("[DDL] clip_playlists + clip_playlist_items \u2713")
+        except Exception as e:
+            logger.warning(f"[DDL] clip_playlists: {e}")
+
         elapsed = time.time() - ddl_start
         logger.info(f"[DDL] All migrations completed in {elapsed:.1f}s")
 

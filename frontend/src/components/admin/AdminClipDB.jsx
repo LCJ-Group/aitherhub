@@ -6,6 +6,7 @@ import {
   Download, Subtitles, Scissors, CheckCircle, Ban, AlertTriangle, Undo2,
   MessageSquare, SkipBack, SkipForward, Volume2, VolumeX,
   TrendingUp, Activity, Brain, Clock, Zap, Target, Eye, Layers,
+  ListPlus, List, Trash2, Palette, Edit3,
 } from "lucide-react";
 import { TikTokUrlRegisterButton } from "./TikTokTrackingPanel";
 import CaptionOverlayPlayer from "./CaptionOverlayPlayer";
@@ -116,8 +117,9 @@ const NG_REASONS = [
   { key: "other", label: "その他" },
 ];
 
-function ClipCard({ clip, onPlay, brands, adminKey, onBrandChange }) {
+function ClipCard({ clip, onPlay, brands, adminKey, onBrandChange, allPlaylists, onPlaylistChange }) {
   const [expanded, setExpanded] = useState(false);
+  const [showParams, setShowParams] = useState(false);
   const [showBrandPicker, setShowBrandPicker] = useState(false);
   const [assigning, setAssigning] = useState(false);
   const [brandSearch, setBrandSearch] = useState("");
@@ -585,6 +587,58 @@ function ClipCard({ clip, onPlay, brands, adminKey, onBrandChange }) {
           </p>
         )}
 
+        {/* Parameters tab (collapsible) */}
+        <div className="border-t border-gray-100 pt-1.5 mt-1">
+          <button
+            onClick={(e) => { e.stopPropagation(); setShowParams(!showParams); }}
+            className="flex items-center gap-1 text-[10px] text-gray-400 hover:text-gray-600 transition w-full"
+          >
+            <Activity className="w-3 h-3" />
+            <span>パラメータ</span>
+            <span className="ml-auto text-[9px]">{showParams ? '▲' : '▼'}</span>
+          </button>
+          {showParams && (
+            <div className="mt-1.5 space-y-1 text-[10px] text-gray-500 bg-gray-50 rounded-lg p-2">
+              {clip.duration_sec != null && (
+                <div className="flex justify-between"><span>長さ</span><span className="font-medium text-gray-700">{Math.round(clip.duration_sec)}秒</span></div>
+              )}
+              {clip.time_start != null && clip.time_end != null && (
+                <div className="flex justify-between"><span>区間</span><span className="font-medium text-gray-700">{clip.time_start.toFixed(1)}s - {clip.time_end.toFixed(1)}s</span></div>
+              )}
+              {clip.phase_index != null && (
+                <div className="flex justify-between"><span>フェーズ</span><span className="font-medium text-gray-700">#{clip.phase_index}</span></div>
+              )}
+              {clip.phase_description && (
+                <div className="flex justify-between gap-2"><span className="shrink-0">説明</span><span className="font-medium text-gray-700 text-right truncate">{clip.phase_description}</span></div>
+              )}
+              {clip.subtitle_style && (
+                <div className="flex justify-between"><span>字幕</span><span className="font-medium text-gray-700">{clip.subtitle_style}</span></div>
+              )}
+              {clip.detected_language && (
+                <div className="flex justify-between"><span>言語</span><span className="font-medium text-gray-700">{clip.detected_language}</span></div>
+              )}
+              {clip.viewer_count != null && clip.viewer_count > 0 && (
+                <div className="flex justify-between"><span>視聴者数</span><span className="font-medium text-gray-700">{clip.viewer_count.toLocaleString()}</span></div>
+              )}
+              {clip.importance_score != null && (
+                <div className="flex justify-between"><span>重要度</span><span className="font-medium text-gray-700">{(clip.importance_score * 100).toFixed(0)}%</span></div>
+              )}
+              {clip.stream_date && (
+                <div className="flex justify-between"><span>配信日</span><span className="font-medium text-gray-700">{clip.stream_date}</span></div>
+              )}
+              {clip.download_count != null && clip.download_count > 0 && (
+                <div className="flex justify-between"><span>DL数</span><span className="font-medium text-gray-700">{clip.download_count}</span></div>
+              )}
+              {clip.video_id && (
+                <div className="flex justify-between gap-1"><span className="shrink-0">Video</span><span className="font-mono text-[9px] text-gray-400 truncate">{clip.video_id.slice(0, 8)}...</span></div>
+              )}
+              {clip.clip_id && (
+                <div className="flex justify-between gap-1"><span className="shrink-0">Clip ID</span><span className="font-mono text-[9px] text-gray-400 truncate">{clip.clip_id.slice(0, 8)}...</span></div>
+              )}
+            </div>
+          )}
+        </div>
+
         {/* CLIP EDITOR link */}
         {clip.video_id && (
           <a
@@ -641,6 +695,30 @@ function ClipCard({ clip, onPlay, brands, adminKey, onBrandChange }) {
             <Layers className="w-3 h-3" /> PiP合成
           </button>
         )}
+
+        {/* Playlist assignment */}
+        <div className="flex items-center gap-1.5 pt-1 border-t border-gray-100 mt-1">
+          <ClipPlaylistPopover
+            clipId={clip.clip_id || clip.id}
+            clipPlaylists={clip.playlists}
+            allPlaylists={allPlaylists || []}
+            adminKey={adminKey}
+            onUpdate={onPlaylistChange}
+          />
+          {clip.playlists && clip.playlists.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {clip.playlists.map((pl) => (
+                <span
+                  key={pl.id}
+                  className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[9px] font-medium text-white"
+                  style={{ backgroundColor: pl.color || '#6366f1' }}
+                >
+                  {pl.name}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
 
         {/* TikTok tracking button */}
         <TikTokUrlRegisterButton clipId={clip.id} adminKey={adminKey} />
@@ -1356,6 +1434,9 @@ export default function AdminClipDB({ adminKey }) {
   const [notDownloadedFilter, setNotDownloadedFilter] = useState(null);
   const [languageFilter, setLanguageFilter] = useState("");
   const [aiVersionFilter, setAiVersionFilter] = useState("");
+  const [playlists, setPlaylists] = useState([]);
+  const [selectedPlaylistFilter, setSelectedPlaylistFilter] = useState("");
+  const [showPlaylistManager, setShowPlaylistManager] = useState(false);
   const [sortBy, setSortBy] = useState(initSort);
   const [sortOrder, setSortOrder] = useState(initOrder);
   const [page, setPage] = useState(initPage);
@@ -1493,7 +1574,7 @@ export default function AdminClipDB({ adminKey }) {
     if (searchMode === "structured" && enrichTriggered.current) {
       loadClips();
     }
-  }, [page, sortBy, sortOrder, selectedTag, soldFilter, ratingFilter, selectedBrand, unusableFilter, noBrandFilter, hasSubtitleFilter, hasTrimFilter, notDownloadedFilter, languageFilter, aiVersionFilter]);
+  }, [page, sortBy, sortOrder, selectedTag, soldFilter, ratingFilter, selectedBrand, unusableFilter, noBrandFilter, hasSubtitleFilter, hasTrimFilter, notDownloadedFilter, languageFilter, aiVersionFilter, selectedPlaylistFilter]);
 
   async function autoEnrichAndLoad() {
     // 1. Auto enrich (non-blocking for already-enriched clips)
@@ -1513,11 +1594,12 @@ export default function AdminClipDB({ adminKey }) {
       setEnriching(false);
     }
 
-    // 2. Load stats, tags, brands, clips
+    // 2. Load stats, tags, brands, playlists, clips
     loadStats();
     loadReviewStats();
     loadTags();
     loadBrands();
+    loadPlaylists();
     loadClips();
   }
 
@@ -1598,6 +1680,15 @@ export default function AdminClipDB({ adminKey }) {
     console.error("[ClipDB] CRITICAL: Failed to load brands from API and cache");
   }
 
+  async function loadPlaylists() {
+    try {
+      const data = await clipDbFetch("/playlists", {}, adminKey);
+      setPlaylists(data.playlists || []);
+    } catch (e) {
+      console.warn("[ClipDB] Failed to load playlists:", e);
+    }
+  }
+
   async function loadClips() {
     setLoading(true);
     try {
@@ -1621,6 +1712,7 @@ export default function AdminClipDB({ adminKey }) {
       if (notDownloadedFilter !== null) params.not_downloaded = notDownloadedFilter;
       if (languageFilter) params.language = languageFilter;
       if (aiVersionFilter) params.ai_version = aiVersionFilter;
+      if (selectedPlaylistFilter) params.playlist_id = selectedPlaylistFilter;
 
       const data = await clipDbFetch("/search", params, adminKey);
       setClips(data.clips || []);
@@ -1886,6 +1978,29 @@ export default function AdminClipDB({ adminKey }) {
               <option value="v7.20260501">AI v7.20260501</option>
             </select>
 
+            {/* Playlist filter */}
+            <select
+              value={selectedPlaylistFilter}
+              onChange={(e) => { setSelectedPlaylistFilter(e.target.value); setPage(1); }}
+              className="px-3 py-1.5 rounded-lg border border-indigo-300 text-xs bg-indigo-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
+            >
+              <option value="">プレイリスト: すべて</option>
+              {playlists.map((pl) => (
+                <option key={pl.id} value={pl.id}>
+                  {pl.name} ({pl.clip_count})
+                </option>
+              ))}
+            </select>
+
+            <button
+              onClick={() => setShowPlaylistManager(true)}
+              className="px-2 py-1.5 rounded-lg border border-indigo-300 text-xs text-indigo-600 hover:bg-indigo-50 font-medium"
+              title="プレイリスト管理"
+            >
+              <ListPlus className="w-3.5 h-3.5 inline mr-0.5" />
+              管理
+            </button>
+
             <select
               value={sortBy}
               onChange={(e) => { setSortBy(e.target.value); setPage(1); }}
@@ -1931,12 +2046,12 @@ export default function AdminClipDB({ adminKey }) {
               className="px-3 py-1.5 rounded-lg border border-gray-300 text-xs w-32 focus:outline-none focus:ring-2 focus:ring-purple-500"
             />
 
-            {(selectedTag || selectedProduct || selectedLiver || selectedBrand || soldFilter !== null || ratingFilter || unusableFilter !== null || noBrandFilter !== null || hasSubtitleFilter !== null || hasTrimFilter !== null || notDownloadedFilter !== null) && (
+            {(selectedTag || selectedProduct || selectedLiver || selectedBrand || soldFilter !== null || ratingFilter || unusableFilter !== null || noBrandFilter !== null || hasSubtitleFilter !== null || hasTrimFilter !== null || notDownloadedFilter !== null || selectedPlaylistFilter) && (
               <button
                 onClick={() => {
                   setSelectedTag(""); setSelectedProduct(""); setSelectedLiver("");
                   setSelectedBrand(""); setSoldFilter(null); setRatingFilter(""); setUnusableFilter(null);
-                  setNoBrandFilter(null); setHasSubtitleFilter(null); setHasTrimFilter(null); setNotDownloadedFilter(null); setPage(1);
+                  setNoBrandFilter(null); setHasSubtitleFilter(null); setHasTrimFilter(null); setNotDownloadedFilter(null); setSelectedPlaylistFilter(""); setPage(1);
                 }}
                 className="px-2 py-1.5 rounded-lg text-xs text-red-500 hover:bg-red-50 border border-red-200"
               >
@@ -2612,6 +2727,8 @@ export default function AdminClipDB({ adminKey }) {
                 brands={brands}
                 adminKey={adminKey}
                 onBrandChange={handleBrandChange}
+                allPlaylists={playlists}
+                onPlaylistChange={() => { loadClips(); loadPlaylists(); }}
               />
             ))}
           </div>
@@ -2707,6 +2824,16 @@ export default function AdminClipDB({ adminKey }) {
           setJobId={setPipJobId}
           jobStatus={pipJobStatus}
           setJobStatus={setPipJobStatus}
+        />
+      )}
+
+      {/* Playlist Manager Modal */}
+      {showPlaylistManager && (
+        <PlaylistManagerModal
+          onClose={() => setShowPlaylistManager(false)}
+          adminKey={adminKey}
+          playlists={playlists}
+          onRefresh={loadPlaylists}
         />
       )}
     </div>
@@ -3663,6 +3790,259 @@ function PipCompositionModal({ clip, onClose, adminKey, generating, setGeneratin
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+
+// ═══════════════════════════════════════════════
+// ─── Playlist Manager Modal ───
+// ═══════════════════════════════════════════════
+function PlaylistManagerModal({ onClose, adminKey, playlists, onRefresh }) {
+  const [newName, setNewName] = useState("");
+  const [newColor, setNewColor] = useState("#6366f1");
+  const [creating, setCreating] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [editName, setEditName] = useState("");
+  const [editColor, setEditColor] = useState("");
+
+  const PRESET_COLORS = [
+    "#6366f1", "#ef4444", "#f59e0b", "#10b981", "#3b82f6",
+    "#8b5cf6", "#ec4899", "#14b8a6", "#f97316", "#64748b",
+  ];
+
+  async function handleCreate() {
+    if (!newName.trim()) return;
+    setCreating(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/clip-db/playlists`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Admin-Key": adminKey },
+        body: JSON.stringify({ name: newName.trim(), color: newColor }),
+      });
+      if (!res.ok) throw new Error("作成失敗");
+      setNewName("");
+      onRefresh();
+    } catch (e) {
+      alert(e.message);
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function handleDelete(id, name) {
+    if (!confirm(`「${name}」を削除しますか？\n※ クリップとの紐付けも全て解除されます`)) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/clip-db/playlists/${id}`, {
+        method: "DELETE",
+        headers: { "X-Admin-Key": adminKey },
+      });
+      if (!res.ok) throw new Error("削除失敗");
+      onRefresh();
+    } catch (e) {
+      alert(e.message);
+    }
+  }
+
+  async function handleUpdate(id) {
+    if (!editName.trim()) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/clip-db/playlists/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", "X-Admin-Key": adminKey },
+        body: JSON.stringify({ name: editName.trim(), color: editColor }),
+      });
+      if (!res.ok) throw new Error("更新失敗");
+      setEditingId(null);
+      onRefresh();
+    } catch (e) {
+      alert(e.message);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
+      <div className="relative bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        {/* Header */}
+        <div className="sticky top-0 z-10 bg-white rounded-t-2xl border-b border-gray-100 px-5 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <List className="w-5 h-5 text-indigo-500" />
+            <h3 className="text-base font-bold text-gray-800">プレイリスト管理</h3>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="px-5 py-4 space-y-4">
+          {/* Create new playlist */}
+          <div className="p-3 bg-gray-50 rounded-xl space-y-2">
+            <p className="text-xs font-semibold text-gray-600">新しいプレイリスト</p>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleCreate()}
+                placeholder="例: お気に入り、バグあり、本番用..."
+                className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+              <button
+                onClick={handleCreate}
+                disabled={creating || !newName.trim()}
+                className="px-3 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition"
+              >
+                {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+              </button>
+            </div>
+            <div className="flex gap-1.5 flex-wrap">
+              {PRESET_COLORS.map((c) => (
+                <button
+                  key={c}
+                  onClick={() => setNewColor(c)}
+                  className={`w-5 h-5 rounded-full border-2 transition ${newColor === c ? "border-gray-800 scale-125" : "border-transparent hover:scale-110"}`}
+                  style={{ backgroundColor: c }}
+                />
+              ))}
+            </div>
+          </div>
+
+          {/* Existing playlists */}
+          <div className="space-y-2">
+            {playlists.length === 0 && (
+              <p className="text-center text-sm text-gray-400 py-6">プレイリストがありません</p>
+            )}
+            {playlists.map((pl) => (
+              <div key={pl.id} className="flex items-center gap-3 p-3 bg-white border border-gray-200 rounded-xl hover:border-gray-300 transition">
+                {editingId === pl.id ? (
+                  <div className="flex-1 space-y-2">
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={editName}
+                        onChange={(e) => setEditName(e.target.value)}
+                        className="flex-1 px-2 py-1 text-sm border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                      <button onClick={() => handleUpdate(pl.id)} className="px-2 py-1 bg-indigo-600 text-white text-xs rounded-md hover:bg-indigo-700">保存</button>
+                      <button onClick={() => setEditingId(null)} className="px-2 py-1 text-xs text-gray-500 border border-gray-200 rounded-md">取消</button>
+                    </div>
+                    <div className="flex gap-1.5 flex-wrap">
+                      {PRESET_COLORS.map((c) => (
+                        <button
+                          key={c}
+                          onClick={() => setEditColor(c)}
+                          className={`w-4 h-4 rounded-full border-2 transition ${editColor === c ? "border-gray-800 scale-125" : "border-transparent hover:scale-110"}`}
+                          style={{ backgroundColor: c }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: pl.color || "#6366f1" }} />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-gray-800 truncate">{pl.name}</p>
+                      <p className="text-[10px] text-gray-400">{pl.clip_count} クリップ</p>
+                    </div>
+                    <button
+                      onClick={() => { setEditingId(pl.id); setEditName(pl.name); setEditColor(pl.color || "#6366f1"); }}
+                      className="p-1.5 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition"
+                    >
+                      <Edit3 className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => handleDelete(pl.id, pl.name)}
+                      className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md transition"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════
+// ─── Clip Playlist Popover (add/remove clip from playlists) ───
+// ═══════════════════════════════════════════════
+function ClipPlaylistPopover({ clipId, clipPlaylists, allPlaylists, adminKey, onUpdate }) {
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(null); // playlist_id being toggled
+
+  const clipPlaylistIds = (clipPlaylists || []).map(p => p.id);
+
+  async function togglePlaylist(playlistId) {
+    setLoading(playlistId);
+    const isInPlaylist = clipPlaylistIds.includes(playlistId);
+    try {
+      const url = `${API_BASE}/api/v1/clip-db/playlists/${playlistId}/clips?clip_id=${clipId}`;
+      const res = await fetch(url, {
+        method: isInPlaylist ? "DELETE" : "POST",
+        headers: { "X-Admin-Key": adminKey },
+      });
+      if (!res.ok) throw new Error("Failed");
+      onUpdate();
+    } catch (e) {
+      console.error("[Playlist] Toggle failed:", e);
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  return (
+    <div className="relative">
+      <button
+        onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
+        className={`p-1 rounded-md transition ${
+          clipPlaylists?.length > 0
+            ? "text-indigo-600 bg-indigo-50 hover:bg-indigo-100"
+            : "text-gray-400 hover:text-indigo-600 hover:bg-indigo-50"
+        }`}
+        title="プレイリストに追加/削除"
+      >
+        <ListPlus className="w-3.5 h-3.5" />
+      </button>
+
+      {open && (
+        <div
+          className="absolute bottom-full right-0 mb-1 w-48 bg-white border border-gray-200 rounded-xl shadow-lg z-30 py-1 max-h-48 overflow-y-auto"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="px-3 py-1.5 text-[10px] font-semibold text-gray-500 border-b border-gray-100">
+            プレイリスト
+          </div>
+          {allPlaylists.length === 0 && (
+            <p className="px-3 py-2 text-xs text-gray-400">プレイリストなし</p>
+          )}
+          {allPlaylists.map((pl) => {
+            const isIn = clipPlaylistIds.includes(pl.id);
+            const isToggling = loading === pl.id;
+            return (
+              <button
+                key={pl.id}
+                onClick={() => togglePlaylist(pl.id)}
+                disabled={isToggling}
+                className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-gray-50 transition ${isIn ? "font-medium" : ""}`}
+              >
+                <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: pl.color || "#6366f1" }} />
+                <span className="flex-1 text-left truncate">{pl.name}</span>
+                {isToggling ? (
+                  <Loader2 className="w-3 h-3 animate-spin text-gray-400" />
+                ) : isIn ? (
+                  <CheckCircle className="w-3.5 h-3.5 text-indigo-600" />
+                ) : (
+                  <Plus className="w-3 h-3 text-gray-300" />
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
