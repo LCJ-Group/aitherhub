@@ -175,6 +175,18 @@ async def _ensure_feedback_table():
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
             """))
+            # Ensure columns exist (table may have been created with older schema)
+            for col, col_def in [
+                ("job_id", "TEXT NOT NULL DEFAULT ''"),
+                ("clip_id", "TEXT"),
+                ("action", "TEXT NOT NULL DEFAULT 'delete'"),
+                ("reason", "TEXT"),
+                ("reason_category", "TEXT"),
+                ("clip_metadata", "JSONB DEFAULT '{}'::jsonb"),
+            ]:
+                await conn.execute(text(f"""
+                    ALTER TABLE clip_feedback ADD COLUMN IF NOT EXISTS {col} {col_def}
+                """))
             await conn.execute(text("""
                 CREATE INDEX IF NOT EXISTS ix_clip_feedback_job
                 ON clip_feedback (job_id)
