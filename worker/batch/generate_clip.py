@@ -1945,11 +1945,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
 
     # Color mapping for highlight_words types (ASS BGR format)
+    # Impact style: bright, high-contrast colors that pop against black outline
     HIGHLIGHT_COLORS = {
-        "product": _hex_to_ass_color("#FFD700"),   # yellow
-        "price": _hex_to_ass_color("#FF4444"),      # red
-        "emotion": _hex_to_ass_color("#FF8C00"),    # orange
-        "cta": _hex_to_ass_color("#00FF7F"),        # green
+        "product": _hex_to_ass_color("#FFFF00"),   # bright yellow
+        "price": _hex_to_ass_color("#FF3333"),      # bright red
+        "emotion": _hex_to_ass_color("#00FFFF"),    # cyan
+        "cta": _hex_to_ass_color("#FF3333"),        # bright red
     }
 
     for seg in segments:

@@ -162,15 +162,77 @@ def generate_ass_content(
     # Calculate font size based on video resolution
     base_font_size = max(int(video_h * 0.055), 28)
 
-    # Style presets
+    # Style presets (synced with clip_editor_v2.py _ASS_STYLES)
     style_configs = {
         "default": {
             "font": "Noto Sans CJK JP",
             "bold": 1,
-            "outline": 3,
-            "shadow": 1,
+            "outline": 5,
+            "shadow": 3,
             "primary_color": "&H00FFFFFF",
             "outline_color": "&H00000000",
+            "border_style": 1,
+            "back_color": "&H80000000",
+        },
+        "simple": {
+            "font": "Noto Sans CJK JP",
+            "bold": 1,
+            "outline": 5,
+            "shadow": 3,
+            "primary_color": "&H00FFFFFF",
+            "outline_color": "&H00000000",
+            "border_style": 1,
+            "back_color": "&H80000000",
+        },
+        "box": {
+            "font": "Noto Sans CJK JP",
+            "bold": 1,
+            "outline": 22,
+            "shadow": 0,
+            "primary_color": "&H00FFFFFF",
+            "outline_color": "&H00000000",
+            "border_style": 3,
+            "back_color": "&H33000000",
+        },
+        "outline": {
+            "font": "Noto Sans CJK JP",
+            "bold": 1,
+            "outline": 8,
+            "shadow": 0,
+            "primary_color": "&H00FFFFFF",
+            "outline_color": "&H00000000",
+            "border_style": 1,
+            "back_color": "&H00000000",
+        },
+        "pop": {
+            "font": "Noto Sans CJK JP",
+            "bold": 1,
+            "outline": 9,
+            "shadow": 3,
+            "primary_color": "&H00FFFFFF",
+            "outline_color": "&H00000000",
+            "border_style": 1,
+            "back_color": "&H00000000",
+        },
+        "gradient": {
+            "font": "Noto Sans CJK JP",
+            "bold": 1,
+            "outline": 22,
+            "shadow": 0,
+            "primary_color": "&H00FFFFFF",
+            "outline_color": "&H00000000",
+            "border_style": 3,
+            "back_color": "&H26C852BB",
+        },
+        "karaoke": {
+            "font": "Noto Sans CJK JP",
+            "bold": 1,
+            "outline": 22,
+            "shadow": 0,
+            "primary_color": "&H7FFFFFFF",
+            "outline_color": "&H00000000",
+            "border_style": 3,
+            "back_color": "&H4C000000",
         },
         "yellow": {
             "font": "Noto Sans CJK JP",
@@ -179,6 +241,8 @@ def generate_ass_content(
             "shadow": 1,
             "primary_color": "&H0000FFFF",
             "outline_color": "&H00000000",
+            "border_style": 1,
+            "back_color": "&H00000000",
         },
         "neon": {
             "font": "Noto Sans CJK JP",
@@ -187,6 +251,8 @@ def generate_ass_content(
             "shadow": 2,
             "primary_color": "&H0000FF00",
             "outline_color": "&H00FF00FF",
+            "border_style": 1,
+            "back_color": "&H00000000",
         },
     }
     cfg = style_configs.get(style, style_configs["default"])
@@ -203,7 +269,7 @@ WrapStyle: 0
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{cfg['font']},{base_font_size},{cfg['primary_color']},&H000000FF,{cfg['outline_color']},&H80000000,{cfg['bold']},0,0,0,100,100,0,0,1,{cfg['outline']},{cfg['shadow']},2,10,10,{margin_v},1
+Style: Default,{cfg['font']},{base_font_size},{cfg['primary_color']},&H000000FF,{cfg['outline_color']},{cfg.get('back_color', '&H80000000')},{cfg['bold']},0,0,0,100,100,0,0,{cfg.get('border_style', 1)},{cfg['outline']},{cfg['shadow']},2,10,10,{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text

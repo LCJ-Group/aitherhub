@@ -128,21 +128,21 @@ const SUBTITLE_PRESETS = {
   },
   pop: {
     id: 'pop',
-    name: window.__t('clipEditorV2_cdf397', 'ポップ'),
-    desc: window.__t('clipEditorV2_03484c', 'TikTok投稿におすすめ'),
+    name: window.__t('clipEditorV2_cdf397', 'インパクト'),
+    desc: window.__t('clipEditorV2_03484c', 'TikTok人気クリエイター型'),
     icon: '\u2728',
     container: {},
     text: {
-      color: '#FFE135',
-      fontSize: 20,
+      color: '#FFFFFF',
+      fontSize: 22,
       fontWeight: 900,
-      textShadow: '-2px -2px 0 #FF6B35, 2px -2px 0 #FF6B35, -2px 2px 0 #FF6B35, 2px 2px 0 #FF6B35, 0 4px 12px rgba(0,0,0,0.7)',
+      textShadow: '-3px -3px 0 #000, 3px -3px 0 #000, -3px 3px 0 #000, 3px 3px 0 #000, 0 0 12px rgba(0,0,0,0.9), 0 4px 8px rgba(0,0,0,0.5)',
       backgroundColor: 'transparent',
       padding: '4px 12px',
       borderRadius: 0,
-      letterSpacing: 1,
+      letterSpacing: 1.5,
       lineHeight: 1.4,
-      WebkitTextStroke: '1px #FF6B35',
+      WebkitTextStroke: '2.5px #000',
       paintOrder: 'stroke fill',
     },
   },
@@ -1761,35 +1761,36 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
   };
 
     // ─── Pop style: alternate font sizes for visual rhythm ───
-  const renderPopText = (text) => {
+  const renderPopText = (caption) => {
+    // Impact style: white text with keyword highlights in red accent
+    if (!caption) return null;
+    const text = typeof caption === 'string' ? caption : caption.text;
     if (!text) return null;
-    // Split into characters and alternate sizes
-    const chars = [...text];
-    const popColors = ['#FFE135', '#FF6B35', '#FF3CAC', '#00F5D4', '#FFF'];
-    return chars.map((ch, i) => {
-      const sizeVariant = i % 3 === 0 ? 1.3 : i % 3 === 1 ? 0.85 : 1.1;
-      const colorIdx = Math.floor(i / 2) % popColors.length;
-      return (
-        <span
-          key={i}
-          style={{
-            fontSize: `${(SUBTITLE_PRESETS.pop.text.fontSize * sizeVariant)}px`,
-            color: popColors[colorIdx],
-            display: 'inline',
-          }}
-        >
-          {ch}
-        </span>
-      );
+    const hwList = (typeof caption === 'object' && caption.highlight_words) || [];
+    if (!hwList.length) return text;
+    // Build regex from highlight words
+    const keywords = hwList.filter(hw => hw.word && hw.type).map(hw => hw.word);
+    if (!keywords.length) return text;
+    const escaped = keywords.map(kw => kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    const regex = new RegExp(`(${escaped.join('|')})`, 'g');
+    const parts = text.split(regex);
+    return parts.map((part, i) => {
+      const hw = hwList.find(h => h.word === part);
+      if (hw && hw.type) {
+        // Impact highlight: red for price/CTA, bright yellow for product, cyan for emotion
+        const impactColors = { product: '#FFFF00', price: '#FF3333', emotion: '#00FFFF', cta: '#FF3333' };
+        return <span key={i} style={{ color: impactColors[hw.type] || '#FF3333', fontWeight: 900 }}>{part}</span>;
+      }
+      return <span key={i}>{part}</span>;
     });
   };
 
   // ─── Highlight word color mapping ───
   const HW_COLORS = {
-    product: '#FFD700',   // yellow
-    price: '#FF4444',     // red
-    emotion: '#FF8C00',   // orange
-    cta: '#00FF7F',       // green
+    product: '#FFFF00',   // bright yellow
+    price: '#FF3333',     // bright red
+    emotion: '#00FFFF',   // cyan
+    cta: '#FF3333',       // bright red (same as price for impact)
   };
 
   const getHighlightColor = (wordText, highlightWords) => {
@@ -2419,7 +2420,7 @@ const ClipEditorV2 = ({ videoId, clip, videoData, onClose, onClipUpdated }) => {
                     {subtitleStyle === 'karaoke'
                       ? renderKaraokeText(currentCaption)
                       : subtitleStyle === 'pop'
-                        ? renderPopText(currentCaption.text)
+                        ? renderPopText(currentCaption)
                         : renderHighlightedText(currentCaption)}
                   </span>
                 </div>

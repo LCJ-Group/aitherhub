@@ -1324,12 +1324,11 @@ _ASS_STYLES = {
         'border_style': 1, 'back_color': '&H00000000',
     },
     'pop': {
-        # CSS: #FFE135 text (yellow), #FF6B35 stroke (orange)
-        # ASS BGR: FFE135 -> R=FF,G=E1,B=35 -> &H0035E1FF
-        # ASS BGR: FF6B35 -> R=FF,G=6B,B=35 -> &H00356BFF
-        'fontsize': 90, 'bold': 1, 'primary_color': '&H0035E1FF',
-        'outline_color': '&H00356BFF', 'outline': 7, 'shadow': 4,
-        'border_style': 1, 'back_color': '&H70000000',
+        # Impact style: white text + thick black outline (TikTok creator style)
+        # ASS BGR: FFFFFF -> &H00FFFFFF, 000000 -> &H00000000
+        'fontsize': 92, 'bold': 1, 'primary_color': '&H00FFFFFF',
+        'outline_color': '&H00000000', 'outline': 9, 'shadow': 3,
+        'border_style': 1, 'back_color': '&H00000000',
     },
     'gradient': {
         # CSS: white text, linear-gradient(135deg, rgba(139,92,246,0.85), rgba(236,72,153,0.85)) background
@@ -1498,10 +1497,10 @@ def _generate_ass_content(captions: list, style: str, position_x: float, positio
 
     # Color mapping for highlight_words types (ASS BGR format)
     _HW_COLORS = {
-        'product': '&H0000D7FF',   # #FFD700 yellow -> BGR 00D7FF
-        'price': '&H004444FF',      # #FF4444 red -> BGR 4444FF
-        'emotion': '&H00008CFF',    # #FF8C00 orange -> BGR 008CFF
-        'cta': '&H007FFF00',        # #00FF7F green -> BGR 7FFF00
+        'product': '&H0000FFFF',   # #FFFF00 bright yellow -> BGR 00FFFF
+        'price': '&H003333FF',      # #FF3333 bright red -> BGR 3333FF
+        'emotion': '&H00FFFF00',    # #00FFFF cyan -> BGR FFFF00
+        'cta': '&H003333FF',        # #FF3333 bright red -> BGR 3333FF
     }
 
     for cap in processed:
@@ -1635,9 +1634,9 @@ _DRAWTEXT_STYLES = {
         'shadowcolor': 'black@0.0', 'box': 0,
     },
     'pop': {
-        'fontsize': 90, 'fontcolor': '#FFE135', 'borderw': 5,
-        'bordercolor': '#FF6B35', 'shadowx': 4, 'shadowy': 4,
-        'shadowcolor': 'black@0.5', 'box': 0,
+        'fontsize': 92, 'fontcolor': 'white', 'borderw': 9,
+        'bordercolor': 'black', 'shadowx': 3, 'shadowy': 3,
+        'shadowcolor': 'black@0.7', 'box': 0,
     },
     'gradient': {
         'fontsize': 80, 'fontcolor': 'white', 'borderw': 0,
