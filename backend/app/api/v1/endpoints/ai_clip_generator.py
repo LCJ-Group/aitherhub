@@ -130,6 +130,28 @@ async def _ensure_product_master_table():
     except Exception as e:
         logger.warning(f"[ai-clip] Failed to ensure product_master table: {e}")
 
+
+
+def _refresh_product_image_urls(urls: list) -> list:
+    """Refresh SAS tokens for product image URLs.
+    
+    Product images are stored in Azure Blob with SAS tokens that expire.
+    This function strips old SAS tokens and generates fresh ones.
+    """
+    if not urls:
+        return []
+    from app.services.storage_service import generate_read_sas_from_url
+    refreshed = []
+    for url in urls:
+        if not url:
+            continue
+        # Strip existing SAS query params to get base blob URL
+        base_url = url.split("?", 1)[0] if "?" in url else url
+        # Generate fresh SAS (24h expiry)
+        fresh_url = generate_read_sas_from_url(base_url)
+        refreshed.append(fresh_url if fresh_url else base_url)
+    return refreshed
+
 # ─── Clip Feedback Table (AI Learning) ────────────────────────────────────────
 _FEEDBACK_TABLE_ENSURED = False
 
@@ -6062,7 +6084,7 @@ async def list_product_master(
             "id": str(r.id),
             "product_name": r.product_name,
             "brand_name": r.brand_name or "",
-            "product_image_urls": r.product_image_urls if r.product_image_urls else [],
+            "product_image_urls": _refresh_product_image_urls(r.product_image_urls) if r.product_image_urls else [],
             "keywords": list(r.keywords) if r.keywords else [],
             "is_active": r.is_active,
             "created_at": r.created_at.isoformat() if r.created_at else None,
@@ -6489,7 +6511,7 @@ async def search_product_master(
                     "id": str(r.id),
                     "product_name": r.product_name,
                     "brand_name": r.brand_name or "",
-                    "product_image_urls": r.product_image_urls if r.product_image_urls else [],
+                    "product_image_urls": _refresh_product_image_urls(r.product_image_urls) if r.product_image_urls else [],
                     "keywords": list(r.keywords) if r.keywords else [],
                 }
                 for r in rows

@@ -3510,7 +3510,8 @@ function PipCompositionModal({ clip, onClose, adminKey, generating, setGeneratin
           body: formData,
         });
         const data = await res.json();
-        const readUrl = data.read_url || data.blob_url;
+        // Save blob_url (without SAS) for permanent storage; SAS is regenerated on read
+        const readUrl = data.blob_url || data.read_url;
         setProductImages(prev => prev.map(img =>
           img.preview === newImages[i].preview ? { ...img, uploading: false, url: readUrl } : img
         ));
