@@ -917,18 +917,20 @@ async def cron_fetch_all(x_admin_key: Optional[str] = Header(None)):
                 logger.error(f"Failed to fetch video {vid_id}: {e}")
                 results["errors"] += 1
 
+    # Auto-discover new videos for all accounts
+    try:
+        discover_results = await _discover_new_videos_internal()
+        results["new_videos_discovered"] = discover_results.get("new_videos_found", 0)
+        results["accounts_checked"] = discover_results.get("accounts_checked", 0)
+    except Exception as e:
+        logger.error(f"Failed to discover new videos during fetch-all: {e}")
+        results["new_videos_discovered"] = 0
+
     return results
 
 
-@router.post("/cron/discover-new")
-async def cron_discover_new_videos(x_admin_key: Optional[str] = Header(None)):
-    """
-    Scheduled job: Discover and auto-import NEW videos for all tracked accounts.
-    For each unique account, fetches the latest page of posts and registers any
-    videos not already in the DB. This ensures new uploads are caught quickly.
-    """
-    verify_admin(x_admin_key)
-
+async def _discover_new_videos_internal():
+    """Internal function to discover new videos for all tracked accounts."""
     results = {"accounts_checked": 0, "new_videos_found": 0, "errors": 0}
 
     # Get all unique account names
@@ -958,14 +960,12 @@ async def cron_discover_new_videos(x_admin_key: Optional[str] = Header(None)):
     for account_name in account_names:
         results["accounts_checked"] += 1
         try:
-            # Get user_id for this account
             user_data = await _fetch_user_info(account_name)
             user_info = user_data.get("user", {})
             user_id = user_info.get("id")
             if not user_id:
                 continue
 
-            # Get existing video IDs for this account
             async with get_session() as session:
                 result = await session.execute(
                     text("SELECT tiktok_video_id FROM tiktok_tracked_videos WHERE account_name = :account"),
@@ -973,7 +973,6 @@ async def cron_discover_new_videos(x_admin_key: Optional[str] = Header(None)):
                 )
                 existing_ids = {row[0] for row in result.fetchall()}
 
-            # Fetch latest page of posts (most recent first)
             page_data = await _fetch_user_posts(str(user_id), count=30, cursor=0)
             videos = page_data.get("videos", [])
 
@@ -982,7 +981,6 @@ async def cron_discover_new_videos(x_admin_key: Optional[str] = Header(None)):
                 if not video_id or video_id in existing_ids:
                     continue
 
-                # New video found! Register it.
                 author = post.get("author", {})
                 acc_name = author.get("unique_id", "") if isinstance(author, dict) else account_name
                 if not acc_name:
@@ -999,7 +997,6 @@ async def cron_discover_new_videos(x_admin_key: Optional[str] = Header(None)):
 
                 tiktok_url = f"https://www.tiktok.com/@{acc_name}/video/{video_id}"
 
-                # Auto-match by duration
                 clip_db_id = None
                 if duration > 0 and clip_candidates:
                     tolerance = 3.0
@@ -1013,7 +1010,6 @@ async def cron_discover_new_videos(x_admin_key: Optional[str] = Header(None)):
                         close_clips.sort(key=lambda c: abs(float(c["duration_sec"]) - float(duration)))
                         clip_db_id = str(close_clips[0]["id"])
 
-                # Convert create_time to posted_at
                 posted_at = None
                 if create_time:
                     try:
@@ -1068,6 +1064,16 @@ async def cron_discover_new_videos(x_admin_key: Optional[str] = Header(None)):
             results["errors"] += 1
 
     return results
+
+
+@router.post("/cron/discover-new")
+async def cron_discover_new_videos(x_admin_key: Optional[str] = Header(None)):
+    """
+    Scheduled job: Discover and auto-import NEW videos for all tracked accounts.
+    Now also called automatically by cron/fetch-all.
+    """
+    verify_admin(x_admin_key)
+    return await _discover_new_videos_internal()
 
 
 # ─── Account Bulk Import ─────────────────────────────────────────────────────

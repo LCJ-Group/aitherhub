@@ -689,23 +689,6 @@ export default function TikTokTrackingPanel({ adminKey }) {
           <div className="flex items-center justify-between">
             <div className="text-sm font-semibold text-teal-700">👥 登録済みアカウント管理</div>
             <div className="flex gap-2">
-              <button
-                onClick={async () => {
-                  try {
-                    const res = await fetch(`${API_BASE}/api/v1/tiktok-tracking/cron/discover-new`, { method: "POST", headers });
-                    if (res.ok) {
-                      const data = await res.json();
-                      alert(`✅ 新規検出完了\nチェック: ${data.accounts_checked}アカウント\n新規動画: ${data.new_videos_found}件`);
-                      fetchAccounts();
-                    } else {
-                      alert("❌ 新規検出失敗");
-                    }
-                  } catch (e) { alert("❌ エラー: " + e.message); }
-                }}
-                className="px-3 py-1.5 text-[10px] font-medium bg-purple-100 text-purple-600 rounded-lg hover:bg-purple-200 transition-colors"
-              >
-                🔍 新規検出
-              </button>
               <button onClick={fetchAccounts} className="px-3 py-1.5 text-[10px] font-medium bg-teal-100 text-teal-600 rounded-lg hover:bg-teal-200 transition-colors">
                 ↻ 更新
               </button>
