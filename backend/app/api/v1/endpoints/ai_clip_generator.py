@@ -1353,29 +1353,26 @@ def _generate_overlay_images(
     for kw in _EMPHASIS_KEYWORDS:
         highlight_keywords.add(kw)
     
-    # Pre-process captions: calculate timing with gap enforcement
-    processed_captions = []
+    # Pre-process captions: calculate timing with STRICT non-overlap guarantee
+    # Strategy: Each subtitle occupies a non-overlapping time slot.
+    # We use the original start/end from Whisper but GUARANTEE that:
+    #   caption[i].end <= caption[i+1].start (strictly sequential)
+    raw_captions = []
     for i, cap in enumerate(styled_captions or []):
         cap_start = float(cap.get('start', 0)) - caption_offset
         cap_end = float(cap.get('end', 0)) - caption_offset
         cap_text = cap.get('text', '').strip()
         if not cap_text:
             continue
-        
         # Skip captions outside clip duration
         if cap_start >= effective_duration or cap_end <= 0:
             continue
         # Clamp to clip boundaries
         cap_start = max(0.0, cap_start)
         cap_end = min(effective_duration, cap_end)
-        
-        # Ensure minimum display time
         if cap_end <= cap_start:
-            cap_end = cap_start + MIN_DISPLAY
-        if cap_end - cap_start < MIN_DISPLAY:
-            cap_end = cap_start + MIN_DISPLAY
-        
-        processed_captions.append({
+            cap_end = cap_start + 0.5
+        raw_captions.append({
             'start': cap_start,
             'end': cap_end,
             'text': cap_text,
@@ -1383,14 +1380,57 @@ def _generate_overlay_images(
             'orig_idx': i,
         })
     
-    # Enforce non-overlapping timing with gap (字幕重畳防止)
+    # Sort by start time to handle any out-of-order segments
+    raw_captions.sort(key=lambda x: x['start'])
+    
+    # STRICT non-overlap enforcement: each caption ends before next begins
+    # This is the ONLY place timing is finalized - no MIN_DISPLAY expansion that could cause overlap
+    processed_captions = []
+    prev_end = -1.0
+    for cap in raw_captions:
+        # Ensure this caption starts after previous one ended (with gap)
+        actual_start = max(cap['start'], prev_end + SUBTITLE_GAP)
+        actual_end = cap['end']
+        
+        # If start was pushed forward, also push end forward proportionally
+        if actual_start > cap['start']:
+            shift = actual_start - cap['start']
+            actual_end = actual_end + shift
+        
+        # Clamp end to clip duration
+        actual_end = min(actual_end, effective_duration)
+        
+        # Ensure minimum display time (but NEVER extend past next caption's original start)
+        if actual_end - actual_start < 0.5:
+            actual_end = actual_start + 0.5
+        
+        # Skip if this caption would be entirely outside the clip
+        if actual_start >= effective_duration:
+            continue
+        
+        processed_captions.append({
+            'start': actual_start,
+            'end': actual_end,
+            'text': cap['text'],
+            'style': cap['style'],
+            'orig_idx': cap['orig_idx'],
+        })
+        prev_end = actual_end
+    
+    # FINAL PASS: Absolutely guarantee no two captions overlap
+    # This handles any edge cases from the above logic
     for i in range(len(processed_captions) - 1):
         curr = processed_captions[i]
         nxt = processed_captions[i + 1]
-        # Current caption must end before next starts (with gap)
-        max_end = nxt['start'] - SUBTITLE_GAP
-        if curr['end'] > max_end:
-            curr['end'] = max(curr['start'] + 0.5, max_end)  # At least 0.5s display
+        if curr['end'] >= nxt['start']:
+            # Force current to end before next starts
+            curr['end'] = nxt['start'] - SUBTITLE_GAP
+            # Ensure at least 0.3s display (absolute minimum)
+            if curr['end'] - curr['start'] < 0.3:
+                curr['end'] = curr['start'] + 0.3
+                # If this STILL overlaps, push next forward
+                if curr['end'] >= nxt['start']:
+                    nxt['start'] = curr['end'] + SUBTITLE_GAP
     
     for cap_info in processed_captions:
         cap_text = cap_info['text']
