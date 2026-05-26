@@ -5,7 +5,7 @@ import {
   Loader2, RefreshCw, ChevronLeft, ChevronRight, Building2, Plus, Minus,
   Download, Subtitles, Scissors, CheckCircle, Ban, AlertTriangle, Undo2,
   MessageSquare, SkipBack, SkipForward, Volume2, VolumeX,
-  TrendingUp, Activity, Brain, Clock, Zap, Target, Eye,
+  TrendingUp, Activity, Brain, Clock, Zap, Target, Eye, Layers,
 } from "lucide-react";
 import { TikTokUrlRegisterButton } from "./TikTokTrackingPanel";
 import CaptionOverlayPlayer from "./CaptionOverlayPlayer";
@@ -627,6 +627,21 @@ function ClipCard({ clip, onPlay, brands, adminKey, onBrandChange }) {
             <Sparkles className="w-3 h-3" /> AI再生成
           </button>
         )}
+        {/* PiP合成 button */}
+        {clip.clip_url && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              if (typeof window.__openPipModal === 'function') {
+                window.__openPipModal(clip);
+              }
+            }}
+            className="flex items-center justify-center gap-1.5 w-full py-1.5 rounded-lg text-[11px] font-medium text-purple-600 bg-purple-50 hover:bg-purple-100 transition-colors"
+          >
+            <Layers className="w-3 h-3" /> PiP合成
+          </button>
+        )}
+
         {/* TikTok tracking button */}
         <TikTokUrlRegisterButton clipId={clip.id} adminKey={adminKey} />
 
@@ -1380,11 +1395,17 @@ export default function AdminClipDB({ adminKey }) {
   const [v10RegenJobId, setV10RegenJobId] = useState(null);
   const [v10RegenStatus, setV10RegenStatus] = useState(null);
   const [v10RegenGenerating, setV10RegenGenerating] = useState(false);
+  // PiP合成 modal state
+  const [pipModalClip, setPipModalClip] = useState(null);
+  const [pipJobId, setPipJobId] = useState(null);
+  const [pipJobStatus, setPipJobStatus] = useState(null);
+  const [pipGenerating, setPipGenerating] = useState(false);
   // Register global callback for ClipCard AI clip button
   useEffect(() => {
     window.__openAiClipModal = (clip) => setAiClipModalClip(clip);
     window.__openV10RegenModal = (clip) => setV10RegenClip(clip);
-    return () => { delete window.__openAiClipModal; delete window.__openV10RegenModal; };
+    window.__openPipModal = (clip) => setPipModalClip(clip);
+    return () => { delete window.__openAiClipModal; delete window.__openV10RegenModal; delete window.__openPipModal; };
   }, []);
 
   // Poll AI clip job status with stall detection
@@ -2668,6 +2689,26 @@ export default function AdminClipDB({ adminKey }) {
           setJobStatus={setV10RegenStatus}
         />
       )}
+      {/* PiP合成 Modal */}
+      {pipModalClip && (
+        <PipCompositionModal
+          clip={pipModalClip}
+          onClose={() => {
+            setPipModalClip(null);
+            if (!pipGenerating) {
+              setPipJobId(null);
+              setPipJobStatus(null);
+            }
+          }}
+          adminKey={adminKey}
+          generating={pipGenerating}
+          setGenerating={setPipGenerating}
+          jobId={pipJobId}
+          setJobId={setPipJobId}
+          jobStatus={pipJobStatus}
+          setJobStatus={setPipJobStatus}
+        />
+      )}
     </div>
   );
 }
@@ -3264,6 +3305,362 @@ function V10RegenerationModal({ clip, onClose, adminKey, generating, setGenerati
               </>
             )}
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+// ═══════════════════════════════════════════════
+// ─── PiP Composition Modal ───
+// ═══════════════════════════════════════════════
+function PipCompositionModal({ clip, onClose, adminKey, generating, setGenerating, jobId, setJobId, jobStatus, setJobStatus }) {
+  const [productImages, setProductImages] = useState([]);
+  const [productSearch, setProductSearch] = useState('');
+  const [productResults, setProductResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+  const [showDropdown, setShowDropdown] = useState(false);
+  const pollRef = useRef(null);
+
+  const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
+
+  // Search product master
+  const searchProducts = async (query) => {
+    setProductSearch(query);
+    if (!query.trim()) {
+      setProductResults([]);
+      setShowDropdown(false);
+      return;
+    }
+    setSearching(true);
+    setShowDropdown(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/ai-clip/product-master/search?q=${encodeURIComponent(query)}`, {
+        headers: { "X-Admin-Key": adminKey },
+      });
+      const data = await res.json();
+      setProductResults(data.products || []);
+    } catch (e) {
+      console.error('Product search error:', e);
+      setProductResults([]);
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  // Select product from master
+  const selectProduct = (product) => {
+    if (product.product_image_urls && product.product_image_urls.length > 0) {
+      setProductImages(product.product_image_urls.map(url => ({
+        preview: url,
+        url: url,
+        uploading: false,
+      })));
+    }
+    setProductSearch(product.product_name);
+    setShowDropdown(false);
+  };
+
+  // Upload product image
+  const handleImageUpload = async (files) => {
+    const newImages = Array.from(files).map(file => ({
+      file,
+      preview: URL.createObjectURL(file),
+      uploading: true,
+      url: null,
+    }));
+    setProductImages(prev => [...prev, ...newImages]);
+
+    for (let i = 0; i < newImages.length; i++) {
+      const formData = new FormData();
+      formData.append('file', newImages[i].file);
+      formData.append('file_type', 'product-image');
+      try {
+        const res = await fetch(`${API_BASE}/api/v1/ai-clip/upload-product-image`, {
+          method: 'POST',
+          headers: { "X-Admin-Key": adminKey },
+          body: formData,
+        });
+        const data = await res.json();
+        const readUrl = data.read_url || data.blob_url;
+        setProductImages(prev => prev.map(img =>
+          img.preview === newImages[i].preview ? { ...img, uploading: false, url: readUrl } : img
+        ));
+      } catch (e) {
+        console.error('Image upload failed:', e);
+        setProductImages(prev => prev.map(img =>
+          img.preview === newImages[i].preview ? { ...img, uploading: false, url: null } : img
+        ));
+      }
+    }
+  };
+
+  // Remove image
+  const removeImage = (idx) => {
+    setProductImages(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  // Start PiP generation
+  const startGeneration = async () => {
+    const uploadedUrls = productImages.filter(img => img.url).map(img => img.url);
+    if (uploadedUrls.length === 0) {
+      alert('商品画像を1枚以上アップロードしてください');
+      return;
+    }
+    setGenerating(true);
+    setJobStatus(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/ai-clip/generate-from-clip`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Admin-Key": adminKey,
+        },
+        body: JSON.stringify({
+          clip_id: clip.clip_id || clip.id,
+          video_mode: "product_overlay",
+          product_image_urls: uploadedUrls,
+          subtitle_style: "auto",
+          enable_sfx: true,
+          enable_transitions: true,
+          enable_hook: true,
+          enable_silence_cut: true,
+          enable_zoom_pulse: true,
+          enable_progress_bar: true,
+          enable_flash_intro: true,
+          enable_loop_fade: true,
+          enable_cta: true,
+          enable_keyword_highlight: true,
+          enable_subtitle_animation: true,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `API error ${res.status}`);
+      }
+      const data = await res.json();
+      setJobId(data.job_id);
+      setJobStatus({ status: "queued", progress_pct: 0, current_step: "キューに追加しました" });
+    } catch (e) {
+      alert(`PiP合成エラー: ${e.message}`);
+      setGenerating(false);
+    }
+  };
+
+  // Poll job status
+  useEffect(() => {
+    if (!jobId) return;
+    const poll = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/v1/ai-clip/job-status/${jobId}`, {
+          headers: { "X-Admin-Key": adminKey },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setJobStatus(data);
+          if (data.status === "done" || data.status === "failed") {
+            setGenerating(false);
+            clearInterval(pollRef.current);
+          }
+        }
+      } catch (e) {
+        console.error('Poll error:', e);
+      }
+    };
+    pollRef.current = setInterval(poll, 3000);
+    poll();
+    return () => clearInterval(pollRef.current);
+  }, [jobId]);
+
+  const isDone = jobStatus?.status === "done";
+  const isFailed = jobStatus?.status === "failed";
+  const isProcessing = generating || (jobStatus && !isDone && !isFailed);
+  const resultClip = isDone && jobStatus?.results?.[0];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
+      <div className="relative bg-white rounded-2xl shadow-2xl max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        {/* Header */}
+        <div className="sticky top-0 z-10 bg-white rounded-t-2xl border-b border-gray-100 px-5 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Layers className="w-5 h-5 text-purple-500" />
+            <h3 className="text-base font-bold text-gray-800">PiP合成 <span className="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-full ml-1">商品オーバーレイ</span></h3>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="px-5 py-4 space-y-4">
+          {/* Source clip info */}
+          <div className="flex gap-3 p-3 bg-gray-50 rounded-xl">
+            {clip.thumbnail_url && (
+              <img src={clip.thumbnail_url} alt="" className="w-16 h-24 object-cover rounded-lg" />
+            )}
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-gray-800 truncate">{clip.product_name || "不明な商品"}</p>
+              <p className="text-xs text-gray-500 mt-0.5">{clip.liver_name || "不明"}</p>
+              <p className="text-xs text-gray-400 mt-0.5">{clip.duration_sec ? `${Math.round(clip.duration_sec)}秒` : ""}</p>
+            </div>
+          </div>
+
+          {/* Product image section */}
+          {!isProcessing && !isDone && (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-purple-700">📦 商品マスターから選択</span>
+              </div>
+              <div className="relative">
+                <input
+                  type="text"
+                  value={productSearch}
+                  onChange={(e) => searchProducts(e.target.value)}
+                  onFocus={() => { if (productResults.length > 0) setShowDropdown(true); }}
+                  placeholder="商品名・ブランド名で検索..."
+                  className="w-full px-3 py-2 text-xs border border-purple-200 rounded-lg focus:outline-none focus:border-purple-400 bg-white"
+                />
+                {searching && (
+                  <span className="absolute right-3 top-2.5 text-[9px] text-gray-400">検索中...</span>
+                )}
+                {showDropdown && productResults.length > 0 && (
+                  <div className="absolute z-50 w-full mt-1 bg-white border border-purple-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
+                    {productResults.map(p => (
+                      <button
+                        key={p.id}
+                        onClick={() => selectProduct(p)}
+                        className="w-full text-left px-3 py-2 hover:bg-purple-50 border-b border-gray-100 last:border-0 flex items-center gap-2"
+                      >
+                        {p.product_image_urls && p.product_image_urls[0] && (
+                          <img src={p.product_image_urls[0]} alt="" className="w-8 h-8 object-cover rounded" />
+                        )}
+                        <div>
+                          <div className="text-xs font-medium text-gray-800">{p.product_name}</div>
+                          {p.brand_name && <div className="text-[9px] text-gray-500">{p.brand_name}</div>}
+                          <div className="text-[9px] text-purple-500">{p.product_image_urls?.length || 0}枚の画像</div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Upload area */}
+              <div className="border-2 border-dashed border-purple-200 rounded-lg p-3 bg-purple-50/30">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[10px] font-bold text-purple-700">📸 商品画像（必須）</span>
+                  <label className="cursor-pointer px-2 py-1 bg-purple-600 text-white text-[10px] rounded hover:bg-purple-700 transition-colors">
+                    + 画像追加
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      className="hidden"
+                      onChange={(e) => handleImageUpload(e.target.files)}
+                    />
+                  </label>
+                </div>
+                {productImages.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-4 text-gray-400">
+                    <span className="text-2xl">🖼️</span>
+                    <span className="text-[10px] mt-1">ここにドラッグ or クリックして商品画像をアップロード</span>
+                    <span className="text-[9px] text-gray-300 mt-0.5">複数枚OK・JPG/PNG/WebP対応</span>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-4 gap-2">
+                    {productImages.map((img, idx) => (
+                      <div key={idx} className="relative group">
+                        <img src={img.preview} alt="" className="w-full h-16 object-cover rounded-lg border border-purple-200" />
+                        {img.uploading && (
+                          <div className="absolute inset-0 bg-white/70 flex items-center justify-center rounded-lg">
+                            <Loader2 className="w-4 h-4 animate-spin text-purple-500" />
+                          </div>
+                        )}
+                        <button
+                          onClick={() => removeImage(idx)}
+                          className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                        >
+                          <X className="w-2.5 h-2.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <p className="text-[9px] text-purple-600 bg-purple-50 px-3 py-2 rounded-lg">
+                💡 商品画像をメイン表示し、配信者は右下ワイプに。商品が映ってない時に最適。複数画像を登録すると3秒ごとにローテーション表示されます。
+              </p>
+
+              {/* Generate button */}
+              <button
+                onClick={startGeneration}
+                disabled={productImages.filter(img => img.url).length === 0}
+                className="w-full py-2.5 rounded-xl bg-purple-500 hover:bg-purple-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold text-sm transition-colors flex items-center justify-center gap-2"
+              >
+                <Layers className="w-4 h-4" /> PiP合成を開始
+              </button>
+            </div>
+          )}
+
+          {/* Processing status */}
+          {isProcessing && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Loader2 className="w-5 h-5 animate-spin text-purple-500" />
+                  <span className="text-sm font-medium text-gray-700">PiP合成中...</span>
+                </div>
+                <span className="text-xs text-gray-500">{jobStatus?.progress_pct || 0}%</span>
+              </div>
+              <div className="w-full bg-gray-100 rounded-full h-2">
+                <div
+                  className="bg-purple-500 h-2 rounded-full transition-all duration-500"
+                  style={{ width: `${jobStatus?.progress_pct || 0}%` }}
+                />
+              </div>
+              <p className="text-xs text-gray-500 text-center">{jobStatus?.current_step || "処理中..."}</p>
+            </div>
+          )}
+
+          {/* Done */}
+          {isDone && resultClip && (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 text-green-600">
+                <CheckCircle className="w-5 h-5" />
+                <span className="text-sm font-semibold">PiP合成完了！</span>
+              </div>
+              {resultClip.clip_url && (
+                <video
+                  src={resultClip.clip_url}
+                  controls
+                  className="w-full rounded-xl border border-gray-200"
+                  style={{ maxHeight: 300 }}
+                />
+              )}
+              {resultClip.clip_url && (
+                <a
+                  href={resultClip.clip_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center justify-center gap-2 w-full py-2 rounded-lg text-xs font-medium text-purple-600 bg-purple-50 hover:bg-purple-100 transition-colors"
+                >
+                  <Download className="w-3.5 h-3.5" /> ダウンロード
+                </a>
+              )}
+            </div>
+          )}
+
+          {/* Failed */}
+          {isFailed && (
+            <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-xl">
+              <AlertTriangle className="w-4 h-4 text-red-500 flex-shrink-0" />
+              <div>
+                <p className="text-xs font-medium text-red-700">PiP合成に失敗しました</p>
+                <p className="text-[10px] text-red-600 mt-0.5">{jobStatus?.error || "不明なエラー"}</p>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
