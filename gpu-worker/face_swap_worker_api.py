@@ -483,12 +483,12 @@ def create_landmark_mask(face, frame_shape, blur_amount=0.3):
 
     # Create ellipse centered slightly below face center (protects forehead/hair)
     cx = (x1 + x2) // 2
-    cy = (y1 + y2) // 2 + int(face_h * 0.08)  # Shift down 8% to protect forehead
+    cy = (y1 + y2) // 2 + int(face_h * 0.05)  # Shift down 5% to protect forehead
 
-    # Horizontal radius: 45% of face width (covers cheeks but not ears)
-    # Vertical radius: 40% of face height (shorter to exclude forehead)
-    rx = int(face_w * 0.45)
-    ry = int(face_h * 0.40)
+    # Horizontal radius: 52% of face width (covers full face including jawline)
+    # Vertical radius: 48% of face height (covers more of the face for better swap)
+    rx = int(face_w * 0.52)
+    ry = int(face_h * 0.48)
 
     # Draw filled ellipse
     cv2.ellipse(mask, (cx, cy), (rx, ry), 0, 0, 360, 1.0, -1)

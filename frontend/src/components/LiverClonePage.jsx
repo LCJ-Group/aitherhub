@@ -813,15 +813,30 @@ export default function LiverClonePage() {
     let chunks = [];
 
     // Check if audio has voice activity (not just noise)
+    // Uses both average energy AND peak energy to avoid false positives
     const hasVoiceActivity = () => {
       const dataArray = new Uint8Array(analyser.frequencyBinCount);
       analyser.getByteFrequencyData(dataArray);
       // Calculate average energy
       let sum = 0;
-      for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+      let peak = 0;
+      for (let i = 0; i < dataArray.length; i++) {
+        sum += dataArray[i];
+        if (dataArray[i] > peak) peak = dataArray[i];
+      }
       const avg = sum / dataArray.length;
-      return avg > 15; // Threshold: above background noise
+      // Require BOTH: average > 25 AND peak > 80 (real speech has high peaks)
+      const isVoice = avg > 25 && peak > 80;
+      if (!isVoice && avg > 10) {
+        console.log(`[STS] VAD: avg=${avg.toFixed(1)}, peak=${peak} → skipped (below threshold)`);
+      }
+      return isVoice;
     };
+
+    // Track if STS is currently playing (to avoid recording during playback)
+    let stsPlaying = false;
+    stsRecorderRef.current._isPlaying = () => stsPlaying;
+    stsRecorderRef.current._setPlaying = (v) => { stsPlaying = v; };
 
     recorder.ondataavailable = (e) => {
       if (e.data.size > 0) {
@@ -840,6 +855,12 @@ export default function LiverClonePage() {
           return;
         }
 
+        // Skip if STS is currently playing (avoid feedback loop)
+        if (stsRecorderRef.current?._isPlaying?.()) {
+          console.log("[STS] Skipping chunk - playback in progress");
+          return;
+        }
+
         // Only keep latest chunk if queue is building up (prevent lag accumulation)
         if (stsQueueRef.current.length > 1) {
           console.log(`[STS] Queue overflow (${stsQueueRef.current.length}), dropping old chunks`);
@@ -849,7 +870,7 @@ export default function LiverClonePage() {
         const reader = new FileReader();
         reader.onloadend = () => {
           const base64 = reader.result.split(',')[1];
-          if (base64 && base64.length > 200) {
+          if (base64 && base64.length > 800) {
             stsQueueRef.current.push(base64);
             processSTSQueue();
           }
@@ -929,6 +950,9 @@ export default function LiverClonePage() {
   const playSTSAudio = (audioBase64) => {
     return new Promise(async (resolve) => {
       try {
+        // Mark as playing to prevent recording during playback
+        if (stsRecorderRef.current?._setPlaying) stsRecorderRef.current._setPlaying(true);
+
         let ctx = stsAudioContextRef.current;
         if (!ctx || ctx.state === 'closed') {
           ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -952,9 +976,30 @@ export default function LiverClonePage() {
           const blob = new Blob([audioArray], { type: 'audio/mpeg' });
           const url = URL.createObjectURL(blob);
           const audio = new Audio(url);
-          audio.onended = () => { URL.revokeObjectURL(url); resolve(); };
-          audio.onerror = () => { URL.revokeObjectURL(url); resolve(); };
-          await audio.play().catch(() => resolve());
+          audio.onended = () => {
+            URL.revokeObjectURL(url);
+            if (stsRecorderRef.current?._setPlaying) stsRecorderRef.current._setPlaying(false);
+            if (previewWsRef.current?.readyState === WebSocket.OPEN) {
+              previewWsRef.current.send(JSON.stringify({ type: "mouth_open", value: 0 }));
+            }
+            resolve();
+          };
+          audio.onerror = () => {
+            URL.revokeObjectURL(url);
+            if (stsRecorderRef.current?._setPlaying) stsRecorderRef.current._setPlaying(false);
+            resolve();
+          };
+          // Simple lip-sync for Audio fallback: toggle mouth during playback
+          const fallbackLip = setInterval(() => {
+            if (previewWsRef.current?.readyState === WebSocket.OPEN) {
+              previewWsRef.current.send(JSON.stringify({ type: "mouth_open", value: 0.5 }));
+            }
+          }, 100);
+          audio.addEventListener('ended', () => clearInterval(fallbackLip), { once: true });
+          await audio.play().catch(() => {
+            if (stsRecorderRef.current?._setPlaying) stsRecorderRef.current._setPlaying(false);
+            resolve();
+          });
           return;
         }
 
@@ -1004,6 +1049,7 @@ export default function LiverClonePage() {
           if (previewWsRef.current?.readyState === WebSocket.OPEN) {
             previewWsRef.current.send(JSON.stringify({ type: "mouth_open", value: 0 }));
           }
+          if (stsRecorderRef.current?._setPlaying) stsRecorderRef.current._setPlaying(false);
           console.log(`[STS] Playback done (${audioBuffer.duration.toFixed(1)}s)`);
           resolve();
         };
@@ -1011,6 +1057,7 @@ export default function LiverClonePage() {
         sourceNode.start(0);
       } catch (err) {
         console.error("[STS] playSTSAudio error:", err);
+        if (stsRecorderRef.current?._setPlaying) stsRecorderRef.current._setPlaying(false);
         resolve();
       }
     });
@@ -1248,24 +1295,77 @@ export default function LiverClonePage() {
 
   // ── Product Introduction Functions ──
   const handleProductImageUpload = (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      const base64 = reader.result.split(',')[1];
-      const newProduct = {
-        id: Date.now(),
-        image_base64: base64,
-        image_preview: reader.result,
-        name: "",
-        info: "",
-        script: "",
-        speaking: false,
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+
+    files.forEach((file, fileIdx) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const base64 = reader.result.split(',')[1];
+        const newProduct = {
+          id: Date.now() + fileIdx,
+          image_base64: base64,
+          image_preview: reader.result,
+          name: "",
+          info: "",
+          script: "",
+          speaking: false,
+          identifying: true, // Auto-identify in progress
+        };
+        setProducts(prev => {
+          const updated = [...prev, newProduct];
+          // Auto-identify this product
+          autoIdentifyProduct(updated.length - 1, base64);
+          return updated;
+        });
       };
-      setProducts(prev => [...prev, newProduct]);
-    };
-    reader.readAsDataURL(file);
+      reader.readAsDataURL(file);
+    });
     e.target.value = ""; // Reset input
+  };
+
+  // Auto-identify product from image using GPT-4 Vision
+  const autoIdentifyProduct = async (productIdx, imageBase64) => {
+    try {
+      const result = await liverCloneService.generateProductIntro({
+        image_base64: imageBase64,
+        product_name: "",
+        product_info: "",
+        language: language,
+        style: "identify", // Special mode: just identify, don't generate script
+        max_length: 50,
+      });
+      if (result.status === "ok" && result.script) {
+        // Parse the identification result (format: "商品名: xxx\n特徴: yyy")
+        const lines = result.script.split('\n');
+        let name = "";
+        let info = "";
+        for (const line of lines) {
+          if (line.includes('商品名') || line.includes('Product')) {
+            name = line.replace(/^.*[:：]\s*/, '').trim();
+          } else if (line.includes('特徴') || line.includes('Feature') || line.includes('情報')) {
+            info = line.replace(/^.*[:：]\s*/, '').trim();
+          } else if (!name && line.trim()) {
+            name = line.trim();
+          } else if (name && !info && line.trim()) {
+            info = line.trim();
+          }
+        }
+        if (!name && result.script.length < 100) name = result.script.trim();
+        setProducts(prev => prev.map((p, i) =>
+          i === productIdx ? { ...p, name: name || p.name, info: info || p.info, identifying: false } : p
+        ));
+      } else {
+        setProducts(prev => prev.map((p, i) =>
+          i === productIdx ? { ...p, identifying: false } : p
+        ));
+      }
+    } catch (err) {
+      console.error("[Product] Auto-identify failed:", err);
+      setProducts(prev => prev.map((p, i) =>
+        i === productIdx ? { ...p, identifying: false } : p
+      ));
+    }
   };
 
   const generateProductScript = async (productIdx) => {
@@ -2224,6 +2324,7 @@ export default function LiverClonePage() {
                       ref={productFileInputRef}
                       type="file"
                       accept="image/*"
+                      multiple
                       onChange={handleProductImageUpload}
                       className="hidden"
                     />
@@ -2249,24 +2350,33 @@ export default function LiverClonePage() {
                           />
                         </div>
                         <div className="flex-1 min-w-0">
-                          <input
-                            type="text"
-                            value={product.name}
-                            onChange={(e) => setProducts(prev => prev.map((p, i) =>
-                              i === idx ? { ...p, name: e.target.value } : p
-                            ))}
-                            placeholder="商品名（任意）"
-                            className="w-full bg-transparent border-b border-gray-700 text-sm py-1 focus:outline-none focus:border-green-500 mb-1"
-                          />
-                          <input
-                            type="text"
-                            value={product.info}
-                            onChange={(e) => setProducts(prev => prev.map((p, i) =>
-                              i === idx ? { ...p, info: e.target.value } : p
-                            ))}
-                            placeholder="商品情報（任意：価格、特徴など）"
-                            className="w-full bg-transparent border-b border-gray-700 text-xs text-gray-400 py-1 focus:outline-none focus:border-green-500"
-                          />
+                          {product.identifying ? (
+                            <div className="flex items-center gap-2 py-2">
+                              <Loader2 className="w-3 h-3 animate-spin text-green-400" />
+                              <span className="text-xs text-green-400">AIが商品を識別中...</span>
+                            </div>
+                          ) : (
+                            <>
+                              <input
+                                type="text"
+                                value={product.name}
+                                onChange={(e) => setProducts(prev => prev.map((p, i) =>
+                                  i === idx ? { ...p, name: e.target.value } : p
+                                ))}
+                                placeholder="商品名（任意）"
+                                className="w-full bg-transparent border-b border-gray-700 text-sm py-1 focus:outline-none focus:border-green-500 mb-1"
+                              />
+                              <input
+                                type="text"
+                                value={product.info}
+                                onChange={(e) => setProducts(prev => prev.map((p, i) =>
+                                  i === idx ? { ...p, info: e.target.value } : p
+                                ))}
+                                placeholder="商品情報（任意：価格、特徴など）"
+                                className="w-full bg-transparent border-b border-gray-700 text-xs text-gray-400 py-1 focus:outline-none focus:border-green-500"
+                              />
+                            </>
+                          )}
                         </div>
                         <button
                           onClick={() => removeProduct(idx)}

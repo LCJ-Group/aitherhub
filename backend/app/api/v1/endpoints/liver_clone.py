@@ -636,10 +636,51 @@ async def generate_product_intro(req: ProductIntroRequest):
                 "image_url": {"url": req.image_url, "detail": "low"},
             }
 
+        # Special mode: identify product only (no script generation)
+        if req.style == "identify":
+            system_prompt_identify = (
+                "商品画像を見て、以下の形式で商品情報を抽出してください。\n"
+                "商品名: (商品名を推測)\n"
+                "特徴: (主な特徴を簡潔に)\n"
+                "日本語で回答してください。"
+            )
+            messages_identify = [
+                {"role": "system", "content": system_prompt_identify},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "この商品を識別してください。"},
+                        image_content,
+                    ],
+                },
+            ]
+            openai_base = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                resp = await client.post(
+                    f"{openai_base}/chat/completions",
+                    json={
+                        "model": "gpt-4.1-nano",
+                        "messages": messages_identify,
+                        "max_tokens": 100,
+                        "temperature": 0.3,
+                    },
+                    headers={
+                        "Authorization": f"Bearer {openai_key}",
+                        "Content-Type": "application/json",
+                    },
+                )
+            if resp.status_code != 200:
+                logger.error(f"[ProductIntro] Identify error: {resp.status_code}")
+                raise HTTPException(status_code=502, detail="AI identification failed")
+            result = resp.json()
+            script = result["choices"][0]["message"]["content"].strip()
+            logger.info(f"[ProductIntro] Identified: {script[:80]}")
+            return {"status": "ok", "script": script, "language": req.language, "style": "identify"}
+
         style_prompts = {
-            "enthusiastic": "\u30c6\u30f3\u30b7\u30e7\u30f3\u9ad8\u304f\u3001\u8208\u596e\u6c17\u5473\u306b\u5546\u54c1\u3092\u7d39\u4ecb\u3059\u308b\u30e9\u30a4\u30d6\u30b3\u30de\u30fc\u30b9\u306e\u30e9\u30a4\u30d0\u30fc",
-            "casual": "\u89aa\u3057\u307f\u3084\u3059\u304f\u30ab\u30b8\u30e5\u30a2\u30eb\u306b\u5546\u54c1\u3092\u7d39\u4ecb\u3059\u308b\u30e9\u30a4\u30d0\u30fc",
-            "professional": "\u5c02\u9580\u7684\u3067\u4fe1\u983c\u611f\u306e\u3042\u308b\u30c8\u30fc\u30f3\u3067\u5546\u54c1\u3092\u7d39\u4ecb\u3059\u308b\u30e9\u30a4\u30d0\u30fc",
+            "enthusiastic": "テンション高く、興奮気味に商品を紹介するライブコマースのライバー",
+            "casual": "親しみやすくカジュアルに商品を紹介するライバー",
+            "professional": "専門的で信頼感のあるトーンで商品を紹介するライバー",
         }
         style_desc = style_prompts.get(req.style, style_prompts["enthusiastic"])
 
