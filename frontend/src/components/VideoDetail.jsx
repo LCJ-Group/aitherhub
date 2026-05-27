@@ -1391,7 +1391,7 @@ export default function VideoDetail({ videoData, editorParams }) {
               <div className="rounded-2xl border border-purple-200/60 bg-gradient-to-br from-purple-50 to-indigo-50 p-4 shadow-sm">
                 <div className="flex items-center gap-2 mb-3">
                   <span className="text-lg">{"\uD83C\uDFA5"}</span>
-                  <h3 className="text-sm font-semibold text-purple-900">\u9332\u753B\u6620\u50CF</h3>
+                  <h3 className="text-sm font-semibold text-purple-900">録画映像</h3>
                   {videoData?.upload_type === 'live_boost' && (
                     <span className="px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 text-[10px] font-medium">LiveBoost</span>
                   )}
