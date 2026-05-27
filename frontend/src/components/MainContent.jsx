@@ -56,6 +56,62 @@ function getVideoDuration(file) {
 }
 
 /**
+ * v14: Generate a thumbnail from a local video file
+ * Captures a frame at 1 second (or 0 if video is shorter)
+ * Returns a data URL string or null on failure
+ */
+function generateVideoThumbnail(file) {
+  return new Promise((resolve) => {
+    try {
+      const video = document.createElement('video');
+      video.preload = 'metadata';
+      video.muted = true;
+      video.playsInline = true;
+      const url = URL.createObjectURL(file);
+      video.src = url;
+
+      video.onloadeddata = () => {
+        // Seek to 1s or 10% of duration, whichever is smaller
+        const seekTime = Math.min(1, video.duration * 0.1);
+        video.currentTime = seekTime;
+      };
+
+      video.onseeked = () => {
+        try {
+          const canvas = document.createElement('canvas');
+          // Use a reasonable resolution for thumbnail
+          const maxWidth = 480;
+          const scale = Math.min(1, maxWidth / video.videoWidth);
+          canvas.width = video.videoWidth * scale;
+          canvas.height = video.videoHeight * scale;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+          URL.revokeObjectURL(url);
+          resolve(dataUrl);
+        } catch {
+          URL.revokeObjectURL(url);
+          resolve(null);
+        }
+      };
+
+      video.onerror = () => {
+        URL.revokeObjectURL(url);
+        resolve(null);
+      };
+
+      // Timeout fallback
+      setTimeout(() => {
+        URL.revokeObjectURL(url);
+        resolve(null);
+      }, 10000);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+/**
  * Format relative time
  */
 function formatRelativeTime(date) {
@@ -197,6 +253,7 @@ export default function MainContent({
       user.isLoggedIn)
   );
   const [selectedFile, setSelectedFile] = useState(null);
+  const [videoThumbnailUrl, setVideoThumbnailUrl] = useState(null); // v14: Local video thumbnail for real preview
   const [uploading, setUploading] = useState(false);
   const [uploadStartTime, setUploadStartTime] = useState(null);
   const [uploadDurationMs, setUploadDurationMs] = useState(null);
@@ -460,6 +517,8 @@ export default function MainContent({
     setProgress(0);
     // Get video duration
     getVideoDuration(file).then(dur => { if (dur) setVideoDurationSec(dur); });
+    // v14: Generate local thumbnail for real preview
+    generateVideoThumbnail(file).then(url => { if (url) setVideoThumbnailUrl(url); });
   };
 
   // Clean video file handlers (single file - legacy)
@@ -477,6 +536,8 @@ export default function MainContent({
       setCleanVideoFile(file);
       // Get video duration
       getVideoDuration(file).then(dur => { if (dur) setVideoDurationSec(dur); });
+      // v14: Generate local thumbnail
+      generateVideoThumbnail(file).then(url => { if (url) setVideoThumbnailUrl(url); });
     }
   };
 
@@ -995,6 +1056,7 @@ export default function MainContent({
 
   const handleCancel = () => {
     setSelectedFile(null);
+    setVideoThumbnailUrl(null);
     setDuplicateVideo(null);
     setUploading(false);
     setProgress(0);
@@ -1489,6 +1551,8 @@ export default function MainContent({
                       uploadDurationMs={uploadDurationMs}
                       uploadStartTime={uploading ? uploadStartTime : null}
                       videoDurationSec={videoDurationSec}
+                      videoThumbnailUrl={videoThumbnailUrl}
+                      videoPreviewUrl={videoData?.preview_url}
                     />
                   </div>
                   {/* Allow uploading another video or starting live analysis while current one is processing */}
@@ -1502,6 +1566,7 @@ export default function MainContent({
                           setUploadedVideoId(null);
                           setVideoData(null);
                           setSelectedFile(null);
+                          setVideoThumbnailUrl(null);
                           setCleanVideoFile(null);
                           setCleanVideoFiles([]);
                           setProductExcelFile(null);
@@ -1524,6 +1589,7 @@ export default function MainContent({
                           setUploadedVideoId(null);
                           setVideoData(null);
                           setSelectedFile(null);
+                          setVideoThumbnailUrl(null);
                           setCleanVideoFile(null);
                           setCleanVideoFiles([]);
                           setProductExcelFile(null);
@@ -1554,7 +1620,19 @@ export default function MainContent({
               <div className="w-full max-w-md mx-auto">
                 <div className="rounded-2xl p-8 border transition-all duration-200 border-red-300/30 bg-red-500/10 backdrop-blur-sm">
                   <div className="flex flex-col items-center text-center space-y-4">
-                    <div className="text-4xl">⚠️</div>
+                    {/* v14: Show thumbnail on error screen too */}
+                    {videoThumbnailUrl ? (
+                      <div className="relative w-full max-w-[220px] rounded-xl overflow-hidden shadow-md border border-red-200/50 bg-black">
+                        <img src={videoThumbnailUrl} alt="Video" className="w-full h-auto max-h-[140px] object-contain opacity-70" />
+                        <div className="absolute inset-0 flex items-center justify-center">
+                          <div className="w-10 h-10 rounded-full bg-red-500/80 flex items-center justify-center">
+                            <span className="text-white text-lg">!</span>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="text-4xl">⚠️</div>
+                    )}
                     <p className="text-base font-semibold text-red-200">
                       {window.__t('errorAnalysisMessage') || '解析中にエラーが発生しました。'}
                     </p>
@@ -1702,7 +1780,21 @@ export default function MainContent({
                         </>                      ) : selectedFile ? (
                         <>
                           <div className="flex flex-col items-center text-center space-y-6">
-                            <div className="text-4xl">🎬</div>
+                            {/* v14: Show video thumbnail instead of emoji */}
+                            {videoThumbnailUrl ? (
+                              <div className="relative w-full max-w-[260px] rounded-xl overflow-hidden shadow-md border border-gray-200 bg-black">
+                                <img
+                                  src={videoThumbnailUrl}
+                                  alt="Video preview"
+                                  className="w-full h-auto max-h-[160px] object-contain"
+                                />
+                                <div className="absolute bottom-2 right-2 px-2 py-0.5 bg-black/70 rounded text-[10px] text-white font-mono">
+                                  {videoDurationSec ? `${Math.floor(videoDurationSec / 60)}:${String(Math.floor(videoDurationSec % 60)).padStart(2, '0')}` : ''}
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="text-4xl">🎬</div>
+                            )}
                             <div>
                               <p className="text-sm font-semibold">
                                 {selectedFile.name}

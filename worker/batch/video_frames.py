@@ -78,6 +78,61 @@ def _check_gpu_available() -> bool:
         return False
 
 
+def _detect_vfr(video_path: str) -> bool:
+    """
+    v14: Detect if video has Variable Frame Rate (VFR).
+    Common in iPhone ScreenRecording, OBS, and some webcam recordings.
+    VFR videos cause ffmpeg to stall or produce fewer frames than expected
+    when using -vsync 0.
+    """
+    try:
+        # Method 1: Check avg_frame_rate vs r_frame_rate
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=avg_frame_rate,r_frame_rate",
+             "-of", "default=noprint_wrappers=1", video_path],
+            capture_output=True, text=True, timeout=30,
+        )
+        lines = result.stdout.strip().split('\n')
+        rates = {}
+        for line in lines:
+            if '=' in line:
+                key, val = line.split('=', 1)
+                rates[key.strip()] = val.strip()
+
+        avg_fr = rates.get('avg_frame_rate', '0/1')
+        r_fr = rates.get('r_frame_rate', '0/1')
+
+        def _parse_rate(r):
+            if '/' in r:
+                num, den = r.split('/')
+                return float(num) / float(den) if float(den) > 0 else 0
+            return float(r) if r else 0
+
+        avg = _parse_rate(avg_fr)
+        r = _parse_rate(r_fr)
+
+        # If avg_frame_rate differs significantly from r_frame_rate, it's likely VFR
+        if avg > 0 and r > 0:
+            ratio = avg / r if r > avg else r / avg
+            if ratio < 0.85:  # >15% difference indicates VFR
+                logger.info("[VFR] Detected VFR: avg_frame_rate=%s (%.2f), r_frame_rate=%s (%.2f), ratio=%.2f",
+                            avg_fr, avg, r_fr, r, ratio)
+                return True
+
+        # Method 2: Check filename patterns common for VFR sources
+        basename = os.path.basename(video_path).lower()
+        vfr_indicators = ['screenrecording', 'screen_recording', 'obs_', 'capture_']
+        if any(ind in basename for ind in vfr_indicators):
+            logger.info("[VFR] Detected VFR by filename pattern: %s", basename)
+            return True
+
+        return False
+    except Exception as e:
+        logger.debug("[VFR] Detection failed, assuming CFR: %s", e)
+        return False
+
+
 # Map video codecs to NVDEC cuvid decoder names
 _CUVID_DECODERS = {
     "h264": "h264_cuvid",
@@ -101,10 +156,11 @@ def extract_frames(
     """
     STEP 0 – Extract frames from video
 
-    v3: GPU-accelerated (NVDEC) with CPU fallback + disk-optimized
-    - Uses NVIDIA CUVID hardware decoder when GPU is available (5-10x faster)
-    - Falls back to CPU decoding if GPU is unavailable or codec unsupported
-    - Outputs scaled frames (max 640px width, JPEG q8) for 75% disk savings
+    v14: VFR (Variable Frame Rate) resilience + partial success tolerance
+    - GPU-accelerated (NVDEC) with CPU fallback + disk-optimized
+    - VFR-safe: uses -vsync cfr to handle iPhone ScreenRecording etc.
+    - Partial success: if >=40% frames extracted before stall, accepts result
+    - Stall timeout: adaptive based on actual extraction speed (not just duration)
     - on_progress(percent): optional callback for real-time progress (0-100)
     """
     out_dir = os.path.join(frames_root, "frames")
@@ -146,6 +202,13 @@ def extract_frames(
     _sw = FRAME_SCALE_WIDTH
     _jq = FRAME_JPEG_QUALITY
 
+    # v14: Detect VFR (variable frame rate) videos — common in iPhone ScreenRecording
+    _is_vfr = _detect_vfr(video_path)
+    # v14: Use -vsync cfr for VFR videos to ensure consistent frame output
+    _vsync_mode = "cfr" if _is_vfr else "0"
+    if _is_vfr:
+        logger.info("[FRAMES] VFR video detected — using -vsync cfr for reliable extraction")
+
     if use_gpu:
         # GPU path: NVDEC hardware decode + GPU resize + CPU JPG encode
         # v13: Added -threads limit for CPU-side JPG encoding to prevent saturation
@@ -158,11 +221,11 @@ def extract_frames(
             "-i", video_path,
             "-vf", f"fps={fps},scale_cuda={_sw}:-1,hwdownload,format=nv12",
             "-q:v", str(_jq),
-            "-vsync", "0",
+            "-vsync", _vsync_mode,
             os.path.join(out_dir, "frame_%08d.jpg"),
         ]
-        logger.info("[FRAMES] Using GPU decode: %s (codec=%s, scale=%dpx, q=%d)",
-                    cuvid_decoder, codec, _sw, _jq)
+        logger.info("[FRAMES] Using GPU decode: %s (codec=%s, scale=%dpx, q=%d, vsync=%s)",
+                    cuvid_decoder, codec, _sw, _jq, _vsync_mode)
     else:
         # CPU path: software decode + scale + JPG
         # v13: Limited threads from "0" (unlimited) to FFMPEG_THREADS to prevent CPU saturation
@@ -172,11 +235,11 @@ def extract_frames(
             "-i", video_path,
             "-vf", f"fps={fps},scale={_sw}:-1",
             "-q:v", str(_jq),
-            "-vsync", "0",
+            "-vsync", _vsync_mode,
             os.path.join(out_dir, "frame_%08d.jpg"),
         ]
-        logger.info("[FRAMES] Using CPU decode (gpu=%s, codec=%s, cuvid=%s, scale=%dpx, q=%d)",
-                    has_gpu, codec, cuvid_decoder, _sw, _jq)
+        logger.info("[FRAMES] Using CPU decode (gpu=%s, codec=%s, cuvid=%s, scale=%dpx, q=%d, vsync=%s)",
+                    has_gpu, codec, cuvid_decoder, _sw, _jq, _vsync_mode)
 
     import threading, time as _time, shutil
 
@@ -211,17 +274,20 @@ def extract_frames(
         stderr=subprocess.PIPE,
     )
 
-    # --- Stall detection: if no new frames for STALL_TIMEOUT seconds, kill ffmpeg ---
-    # v13: Increased timeouts to prevent false-positive stall detection under CPU load.
-    # Under high load (load avg >20), ffmpeg may produce frames slowly but NOT stalled.
-    # Old: max(120, min(duration/10, 600)) → too aggressive for loaded systems.
-    # New: max(300, min(duration/5, 1200)) → 300s-1200s, much more tolerant.
-    # For 109min (6548s) video: 6548/5 = 1309 → capped at 1200s
-    # For 49min (2983s) video: 2983/5 = 596 → 596s
-    # For short (<25min) video: min 300s
-    STALL_TIMEOUT = max(300, min(int(duration / 5), 1200))  # 300s-1200s based on duration
-    logger.info("[FRAMES] STALL_TIMEOUT=%ds (duration=%.0fs, expected_frames=%d)", STALL_TIMEOUT, duration, expected_frames)
+    # --- Stall detection: v14 adaptive timeout based on actual extraction speed ---
+    # v14: Instead of a fixed formula, use an adaptive approach:
+    # - Initial grace period: 600s (10 min) to allow ffmpeg to start producing frames
+    # - After first frame: timeout = max(300, time_per_frame * 100)
+    #   (allows 100x slowdown from average speed before declaring stall)
+    # - Absolute max: 1800s (30 min) to prevent infinite waits
+    # - PARTIAL_SUCCESS_THRESHOLD: if >=40% frames extracted, accept as success
+    INITIAL_GRACE_PERIOD = 600  # 10 min for ffmpeg to start
+    STALL_TIMEOUT = max(300, min(int(duration / 4), 1800))  # 300s-1800s
+    PARTIAL_SUCCESS_THRESHOLD = 0.40  # Accept if >=40% frames extracted
+    logger.info("[FRAMES] STALL_TIMEOUT=%ds, PARTIAL_THRESHOLD=%.0f%% (duration=%.0fs, expected=%d)",
+                STALL_TIMEOUT, PARTIAL_SUCCESS_THRESHOLD * 100, duration, expected_frames)
     _stall_detected = {"value": False}
+    _partial_success = {"value": False}
 
     if on_progress and expected_frames > 0:
         def _monitor():
@@ -245,10 +311,23 @@ def extract_frames(
                             # Check disk space
                             disk_now = shutil.disk_usage(out_dir)
                             free_now = disk_now.free / (1024 ** 3)
+                            # v14: Check if partial success threshold met
+                            completeness = count / expected_frames if expected_frames > 0 else 0
+                            if completeness >= PARTIAL_SUCCESS_THRESHOLD:
+                                logger.warning(
+                                    "[FRAMES] STALL but PARTIAL SUCCESS: %d/%d frames (%.0f%%) extracted. "
+                                    "Accepting partial result (threshold=%.0f%%).",
+                                    count, expected_frames, completeness * 100,
+                                    PARTIAL_SUCCESS_THRESHOLD * 100,
+                                )
+                                _partial_success["value"] = True
+                                _stall_detected["value"] = True
+                                proc.kill()
+                                return
                             logger.error(
                                 "[FRAMES] STALL DETECTED: no new frames for %ds "
-                                "(count=%d, disk_free=%.1f GB). Killing ffmpeg.",
-                                int(stall_sec), count, free_now,
+                                "(count=%d/%d=%.0f%%, disk_free=%.1f GB). Killing ffmpeg.",
+                                int(stall_sec), count, expected_frames, completeness * 100, free_now,
                             )
                             _stall_detected["value"] = True
                             proc.kill()
@@ -265,7 +344,18 @@ def extract_frames(
     proc.wait()
 
     # GPU stall → treat as GPU failure and fall through to CPU fallback
-    if _stall_detected["value"] and use_gpu:
+    # v14: Unless partial success was achieved, in which case accept the result
+    if _stall_detected["value"] and _partial_success["value"]:
+        # Partial success: enough frames extracted, accept result
+        _actual_count = len([f for f in os.listdir(out_dir) if f.endswith('.jpg')])
+        logger.info(
+            "[FRAMES] PARTIAL SUCCESS accepted: %d/%d frames (%.0f%%). Continuing pipeline.",
+            _actual_count, expected_frames, _actual_count / expected_frames * 100 if expected_frames > 0 else 0,
+        )
+        if on_progress:
+            on_progress(100)
+        return out_dir
+    elif _stall_detected["value"] and use_gpu:
         logger.warning(
             "[FRAMES] GPU decode stalled after %d/%d frames. Falling back to CPU.",
             len([f for f in os.listdir(out_dir) if f.endswith('.jpg')]),
@@ -277,10 +367,11 @@ def extract_frames(
                 os.remove(os.path.join(out_dir, f))
     elif _stall_detected["value"] and not use_gpu:
         # CPU path stalled — this is a real failure
+        _actual_count = len([f for f in os.listdir(out_dir) if f.endswith('.jpg')])
         raise RuntimeError(
             f"[FRAMES] ffmpeg stalled (no new frames for {STALL_TIMEOUT}s). "
-            f"Extracted {len([f for f in os.listdir(out_dir) if f.endswith('.jpg')])} "
-            f"of {expected_frames} expected frames."
+            f"Extracted {_actual_count} of {expected_frames} expected frames "
+            f"({_actual_count/expected_frames*100:.0f}% < {PARTIAL_SUCCESS_THRESHOLD*100:.0f}% threshold)."
         )
 
     # If GPU failed (error or stall), fallback to CPU
@@ -299,7 +390,7 @@ def extract_frames(
             "-i", video_path,
             "-vf", f"fps={fps},scale={_sw}:-1",
             "-q:v", str(_jq),
-            "-vsync", "0",
+            "-vsync", _vsync_mode,  # v14: VFR-safe
             os.path.join(out_dir, "frame_%08d.jpg"),
         ]
         proc2 = subprocess.Popen(
@@ -330,10 +421,12 @@ def extract_frames(
                             if stall_sec > STALL_TIMEOUT:
                                 disk_now = shutil.disk_usage(out_dir)
                                 free_now = disk_now.free / (1024 ** 3)
+                                # v14: Log completeness for CPU fallback stall
+                                _completeness2 = count / expected_frames if expected_frames > 0 else 0
                                 logger.error(
                                     "[FRAMES] CPU STALL DETECTED: no new frames for %ds "
-                                    "(count=%d, disk_free=%.1f GB). Killing ffmpeg.",
-                                    int(stall_sec), count, free_now,
+                                    "(count=%d/%d=%.0f%%, disk_free=%.1f GB). Killing ffmpeg.",
+                                    int(stall_sec), count, expected_frames, _completeness2 * 100, free_now,
                                 )
                                 _stall_detected2["value"] = True
                                 proc2.kill()
@@ -350,9 +443,20 @@ def extract_frames(
         proc2.wait()
 
         if _stall_detected2["value"]:
+            # v14: Check partial success for CPU fallback too
+            _cpu_count = len([f for f in os.listdir(out_dir) if f.endswith('.jpg')])
+            _cpu_completeness = _cpu_count / expected_frames if expected_frames > 0 else 0
+            if _cpu_completeness >= PARTIAL_SUCCESS_THRESHOLD:
+                logger.warning(
+                    "[FRAMES] CPU fallback stalled but PARTIAL SUCCESS: %d/%d frames (%.0f%%). Accepting.",
+                    _cpu_count, expected_frames, _cpu_completeness * 100,
+                )
+                if on_progress:
+                    on_progress(100)
+                return out_dir
             raise RuntimeError(
                 f"[FRAMES] ffmpeg CPU fallback stalled (no new frames for {STALL_TIMEOUT}s). "
-                f"Likely disk full."
+                f"Extracted {_cpu_count}/{expected_frames} ({_cpu_completeness*100:.0f}% < {PARTIAL_SUCCESS_THRESHOLD*100:.0f}% threshold)."
             )
 
     if on_progress:

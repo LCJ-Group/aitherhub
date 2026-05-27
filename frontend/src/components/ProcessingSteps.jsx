@@ -50,7 +50,7 @@ function emaSmooth(prev, next, alpha = 0.3) {
   return alpha * next + (1 - alpha) * prev;
 }
 
-function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingComplete, externalProgress, uploadDurationMs, uploadStartTime, videoDurationSec }) {
+function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingComplete, externalProgress, uploadDurationMs, uploadStartTime, videoDurationSec, videoThumbnailUrl, videoPreviewUrl }) {
   useTranslation(); // triggers re-render on language change
   // Upload elapsed time (live counter during upload)
   const [uploadElapsedMs, setUploadElapsedMs] = useState(0);
@@ -1142,6 +1142,40 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
     <div className="w-full">
       {/* Video title */}
       {videoTitleNode}
+
+      {/* v14: Video thumbnail preview - real screen feel */}
+      {(videoThumbnailUrl || videoPreviewUrl) && (
+        <div className="mb-4 flex justify-center">
+          <div className="relative w-full max-w-[280px] rounded-xl overflow-hidden shadow-lg border border-gray-200 bg-black">
+            {videoPreviewUrl ? (
+              <video
+                src={videoPreviewUrl}
+                className="w-full h-auto max-h-[180px] object-contain"
+                muted
+                playsInline
+                preload="metadata"
+              />
+            ) : (
+              <img
+                src={videoThumbnailUrl}
+                alt="Video preview"
+                className="w-full h-auto max-h-[180px] object-contain"
+              />
+            )}
+            {/* Overlay processing indicator */}
+            {!isDone && !isError && (
+              <div className="absolute inset-0 bg-black/20 flex items-center justify-center">
+                <div className="flex items-center gap-2 px-3 py-1.5 bg-black/60 rounded-full">
+                  <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
+                  <span className="text-xs text-white font-medium">
+                    {currentStatus === 'UPLOADING' ? 'アップロード中...' : 'AI解析中...'}
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Fixed upload step + scrolling analysis steps */}
       <div className="mb-4 space-y-2">
