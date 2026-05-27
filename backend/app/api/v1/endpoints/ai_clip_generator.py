@@ -827,7 +827,7 @@ async def _analyze_content_relevance(captions: list, product_name: str, duration
     if not caption_lines:
         return []
 
-    captions_text = "\n".join(caption_lines[:50])  # 最夤50セグメント
+    captions_text = "\n".join(caption_lines[:80])  # V13: 50→80セグメントに拡大（より多くのコンテキストをGPTに渡す）
 
     prompt = f"""以下はライブコマース動画の字幕データです。各行は[開始秒-終了秒] テキストの形式です。
 
@@ -858,7 +858,7 @@ JSON配列で出力。カットすべき区間がない場合は空配列[]。
         response = await client.chat.completions.create(
             model=azure_model,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=200,
+            max_tokens=500,
             temperature=0.1,
         )
 
@@ -1874,6 +1874,22 @@ def _build_advanced_ffmpeg_command(video_path: str, ass_path: str, output_path: 
     vf_parts = []
     
     # ── 1. Silence trimming (select filter) ──
+    # V13: keep_segments > 20 の場合、隣接セグメントをマージして20以下にする
+    if len(keep_segments) > 20:
+        # 最も短いギャップからマージしてセグメント数を削減
+        while len(keep_segments) > 20:
+            # 隣接セグメント間のギャップを計算し、最小ギャップをマージ
+            min_gap = float('inf')
+            min_gap_idx = 0
+            for i in range(len(keep_segments) - 1):
+                gap = keep_segments[i + 1][0] - keep_segments[i][1]
+                if gap < min_gap:
+                    min_gap = gap
+                    min_gap_idx = i
+            # マージ: i番目とi+1番目を結合（間のギャップも含む）
+            merged = (keep_segments[min_gap_idx][0], keep_segments[min_gap_idx + 1][1])
+            keep_segments = keep_segments[:min_gap_idx] + [merged] + keep_segments[min_gap_idx + 2:]
+        logger.info(f"[ai-clip] Merged keep_segments to {len(keep_segments)} (was >20)")
     use_silence_trim = len(keep_segments) > 1 and len(keep_segments) <= 20
     af_chain = None
     if use_silence_trim:
@@ -1882,6 +1898,20 @@ def _build_advanced_ffmpeg_command(video_path: str, ass_path: str, output_path: 
         vf_parts.append(f"select='{select_expr}'")
         vf_parts.append("setpts=N/FRAME_RATE/TB")
         af_chain = f"aselect='{select_expr}',asetpts=N/SR/TB"
+
+    # ── 1b. Speed factor (V13: TikTok風テンポアップ) ──
+    speed_factor = getattr(req, 'speed_factor', 1.05)
+    if speed_factor > 1.0:
+        if use_silence_trim:
+            # silence trimが有効な場合、setpts=N/FRAME_RATE/TBを速度調整版に置換
+            # select後のフレームは既に連続番号なので、速度変更は単純にsetptsをスケーリング
+            # N/FRAME_RATE/TBを置換する代わりに、後からsetptsを追加
+            vf_parts.append(f"setpts={1.0/speed_factor:.4f}*PTS")
+            af_chain = f"{af_chain},atempo={speed_factor:.4f}"
+        else:
+            # silence trimなし: 単純にsetpts + atempo
+            vf_parts.append(f"setpts={1.0/speed_factor:.4f}*PTS")
+            af_chain = f"atempo={speed_factor:.4f}"
 
     # ── 2. Zoom Pulse via crop+scale ──
     if zoom_keyframes:
@@ -1978,7 +2008,10 @@ def _build_advanced_ffmpeg_command(video_path: str, ass_path: str, output_path: 
             out_label = "[vout]" if is_last else f"[v{i}]"
             # Use enable=between() to control when overlay is visible
             # Commas in between() must be escaped with \\ in filter_complex
-            enable_expr = f"between(t\\,{start_t:.3f}\\,{end_t:.3f})"
+            # V13: speed_factorでタイミング調整（速度変更後の時間軸に合わせる）
+            adj_start = start_t / speed_factor if speed_factor > 1.0 else start_t
+            adj_end = end_t / speed_factor if speed_factor > 1.0 else end_t
+            enable_expr = f"between(t\\,{adj_start:.3f}\\,{adj_end:.3f})"
             fc_parts.append(
                 f"{current_label}[{input_idx}:v]overlay=0:0:"
                 f"enable='{enable_expr}':"
@@ -2485,6 +2518,8 @@ class GenerateRequest(BaseModel):
     enable_subtitle_animation: bool = Field(True, description="字幕出現アニメーション")
     zoom_intensity: float = Field(1.08, ge=1.0, le=1.3, description="ズーム倍率 (1.0=なし, 1.3=最大)")
     silence_threshold_db: float = Field(-25.0, ge=-60.0, le=-10.0, description="無音検出閾値(dB) V12: -30→-25に変更してより積極的に検出")
+    # V13: テンポアップ（TikTok風の微妙なスピードアップ）
+    speed_factor: float = Field(1.05, ge=1.0, le=1.3, description="再生速度倍率 (1.0=変更なし, 1.05=TikTok風微速, 1.3=最大)")
     # V12: 編集スタイル学習
     editing_profile_id: Optional[str] = Field(None, description="編集プロファイルID（スタイル学習済みプロファイルを適用）")
 
@@ -2513,10 +2548,12 @@ class GenerateFromClipRequest(BaseModel):
     enable_subtitle_animation: bool = Field(True, description="字幕出現アニメーション")
     zoom_intensity: float = Field(1.08, ge=1.0, le=1.3, description="ズーム倍率")
     silence_threshold_db: float = Field(-25.0, ge=-60.0, le=-10.0, description="無音検出閾値(dB) V12: -30→-25に変更してより積極的に検出")
+    # V13: テンポアップ
+    speed_factor: float = Field(1.05, ge=1.0, le=1.3, description="再生速度倍率 (1.0=変更なし, 1.05=TikTok風微速, 1.3=最大)")
     # V3: 映像モード選択
     video_mode: str = Field("original", description="映像モード: original=そのまま, product_overlay=商品画像オーバーレイ, audio_only=音声+商品スライドショー")
     product_image_urls: Optional[list] = Field(None, description="商品画像URLリスト（video_mode=product_overlay/audio_onlyの場合に使用）")
-    product_video_urls: Optional[list] = Field(None, description="商品動画URLリスト（PiPで動画をオーバーレイ表示する場合に使用）")
+    product_video_urls: Optional[list] = Field(None, description="商品動甾URLリスト（PiPで動甾をオーバーレイ表示する場合に使用）")
     # V12: 編集スタイル学習
     editing_profile_id: Optional[str] = Field(None, description="編集プロファイルID（スタイル学習済みプロファイルを適用）")
 
@@ -4189,7 +4226,7 @@ async def _process_single_clip_v2(job_id: str, clip: dict, req: GenerateRequest,
         if req.enable_silence_cut:
             await _update_job(job_id, progress_pct=18, current_step=f"クリップ {idx+1}/{total}: 無音区間検出中...")
             silence_periods = _detect_silence_periods(
-                video_path, noise_db=req.silence_threshold_db
+                video_path, noise_db=req.silence_threshold_db, min_duration=0.3
             )
             await _update_job(job_id, progress_pct=20, current_step=f"クリップ {idx+1}/{total}: 無音{len(silence_periods)}区間検出")
 
@@ -4224,7 +4261,9 @@ async def _process_single_clip_v2(job_id: str, clip: dict, req: GenerateRequest,
                 filler_cut_segments = []
 
         # ── 4c. Build silence trim segments (after captions, to protect caption regions) ──
-        if req.enable_silence_cut and (silence_periods or filler_cut_segments):
+        # V13: enable_content_cutがTrueの場合、filler_cut_segmentsだけでもkeep_segmentsを更新
+        if (req.enable_silence_cut and (silence_periods or filler_cut_segments)) or \
+           (getattr(req, 'enable_content_cut', True) and filler_cut_segments):
             keep_segments = _build_silence_trim_segments(
                 duration, silence_periods, captions,
                 filler_cut_segments=filler_cut_segments

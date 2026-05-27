@@ -2300,7 +2300,7 @@ def create_vertical_clip_nosub(
 # Silence detection + removal
 # =========================
 
-def detect_silence_intervals(video_path: str, noise_threshold: str = "-35dB", min_silence_duration: float = 0.8) -> list:
+def detect_silence_intervals(video_path: str, noise_threshold: str = "-25dB", min_silence_duration: float = 0.3) -> list:
     """
     Detect silent intervals in a video using ffmpeg silencedetect filter.
     Returns list of (start_sec, end_sec) tuples representing silent intervals.
@@ -3281,7 +3281,7 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
             silence_intervals = []
         else:
             logger.info("Running silence detection...")
-            silence_intervals = detect_silence_intervals(segment_path, noise_threshold="-35dB", min_silence_duration=0.8)
+            silence_intervals = detect_silence_intervals(segment_path, noise_threshold="-25dB", min_silence_duration=0.3)
         if silence_intervals:
             desilenced_path = os.path.join(work_dir, "segment_desilenced.mp4")
             if remove_silence_from_video(segment_path, desilenced_path, silence_intervals):
