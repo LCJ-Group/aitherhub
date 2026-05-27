@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
+import AIVideoEditorDemo from './AIVideoEditorDemo';
 
 /* ─────────────────────────────────────────────
    AitherHub Landing Page — Ultra Technology Edition
@@ -698,16 +699,19 @@ export default function LandingPage() {
           </div>
         </section>
         
-        {/* ═══ TIMELINE DEMO ═══ */}
-        <section style={{ padding: '80px 24px', maxWidth: '900px', margin: '0 auto' }}>
+        {/* ═══ AI VIDEO EDITOR DEMO ═══ */}
+        <section style={{ padding: '80px 24px', maxWidth: '1000px', margin: '0 auto' }}>
           <RevealSection>
             <div style={{ textAlign: 'center', marginBottom: '40px' }}>
               <span style={{ fontSize: '12px', color: '#22d3ee', letterSpacing: '2px', fontFamily: 'monospace' }}>REAL-TIME AI PROCESSING</span>
               <h2 style={{ fontSize: 'clamp(24px, 4vw, 36px)', fontWeight: '700', marginTop: '12px', letterSpacing: '-0.02em' }}>
-                AIが動画を解析する、その瞬間。
+                AIが動画を自動編集する、その瞬間。
               </h2>
+              <p style={{ color: '#64748b', fontSize: '14px', marginTop: '12px', maxWidth: '600px', margin: '12px auto 0' }}>
+                アップロードするだけ。無音カット、字幕生成、フック最適化——すべてAIが6倍速で処理。
+              </p>
             </div>
-            <TimelineUI />
+            <AIVideoEditorDemo />
           </RevealSection>
         </section>
         
