@@ -613,6 +613,7 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
             </div>
 
             {/* ===== Tool Navigation ===== */}
+            {user?.email === 'ryuhairartist@gmail.com' && (
             <div className="mt-3 pt-3 border-t border-gray-100 space-y-1">
               <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider px-2">Tools</span>
               <div
@@ -694,6 +695,7 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
               </div>
 
             </div>
+            )}
           </div>
         </div>
 
