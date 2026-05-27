@@ -476,25 +476,36 @@ def create_landmark_mask(face, frame_shape, blur_amount=0.3):
     mask = np.zeros((h, w), dtype=np.float32)
 
     # Get face bounding box
-    bbox = face.bbox.astype(int)
+    bbox = face.bbox.astype(np.float32)
     x1, y1, x2, y2 = bbox
     face_w = x2 - x1
     face_h = y2 - y1
 
     # Create ellipse centered slightly below face center (protects forehead/hair)
-    cx = (x1 + x2) // 2
-    cy = (y1 + y2) // 2 + int(face_h * 0.05)  # Shift down 5% to protect forehead
+    cx_raw = (x1 + x2) / 2.0
+    cy_raw = (y1 + y2) / 2.0 + face_h * 0.05  # Shift down 5% to protect forehead
+    rx_raw = face_w * 0.52
+    ry_raw = face_h * 0.48
 
-    # Horizontal radius: 52% of face width (covers full face including jawline)
-    # Vertical radius: 48% of face height (covers more of the face for better swap)
-    rx = int(face_w * 0.52)
-    ry = int(face_h * 0.48)
+    # EMA smooth mask parameters to prevent flickering mask edges
+    mask_params_raw = np.array([cx_raw, cy_raw, rx_raw, ry_raw], dtype=np.float32)
+    if _temporal_state.get("prev_mask_params") is not None:
+        mask_alpha = 0.08  # Same as face smoothing alpha
+        mask_params = mask_alpha * mask_params_raw + (1 - mask_alpha) * _temporal_state["prev_mask_params"]
+    else:
+        mask_params = mask_params_raw
+    _temporal_state["prev_mask_params"] = mask_params.copy()
+
+    cx = int(mask_params[0])
+    cy = int(mask_params[1])
+    rx = int(mask_params[2])
+    ry = int(mask_params[3])
 
     # Draw filled ellipse
     cv2.ellipse(mask, (cx, cy), (rx, ry), 0, 0, 360, 1.0, -1)
 
-    # Apply gaussian blur for soft edges
-    blur_ksize = max(3, int(min(face_w, face_h) * blur_amount) | 1)
+    # Apply gaussian blur for soft edges (larger kernel for smoother transitions)
+    blur_ksize = max(3, int(min(face_w, face_h) * blur_amount * 1.5) | 1)
     mask = cv2.GaussianBlur(mask, (blur_ksize, blur_ksize), 0)
 
     return mask
@@ -609,9 +620,9 @@ _temporal_state = {
     "prev_lm106": None,       # Previous smoothed 106-point landmarks
     "frame_count": 0,         # Frame counter for adaptive smoothing
 }
-_SMOOTH_ALPHA = 0.15   # EMA alpha: lower = smoother but more lag, higher = responsive but jittery
-# Reduced from 0.2 to 0.15 for less face jitter while maintaining acceptable responsiveness
-                      # 0.2 = smoother for 16 FPS, reduces jitter/flickering at cost of slight lag
+_SMOOTH_ALPHA = 0.08   # EMA alpha: lower = smoother but more lag, higher = responsive but jittery
+# Reduced from 0.15 to 0.08 for much less face jitter at 15-30 FPS
+# At 15 FPS, 0.08 means each frame only takes 8% of new detection → very stable
 
 def _reset_temporal_state():
     """Reset temporal smoothing state (called when source face changes or stream restarts)."""
@@ -619,6 +630,9 @@ def _reset_temporal_state():
     _temporal_state["prev_kps"] = None
     _temporal_state["prev_lm106"] = None
     _temporal_state["prev_result"] = None
+    _temporal_state["prev_affine"] = None
+    _temporal_state["prev_affine_large"] = None
+    _temporal_state["prev_mask_params"] = None
     _temporal_state["miss_count"] = 0
     _temporal_state["frame_count"] = 0
 
@@ -650,8 +664,9 @@ def direct_swap_frame(frame, detect_score: float = 0.5, use_enhancer: bool = Tru
     if not faces:
         # No faces detected - use cached result if available (prevents flickering)
         _temporal_state["miss_count"] += 1
-        if _temporal_state["prev_result"] is not None and _temporal_state["miss_count"] <= 5:
-            # Return last successful result for up to 5 frames to bridge detection gaps
+        if _temporal_state["prev_result"] is not None and _temporal_state["miss_count"] <= 10:
+            # Return last successful result for up to 10 frames to bridge detection gaps
+            # At 15 FPS, this covers ~0.67 seconds of detection dropout
             return _temporal_state["prev_result"]
         return frame  # Too many misses, fall back to original
 
@@ -674,9 +689,11 @@ def direct_swap_frame(frame, detect_score: float = 0.5, use_enhancer: bool = Tru
         else:
             # Check for sudden large jumps (face re-detection) - reset if too far
             kps_diff = np.linalg.norm(raw_kps - _temporal_state["prev_kps"])
-            if kps_diff > 80:  # Large jump = new face or re-detection, reset
+            if kps_diff > 120:  # Large jump = new face or re-detection, reset
                 _temporal_state["prev_kps"] = raw_kps.copy()
                 _temporal_state["prev_bbox"] = raw_bbox.copy()
+                _temporal_state["prev_affine"] = None  # Reset affine cache too
+                _temporal_state["prev_affine_large"] = None
                 landmarks_5 = raw_kps
             else:
                 # EMA smoothing: new = alpha * current + (1-alpha) * previous
@@ -693,7 +710,7 @@ def direct_swap_frame(frame, detect_score: float = 0.5, use_enhancer: bool = Tru
             raw_lm106 = target_face.landmark_2d_106.astype(np.float32)
             if _temporal_state["prev_lm106"] is not None and raw_lm106.shape == _temporal_state["prev_lm106"].shape:
                 lm106_diff = np.linalg.norm(raw_lm106 - _temporal_state["prev_lm106"])
-                if lm106_diff < 150:  # Not a sudden jump
+                if lm106_diff < 250:  # Not a sudden jump (increased threshold for stability)
                     smoothed_lm106 = alpha * raw_lm106 + (1 - alpha) * _temporal_state["prev_lm106"]
                     _temporal_state["prev_lm106"] = smoothed_lm106.copy()
                     target_face.landmark_2d_106 = smoothed_lm106
@@ -706,13 +723,20 @@ def direct_swap_frame(frame, detect_score: float = 0.5, use_enhancer: bool = Tru
         target_face.kps = landmarks_5
 
         # Step 2: Compute affine matrix and warp face to 128x128
-        affine_matrix = cv2.estimateAffinePartial2D(
+        affine_matrix_raw = cv2.estimateAffinePartial2D(
             landmarks_5, ARCFACE_128_TEMPLATE,
             method=cv2.RANSAC, ransacReprojThreshold=100
         )[0]
 
-        if affine_matrix is None:
+        if affine_matrix_raw is None:
             continue
+
+        # EMA smooth the affine matrix to prevent per-frame jitter
+        if _temporal_state["prev_affine"] is not None:
+            affine_matrix = alpha * affine_matrix_raw + (1 - alpha) * _temporal_state["prev_affine"]
+        else:
+            affine_matrix = affine_matrix_raw
+        _temporal_state["prev_affine"] = affine_matrix.copy()
 
         crop = cv2.warpAffine(
             result, affine_matrix, (128, 128),
@@ -748,19 +772,24 @@ def direct_swap_frame(frame, detect_score: float = 0.5, use_enhancer: bool = Tru
 
         # Step 7: Create affine matrix for the enhanced size
         scale_factor = paste_size / 128.0
-        affine_matrix_scaled = affine_matrix.copy()
-        affine_matrix_scaled[:, 2] *= 1  # Translation stays the same
-        # Create new affine for paste_size
         scaled_template = ARCFACE_128_TEMPLATE * scale_factor
-        affine_matrix_large = cv2.estimateAffinePartial2D(
+        affine_matrix_large_raw = cv2.estimateAffinePartial2D(
             landmarks_5, scaled_template,
             method=cv2.RANSAC, ransacReprojThreshold=100
         )[0]
 
-        if affine_matrix_large is None:
-            affine_matrix_large = affine_matrix
+        if affine_matrix_large_raw is None:
+            affine_matrix_large_raw = affine_matrix * np.array([[1, 1, scale_factor], [1, 1, scale_factor]], dtype=np.float32)
             enhanced = cv2.resize(enhanced, (128, 128), interpolation=cv2.INTER_AREA)
             paste_size = 128
+
+        # EMA smooth the large affine matrix too
+        if _temporal_state["prev_affine_large"] is not None and \
+           affine_matrix_large_raw.shape == _temporal_state["prev_affine_large"].shape:
+            affine_matrix_large = alpha * affine_matrix_large_raw + (1 - alpha) * _temporal_state["prev_affine_large"]
+        else:
+            affine_matrix_large = affine_matrix_large_raw
+        _temporal_state["prev_affine_large"] = affine_matrix_large.copy()
 
         # Step 7b: (mouth_open processing moved to AFTER face paste - see Step 11 below)
 
@@ -779,10 +808,11 @@ def direct_swap_frame(frame, detect_score: float = 0.5, use_enhancer: bool = Tru
 
         # Create a mask for the warped face region (where pixels are non-zero)
         warp_mask = np.zeros((paste_size, paste_size), dtype=np.float32)
-        # Soft box mask within the crop
-        border = int(paste_size * 0.05)
+        # Soft box mask within the crop - larger border for smoother blending
+        border = int(paste_size * 0.08)
         warp_mask[border:-border, border:-border] = 1.0
-        blur_k = max(3, int(paste_size * 0.08) | 1)
+        # Larger blur kernel for much softer edges (reduces visible boundary flickering)
+        blur_k = max(3, int(paste_size * 0.15) | 1)
         warp_mask = cv2.GaussianBlur(warp_mask, (blur_k, blur_k), 0)
 
         warp_mask_warped = cv2.warpAffine(
@@ -800,42 +830,46 @@ def direct_swap_frame(frame, detect_score: float = 0.5, use_enhancer: bool = Tru
         result = (face_warped.astype(np.float32) * mask_3ch + result.astype(np.float32) * (1 - mask_3ch)).astype(np.uint8)
 
         # Step 11: Apply mouth opening AFTER face paste (critical: must be after Step 10)
-        # Previously this was in Step 7b which got overwritten by Step 10's alpha blend.
-        if mouth_open > 0.02:
+        # Uses vectorized numpy operations for speed (~1ms)
+        if mouth_open > 0.01:
             try:
                 # Determine mouth center and face height
-                # Try 106-point landmarks first, fallback to 5-point kps
                 has_106 = hasattr(target_face, 'landmark_2d_106') and target_face.landmark_2d_106 is not None
                 
                 if has_106:
                     lm106 = target_face.landmark_2d_106.astype(np.float32)
-                    upper_lip_center = lm106[90]
-                    lower_lip_center = lm106[99]
+                    # Use multiple lip landmarks for better center estimation
+                    upper_lip_center = lm106[90]  # Upper lip center
+                    lower_lip_center = lm106[99]  # Lower lip center
+                    left_mouth = lm106[84]   # Left mouth corner
+                    right_mouth = lm106[96]  # Right mouth corner
                     mouth_center_pt = (upper_lip_center + lower_lip_center) / 2
+                    mouth_width_px = np.linalg.norm(right_mouth - left_mouth)
                     face_height_px = np.linalg.norm(lm106[1] - lm106[16])
                 else:
-                    # Fallback: use 5-point landmarks (kps)
-                    # kps[3] = left mouth corner, kps[4] = right mouth corner
                     kps = target_face.kps.astype(np.float32)
                     mouth_center_pt = (kps[3] + kps[4]) / 2
-                    # Estimate face height from eye-to-mouth distance * 2.5
+                    mouth_width_px = np.linalg.norm(kps[4] - kps[3])
                     eye_center = (kps[0] + kps[1]) / 2
                     face_height_px = np.linalg.norm(eye_center - mouth_center_pt) * 2.5
 
-                # Max displacement: 25% of face height (more visible lip movement)
-                max_displacement = face_height_px * 0.25
-                displacement = max_displacement * min(1.0, mouth_open)
+                # Max displacement: 35% of face height for clearly visible mouth movement
+                # Apply power curve to mouth_open for more natural feel
+                # (small values = subtle, large values = dramatic)
+                mouth_intensity = min(1.0, mouth_open) ** 0.7  # Power curve for natural response
+                max_displacement = face_height_px * 0.35
+                displacement = max_displacement * mouth_intensity
 
-                # Define the mouth region to deform using cv2.remap for speed
+                # Define mouth region - use mouth width for horizontal extent
                 h_frame, w_frame = result.shape[:2]
                 mouth_y = int(mouth_center_pt[1])
                 mouth_x = int(mouth_center_pt[0])
-                region_h = int(face_height_px * 0.50)  # Larger region for natural falloff
-                region_w = int(face_height_px * 0.55)
+                region_h = int(face_height_px * 0.55)  # Larger region for natural falloff
+                region_w = max(int(mouth_width_px * 2.0), int(face_height_px * 0.55))
 
-                # Include area above mouth for upper lip movement
-                y_start = max(0, mouth_y - int(region_h * 0.35))
-                y_end = min(h_frame, mouth_y + int(region_h * 0.65))
+                # Asymmetric vertical region: more below mouth (jaw opens down)
+                y_start = max(0, mouth_y - int(region_h * 0.30))
+                y_end = min(h_frame, mouth_y + int(region_h * 0.70))
                 x_start = max(0, mouth_x - region_w // 2)
                 x_end = min(w_frame, mouth_x + region_w // 2)
 
@@ -843,47 +877,50 @@ def direct_swap_frame(frame, detect_score: float = 0.5, use_enhancer: bool = Tru
                     rh = y_end - y_start
                     rw = x_end - x_start
 
-                    # Build remap coordinates for the region
-                    map_x = np.tile(np.arange(rw, dtype=np.float32), (rh, 1))
-                    map_y = np.tile(np.arange(rh, dtype=np.float32).reshape(-1, 1), (1, rw))
+                    # Build remap coordinates using vectorized numpy (no Python loops)
+                    cols = np.arange(rw, dtype=np.float32)
+                    rows = np.arange(rh, dtype=np.float32)
+                    map_x = np.tile(cols, (rh, 1))
+                    map_y = np.tile(rows.reshape(-1, 1), (1, rw))
 
-                    # Calculate relative positions
-                    mouth_rel_y = mouth_y - y_start
-                    mouth_rel_x = mouth_x - x_start
+                    mouth_rel_y = float(mouth_y - y_start)
+                    mouth_rel_x = float(mouth_x - x_start)
 
-                    # Horizontal falloff: displacement is strongest at center, fades at edges
-                    # This creates a more natural oval mouth opening shape
-                    col_weights = np.zeros(rw, dtype=np.float32)
-                    for col in range(rw):
-                        dist_from_center = abs(col - mouth_rel_x) / max(1, rw / 2)
-                        # Gaussian-like falloff: strong at center, zero at edges
-                        col_weights[col] = max(0.0, 1.0 - dist_from_center ** 1.5)
+                    # Vectorized horizontal falloff (Gaussian-like)
+                    dist_from_center = np.abs(cols - mouth_rel_x) / max(1.0, rw / 2.0)
+                    col_weights = np.maximum(0.0, 1.0 - dist_from_center ** 1.3)  # Slightly wider than before
 
-                    # Apply bidirectional displacement with horizontal falloff:
-                    # - Below mouth: push down (jaw opening) with gaussian falloff
-                    # - Above mouth: push up slightly (upper lip movement)
-                    # - Horizontal: slight inward pull at corners (cheek movement)
-                    for row in range(rh):
-                        if row > mouth_rel_y:
-                            # Below mouth: push down with ease-out curve
-                            progress = (row - mouth_rel_y) / max(1, rh - mouth_rel_y - 1)
-                            # Smooth ease-out curve
-                            shift = displacement * progress * (2.0 - progress)
-                            map_y[row, :] -= shift * col_weights
-                            # Slight horizontal compression at jaw (cheeks pull inward)
-                            if mouth_open > 0.3:
-                                h_shift = displacement * 0.08 * progress
-                                for col in range(rw):
-                                    if col < mouth_rel_x:
-                                        map_x[row, col] += h_shift * (1.0 - col_weights[col])
-                                    elif col > mouth_rel_x:
-                                        map_x[row, col] -= h_shift * (1.0 - col_weights[col])
-                        elif row < mouth_rel_y:
-                            # Above mouth: slight upward pull (upper lip)
-                            progress = (mouth_rel_y - row) / max(1, mouth_rel_y)
-                            # Smaller displacement for upper lip (25% of lower)
-                            shift = displacement * 0.25 * progress * (2.0 - progress)
-                            map_y[row, :] += shift * col_weights
+                    # Vectorized vertical displacement
+                    # Below mouth: jaw opening (push pixels up to reveal dark gap)
+                    below_mask = rows > mouth_rel_y
+                    below_progress = np.where(below_mask,
+                        (rows - mouth_rel_y) / max(1.0, rh - mouth_rel_y - 1.0), 0.0)
+                    # Ease-out curve for natural deceleration
+                    below_shift = displacement * below_progress * (2.0 - below_progress)
+
+                    # Above mouth: upper lip rises slightly (30% of jaw displacement)
+                    above_mask = rows < mouth_rel_y
+                    above_progress = np.where(above_mask,
+                        (mouth_rel_y - rows) / max(1.0, mouth_rel_y), 0.0)
+                    above_shift = displacement * 0.30 * above_progress * (2.0 - above_progress)
+
+                    # Apply vertical displacement with horizontal weights
+                    # below: map_y -= shift (pull pixels upward to create gap)
+                    # above: map_y += shift (push pixels upward for upper lip)
+                    shift_2d_below = below_shift.reshape(-1, 1) * col_weights.reshape(1, -1)
+                    shift_2d_above = above_shift.reshape(-1, 1) * col_weights.reshape(1, -1)
+                    map_y -= shift_2d_below
+                    map_y += shift_2d_above
+
+                    # Horizontal compression at jaw for mouth_open > 0.2
+                    if mouth_open > 0.2:
+                        h_factor = displacement * 0.12 * below_progress
+                        h_shift_2d = h_factor.reshape(-1, 1) * np.where(
+                            cols < mouth_rel_x,
+                            (1.0 - col_weights),   # Left side: push right
+                            -(1.0 - col_weights)   # Right side: push left
+                        ).reshape(1, -1)
+                        map_x += h_shift_2d
 
                     # Apply remap to the region
                     region = result[y_start:y_end, x_start:x_end].copy()
@@ -894,8 +931,9 @@ def direct_swap_frame(frame, detect_score: float = 0.5, use_enhancer: bool = Tru
                     )
                     result[y_start:y_end, x_start:x_end] = deformed
 
-                    # Always log lip-sync activity for debugging
-                    logger.info(f"[LipSync] mouth_open={mouth_open:.3f}, displacement={displacement:.1f}px, face_h={face_height_px:.0f}px")
+                    # Log lip-sync activity periodically (every 15 frames)
+                    if _temporal_state["frame_count"] % 15 == 0:
+                        logger.info(f"[LipSync] mouth_open={mouth_open:.3f}, displacement={displacement:.1f}px, face_h={face_height_px:.0f}px")
             except Exception as e:
                 logger.warning(f"[LipSync] mouth_open error: {e}")
 
@@ -1971,15 +2009,15 @@ async def preview_stream(websocket: WebSocket, api_key: str = Query(...)):
                     start_time = time.time()
 
                     # Smooth mouth_open value to reduce jitter from WebSocket latency
-                    # Fast attack (0.7) for responsive opening, slow release (0.4) for natural closing
+                    # Fast attack (0.85) for very responsive opening, slow release (0.5) for natural closing
                     target_mouth = current_mouth_open
                     if target_mouth > smoothed_mouth_open:
-                        alpha = 0.7  # Fast attack
+                        m_alpha = 0.85  # Very fast attack - mouth opens immediately
                     else:
-                        alpha = 0.4  # Slow release
-                    smoothed_mouth_open = smoothed_mouth_open + alpha * (target_mouth - smoothed_mouth_open)
+                        m_alpha = 0.5   # Moderate release - mouth closes naturally
+                    smoothed_mouth_open = smoothed_mouth_open + m_alpha * (target_mouth - smoothed_mouth_open)
                     # Snap to zero if very small (avoid perpetual tiny mouth movements)
-                    if smoothed_mouth_open < 0.02:
+                    if smoothed_mouth_open < 0.01:
                         smoothed_mouth_open = 0.0
 
                     # Dynamically re-check use_direct each frame
