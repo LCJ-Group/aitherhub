@@ -14,10 +14,31 @@ import PrivacyPolicy from './components/PrivacyPolicy'
 import AuthPage from './pages/authPages/AuthPage'
 import BrandPortal from './components/brand/BrandPortal'
 import ShareVideoPage from './components/ShareVideoPage'
+import LandingPage from './pages/landing/LandingPage'
 import { Toaster } from "./components/ui/toaster";
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { LanguageProvider } from './contexts/LanguageContext';
 import SectionErrorBoundary from './components/SectionErrorBoundary';
+
+/**
+ * HomeRouter: ログイン状態で表示を分岐
+ * - ログイン済み → MainLayout（ダッシュボード）
+ * - 未ログイン → LandingPage
+ */
+function HomeRouter() {
+  try {
+    const userData = localStorage.getItem('user');
+    if (userData) {
+      const user = JSON.parse(userData);
+      if (user && user.access_token) {
+        return <MainLayout />;
+      }
+    }
+  } catch (e) {
+    // parse error → 未ログイン扱い
+  }
+  return <LandingPage />;
+}
 
 function App() {
   return (
@@ -25,7 +46,8 @@ function App() {
       <BrowserRouter>
         <SectionErrorBoundary sectionName="アプリケーション">
           <Routes>
-            <Route path="/" element={<MainLayout />} />
+            <Route path="/" element={<HomeRouter />} />
+            <Route path="/lp" element={<LandingPage />} />
             <Route path="/video/:videoId" element={<MainLayout />} />
             <Route path="/admin" element={<AdminDashboard />} />
             <Route path="/live" element={<LivePage />} />
