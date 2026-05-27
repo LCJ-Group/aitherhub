@@ -128,54 +128,67 @@ class LiveAnalysisPipeline:
                 preview_filename = f"{video_id}_assembled.mp4"
                 blob_name = f"assembled/{preview_filename}"
 
+                file_size = os.path.getsize(assembled_path)
+                # Azure single-block limit is 256MB. Use block upload for larger files.
+                SINGLE_BLOCK_LIMIT = 200 * 1024 * 1024  # 200MB (conservative)
+
                 max_upload_attempts = 3
                 for attempt in range(1, max_upload_attempts + 1):
                     try:
-                        _, upload_url, blob_url, _ = await generate_upload_sas(
-                            email=email,
-                            video_id=video_id,
-                            filename=blob_name,
-                        )
-
-                        async with aiohttp.ClientSession() as http_session:
-                            with open(assembled_path, "rb") as f:
-                                video_data = f.read()
-                            async with http_session.put(
-                                upload_url,
-                                data=video_data,
-                                headers={
-                                    "x-ms-blob-type": "BlockBlob",
-                                    "Content-Type": "video/mp4",
-                                },
-                                timeout=aiohttp.ClientTimeout(total=300),
-                            ) as resp:
-                                if resp.status in (200, 201):
-                                    compressed_blob_path = blob_name
-                                    logger.info(
-                                        f"[pipeline] Uploaded assembled video to blob: {blob_name} "
-                                        f"(attempt {attempt}/{max_upload_attempts})"
-                                    )
-                                    # Save compressed_blob_url to DB immediately
-                                    try:
-                                        await self.db.execute(
-                                            text("""
-                                                UPDATE videos
-                                                SET compressed_blob_url = COALESCE(:blob_url, compressed_blob_url),
-                                                    updated_at = now()
-                                                WHERE id = :video_id
-                                            """),
-                                            {"video_id": video_id, "blob_url": compressed_blob_path},
+                        if file_size <= SINGLE_BLOCK_LIMIT:
+                            # Small file: single PUT request
+                            _, upload_url, blob_url, _ = await generate_upload_sas(
+                                email=email,
+                                video_id=video_id,
+                                filename=blob_name,
+                            )
+                            async with aiohttp.ClientSession() as http_session:
+                                with open(assembled_path, "rb") as f:
+                                    video_data = f.read()
+                                async with http_session.put(
+                                    upload_url,
+                                    data=video_data,
+                                    headers={
+                                        "x-ms-blob-type": "BlockBlob",
+                                        "Content-Type": "video/mp4",
+                                    },
+                                    timeout=aiohttp.ClientTimeout(total=300),
+                                ) as resp:
+                                    if resp.status in (200, 201):
+                                        compressed_blob_path = blob_name
+                                    else:
+                                        logger.warning(
+                                            f"[pipeline] Upload failed: HTTP {resp.status} "
+                                            f"(attempt {attempt}/{max_upload_attempts})"
                                         )
-                                        await self.db.commit()
-                                        logger.info(f"[pipeline] Saved compressed_blob_url early for video={video_id}")
-                                    except Exception as db_err:
-                                        logger.warning(f"[pipeline] Non-critical: early blob_url save failed: {db_err}")
-                                    break  # Success — exit retry loop
-                                else:
-                                    logger.warning(
-                                        f"[pipeline] Failed to upload assembled video: HTTP {resp.status} "
-                                        f"(attempt {attempt}/{max_upload_attempts})"
-                                    )
+                        else:
+                            # Large file: use Azure Block Blob upload (Put Block + Put Block List)
+                            compressed_blob_path = await self._upload_large_blob(
+                                assembled_path, email, video_id, blob_name, file_size
+                            )
+
+                        if compressed_blob_path:
+                            logger.info(
+                                f"[pipeline] Uploaded assembled video to blob: {blob_name} "
+                                f"size={file_size/(1024*1024):.1f}MB "
+                                f"(attempt {attempt}/{max_upload_attempts})"
+                            )
+                            # Save compressed_blob_url to DB immediately
+                            try:
+                                await self.db.execute(
+                                    text("""
+                                        UPDATE videos
+                                        SET compressed_blob_url = COALESCE(:blob_url, compressed_blob_url),
+                                            updated_at = now()
+                                        WHERE id = :video_id
+                                    """),
+                                    {"video_id": video_id, "blob_url": compressed_blob_path},
+                                )
+                                await self.db.commit()
+                                logger.info(f"[pipeline] Saved compressed_blob_url early for video={video_id}")
+                            except Exception as db_err:
+                                logger.warning(f"[pipeline] Non-critical: early blob_url save failed: {db_err}")
+                            break  # Success — exit retry loop
                     except Exception as upload_err:
                         logger.warning(
                             f"[pipeline] Assembled video upload attempt {attempt}/{max_upload_attempts} "
@@ -188,7 +201,8 @@ class LiveAnalysisPipeline:
                 if not compressed_blob_path:
                     logger.error(
                         f"[pipeline] CRITICAL: All {max_upload_attempts} upload attempts failed "
-                        f"for video={video_id}. Video will be marked DONE but preview unavailable."
+                        f"for video={video_id} (size={file_size/(1024*1024):.1f}MB). "
+                        f"Video will be marked DONE but preview unavailable."
                     )
             except Exception as e:
                 logger.error(f"[pipeline] Assembled video upload failed completely: {e}")
@@ -417,6 +431,116 @@ class LiveAnalysisPipeline:
         "sales_detection":  "STEP_5_BUILD_PHASE_UNITS",
         "clip_generation":  "STEP_13_BUILD_REPORTS",
     }
+
+    async def _upload_large_blob(
+        self,
+        file_path: str,
+        email: str,
+        video_id: str,
+        blob_name: str,
+        file_size: int,
+    ) -> Optional[str]:
+        """Upload a large file to Azure Blob Storage using Block Blob API.
+
+        Azure has a 256MB limit for single PUT uploads. For larger files,
+        we split into 100MB blocks, upload each with Put Block, then commit
+        with Put Block List.
+
+        Returns blob_name on success, None on failure.
+        """
+        import aiohttp
+        import base64
+        from app.services.storage_service import generate_upload_sas
+
+        BLOCK_SIZE = 100 * 1024 * 1024  # 100MB per block
+
+        try:
+            # Get a SAS URL for the blob
+            _, upload_url, _, _ = await generate_upload_sas(
+                email=email,
+                video_id=video_id,
+                filename=blob_name,
+            )
+
+            # Parse the base URL and SAS token
+            if "?" in upload_url:
+                base_url, sas_token = upload_url.split("?", 1)
+            else:
+                base_url = upload_url
+                sas_token = ""
+
+            block_ids = []
+            block_index = 0
+
+            async with aiohttp.ClientSession() as session:
+                with open(file_path, "rb") as f:
+                    while True:
+                        chunk = f.read(BLOCK_SIZE)
+                        if not chunk:
+                            break
+
+                        # Generate a unique block ID (must be base64-encoded, same length)
+                        block_id = base64.b64encode(
+                            f"block-{block_index:06d}".encode()
+                        ).decode()
+                        block_ids.append(block_id)
+
+                        # Put Block
+                        put_block_url = f"{base_url}?comp=block&blockid={block_id}&{sas_token}"
+                        async with session.put(
+                            put_block_url,
+                            data=chunk,
+                            headers={"Content-Length": str(len(chunk))},
+                            timeout=aiohttp.ClientTimeout(total=300),
+                        ) as resp:
+                            if resp.status not in (200, 201):
+                                body = await resp.text()
+                                logger.error(
+                                    f"[pipeline] Put Block failed: HTTP {resp.status} "
+                                    f"block={block_index} body={body[:200]}"
+                                )
+                                return None
+
+                        block_index += 1
+                        logger.info(
+                            f"[pipeline] Uploaded block {block_index} of "
+                            f"{(file_size + BLOCK_SIZE - 1) // BLOCK_SIZE} "
+                            f"({len(chunk)/(1024*1024):.1f}MB)"
+                        )
+
+                # Put Block List — commit all blocks
+                block_list_xml = '<?xml version="1.0" encoding="utf-8"?>\n<BlockList>\n'
+                for bid in block_ids:
+                    block_list_xml += f"  <Latest>{bid}</Latest>\n"
+                block_list_xml += "</BlockList>"
+
+                put_list_url = f"{base_url}?comp=blocklist&{sas_token}"
+                async with session.put(
+                    put_list_url,
+                    data=block_list_xml.encode("utf-8"),
+                    headers={
+                        "Content-Type": "application/xml",
+                        "x-ms-blob-content-type": "video/mp4",
+                    },
+                    timeout=aiohttp.ClientTimeout(total=120),
+                ) as resp:
+                    if resp.status in (200, 201):
+                        logger.info(
+                            f"[pipeline] Block upload complete: {blob_name} "
+                            f"blocks={len(block_ids)} size={file_size/(1024*1024):.1f}MB"
+                        )
+                        return blob_name
+                    else:
+                        body = await resp.text()
+                        logger.error(
+                            f"[pipeline] Put Block List failed: HTTP {resp.status} "
+                            f"body={body[:300]}"
+                        )
+                        return None
+
+        except Exception as e:
+            logger.error(f"[pipeline] Large blob upload failed: {e}")
+            return None
 
     async def _sync_video_status(
         self,

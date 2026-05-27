@@ -1611,31 +1611,95 @@ async def _repair_video_preview_task(video_id: str, email: str):
                 )
                 return
 
-        # Upload assembled video
+        # Upload assembled video (use block upload for large files)
+        import base64
         blob_name = f"assembled/{video_id}_assembled.mp4"
+        file_size = os.path.getsize(output_path)
+        SINGLE_BLOCK_LIMIT = 200 * 1024 * 1024  # 200MB
+
         _, upload_url, blob_url, _ = await generate_upload_sas(
             email=email,
             video_id=video_id,
             filename=blob_name,
         )
 
-        async with aiohttp.ClientSession() as http_session:
-            with open(output_path, "rb") as f:
-                video_data = f.read()
-            async with http_session.put(
-                upload_url,
-                data=video_data,
-                headers={
-                    "x-ms-blob-type": "BlockBlob",
-                    "Content-Type": "video/mp4",
-                },
-                timeout=aiohttp.ClientTimeout(total=600),
-            ) as resp:
-                if resp.status not in (200, 201):
-                    logger.error(
-                        f"[admin/repair-preview] Upload failed for {video_id}: HTTP {resp.status}"
-                    )
-                    return
+        if file_size <= SINGLE_BLOCK_LIMIT:
+            # Small file: single PUT
+            async with aiohttp.ClientSession() as http_session:
+                with open(output_path, "rb") as f:
+                    video_data = f.read()
+                async with http_session.put(
+                    upload_url,
+                    data=video_data,
+                    headers={
+                        "x-ms-blob-type": "BlockBlob",
+                        "Content-Type": "video/mp4",
+                    },
+                    timeout=aiohttp.ClientTimeout(total=600),
+                ) as resp:
+                    if resp.status not in (200, 201):
+                        logger.error(
+                            f"[admin/repair-preview] Upload failed for {video_id}: HTTP {resp.status}"
+                        )
+                        return
+        else:
+            # Large file: block upload
+            BLOCK_SIZE = 100 * 1024 * 1024  # 100MB per block
+            if "?" in upload_url:
+                base_url, sas_token = upload_url.split("?", 1)
+            else:
+                base_url, sas_token = upload_url, ""
+
+            block_ids = []
+            async with aiohttp.ClientSession() as http_session:
+                with open(output_path, "rb") as f:
+                    block_index = 0
+                    while True:
+                        chunk_data = f.read(BLOCK_SIZE)
+                        if not chunk_data:
+                            break
+                        block_id = base64.b64encode(
+                            f"block-{block_index:06d}".encode()
+                        ).decode()
+                        block_ids.append(block_id)
+                        put_block_url = f"{base_url}?comp=block&blockid={block_id}&{sas_token}"
+                        async with http_session.put(
+                            put_block_url,
+                            data=chunk_data,
+                            headers={"Content-Length": str(len(chunk_data))},
+                            timeout=aiohttp.ClientTimeout(total=300),
+                        ) as resp:
+                            if resp.status not in (200, 201):
+                                logger.error(
+                                    f"[admin/repair-preview] Put Block failed: HTTP {resp.status} block={block_index}"
+                                )
+                                return
+                        block_index += 1
+                        logger.info(f"[admin/repair-preview] Uploaded block {block_index}/{(file_size+BLOCK_SIZE-1)//BLOCK_SIZE}")
+
+                # Commit blocks
+                block_list_xml = '<?xml version="1.0" encoding="utf-8"?>\n<BlockList>\n'
+                for bid in block_ids:
+                    block_list_xml += f"  <Latest>{bid}</Latest>\n"
+                block_list_xml += "</BlockList>"
+                put_list_url = f"{base_url}?comp=blocklist&{sas_token}"
+                async with http_session.put(
+                    put_list_url,
+                    data=block_list_xml.encode("utf-8"),
+                    headers={
+                        "Content-Type": "application/xml",
+                        "x-ms-blob-content-type": "video/mp4",
+                    },
+                    timeout=aiohttp.ClientTimeout(total=120),
+                ) as resp:
+                    if resp.status not in (200, 201):
+                        body = await resp.text()
+                        logger.error(
+                            f"[admin/repair-preview] Put Block List failed: HTTP {resp.status} body={body[:200]}"
+                        )
+                        return
+
+        logger.info(f"[admin/repair-preview] Upload complete: {blob_name} ({file_size/(1024*1024):.1f}MB)")
 
         # Update DB
         async with AsyncSessionLocal() as db:
@@ -1660,6 +1724,33 @@ async def _repair_video_preview_task(video_id: str, email: str):
     finally:
         if work_dir:
             shutil.rmtree(work_dir, ignore_errors=True)
+
+
+
+# ── Set Compressed Blob URL (BUILD 68) ──────────────────────────────────────────────────
+@router.post("/set-compressed-blob/{video_id}")
+async def admin_set_compressed_blob(
+    video_id: str,
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """Directly set compressed_blob_url for a video (admin debug/repair).
+    
+    Body: {"blob_url": "assembled/xxx_assembled.mp4"} or {"blob_url": "email/VIDEO_ID/chunks/chunk_0000.mp4"}
+    """
+    expected_key = os.getenv("ADMIN_API_KEY", "aither:hub")
+    if x_admin_key != expected_key:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    blob_url = payload.get("blob_url", "")
+    if not blob_url:
+        raise HTTPException(status_code=400, detail="blob_url required")
+    await db.execute(
+        text("UPDATE videos SET compressed_blob_url = :blob_url, updated_at = now() WHERE id = :vid"),
+        {"vid": video_id, "blob_url": blob_url},
+    )
+    await db.commit()
+    return {"status": "ok", "video_id": video_id, "compressed_blob_url": blob_url}
 
 
 # ── Upload Health Check ──────────────────────────────────────────────────────────────────
