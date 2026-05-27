@@ -1613,6 +1613,8 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
   const [analyzingImage, setAnalyzingImage] = useState(false);
   const [registeringToMaster, setRegisteringToMaster] = useState(false);
   const [masterRegistered, setMasterRegistered] = useState(false);
+  // Product video upload state (for PiP video overlay)
+  const [productVideos, setProductVideos] = useState([]); // [{file, preview, uploading, url}]
   // Product master search state (for selecting product from master)
   const [productMasterSearch, setProductMasterSearch] = useState('');
   const [productMasterResults, setProductMasterResults] = useState([]);
@@ -1846,6 +1848,7 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
         target_language: 'auto',
         position_y: 75,
         enable_silence_cut: true,
+        enable_content_cut: true,
         enable_zoom_pulse: true,
         enable_progress_bar: true,
         enable_flash_intro: true,
@@ -1854,7 +1857,9 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
         enable_keyword_highlight: true,
         enable_subtitle_animation: true,
         video_mode: clipVideoMode,
+        product_name: imageAnalysis?.product_name || productMasterSearch || undefined,
         product_image_urls: uploadedUrls.length > 0 ? uploadedUrls : undefined,
+        product_video_urls: productVideos && productVideos.length > 0 ? productVideos.map(v => v.url).filter(Boolean) : undefined,
       }, {
         headers: { "X-Admin-Key": "aither:hub" },
       });
@@ -2532,6 +2537,72 @@ function FeedbackCard({ fb, onRated, feedbacks, currentIdx, expanded, onToggle, 
                           ✅ 商品マスターに登録しました！今後同じ商品の動画で自動適用されます。
                         </div>
                       )}
+                      {/* Product Video Upload (for PiP video overlay) */}
+                      <div className="mt-2 pt-2 border-t border-indigo-100">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[9px] font-bold text-indigo-700">🎥 商品動画（オプション）</span>
+                          <label className="px-2 py-0.5 bg-indigo-100 text-indigo-700 text-[8px] rounded cursor-pointer hover:bg-indigo-200 transition-colors font-medium">
+                            + 動画追加
+                            <input
+                              type="file"
+                              accept="video/*"
+                              className="hidden"
+                              onChange={async (e) => {
+                                const file = e.target.files[0];
+                                if (!file) return;
+                                const preview = URL.createObjectURL(file);
+                                setProductVideos(prev => [...prev, { file, preview, uploading: true, url: null }]);
+                                try {
+                                  const formData = new FormData();
+                                  formData.append('file', file);
+                                  const apiBase = import.meta.env.VITE_API_BASE_URL;
+                                  const res = await fetch(`${apiBase}/api/v1/ai-clip/upload-asset`, {
+                                    method: 'POST',
+                                    headers: { 'X-Admin-Key': 'aither:hub' },
+                                    body: formData,
+                                  });
+                                  const data = await res.json();
+                                  setProductVideos(prev => prev.map(v => v.preview === preview ? { ...v, uploading: false, url: data.url || data.read_url } : v));
+                                } catch (err) {
+                                  setProductVideos(prev => prev.map(v => v.preview === preview ? { ...v, uploading: false } : v));
+                                  console.error('Video upload failed:', err);
+                                }
+                              }}
+                            />
+                          </label>
+                        </div>
+                        {productVideos.length > 0 && (
+                          <div className="flex flex-wrap gap-1">
+                            {productVideos.map((vid, idx) => (
+                              <div key={idx} className="relative group">
+                                <div className={`w-16 h-12 rounded border flex items-center justify-center bg-gray-900 ${
+                                  vid.uploading ? 'opacity-50 border-yellow-300' :
+                                  vid.url ? 'border-green-300' : 'border-red-300'
+                                }`}>
+                                  <span className="text-white text-[10px]">🎬</span>
+                                </div>
+                                {vid.uploading && (
+                                  <div className="absolute inset-0 flex items-center justify-center">
+                                    <span className="text-[8px] animate-pulse text-yellow-400">⏳</span>
+                                  </div>
+                                )}
+                                {!vid.uploading && vid.url && (
+                                  <div className="absolute top-0 right-0 bg-green-500 rounded-full w-3 h-3 flex items-center justify-center">
+                                    <span className="text-white text-[6px]">✓</span>
+                                  </div>
+                                )}
+                                <button
+                                  onClick={() => setProductVideos(prev => prev.filter((_, i) => i !== idx))}
+                                  className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full w-3.5 h-3.5 text-[8px] hidden group-hover:flex items-center justify-center"
+                                >×</button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {productVideos.length === 0 && (
+                          <div className="text-[8px] text-gray-400">画像の代わりに商品動画をPiPオーバーレイ可能（任意）</div>
+                        )}
+                      </div>
                     </div>
                   )}
                   {/* Job Progress */}

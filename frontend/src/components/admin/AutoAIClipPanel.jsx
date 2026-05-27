@@ -61,6 +61,7 @@ export default function AutoAIClipPanel({ adminKey }) {
     position_y: 75,
     // V2 new options
     enable_silence_cut: true,
+    enable_content_cut: true,
     enable_zoom_pulse: true,
     enable_progress_bar: true,
     enable_flash_intro: true,
@@ -257,6 +258,7 @@ export default function AutoAIClipPanel({ adminKey }) {
       max_duration: c.max_duration ?? prev.max_duration,
       // V2 fields
       enable_silence_cut: c.enable_silence_cut ?? prev.enable_silence_cut,
+      enable_content_cut: c.enable_content_cut ?? prev.enable_content_cut,
       enable_zoom_pulse: c.enable_zoom_pulse ?? prev.enable_zoom_pulse,
       enable_progress_bar: c.enable_progress_bar ?? prev.enable_progress_bar,
       enable_flash_intro: c.enable_flash_intro ?? prev.enable_flash_intro,
@@ -615,6 +617,20 @@ export default function AutoAIClipPanel({ adminKey }) {
                   </div>
                 </label>
 
+                {/* Content Cut */}
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={config.enable_content_cut}
+                    onChange={e => setConfig(prev => ({ ...prev, enable_content_cut: e.target.checked }))}
+                    className="rounded text-orange-600"
+                  />
+                  <div>
+                    <span className="text-sm font-medium text-gray-700">🎯 コンテンツカット</span>
+                    <p className="text-xs text-gray-400">商品と無関係な部分・言い淀みを自動除去</p>
+                  </div>
+                </label>
+
                 {/* Zoom Pulse */}
                 <label className="flex items-center gap-2">
                   <input
@@ -880,6 +896,7 @@ export default function AutoAIClipPanel({ adminKey }) {
                 <h4 className="text-xs font-semibold text-purple-700 mb-2">V2 エフェクト</h4>
                 <div className="flex flex-wrap gap-1.5">
                   {config.enable_silence_cut && <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">✂️ 無音カット</span>}
+                  {config.enable_content_cut && <span className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full">🎯 コンテンツカット</span>}
                   {config.enable_zoom_pulse && <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">🔍 ズーム</span>}
                   {config.enable_progress_bar && <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">📊 進行バー</span>}
                   {config.enable_flash_intro && <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">⚡ フラッシュ</span>}
