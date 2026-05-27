@@ -976,7 +976,7 @@ def _build_silence_trim_segments(duration: float, silence_periods: list,
     # Sort by length (longest first) to prioritize removing the most impactful silences
     cuttable = []
     total_cut_time = 0.0
-    max_cut_ratio = 0.60  # V12: 最夤60%カット（「カット不足」フィードバック対応）
+    max_cut_ratio = 0.70  # V2.18: 60%→70% さらに積極的にカット（無音区間をより確実に除去）
     max_cut_time = duration * max_cut_ratio
 
     # --- Phase 1: Silence cuts ---
@@ -988,8 +988,8 @@ def _build_silence_trim_segments(duration: float, silence_periods: list,
         # Don't cut if overlaps with meaningful caption
         if _is_protected(s_start, s_end):
             continue
-        # V12: Lower threshold - cut silences from 0.3s（「カット不足」フィードバック対応）
-        if silence_len < 0.3:
+        # V2.18: Lower threshold - cut silences from 0.2s（より短い無音もカット）
+        if silence_len < 0.2:
             continue
         # Check max cut limit
         if total_cut_time >= max_cut_time:
@@ -1009,6 +1009,12 @@ def _build_silence_trim_segments(duration: float, silence_periods: list,
             # V12: Short silence: partial cut (remove 50% from center)
             mid = (s_start + s_end) / 2
             half_cut = silence_len * 0.5 / 2
+            cut_start = mid - half_cut
+            cut_end = mid + half_cut
+        elif silence_len >= 0.2:
+            # V2.18: Very short silence: light cut (remove 30% from center)
+            mid = (s_start + s_end) / 2
+            half_cut = silence_len * 0.3 / 2
             cut_start = mid - half_cut
             cut_end = mid + half_cut
         else:
@@ -1844,6 +1850,71 @@ async def _apply_sound_effects(video_path: str, output_path: str, duration: floa
 
 
 # ─── V2: Build Advanced ffmpeg Filter Chain ──────────────────────────────────────────
+def _remap_time_for_silence_trim(original_time: float, keep_segments: list) -> float:
+    """V2.18: 元の動画の時間を、無音カット後の出力時間軸にリマッピングする。
+    
+    keep_segments: [(start, end), ...] - 保持されるセグメント（元の時間軸）
+    original_time: 元の動画での時間（秒）
+    
+    Returns: 出力動画での対応する時間（秒）。
+    元の時間がカットされた区間内の場合、直前のkeepセグメントの終端に対応する出力時間を返す。
+    """
+    output_time = 0.0
+    for seg_start, seg_end in keep_segments:
+        if original_time <= seg_start:
+            # この時間はこのセグメントの前にある（カットされた区間）
+            return output_time
+        elif original_time <= seg_end:
+            # この時間はこのセグメント内にある
+            return output_time + (original_time - seg_start)
+        else:
+            # このセグメントは完全に通過済み
+            output_time += (seg_end - seg_start)
+    # 全セグメントを超えている場合
+    return output_time
+
+
+def _remap_overlay_images_for_silence_trim(overlay_images: list, keep_segments: list) -> list:
+    """V2.18: overlay_imagesのタイミングをkeep_segmentsに基づいてリマッピングする。
+    
+    無音カット（select filter + setpts）後の出力時間軸に合わせて、
+    各overlay画像の表示開始・終了時間を再計算する。
+    カットされた区間に完全に含まれるoverlayは除外する。
+    """
+    if not overlay_images or len(keep_segments) <= 1:
+        return overlay_images
+    
+    remapped = []
+    for png_path, start_t, end_t in overlay_images:
+        new_start = _remap_time_for_silence_trim(start_t, keep_segments)
+        new_end = _remap_time_for_silence_trim(end_t, keep_segments)
+        
+        # カットされた区間に完全に含まれる場合（new_start == new_end）はスキップ
+        if new_end - new_start < 0.05:
+            continue
+        
+        remapped.append((png_path, new_start, new_end))
+    
+    return remapped
+
+
+def _remap_zoom_keyframes_for_silence_trim(zoom_keyframes: list, keep_segments: list) -> list:
+    """V2.18: zoom_keyframesのタイミングをkeep_segmentsに基づいてリマッピングする。"""
+    if not zoom_keyframes or len(keep_segments) <= 1:
+        return zoom_keyframes
+    
+    remapped = []
+    for t, zf in zoom_keyframes:
+        new_t = _remap_time_for_silence_trim(t, keep_segments)
+        # カットされた区間内のズームポイントは除外
+        # （直前のセグメント終端と同じ時間になるポイントは、次のポイントと重なる可能性があるのでスキップ）
+        if remapped and abs(new_t - remapped[-1][0]) < 0.1:
+            continue
+        remapped.append((new_t, zf))
+    
+    return remapped
+
+
 def _build_advanced_ffmpeg_command(video_path: str, ass_path: str, output_path: str,
     video_width: int, video_height: int, duration: float,
     req, zoom_keyframes: list, keep_segments: list,
@@ -1898,6 +1969,15 @@ def _build_advanced_ffmpeg_command(video_path: str, ass_path: str, output_path: 
         vf_parts.append(f"select='{select_expr}'")
         vf_parts.append("setpts=N/FRAME_RATE/TB")
         af_chain = f"aselect='{select_expr}',asetpts=N/SR/TB"
+        # V2.18: overlay_imagesとzoom_keyframesのタイミングをリマッピング
+        # select+setpts後の出力時間軸に合わせる（字幕ズレ修正）
+        overlay_images = _remap_overlay_images_for_silence_trim(overlay_images, keep_segments)
+        zoom_keyframes = _remap_zoom_keyframes_for_silence_trim(zoom_keyframes, keep_segments)
+        # 出力動画の実際の長さを計算（progress bar用）
+        duration = sum(e - s for s, e in keep_segments)
+        logger.info(f"[ai-clip] V2.18 remap: {len(overlay_images)} overlays, "
+                    f"{len(zoom_keyframes)} zoom keyframes remapped to trimmed timeline "
+                    f"(output_duration={duration:.1f}s)")
 
     # ── 1b. Speed factor (V13: TikTok風テンポアップ) ──
     speed_factor = getattr(req, 'speed_factor', 1.05)
@@ -2517,7 +2597,7 @@ class GenerateRequest(BaseModel):
     enable_keyword_highlight: bool = Field(True, description="キーワードハイライト")
     enable_subtitle_animation: bool = Field(True, description="字幕出現アニメーション")
     zoom_intensity: float = Field(1.08, ge=1.0, le=1.3, description="ズーム倍率 (1.0=なし, 1.3=最大)")
-    silence_threshold_db: float = Field(-25.0, ge=-60.0, le=-10.0, description="無音検出閾値(dB) V12: -30→-25に変更してより積極的に検出")
+    silence_threshold_db: float = Field(-22.0, ge=-60.0, le=-10.0, description="無音検出閾値(dB) V2.18: -25→-22に変更してより積極的に検出")
     # V13: テンポアップ（TikTok風の微妙なスピードアップ）
     speed_factor: float = Field(1.05, ge=1.0, le=1.3, description="再生速度倍率 (1.0=変更なし, 1.05=TikTok風微速, 1.3=最大)")
     # V12: 編集スタイル学習
@@ -2547,7 +2627,7 @@ class GenerateFromClipRequest(BaseModel):
     enable_keyword_highlight: bool = Field(True, description="キーワードハイライト")
     enable_subtitle_animation: bool = Field(True, description="字幕出現アニメーション")
     zoom_intensity: float = Field(1.08, ge=1.0, le=1.3, description="ズーム倍率")
-    silence_threshold_db: float = Field(-25.0, ge=-60.0, le=-10.0, description="無音検出閾値(dB) V12: -30→-25に変更してより積極的に検出")
+    silence_threshold_db: float = Field(-22.0, ge=-60.0, le=-10.0, description="無音検出閾値(dB) V2.18: -25→-22に変更してより積極的に検出")
     # V13: テンポアップ
     speed_factor: float = Field(1.05, ge=1.0, le=1.3, description="再生速度倍率 (1.0=変更なし, 1.05=TikTok風微速, 1.3=最大)")
     # V3: 映像モード選択
@@ -4226,7 +4306,7 @@ async def _process_single_clip_v2(job_id: str, clip: dict, req: GenerateRequest,
         if req.enable_silence_cut:
             await _update_job(job_id, progress_pct=18, current_step=f"クリップ {idx+1}/{total}: 無音区間検出中...")
             silence_periods = _detect_silence_periods(
-                video_path, noise_db=req.silence_threshold_db, min_duration=0.3
+                video_path, noise_db=req.silence_threshold_db, min_duration=0.2  # V2.18: 0.3→0.2 より短い無音もカット
             )
             await _update_job(job_id, progress_pct=20, current_step=f"クリップ {idx+1}/{total}: 無音{len(silence_periods)}区間検出")
 

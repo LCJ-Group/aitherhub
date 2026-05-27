@@ -70,7 +70,7 @@ export default function AutoAIClipPanel({ adminKey }) {
     enable_keyword_highlight: true,
     enable_subtitle_animation: true,
     zoom_intensity: 1.08,
-    silence_threshold_db: -30,
+    silence_threshold_db: -22,  // V2.18: より積極的な無音検出
   });
 
   // ── Polling for active job ──
@@ -403,20 +403,39 @@ export default function AutoAIClipPanel({ adminKey }) {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
-            🤖 全自動AIクリップ生成 <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">V2.17</span>
+            🤖 全自動AIクリップ生成 <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">V2.18</span>
             <span className="relative group">
               <span className="cursor-help text-gray-400 hover:text-gray-600 text-sm">ℹ️</span>
-              <span className="absolute left-0 top-6 z-50 hidden group-hover:block w-72 p-3 bg-gray-900 text-white text-xs rounded-lg shadow-lg leading-relaxed">
-                <b>V2.17 字幕品質改善:</b><br/>
+              <span className="absolute left-0 top-6 z-50 hidden group-hover:block w-80 max-h-96 overflow-y-auto p-3 bg-gray-900 text-white text-xs rounded-lg shadow-lg leading-relaxed">
+                <b className="text-purple-300">V2.18 無音カット強化 + 字幕ズレ修正:</b><br/>
+                ・無音カット後の字幕タイミング自動補正（根本修正）<br/>
+                ・無音検出閾値: -25dB→-22dB（より積極的）<br/>
+                ・最小検出時間: 0.3秒→0.2秒（短い無音もカット）<br/>
+                ・最大カット率: 60%→70%（よりテンポ良く）<br/>
+                ・ズームパルスもカット後時間軸に自動調整<br/>
+                <br/>
+                <b className="text-purple-300">V2.17 字幕品質改善:</b><br/>
                 ・字幕重畳防止（0.1秒ギャップ制御）<br/>
                 ・長文自動フォント縮小＋自然改行<br/>
                 ・キーワード強調（商品名=金色, CTA=緑, 数字=橙）<br/>
                 ・助詞・句読点での自然な改行位置<br/>
                 <br/>
-                <b>設計思想:</b><br/>
-                ・1行に収まる字幕で視認性UP<br/>
-                ・重要ワードを色分けで目立たせる<br/>
-                ・字幕切替時の重なりを完全排除
+                <b className="text-purple-300">V2.16 コンテンツカット:</b><br/>
+                ・GPTによる商品無関係区間の自動検出・除去<br/>
+                ・フィラーワード（「えーっと」等）自動カット<br/>
+                <br/>
+                <b className="text-purple-300">V2.13 テンポアップ:</b><br/>
+                ・1.05x速度ブースト（TikTok風）<br/>
+                ・keep_segmentsマージ（セグメント数上限制御）<br/>
+                <br/>
+                <b className="text-purple-300">V2.10 Pillowレンダリング:</b><br/>
+                ・drawtext/ASS廃止→Pillow PNG overlay方式<br/>
+                ・日本語フォントの完全対応<br/>
+                <br/>
+                <b className="text-gray-400">設計思想:</b><br/>
+                ・無音区間を自動検出してテンポ良く仕上げる<br/>
+                ・字幕は常に映像と同期（ズレなし）<br/>
+                ・重要ワードを色分けで目立たせる
               </span>
             </span>
           </h2>
