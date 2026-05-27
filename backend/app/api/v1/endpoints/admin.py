@@ -3,7 +3,7 @@ Admin dashboard API endpoint.
 Provides platform-wide statistics for the master dashboard.
 Each query is isolated with rollback on failure to prevent cascade errors.
 """
-from fastapi import APIRouter, Depends, HTTPException, Header, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Header, Query, Request
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
@@ -1470,13 +1470,14 @@ async def _retry_live_boost_admin(
 @router.post("/repair-video-preview/{video_id}")
 async def repair_video_preview(
     video_id: str,
+    background_tasks: BackgroundTasks,
     x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
     db: AsyncSession = Depends(get_db),
 ):
     """
     BUILD 68: Repair a video that has status=DONE but missing compressed_blob_url.
-    This endpoint directly assembles chunks from Azure and uploads the result,
-    without re-running the full analysis pipeline.
+    Enqueues a background task to assemble chunks from Azure and upload the result.
+    Returns immediately with status=accepted.
     """
     if x_admin_key != f"{ADMIN_ID}:{ADMIN_PASS}":
         raise HTTPException(status_code=403, detail="Forbidden")
@@ -1511,23 +1512,44 @@ async def repair_video_preview(
 
         email = row.user_email or ""
 
-        # Resolve blob video_id (handle UUID case)
-        from app.services.storage_service import (
-            resolve_blob_video_id,
-            generate_upload_sas,
-            generate_download_sas,
-        )
-        blob_video_id = resolve_blob_video_id(email, video_id)
-        logger.info(
-            f"[admin/repair-preview] Resolved blob_video_id: {video_id} → {blob_video_id}"
+        # Enqueue the heavy work as a background task
+        background_tasks.add_task(
+            _repair_video_preview_task, video_id, email
         )
 
-        # Discover and download chunks
-        import aiohttp
-        import tempfile
-        import os
-        import subprocess
-        import shutil
+        return {
+            "status": "accepted",
+            "video_id": video_id,
+            "message": "Repair task enqueued. Check video status in a few minutes.",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"[admin/repair-preview] Failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def _repair_video_preview_task(video_id: str, email: str):
+    """Background task to assemble chunks and upload the assembled video."""
+    import aiohttp
+    import tempfile
+    import os
+    import subprocess
+    import shutil
+    from app.services.storage_service import (
+        resolve_blob_video_id,
+        generate_upload_sas,
+        generate_download_sas,
+    )
+    from app.core.db import AsyncSessionLocal
+
+    work_dir = None
+    try:
+        blob_video_id = resolve_blob_video_id(email, video_id)
+        logger.info(
+            f"[admin/repair-preview] BG task started: {video_id} → {blob_video_id}"
+        )
 
         work_dir = tempfile.mkdtemp(prefix=f"repair_{video_id}_")
         chunk_dir = os.path.join(work_dir, "chunks")
@@ -1536,7 +1558,7 @@ async def repair_video_preview(
         chunk_paths = []
         consecutive_misses = 0
         async with aiohttp.ClientSession() as session:
-            for i in range(500):  # Safety limit
+            for i in range(500):
                 chunk_filename = f"chunks/chunk_{i:04d}.mp4"
                 try:
                     download_url, _ = await generate_download_sas(
@@ -1547,7 +1569,6 @@ async def repair_video_preview(
                     )
                     async with session.head(download_url) as resp:
                         if resp.status == 200:
-                            # Download the chunk
                             local_path = os.path.join(chunk_dir, f"chunk_{i:04d}.mp4")
                             async with session.get(download_url) as dl_resp:
                                 if dl_resp.status == 200:
@@ -1566,11 +1587,8 @@ async def repair_video_preview(
                         break
 
         if not chunk_paths:
-            shutil.rmtree(work_dir, ignore_errors=True)
-            raise HTTPException(
-                status_code=422,
-                detail=f"No chunks found in blob storage for video={video_id} (tried {blob_video_id})",
-            )
+            logger.error(f"[admin/repair-preview] No chunks found for {video_id}")
+            return
 
         # Assemble chunks with ffmpeg
         output_path = os.path.join(work_dir, f"{video_id}_assembled.mp4")
@@ -1587,11 +1605,11 @@ async def repair_video_preview(
                 capture_output=True, timeout=600,
             )
             if proc.returncode != 0:
-                shutil.rmtree(work_dir, ignore_errors=True)
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"ffmpeg concat failed: {proc.stderr.decode()[:500]}",
+                logger.error(
+                    f"[admin/repair-preview] ffmpeg failed for {video_id}: "
+                    f"{proc.stderr.decode()[:300]}"
                 )
+                return
 
         # Upload assembled video
         blob_name = f"assembled/{video_id}_assembled.mp4"
@@ -1614,45 +1632,34 @@ async def repair_video_preview(
                 timeout=aiohttp.ClientTimeout(total=600),
             ) as resp:
                 if resp.status not in (200, 201):
-                    shutil.rmtree(work_dir, ignore_errors=True)
-                    raise HTTPException(
-                        status_code=500,
-                        detail=f"Failed to upload assembled video: HTTP {resp.status}",
+                    logger.error(
+                        f"[admin/repair-preview] Upload failed for {video_id}: HTTP {resp.status}"
                     )
+                    return
 
         # Update DB
-        await db.execute(
-            text("""
-                UPDATE videos
-                SET compressed_blob_url = :blob_url,
-                    updated_at = now()
-                WHERE id = :vid
-            """),
-            {"vid": video_id, "blob_url": blob_name},
-        )
-        await db.commit()
-
-        # Cleanup
-        shutil.rmtree(work_dir, ignore_errors=True)
+        async with AsyncSessionLocal() as db:
+            await db.execute(
+                text("""
+                    UPDATE videos
+                    SET compressed_blob_url = :blob_url,
+                        updated_at = now()
+                    WHERE id = :vid
+                """),
+                {"vid": video_id, "blob_url": blob_name},
+            )
+            await db.commit()
 
         logger.info(
             f"[admin/repair-preview] Successfully repaired video={video_id} "
             f"chunks={len(chunk_paths)} blob={blob_name}"
         )
 
-        return {
-            "status": "repaired",
-            "video_id": video_id,
-            "chunks_assembled": len(chunk_paths),
-            "compressed_blob_url": blob_name,
-            "message": "Video preview repaired successfully",
-        }
-
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.exception(f"[admin/repair-preview] Failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"[admin/repair-preview] BG task failed for {video_id}: {e}")
+    finally:
+        if work_dir:
+            shutil.rmtree(work_dir, ignore_errors=True)
 
 
 # ── Upload Health Check ──────────────────────────────────────────────────────────────────

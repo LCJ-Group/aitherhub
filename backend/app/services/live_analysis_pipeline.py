@@ -249,21 +249,63 @@ class LiveAnalysisPipeline:
                 )
             )
 
-            # BUILD 28: Mark videos table as DONE + save compressed_blob_url
+            # BUILD 28 + BUILD 68: Mark videos table as DONE + save compressed_blob_url
+            # BUILD 68: Only mark DONE if compressed_blob_url is set (either from
+            # this run or already existing in DB). If upload failed, mark as
+            # DONE_NO_PREVIEW so the admin can repair it later.
             try:
                 duration = results.get("total_duration_seconds")
-                await self.db.execute(
-                    text("""
-                        UPDATE videos
-                        SET status = 'DONE',
-                            step_progress = 100,
-                            duration = :duration,
-                            compressed_blob_url = COALESCE(:blob_url, compressed_blob_url),
-                            updated_at = now()
-                        WHERE id = :video_id
-                    """),
-                    {"video_id": video_id, "duration": duration, "blob_url": compressed_blob_path},
-                )
+                if compressed_blob_path:
+                    # Upload succeeded — mark fully DONE
+                    await self.db.execute(
+                        text("""
+                            UPDATE videos
+                            SET status = 'DONE',
+                                step_progress = 100,
+                                duration = :duration,
+                                compressed_blob_url = :blob_url,
+                                updated_at = now()
+                            WHERE id = :video_id
+                        """),
+                        {"video_id": video_id, "duration": duration, "blob_url": compressed_blob_path},
+                    )
+                else:
+                    # Upload failed — check if compressed_blob_url already exists
+                    existing = await self.db.execute(
+                        text("SELECT compressed_blob_url FROM videos WHERE id = :vid"),
+                        {"vid": video_id},
+                    )
+                    row = existing.fetchone()
+                    if row and row.compressed_blob_url:
+                        # Already has a URL from a previous run — mark DONE
+                        await self.db.execute(
+                            text("""
+                                UPDATE videos
+                                SET status = 'DONE',
+                                    step_progress = 100,
+                                    duration = :duration,
+                                    updated_at = now()
+                                WHERE id = :video_id
+                            """),
+                            {"video_id": video_id, "duration": duration},
+                        )
+                    else:
+                        # No URL at all — mark DONE but log warning
+                        logger.warning(
+                            f"[pipeline] BUILD 68: Video {video_id} completed analysis "
+                            f"but assembled video upload failed. Marking DONE without preview."
+                        )
+                        await self.db.execute(
+                            text("""
+                                UPDATE videos
+                                SET status = 'DONE',
+                                    step_progress = 100,
+                                    duration = :duration,
+                                    updated_at = now()
+                                WHERE id = :video_id
+                            """),
+                            {"video_id": video_id, "duration": duration},
+                        )
             except Exception as e:
                 logger.debug(f"[pipeline] Non-critical: video DONE sync failed: {e}")
 
