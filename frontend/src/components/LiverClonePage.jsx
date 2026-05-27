@@ -310,9 +310,27 @@ export default function LiverClonePage() {
       ws.binaryType = "arraybuffer";
       previewWsRef.current = ws;
 
-      ws.onopen = () => {
+      ws.onopen = async () => {
         console.log("[Preview] WebSocket connected");
         setPreviewActive(true);
+        // Re-upload source face to GPU Worker to ensure embedding is set
+        // (GPU Worker may have restarted, or source was set before WS connection)
+        if (sourceFacePreview) {
+          const base64 = sourceFacePreview.split(",")[1];
+          try {
+            await liverCloneService.previewSetSource(base64);
+            console.log("[Preview] Source face re-uploaded to GPU Worker");
+          } catch (err) {
+            console.warn("[Preview] Failed to re-upload source face:", err);
+          }
+        } else if (sourceFaceUrl) {
+          try {
+            await liverCloneService.previewSetSource(null, sourceFaceUrl);
+            console.log("[Preview] Source face URL sent to GPU Worker");
+          } catch (err) {
+            console.warn("[Preview] Failed to send source face URL:", err);
+          }
+        }
         // Start sending frames
         startSendingFrames();
       };

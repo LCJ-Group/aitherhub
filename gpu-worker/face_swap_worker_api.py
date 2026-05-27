@@ -607,8 +607,8 @@ _temporal_state = {
     "prev_lm106": None,       # Previous smoothed 106-point landmarks
     "frame_count": 0,         # Frame counter for adaptive smoothing
 }
-_SMOOTH_ALPHA = 0.35  # EMA alpha: lower = smoother but more lag, higher = responsive but jittery
-                      # 0.35 = good balance for 15 FPS real-time preview
+_SMOOTH_ALPHA = 0.2   # EMA alpha: lower = smoother but more lag, higher = responsive but jittery
+                      # 0.2 = smoother for 16 FPS, reduces jitter/flickering at cost of slight lag
 
 def _reset_temporal_state():
     """Reset temporal smoothing state (called when source face changes or stream restarts)."""
@@ -1870,7 +1870,8 @@ async def preview_stream(websocket: WebSocket, api_key: str = Query(...)):
         logger.info("[Preview] Using Direct ONNX Pipeline v3.1 "
                     "(GFPGAN + hair protection, ~34ms/frame)")
     else:
-        logger.warning("[Preview] ONNX engine not ready, using CLI fallback")
+        logger.warning("[Preview] ONNX engine not ready or source not set at connection time. "
+                       "Will re-check dynamically each frame.")
 
     try:
         import cv2
@@ -1937,7 +1938,10 @@ async def preview_stream(websocket: WebSocket, api_key: str = Query(...)):
                 try:
                     start_time = time.time()
 
-                    if use_direct and source_face_embedding is not None:
+                    # Dynamically re-check use_direct each frame
+                    # (source face may be uploaded after WebSocket connection)
+                    can_use_direct = onnx_engine_ready and source_face_embedding is not None
+                    if can_use_direct:
                         # ── Direct ONNX Pipeline v3.1 Processing ──────────────
                         nparr = np.frombuffer(data, np.uint8)
                         frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
@@ -1959,7 +1963,7 @@ async def preview_stream(websocket: WebSocket, api_key: str = Query(...)):
                         if result is not None:
                             # Lower JPEG quality for faster transfer (75% is visually identical at 640x360)
                             _, encoded = cv2.imencode('.jpg', result,
-                                                      [cv2.IMWRITE_JPEG_QUALITY, 75])
+                                                      [cv2.IMWRITE_JPEG_QUALITY, 85])
                             processed = encoded.tobytes()
                         else:
                             processed = data

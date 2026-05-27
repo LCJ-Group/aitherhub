@@ -318,7 +318,8 @@ async def health_check():
 
 class PreviewFrameRequest(BaseModel):
     """Request to process a single preview frame."""
-    image_base64: str
+    image_base64: str = ""
+    image_url: str = ""
 
 
 @router.post("/preview/frame")
@@ -362,15 +363,25 @@ async def preview_set_source(req: PreviewFrameRequest):
     """
     Set the source face for preview mode.
     This uploads the face to the GPU Worker without creating a full session.
+    Accepts image_base64 or image_url.
     """
     from app.services.liver_clone_service import get_liver_clone_service
 
     service = get_liver_clone_service()
     try:
-        result = await service.face_swap.set_source_face(
-            image_base64=req.image_base64
-        )
+        if req.image_base64:
+            result = await service.face_swap.set_source_face(
+                image_base64=req.image_base64
+            )
+        elif req.image_url:
+            result = await service.face_swap.set_source_face(
+                image_url=req.image_url
+            )
+        else:
+            raise HTTPException(status_code=400, detail="image_base64 or image_url required")
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("[LiverClone API] Preview set-source failed")
         raise HTTPException(status_code=500, detail=str(e))

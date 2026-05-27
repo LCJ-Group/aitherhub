@@ -177,10 +177,13 @@ class LiverCloneService {
    * @param {string} imageBase64 - Base64-encoded face image
    * @returns {Promise<Object>}
    */
-  async previewSetSource(imageBase64) {
+  async previewSetSource(imageBase64, imageUrl = null) {
+    const body = {};
+    if (imageBase64) body.image_base64 = imageBase64;
+    if (imageUrl) body.image_url = imageUrl;
     const res = await axios.post(
       `${this.baseURL}/api/v1/liver-clone/preview/set-source`,
-      { image_base64: imageBase64 },
+      body,
       { headers: this._headers() }
     );
     return res.data;
