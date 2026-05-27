@@ -32,6 +32,83 @@ import {
 import liverCloneService from "../base/services/liverCloneService";
 import { useTranslation } from "react-i18next";
 
+// ── IndexedDB helpers for large binary data (product/face images) ──
+const IDB_NAME = "liverClone_imageStore";
+const IDB_VERSION = 1;
+const IDB_STORE = "images";
+
+function openImageDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(IDB_NAME, IDB_VERSION);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(IDB_STORE)) {
+        db.createObjectStore(IDB_STORE, { keyPath: "id" });
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function saveImageToDB(id, imageBase64, imagePreview) {
+  try {
+    const db = await openImageDB();
+    const tx = db.transaction(IDB_STORE, "readwrite");
+    tx.objectStore(IDB_STORE).put({ id, image_base64: imageBase64, image_preview: imagePreview });
+    await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = rej; });
+  } catch (e) {
+    console.warn("[IDB] Failed to save image:", e);
+  }
+}
+
+async function loadImagesFromDB(ids) {
+  try {
+    const db = await openImageDB();
+    const tx = db.transaction(IDB_STORE, "readonly");
+    const store = tx.objectStore(IDB_STORE);
+    const results = {};
+    await Promise.all(ids.map(id => new Promise((res) => {
+      const req = store.get(id);
+      req.onsuccess = () => { if (req.result) results[id] = req.result; res(); };
+      req.onerror = () => res();
+    })));
+    return results;
+  } catch (e) {
+    console.warn("[IDB] Failed to load images:", e);
+    return {};
+  }
+}
+
+async function deleteImageFromDB(id) {
+  try {
+    const db = await openImageDB();
+    const tx = db.transaction(IDB_STORE, "readwrite");
+    tx.objectStore(IDB_STORE).delete(id);
+  } catch (e) {
+    console.warn("[IDB] Failed to delete image:", e);
+  }
+}
+
+async function cleanupOrphanedImages(validIds) {
+  try {
+    const db = await openImageDB();
+    const tx = db.transaction(IDB_STORE, "readwrite");
+    const store = tx.objectStore(IDB_STORE);
+    const allKeys = await new Promise((res) => {
+      const req = store.getAllKeys();
+      req.onsuccess = () => res(req.result);
+      req.onerror = () => res([]);
+    });
+    const validSet = new Set(validIds);
+    for (const key of allKeys) {
+      if (!validSet.has(key)) store.delete(key);
+    }
+  } catch (e) {
+    console.warn("[IDB] Cleanup failed:", e);
+  }
+}
+
 /**
  * Liver Clone Page — Real-time Face Swap + Voice Conversion Live Streaming
  *
@@ -148,7 +225,7 @@ export default function LiverClonePage() {
   const [activeTab, setActiveTab] = useState("config"); // config, comments, autopilot, products, metrics
   const pollRef = useRef(null);
   const fileInputRef = useRef(null);
-  // Saved Faces (localStorage persistence)
+  // Saved Faces (localStorage metadata + IndexedDB images)
   const [savedFaces, setSavedFaces] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem("liverClone_savedFaces") || "[]");
@@ -156,7 +233,7 @@ export default function LiverClonePage() {
   });
   const [faceSaveName, setFaceSaveName] = useState("");
 
-  // Product Introduction (localStorage persistence)
+  // Product Introduction (localStorage metadata + IndexedDB images)
   const [products, setProducts] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem("liverClone_savedProducts") || "[]");
@@ -165,11 +242,56 @@ export default function LiverClonePage() {
   const [productGenerating, setProductGenerating] = useState(false);
   const [activeProductIdx, setActiveProductIdx] = useState(null); // Currently displayed product PIP
   const productFileInputRef = useRef(null);
+  const productsInitializedRef = useRef(false); // Prevent double-init
 
-  // ── Load health on mount ──
+  // ── Load health on mount + restore images from IndexedDB ──
   useEffect(() => {
     checkHealth();
     loadExistingSessions();
+
+    // Restore product images from IndexedDB
+    (async () => {
+      try {
+        const saved = JSON.parse(localStorage.getItem("liverClone_savedProducts") || "[]");
+        if (saved.length > 0) {
+          const ids = saved.map(p => p.id).filter(Boolean);
+          if (ids.length > 0) {
+            const images = await loadImagesFromDB(ids);
+            const restored = saved.map(p => {
+              const img = images[p.id];
+              if (img) {
+                return { ...p, image_base64: img.image_base64 || "", image_preview: img.image_preview || "" };
+              }
+              return p;
+            });
+            productsInitializedRef.current = true;
+            setProducts(restored);
+          }
+        }
+      } catch (e) {
+        console.warn("[Products] Failed to restore images from IndexedDB:", e);
+      }
+    })();
+
+    // Restore saved face images from IndexedDB
+    (async () => {
+      try {
+        const savedFaceMeta = JSON.parse(localStorage.getItem("liverClone_savedFaces") || "[]");
+        if (savedFaceMeta.length === 0) return;
+        const faceIds = savedFaceMeta.map(f => `face_${f.id}`);
+        const faceImages = await loadImagesFromDB(faceIds);
+        const restoredFaces = savedFaceMeta.map(f => {
+          const img = faceImages[`face_${f.id}`];
+          return {
+            ...f,
+            preview: img?.image_preview || f.preview || "",
+          };
+        });
+        setSavedFaces(restoredFaces);
+      } catch (e) {
+        console.warn("[Faces] Failed to restore images from IndexedDB:", e);
+      }
+    })();
   }, []);
 
   // ── Persist voice/config settings to localStorage ──
@@ -211,12 +333,33 @@ export default function LiverClonePage() {
     localStorage.setItem("liverClone_stsEnabled", stsEnabled ? "true" : "false");
   }, [stsEnabled]);
   useEffect(() => {
-    // Persist products (exclude speaking state and very large data)
-    const toSave = products.map(p => ({
-      ...p,
-      speaking: false, // Don't persist speaking state
-    }));
-    localStorage.setItem("liverClone_savedProducts", JSON.stringify(toSave));
+    // Persist products: metadata to localStorage, images to IndexedDB
+    // Exclude image_base64 and image_preview from localStorage to avoid quota exceeded
+    const toSave = products.map(p => {
+      const { image_base64, image_preview, speaking, identifying, ...rest } = p;
+      return { ...rest, speaking: false, identifying: false };
+    });
+    try {
+      localStorage.setItem("liverClone_savedProducts", JSON.stringify(toSave));
+    } catch (e) {
+      console.warn("[Products] localStorage save failed (clearing old data):", e);
+      // If still fails, clear old products data
+      try {
+        localStorage.removeItem("liverClone_savedProducts");
+        localStorage.setItem("liverClone_savedProducts", JSON.stringify(toSave));
+      } catch (e2) {
+        console.error("[Products] Cannot save to localStorage:", e2);
+      }
+    }
+    // Save images to IndexedDB (fire-and-forget)
+    products.forEach(p => {
+      if (p.image_base64 || p.image_preview) {
+        saveImageToDB(p.id, p.image_base64 || "", p.image_preview || "");
+      }
+    });
+    // Cleanup orphaned images
+    const validIds = products.map(p => p.id).filter(Boolean);
+    cleanupOrphanedImages(validIds);
   }, [products]);
 
   // ── Poll session status ──
@@ -1487,6 +1630,10 @@ export default function LiverClonePage() {
   };
 
   const removeProduct = (productIdx) => {
+    const removedProduct = products[productIdx];
+    if (removedProduct?.id) {
+      deleteImageFromDB(removedProduct.id);
+    }
     setProducts(prev => prev.filter((_, i) => i !== productIdx));
     if (activeProductIdx === productIdx) setActiveProductIdx(null);
   };
@@ -2014,17 +2161,25 @@ export default function LiverClonePage() {
                           className="flex-1 bg-gray-900 border border-gray-700 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:border-cyan-500"
                         />
                         <button
-                          onClick={() => {
+                          onClick={async () => {
                             if (!faceSaveName.trim() || !sourceFacePreview) return;
+                            const faceId = Date.now();
                             const newFace = {
-                              id: Date.now(),
+                              id: faceId,
                               name: faceSaveName.trim(),
                               preview: sourceFacePreview,
                               url: sourceFaceUrl || "",
                             };
                             const updated = [...savedFaces, newFace];
                             setSavedFaces(updated);
-                            localStorage.setItem("liverClone_savedFaces", JSON.stringify(updated));
+                            // Save metadata (without preview) to localStorage, image to IndexedDB
+                            const metaOnly = updated.map(f => ({ id: f.id, name: f.name, url: f.url || "" }));
+                            try {
+                              localStorage.setItem("liverClone_savedFaces", JSON.stringify(metaOnly));
+                            } catch (e) {
+                              console.warn("[Faces] localStorage save failed:", e);
+                            }
+                            await saveImageToDB(`face_${faceId}`, "", sourceFacePreview);
                             setFaceSaveName("");
                           }}
                           className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-xs font-medium transition"
@@ -2059,7 +2214,11 @@ export default function LiverClonePage() {
                                   e.stopPropagation();
                                   const updated = savedFaces.filter((f) => f.id !== face.id);
                                   setSavedFaces(updated);
-                                  localStorage.setItem("liverClone_savedFaces", JSON.stringify(updated));
+                                  const metaOnly = updated.map(f => ({ id: f.id, name: f.name, url: f.url || "" }));
+                                  try {
+                                    localStorage.setItem("liverClone_savedFaces", JSON.stringify(metaOnly));
+                                  } catch (e2) { console.warn("[Faces] localStorage save failed:", e2); }
+                                  deleteImageFromDB(`face_${face.id}`);
                                 }}
                                 className="absolute top-0.5 right-0.5 w-4 h-4 bg-red-600 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition"
                               >
