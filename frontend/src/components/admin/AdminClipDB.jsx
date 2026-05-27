@@ -3473,6 +3473,7 @@ function V10RegenerationModal({ clip, onClose, adminKey, generating, setGenerati
 // ═══════════════════════════════════════════════
 function PipCompositionModal({ clip, onClose, adminKey, generating, setGenerating, jobId, setJobId, jobStatus, setJobStatus }) {
   const [productImages, setProductImages] = useState([]);
+  const [productVideos, setProductVideos] = useState([]);  // V12: 商品動画サポート
   const [productSearch, setProductSearch] = useState('');
   const [productResults, setProductResults] = useState([]);
   const [searching, setSearching] = useState(false);
@@ -3518,79 +3519,137 @@ function PipCompositionModal({ clip, onClose, adminKey, generating, setGeneratin
     setShowDropdown(false);
   };
 
-  // Upload product image
-  const handleImageUpload = async (files) => {
-    const newImages = Array.from(files).map(file => ({
-      file,
-      preview: URL.createObjectURL(file),
-      uploading: true,
-      url: null,
-    }));
-    setProductImages(prev => [...prev, ...newImages]);
+  // Upload product image or video (V12: 動画サポート追加)
+  const handleMediaUpload = async (files) => {
+    const fileArray = Array.from(files);
+    const imageFiles = fileArray.filter(f => f.type.startsWith('image/'));
+    const videoFiles = fileArray.filter(f => f.type.startsWith('video/') || /\.(mp4|mov|avi|webm|mkv)$/i.test(f.name));
 
-    for (let i = 0; i < newImages.length; i++) {
-      const formData = new FormData();
-      formData.append('file', newImages[i].file);
-      formData.append('file_type', 'product-image');
-      try {
-        const res = await fetch(`${API_BASE}/api/v1/ai-clip/upload-product-image`, {
-          method: 'POST',
-          headers: { "X-Admin-Key": adminKey },
-          body: formData,
-        });
-        const data = await res.json();
-        // Save blob_url (without SAS) for permanent storage; SAS is regenerated on read
-        const readUrl = data.blob_url || data.read_url;
-        setProductImages(prev => prev.map(img =>
-          img.preview === newImages[i].preview ? { ...img, uploading: false, url: readUrl } : img
-        ));
-      } catch (e) {
-        console.error('Image upload failed:', e);
-        setProductImages(prev => prev.map(img =>
-          img.preview === newImages[i].preview ? { ...img, uploading: false, url: null } : img
-        ));
+    // Handle images
+    if (imageFiles.length > 0) {
+      const newImages = imageFiles.map(file => ({
+        file,
+        preview: URL.createObjectURL(file),
+        uploading: true,
+        url: null,
+      }));
+      setProductImages(prev => [...prev, ...newImages]);
+
+      for (let i = 0; i < newImages.length; i++) {
+        const formData = new FormData();
+        formData.append('file', newImages[i].file);
+        formData.append('file_type', 'product-media');
+        try {
+          const res = await fetch(`${API_BASE}/api/v1/ai-clip/upload-product-media`, {
+            method: 'POST',
+            headers: { "X-Admin-Key": adminKey },
+            body: formData,
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || 'Upload failed');
+          const readUrl = data.blob_url || data.read_url;
+          setProductImages(prev => prev.map(img =>
+            img.preview === newImages[i].preview ? { ...img, uploading: false, url: readUrl } : img
+          ));
+        } catch (e) {
+          console.error('Image upload failed:', e);
+          setProductImages(prev => prev.map(img =>
+            img.preview === newImages[i].preview ? { ...img, uploading: false, url: null, error: e.message } : img
+          ));
+        }
+      }
+    }
+
+    // Handle videos (V12)
+    if (videoFiles.length > 0) {
+      const newVideos = videoFiles.map(file => ({
+        file,
+        name: file.name,
+        uploading: true,
+        url: null,
+      }));
+      setProductVideos(prev => [...prev, ...newVideos]);
+
+      for (let i = 0; i < newVideos.length; i++) {
+        const formData = new FormData();
+        formData.append('file', newVideos[i].file);
+        formData.append('file_type', 'product-video');
+        try {
+          const res = await fetch(`${API_BASE}/api/v1/ai-clip/upload-product-media`, {
+            method: 'POST',
+            headers: { "X-Admin-Key": adminKey },
+            body: formData,
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || 'Upload failed');
+          const readUrl = data.blob_url || data.read_url;
+          setProductVideos(prev => prev.map(vid =>
+            vid.name === newVideos[i].name ? { ...vid, uploading: false, url: readUrl } : vid
+          ));
+        } catch (e) {
+          console.error('Video upload failed:', e);
+          setProductVideos(prev => prev.map(vid =>
+            vid.name === newVideos[i].name ? { ...vid, uploading: false, url: null, error: e.message } : vid
+          ));
+        }
       }
     }
   };
+
+  // Legacy handler for backward compatibility
+  const handleImageUpload = handleMediaUpload;
 
   // Remove image
   const removeImage = (idx) => {
     setProductImages(prev => prev.filter((_, i) => i !== idx));
   };
 
+  // Remove video (V12)
+  const removeVideo = (idx) => {
+    setProductVideos(prev => prev.filter((_, i) => i !== idx));
+  };
+
   // Start PiP generation
   const startGeneration = async () => {
-    const uploadedUrls = productImages.filter(img => img.url).map(img => img.url);
-    if (uploadedUrls.length === 0) {
-      alert('商品画像を1枚以上アップロードしてください');
+    const uploadedImageUrls = productImages.filter(img => img.url).map(img => img.url);
+    const uploadedVideoUrls = productVideos.filter(v => v.url).map(v => v.url);
+    if (uploadedImageUrls.length === 0 && uploadedVideoUrls.length === 0) {
+      alert('商品画像または商品動画を1つ以上アップロードしてください');
       return;
     }
     setGenerating(true);
     setJobStatus(null);
     try {
+      const body = {
+        clip_id: clip.clip_id || clip.id,
+        video_mode: "product_overlay",
+        subtitle_style: "auto",
+        enable_sfx: true,
+        enable_transitions: true,
+        enable_hook: true,
+        enable_silence_cut: true,
+        enable_zoom_pulse: true,
+        enable_progress_bar: true,
+        enable_flash_intro: true,
+        enable_loop_fade: true,
+        enable_cta: true,
+        enable_keyword_highlight: true,
+        enable_subtitle_animation: true,
+      };
+      // V12: 画像と動画の両方を送信
+      if (uploadedImageUrls.length > 0) {
+        body.product_image_urls = uploadedImageUrls;
+      }
+      if (uploadedVideoUrls.length > 0) {
+        body.product_video_urls = uploadedVideoUrls;
+      }
       const res = await fetch(`${API_BASE}/api/v1/ai-clip/generate-from-clip`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "X-Admin-Key": adminKey,
         },
-        body: JSON.stringify({
-          clip_id: clip.clip_id || clip.id,
-          video_mode: "product_overlay",
-          product_image_urls: uploadedUrls,
-          subtitle_style: "auto",
-          enable_sfx: true,
-          enable_transitions: true,
-          enable_hook: true,
-          enable_silence_cut: true,
-          enable_zoom_pulse: true,
-          enable_progress_bar: true,
-          enable_flash_intro: true,
-          enable_loop_fade: true,
-          enable_cta: true,
-          enable_keyword_highlight: true,
-          enable_subtitle_animation: true,
-        }),
+        body: JSON.stringify(body),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -3702,10 +3761,10 @@ function PipCompositionModal({ clip, onClose, adminKey, generating, setGeneratin
                 )}
               </div>
 
-              {/* Upload area */}
+              {/* Upload area - Images */}
               <div className="border-2 border-dashed border-purple-200 rounded-lg p-3 bg-purple-50/30">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-[10px] font-bold text-purple-700">📸 商品画像（必須）</span>
+                  <span className="text-[10px] font-bold text-purple-700">📸 商品画像</span>
                   <label className="cursor-pointer px-2 py-1 bg-purple-600 text-white text-[10px] rounded hover:bg-purple-700 transition-colors">
                     + 画像追加
                     <input
@@ -3713,15 +3772,14 @@ function PipCompositionModal({ clip, onClose, adminKey, generating, setGeneratin
                       accept="image/*"
                       multiple
                       className="hidden"
-                      onChange={(e) => handleImageUpload(e.target.files)}
+                      onChange={(e) => handleMediaUpload(e.target.files)}
                     />
                   </label>
                 </div>
                 {productImages.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-4 text-gray-400">
-                    <span className="text-2xl">🖼️</span>
-                    <span className="text-[10px] mt-1">ここにドラッグ or クリックして商品画像をアップロード</span>
-                    <span className="text-[9px] text-gray-300 mt-0.5">複数枚OK・JPG/PNG/WebP対応</span>
+                  <div className="flex flex-col items-center justify-center py-3 text-gray-400">
+                    <span className="text-xl">🖼️</span>
+                    <span className="text-[9px] mt-1">商品画像をアップロード（JPG/PNG/WebP）</span>
                   </div>
                 ) : (
                   <div className="grid grid-cols-4 gap-2">
@@ -3731,6 +3789,11 @@ function PipCompositionModal({ clip, onClose, adminKey, generating, setGeneratin
                         {img.uploading && (
                           <div className="absolute inset-0 bg-white/70 flex items-center justify-center rounded-lg">
                             <Loader2 className="w-4 h-4 animate-spin text-purple-500" />
+                          </div>
+                        )}
+                        {img.error && (
+                          <div className="absolute inset-0 bg-red-100/80 flex items-center justify-center rounded-lg">
+                            <span className="text-[8px] text-red-600">失敗</span>
                           </div>
                         )}
                         <button
@@ -3745,14 +3808,56 @@ function PipCompositionModal({ clip, onClose, adminKey, generating, setGeneratin
                 )}
               </div>
 
+              {/* Upload area - Videos (V12) */}
+              <div className="border-2 border-dashed border-blue-200 rounded-lg p-3 bg-blue-50/30">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[10px] font-bold text-blue-700">🎬 商品動画（PiPオーバーレイ）</span>
+                  <label className="cursor-pointer px-2 py-1 bg-blue-600 text-white text-[10px] rounded hover:bg-blue-700 transition-colors">
+                    + 動画追加
+                    <input
+                      type="file"
+                      accept="video/mp4,video/quicktime,video/x-msvideo,video/webm,.mp4,.mov,.avi,.webm,.mkv"
+                      multiple
+                      className="hidden"
+                      onChange={(e) => handleMediaUpload(e.target.files)}
+                    />
+                  </label>
+                </div>
+                {productVideos.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-3 text-gray-400">
+                    <span className="text-xl">🎬</span>
+                    <span className="text-[9px] mt-1">商品動画をアップロード（MP4/MOV/AVI/WebM）</span>
+                    <span className="text-[8px] text-gray-300 mt-0.5">短動画: 5-10秒時点で3秒間表示 / ロング: 3秒表示→4秒非表示ループ</span>
+                  </div>
+                ) : (
+                  <div className="space-y-1">
+                    {productVideos.map((vid, idx) => (
+                      <div key={idx} className="flex items-center gap-2 p-1.5 bg-blue-50 rounded-lg border border-blue-200">
+                        <span className="text-lg">🎬</span>
+                        <span className="text-[10px] text-blue-800 flex-1 truncate">{vid.name}</span>
+                        {vid.uploading && <Loader2 className="w-3 h-3 animate-spin text-blue-500" />}
+                        {vid.url && <span className="text-[9px] text-green-600">✓</span>}
+                        {vid.error && <span className="text-[8px] text-red-600">失敗</span>}
+                        <button
+                          onClick={() => removeVideo(idx)}
+                          className="w-4 h-4 bg-red-500 text-white rounded-full flex items-center justify-center hover:bg-red-600"
+                        >
+                          <X className="w-2.5 h-2.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               <p className="text-[9px] text-purple-600 bg-purple-50 px-3 py-2 rounded-lg">
-                💡 商品画像をメイン表示し、配信者は右下ワイプに。商品が映ってない時に最適。複数画像を登録すると3秒ごとにローテーション表示されます。
+                💡 商品画像: メイン表示し配信者は右下ワイプに。商品動画: 右下にPiPオーバーレイ表示。両方登録可。
               </p>
 
               {/* Generate button */}
               <button
                 onClick={startGeneration}
-                disabled={productImages.filter(img => img.url).length === 0}
+                disabled={productImages.filter(img => img.url).length === 0 && productVideos.filter(v => v.url).length === 0}
                 className="w-full py-2.5 rounded-xl bg-purple-500 hover:bg-purple-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold text-sm transition-colors flex items-center justify-center gap-2"
               >
                 <Layers className="w-4 h-4" /> PiP合成を開始

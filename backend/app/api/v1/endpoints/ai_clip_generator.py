@@ -836,16 +836,18 @@ async def _analyze_content_relevance(captions: list, product_name: str, duration
 {captions_text}
 
 【タスク】
-上記の字幕から、以下に該当する区間を特定してください：
-1. 商品・セールスと全く無関係な雑談（天気、挨拶、無関係な話題）
-2. フィラーワードのみ（「えーっと」「あの」「なんか」等）
-3. 主播の停頓・言い淀み（同じ言葉の繰り返し、「えー」の連続）
-4. 視聴者への単純な挨拶・コメント読み上げ（商品紹介と無関なもの）
+この動画をTikTok短動画用に編集します。以下に該当する区間を積極的に特定してください：
+1. 商品・セールスと無関係な雑談（天気、挨拶、無関係な話題）
+2. フィラーワード・言い淀み（「えーっと」「あの」「なんか」「えー」等）
+3. 同じ内容の繰り返し（同じことを2回以上言っている場合、1回目だけ残す）
+4. 視聴者への単純な挨拶・コメント読み上げ（商品紹介と無関）
+5. 「えーと」「それで」「じゃあ」などのつなぎ言葉だけの区間
+6. 無音・沈黙の区間（0.3秒以上）
 
 【ルール】
 - 商品説明・価格・特徴・使用感・セールストークは絶対にカットしない
-- 商品に関連する話題（使い方、効果、比較）はカットしない
-- 迷ったらカットしない（保守的に）
+- それ以外は積極的にカットする（TikTokはテンポが命）
+- 目標: 元動画の40-60%をカットしてテンポ良く仕上げる
 
 【出力形式】
 JSON配列で出力。カットすべき区間がない場合は空配列[]。
@@ -974,7 +976,7 @@ def _build_silence_trim_segments(duration: float, silence_periods: list,
     # Sort by length (longest first) to prioritize removing the most impactful silences
     cuttable = []
     total_cut_time = 0.0
-    max_cut_ratio = 0.50  # V11: 最大50%カット（短動画向けに積極カット）
+    max_cut_ratio = 0.60  # V12: 最夤60%カット（「カット不足」フィードバック対応）
     max_cut_time = duration * max_cut_ratio
 
     # --- Phase 1: Silence cuts ---
@@ -986,19 +988,25 @@ def _build_silence_trim_segments(duration: float, silence_periods: list,
         # Don't cut if overlaps with meaningful caption
         if _is_protected(s_start, s_end):
             continue
-        # V11: Lower threshold - cut silences from 0.5s
-        if silence_len < 0.5:
+        # V12: Lower threshold - cut silences from 0.3s（「カット不足」フィードバック対応）
+        if silence_len < 0.3:
             continue
         # Check max cut limit
         if total_cut_time >= max_cut_time:
             break
 
         if silence_len >= 1.0:
-            # Long silence: aggressive cut, keep only 0.2s natural pause
-            cut_start = s_start + 0.1
-            cut_end = s_end - 0.1
+            # Long silence: aggressive cut, keep only 0.15s natural pause
+            cut_start = s_start + 0.08
+            cut_end = s_end - 0.08
         elif silence_len >= 0.5:
-            # Medium silence: partial cut (remove 50% from center)
+            # Medium silence: aggressive cut (remove 70% from center)
+            mid = (s_start + s_end) / 2
+            half_cut = silence_len * 0.7 / 2
+            cut_start = mid - half_cut
+            cut_end = mid + half_cut
+        elif silence_len >= 0.3:
+            # V12: Short silence: partial cut (remove 50% from center)
             mid = (s_start + s_end) / 2
             half_cut = silence_len * 0.5 / 2
             cut_start = mid - half_cut
@@ -1588,15 +1596,16 @@ def _generate_overlay_images(
     
     # STRICT non-overlap enforcement: each caption ends before next begins
     # This is the ONLY place timing is finalized - no MIN_DISPLAY expansion that could cause overlap
-    # ALSO: Skip captions that would overlap with Hook text (0-3s) to avoid visual clutter
-    hook_end_time = 3.0 if hook_text else 0.0
+    # V12 FIX: フックと字幕は表示位置が異なる（フック=上部、字幕=下部）ので共存可能
+    # 以前はhook_end_time=3.0で冒頭字幕をスキップしていたが、これが「冒頭2-3秒に字幕がない」問題の原因
+    # hook_end_time = 3.0 if hook_text else 0.0  # REMOVED: 字幕とフックは位置が異なるので共存OK
     
     processed_captions = []
     prev_end = -1.0
     for cap in raw_captions:
         # Ensure this caption starts after previous one ended (with gap)
-        # Also ensure subtitles don't overlap with Hook text display period
-        actual_start = max(cap['start'], prev_end + SUBTITLE_GAP, hook_end_time if cap['start'] < hook_end_time else cap['start'])
+        # V12: フック表示中でも字幕は表示する（位置が異なるため重ならない）
+        actual_start = max(cap['start'], prev_end + SUBTITLE_GAP)
         actual_end = cap['end']
         
         # If start was pushed forward, also push end forward proportionally
@@ -2475,7 +2484,7 @@ class GenerateRequest(BaseModel):
     enable_keyword_highlight: bool = Field(True, description="キーワードハイライト")
     enable_subtitle_animation: bool = Field(True, description="字幕出現アニメーション")
     zoom_intensity: float = Field(1.08, ge=1.0, le=1.3, description="ズーム倍率 (1.0=なし, 1.3=最大)")
-    silence_threshold_db: float = Field(-30.0, ge=-60.0, le=-10.0, description="無音検出閾値(dB)")
+    silence_threshold_db: float = Field(-25.0, ge=-60.0, le=-10.0, description="無音検出閾値(dB) V12: -30→-25に変更してより積極的に検出")
     # V12: 編集スタイル学習
     editing_profile_id: Optional[str] = Field(None, description="編集プロファイルID（スタイル学習済みプロファイルを適用）")
 
@@ -2503,7 +2512,7 @@ class GenerateFromClipRequest(BaseModel):
     enable_keyword_highlight: bool = Field(True, description="キーワードハイライト")
     enable_subtitle_animation: bool = Field(True, description="字幕出現アニメーション")
     zoom_intensity: float = Field(1.08, ge=1.0, le=1.3, description="ズーム倍率")
-    silence_threshold_db: float = Field(-30.0, ge=-60.0, le=-10.0, description="無音検出閾値(dB)")
+    silence_threshold_db: float = Field(-25.0, ge=-60.0, le=-10.0, description="無音検出閾値(dB) V12: -30→-25に変更してより積極的に検出")
     # V3: 映像モード選択
     video_mode: str = Field("original", description="映像モード: original=そのまま, product_overlay=商品画像オーバーレイ, audio_only=音声+商品スライドショー")
     product_image_urls: Optional[list] = Field(None, description="商品画像URLリスト（video_mode=product_overlay/audio_onlyの場合に使用）")
@@ -3031,6 +3040,7 @@ async def generate_ai_clip_from_clip(
                 product_image_urls = [r.product_image_url for r in exp_rows]
     clip_data["video_mode"] = req.video_mode
     clip_data["product_image_urls"] = product_image_urls
+    clip_data["product_video_urls"] = req.product_video_urls or []  # V12: 商品動町PiP対応
 
     # GenerateRequestに変換（_process_single_clip_v2が受け取る形式）
     gen_req = GenerateRequest(
@@ -4785,27 +4795,36 @@ async def _generate_hook(captions: list, clip: dict, req: GenerateRequest) -> st
             api_version=os.getenv("GPT5_API_VERSION", "2025-04-01-preview"),
         )
 
-        prompt = f"""TikTok/Reelsの最初3秒で視聴者のスクロールを止めるフックテキストを生成。
+        prompt = f"""あなたはTikTok動画のフックテキスト専門家です。
+以下の動画の書き起こし内容を読み、その内容に直接関係する短いフックテキストを生成してください。
 
 【絶対ルール】
-- 最大10文字以内（厳守！それ以上は絶対ダメ）
-- 絵文字は使わない
-- 「。」「、」は使わない
-- 【最重要】フックは必ず動画内容・商品に直接関係すること！汎用的な「知らないと損」「これマジ」等は禁止。
-- 商品名/ブランド名がある場合は必ず含める
+- 最大10文字以内（厳守！）
+- 絵文字・句読点は使わない
+- 【最重要】フックは「動画で実際に話している具体的な内容」から作ること！
+  → 動画内容を読んで、そこに出てくる具体的な商品名・効果・特徴をフックに使う
+  → 汎用的なフレーズ（知らないと損、これマジ、衝撃、ヤバい等）は絶対禁止
+- 商品名/ブランド名がある場合は必ずフックに含める
+
+【判定基準】
+このフックを見て「何の動画か」が分かるか？
+→ 分からない = NG（汎用フック）
+→ 分かる = OK（具体的フック）
 
 【良い例】
-- 商品名がKEENの靴: 「KEENが神」「KEENの本気」
-- 脱毛膏の場合: 「ツル肌の秘密」「この脱毛が神」
-- 美容液の場合: 「肌が変わる」「美肌の答え」
+- 動画が靴KEENの紹介 → 「KEENが神」「KEENの本気」
+- 動画が脱毛クリームの効果 → 「ツル肌の秘密」「この脱毛が神」
+- 動画がシャンプーの香り → 「この香りヤバい」「髪が変わる」
+- 動画がまつ毛美容液 → 「まつ毛が伸びた」「まつ育の答え」
 
-【悪い例（禁止）】
-- 「知らないと損する」「これマジですごい」「衰撃の結果」→ 動画内容と無関係な汎用フックは絶対禁止
+【禁止フック（動画内容と無関係な汎用表現）】
+「知らないと損」「これマジですごい」「衝撃の結果」「見ないと後悔」「まじありえない」→ 全て禁止
 
 商品名: {product_name or '（なし）'}
-動画内容: {transcript[:300]}
+動画の書き起こし内容（これを読んでフックを作る）:
+{transcript[:400]}
 
-上記の動画内容・商品に直接関係するフックテキストのみ出力（10文字以内）:"""
+上記の書き起こし内容に直接関係するフックテキスト（10文字以内、1つだけ出力）:"""
 
         response = client.responses.create(
             model=azure_model,
@@ -4829,6 +4848,16 @@ async def _generate_hook(captions: list, clip: dict, req: GenerateRequest) -> st
             # 絶対に15文字以内に制限
             if len(result) > 15:
                 result = result[:15]
+            # V12: 汎用フック検出バリデーション
+            _BANNED_HOOKS = [
+                "知らないと損", "これマジ", "衝撃の結果", "見ないと後悔",
+                "まじありえない", "ヤバすぎ", "神すぎ", "ガチで",
+                "マジですごい", "衰撃", "衝撃", "これ見て",
+            ]
+            is_generic = any(banned in result for banned in _BANNED_HOOKS)
+            if is_generic:
+                logger.warning(f"[ai-clip] GPT returned generic hook '{result}', falling back to product-based hook")
+                return _generate_simple_hook(product_name, transcript)
             return result
 
     except Exception as e:
@@ -5471,24 +5500,48 @@ async def _generate_pip_video_overlay(
     return pip_output
 
 
-# ─── Product Image Upload & AI Analysis Endpoints ─────────────────────────────────────────.post("/upload-product-image")
-async def upload_product_image(
+# ─── Product Image/Video Upload & AI Analysis Endpoints ──────────────────────────────────────
+
+@router.post("/upload-product-media")
+async def upload_product_media(
     file: UploadFile = File(...),
-    file_type: str = Form("product-image"),
+    file_type: str = Form("product-media"),
     x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
 ):
-    """商品画像をAzure Blobにアップロードする（AIクリップ生成用）"""
+    """V12: 商品画像または商品動画をAzure Blobにアップロードする（PiP合成用）
+    対応フォーマット: 画像(jpg/png/webp/gif) + 動画(mp4/mov/avi/webm/mkv)
+    """
     verify_admin(x_admin_key)
     from app.services.storage_service import generate_upload_sas
     import httpx
 
+    # V12: 動画フォーマットもサポート
+    ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+    ALLOWED_VIDEO_TYPES = {"video/mp4", "video/quicktime", "video/x-msvideo", "video/webm", "video/x-matroska"}
+    ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".mp4", ".mov", ".avi", ".webm", ".mkv"}
+
     try:
+        # ファイルタイプ判定
+        content_type = file.content_type or ""
+        filename = file.filename or f"product_{int(time.time())}"
+        ext = os.path.splitext(filename)[1].lower()
+
+        is_video = content_type in ALLOWED_VIDEO_TYPES or ext in {".mp4", ".mov", ".avi", ".webm", ".mkv"}
+        is_image = content_type in ALLOWED_IMAGE_TYPES or ext in {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+
+        if not is_video and not is_image:
+            raise HTTPException(
+                status_code=400,
+                detail=f"サポートされていないファイル形式です。対応: {', '.join(ALLOWED_EXTENSIONS)}"
+            )
+
         content = await file.read()
-        if len(content) > 20 * 1024 * 1024:
-            raise HTTPException(status_code=400, detail="画像が大きすぎます（最大20MB）")
+        max_size = 100 * 1024 * 1024 if is_video else 20 * 1024 * 1024
+        if len(content) > max_size:
+            size_label = "100MB" if is_video else "20MB"
+            raise HTTPException(status_code=400, detail=f"ファイルが大きすぎます（最大{size_label}）")
 
         file_id = f"ai-clip-product-{int(time.time())}-{uuid.uuid4().hex[:8]}"
-        filename = file.filename or f"product_{int(time.time())}.jpg"
 
         vid, upload_url, blob_url, expiry = await generate_upload_sas(
             email="ai-clip-generator@aitherhub.com",
@@ -5496,37 +5549,55 @@ async def upload_product_image(
             filename=filename,
         )
 
-        async with httpx.AsyncClient(timeout=120) as client:
+        # Content-Typeを正しく設定
+        upload_content_type = content_type
+        if is_video and not upload_content_type:
+            upload_content_type = "video/mp4"
+        elif is_image and not upload_content_type:
+            upload_content_type = "image/jpeg"
+
+        async with httpx.AsyncClient(timeout=180) as client:
             resp = await client.put(
                 upload_url,
                 content=content,
                 headers={
                     "x-ms-blob-type": "BlockBlob",
-                    "Content-Type": file.content_type or "image/jpeg",
+                    "Content-Type": upload_content_type,
                 },
             )
             resp.raise_for_status()
 
-        # Generate read SAS URL for the uploaded image
+        # Generate read SAS URL
         from app.services.storage_service import generate_read_sas_from_url
         read_url = generate_read_sas_from_url(blob_url)
         if not read_url:
-            # Fallback: return blob_url and let analyze endpoint handle it
             read_url = blob_url
 
-        logger.info(f"[ai-clip] Product image uploaded: {filename} ({len(content)} bytes) \u2192 {blob_url}")
+        media_type = "video" if is_video else "image"
+        logger.info(f"[ai-clip] Product {media_type} uploaded: {filename} ({len(content)} bytes) \u2192 {blob_url}")
         return {
             "success": True,
             "blob_url": blob_url,
             "read_url": read_url,
             "file_size": len(content),
             "filename": filename,
+            "media_type": media_type,
         }
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"[ai-clip] Product image upload failed: {e}")
+        logger.error(f"[ai-clip] Product media upload failed: {e}")
         raise HTTPException(status_code=500, detail=f"アップロードに失敗しました: {str(e)}")
+
+
+@router.post("/upload-product-image")
+async def upload_product_image(
+    file: UploadFile = File(...),
+    file_type: str = Form("product-image"),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """V12: 後方互換性のために残すが、内部でupload_product_mediaを呼ぶ"""
+    return await upload_product_media(file=file, file_type=file_type, x_admin_key=x_admin_key)
 
 
 class AnalyzeProductImageRequest(BaseModel):
