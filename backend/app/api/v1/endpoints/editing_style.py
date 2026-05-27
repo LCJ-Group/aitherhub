@@ -12,7 +12,9 @@ Endpoints:
   GET  /editing-style/profiles                    - プロファイル一覧
   GET  /editing-style/profiles/{profile_id}       - プロファイル詳細
   DELETE /editing-style/profiles/{profile_id}     - プロファイル削除
-  POST /editing-style/upload-sample               - お手本動画アップロード
+  POST /editing-style/get-upload-url              - SAS URL取得（フロントエンド直接アップロード用）
+  POST /editing-style/register-sample             - アップロード完了通知（DB登録）
+  POST /editing-style/upload-sample               - サーバー経由アップロード（レガシー互換）
   POST /editing-style/analyze                     - Phase 1: 完成動画からスタイル分析
   POST /editing-style/analyze-pair                - Phase 2: 完成動画+元動画ペアで差分学習
   GET  /editing-style/profiles/{profile_id}/samples - サンプル動画一覧
@@ -80,11 +82,19 @@ async def _ensure_tables():
                     analysis_status TEXT DEFAULT 'pending',
                     filename TEXT DEFAULT '',
                     duration_sec FLOAT DEFAULT 0,
+                    error_message TEXT DEFAULT '',
                     created_at TIMESTAMPTZ DEFAULT NOW()
                 )
             """))
             await conn.execute(text("""
                 CREATE INDEX IF NOT EXISTS idx_ess_profile ON editing_style_samples(profile_id)
+            """))
+            # Add error_message column if missing (migration)
+            await conn.execute(text("""
+                DO $$ BEGIN
+                    ALTER TABLE editing_style_samples ADD COLUMN IF NOT EXISTS error_message TEXT DEFAULT '';
+                EXCEPTION WHEN others THEN NULL;
+                END $$;
             """))
         _DB_TABLES_ENSURED = True
         logger.info("[editing-style] Tables ensured")
@@ -105,6 +115,20 @@ async def get_session():
 class CreateProfileRequest(BaseModel):
     name: str = Field(..., description="プロファイル名（例: 黄松松スタイル）")
     description: str = Field("", description="説明")
+
+
+class GetUploadUrlRequest(BaseModel):
+    profile_id: str = Field(..., description="対象プロファイルID")
+    filename: str = Field(..., description="ファイル名")
+    sample_type: str = Field("finished", description="finished or original")
+
+
+class RegisterSampleRequest(BaseModel):
+    profile_id: str = Field(..., description="対象プロファイルID")
+    video_url: str = Field(..., description="アップロード済みのBlob URL")
+    filename: str = Field(..., description="ファイル名")
+    sample_type: str = Field("finished", description="finished or original")
+    file_size: int = Field(0, description="ファイルサイズ（バイト）")
 
 
 class AnalyzeRequest(BaseModel):
@@ -139,7 +163,7 @@ async def create_profile(
         """), {"id": profile_id, "name": req.name, "description": req.description, "now": now})
         await session.commit()
 
-    return {"success": True, "profile_id": profile_id, "name": req.name}
+    return {"success": True, "id": profile_id, "profile_id": profile_id, "name": req.name}
 
 
 @router.get("/profiles")
@@ -200,7 +224,7 @@ async def get_profile(
                    analysis_status, filename, duration_sec, created_at
             FROM editing_style_samples
             WHERE profile_id = :profile_id
-            ORDER BY created_at DESC
+            ORDER BY created_at ASC
         """), {"profile_id": profile_id})
         sample_rows = samples_result.fetchall()
 
@@ -253,7 +277,104 @@ async def delete_profile(
     return {"success": True, "deleted_id": profile_id}
 
 
-# ─── Sample Upload ────────────────────────────────────────────────────────────
+# ─── Direct Upload (Frontend → Azure Blob) ──────────────────────────────────
+
+@router.post("/get-upload-url")
+async def get_upload_url(
+    req: GetUploadUrlRequest,
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """フロントエンドから直接Azure Blobにアップロードするための書き込みSAS URLを取得"""
+    verify_admin(x_admin_key)
+    await _ensure_tables()
+
+    # Validate profile exists
+    async with get_session() as session:
+        result = await session.execute(text(
+            "SELECT id FROM editing_profiles WHERE id = :id"
+        ), {"id": req.profile_id})
+        if not result.fetchone():
+            raise HTTPException(status_code=404, detail="プロファイルが見つかりません")
+
+    from app.services.storage_service import generate_upload_sas
+
+    file_id = f"editing-style-{int(time.time())}-{uuid.uuid4().hex[:8]}"
+    filename = req.filename or f"sample_{int(time.time())}.mp4"
+
+    vid, upload_url, blob_url, expiry = await generate_upload_sas(
+        email="editing-style@aitherhub.com",
+        video_id=file_id,
+        filename=filename,
+    )
+
+    return {
+        "upload_url": upload_url,
+        "blob_url": blob_url,
+        "expiry": expiry.isoformat(),
+        "file_id": file_id,
+    }
+
+
+@router.post("/register-sample")
+async def register_sample(
+    req: RegisterSampleRequest,
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """フロントエンドからの直接アップロード完了後、DBにサンプルを登録する"""
+    verify_admin(x_admin_key)
+    await _ensure_tables()
+
+    # Validate profile exists
+    async with get_session() as session:
+        result = await session.execute(text(
+            "SELECT id FROM editing_profiles WHERE id = :id"
+        ), {"id": req.profile_id})
+        if not result.fetchone():
+            raise HTTPException(status_code=404, detail="プロファイルが見つかりません")
+
+    # Generate read SAS URL
+    from app.services.storage_service import generate_read_sas_from_url
+    read_url = generate_read_sas_from_url(req.video_url)
+    if not read_url:
+        read_url = req.video_url
+
+    # Save sample record
+    sample_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc)
+
+    async with get_session() as session:
+        await session.execute(text("""
+            INSERT INTO editing_style_samples
+                (id, profile_id, sample_type, video_url, filename, analysis_status, created_at)
+            VALUES (:id, :profile_id, :sample_type, :video_url, :filename, 'pending', :now)
+        """), {
+            "id": sample_id,
+            "profile_id": req.profile_id,
+            "sample_type": req.sample_type,
+            "video_url": read_url,
+            "filename": req.filename,
+            "now": now,
+        })
+        # Update sample count
+        await session.execute(text("""
+            UPDATE editing_profiles
+            SET sample_count = (SELECT COUNT(*) FROM editing_style_samples WHERE profile_id = :pid),
+                updated_at = :now
+            WHERE id = :pid
+        """), {"pid": req.profile_id, "now": now})
+        await session.commit()
+
+    logger.info(f"[editing-style] Sample registered: {req.filename} ({req.file_size} bytes) -> profile {req.profile_id}")
+    return {
+        "success": True,
+        "sample_id": sample_id,
+        "video_url": read_url,
+        "filename": req.filename,
+        "sample_type": req.sample_type,
+    }
+
+
+# ─── Legacy Server-side Upload (fallback) ────────────────────────────────────
 
 @router.post("/upload-sample")
 async def upload_sample(
@@ -262,7 +383,7 @@ async def upload_sample(
     sample_type: str = Form("finished"),
     x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
 ):
-    """お手本動画をアップロードする
+    """お手本動画をアップロードする（サーバー経由 - レガシー互換）
     sample_type: 'finished' = 完成動画, 'original' = 元の長尺動画
     """
     verify_admin(x_admin_key)
@@ -383,16 +504,52 @@ async def analyze_single(
         """), {"id": req.sample_id})
         await session.commit()
 
-    # Run analysis in background
-    background_tasks.add_task(_run_single_analysis, req.profile_id, req.sample_id, sample.video_url)
+    # Run analysis in background using asyncio.create_task for reliability
+    asyncio.create_task(_run_single_analysis_safe(req.profile_id, req.sample_id, sample.video_url))
 
     return {"success": True, "message": "分析を開始しました", "sample_id": req.sample_id}
+
+
+async def _run_single_analysis_safe(profile_id: str, sample_id: str, video_url: str):
+    """Wrapper with timeout and guaranteed status update"""
+    try:
+        await asyncio.wait_for(
+            _run_single_analysis(profile_id, sample_id, video_url),
+            timeout=300  # 5 minutes max
+        )
+    except asyncio.TimeoutError:
+        logger.error(f"[editing-style] Analysis timed out for {sample_id}")
+        try:
+            async with get_session() as session:
+                await session.execute(text("""
+                    UPDATE editing_style_samples
+                    SET analysis_status = 'error',
+                        analysis_result = :err,
+                        error_message = 'タイムアウト（5分超過）'
+                    WHERE id = :id
+                """), {"id": sample_id, "err": json.dumps({"error": "timeout_5min"})})
+                await session.commit()
+        except Exception:
+            pass
+    except Exception as e:
+        logger.error(f"[editing-style] Analysis crashed for {sample_id}: {e}")
+        try:
+            async with get_session() as session:
+                await session.execute(text("""
+                    UPDATE editing_style_samples
+                    SET analysis_status = 'error',
+                        analysis_result = :err,
+                        error_message = :msg
+                    WHERE id = :id
+                """), {"id": sample_id, "err": json.dumps({"error": str(e)}), "msg": str(e)[:500]})
+                await session.commit()
+        except Exception:
+            pass
 
 
 async def _run_single_analysis(profile_id: str, sample_id: str, video_url: str):
     """Phase 1: 完成動画のスタイル分析（バックグラウンド処理）"""
     import httpx
-    import openai
 
     tmp_dir = tempfile.mkdtemp(prefix="editing_style_")
     video_path = os.path.join(tmp_dir, "sample.mp4")
@@ -400,7 +557,7 @@ async def _run_single_analysis(profile_id: str, sample_id: str, video_url: str):
     try:
         # 1. Download video
         logger.info(f"[editing-style] Downloading sample {sample_id}...")
-        async with httpx.AsyncClient(timeout=300) as client:
+        async with httpx.AsyncClient(timeout=180) as client:
             async with client.stream("GET", video_url) as resp:
                 resp.raise_for_status()
                 with open(video_path, "wb") as f:
@@ -408,42 +565,16 @@ async def _run_single_analysis(profile_id: str, sample_id: str, video_url: str):
                         f.write(chunk)
 
         # 2. Get video duration
-        probe_cmd = [
-            "ffprobe", "-v", "quiet", "-print_format", "json",
-            "-show_format", "-show_streams", video_path
-        ]
-        probe_result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=30)
-        probe_data = json.loads(probe_result.stdout) if probe_result.returncode == 0 else {}
-        duration = 0.0
-        if "format" in probe_data and "duration" in probe_data["format"]:
-            duration = float(probe_data["format"]["duration"])
+        duration = _get_video_duration(video_path)
+        logger.info(f"[editing-style] Video duration: {duration:.1f}s")
 
         # 3. Scene change detection (using ffmpeg)
         logger.info(f"[editing-style] Detecting scene changes for {sample_id}...")
-        scene_cmd = [
-            "ffmpeg", "-i", video_path,
-            "-vf", "select='gt(scene,0.3)',showinfo",
-            "-vsync", "vfr", "-f", "null", "-"
-        ]
-        scene_proc = subprocess.run(scene_cmd, capture_output=True, text=True, timeout=120)
-        scene_times = []
-        for line in scene_proc.stderr.split("\n"):
-            if "pts_time:" in line:
-                match = re.search(r"pts_time:(\d+\.?\d*)", line)
-                if match:
-                    scene_times.append(float(match.group(1)))
+        scene_times = _detect_scene_changes(video_path)
 
         # Calculate cut intervals
-        cut_points = [0.0] + scene_times + [duration]
-        cut_intervals = []
-        for i in range(len(cut_points) - 1):
-            interval = cut_points[i + 1] - cut_points[i]
-            if interval > 0.1:  # ignore very short segments
-                cut_intervals.append(interval)
-
+        cut_intervals = _calc_cut_intervals(scene_times, duration)
         avg_cut_interval = sum(cut_intervals) / len(cut_intervals) if cut_intervals else duration
-        min_cut_interval = min(cut_intervals) if cut_intervals else 0
-        max_cut_interval = max(cut_intervals) if cut_intervals else duration
 
         # 4. Transcribe with Whisper
         logger.info(f"[editing-style] Transcribing sample {sample_id}...")
@@ -456,17 +587,16 @@ async def _run_single_analysis(profile_id: str, sample_id: str, video_url: str):
             duration=duration,
             scene_count=len(scene_times),
             avg_cut_interval=avg_cut_interval,
-            cut_intervals=cut_intervals[:50],  # limit for prompt
+            cut_intervals=cut_intervals[:50],
         )
 
         # 6. Build analysis result
         analysis_result = {
-            "duration_sec": duration,
+            "duration_sec": round(duration, 2),
             "scene_count": len(scene_times),
             "avg_cut_interval": round(avg_cut_interval, 2),
-            "min_cut_interval": round(min_cut_interval, 2),
-            "max_cut_interval": round(max_cut_interval, 2),
-            "cut_intervals": [round(x, 2) for x in cut_intervals[:100]],
+            "min_cut_interval": round(min(cut_intervals), 2) if cut_intervals else 0,
+            "max_cut_interval": round(max(cut_intervals), 2) if cut_intervals else 0,
             "transcript_length": len(captions),
             "style_analysis": style_analysis,
             "analyzed_at": datetime.now(timezone.utc).isoformat(),
@@ -484,24 +614,21 @@ async def _run_single_analysis(profile_id: str, sample_id: str, video_url: str):
         # 8. Aggregate profile style_params from all analyzed samples
         await _aggregate_profile_style(profile_id)
 
-        logger.info(f"[editing-style] Analysis complete for {sample_id}: "
+        logger.info(f"[editing-style] ✅ Analysis complete for {sample_id}: "
                     f"duration={duration:.1f}s, scenes={len(scene_times)}, avg_cut={avg_cut_interval:.2f}s")
 
     except Exception as e:
         logger.error(f"[editing-style] Analysis failed for {sample_id}: {e}", exc_info=True)
-        try:
-            async with get_session() as session:
-                await session.execute(text("""
-                    UPDATE editing_style_samples
-                    SET analysis_status = 'error',
-                        analysis_result = :err
-                    WHERE id = :id
-                """), {"id": sample_id, "err": json.dumps({"error": str(e)})})
-                await session.commit()
-        except Exception:
-            pass
+        async with get_session() as session:
+            await session.execute(text("""
+                UPDATE editing_style_samples
+                SET analysis_status = 'error',
+                    analysis_result = :err,
+                    error_message = :msg
+                WHERE id = :id
+            """), {"id": sample_id, "err": json.dumps({"error": str(e)}), "msg": str(e)[:500]})
+            await session.commit()
     finally:
-        # Cleanup
         import shutil
         try:
             shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -540,12 +667,16 @@ async def analyze_pair(
     if not original_row:
         raise HTTPException(status_code=404, detail="元動画サンプルが見つかりません")
 
-    # Mark as analyzing
+    # Mark both as analyzing
     async with get_session() as session:
         await session.execute(text("""
             UPDATE editing_style_samples SET analysis_status = 'analyzing'
-            WHERE id IN (:fid, :oid)
-        """), {"fid": req.finished_sample_id, "oid": req.original_sample_id})
+            WHERE id = :fid
+        """), {"fid": req.finished_sample_id})
+        await session.execute(text("""
+            UPDATE editing_style_samples SET analysis_status = 'analyzing'
+            WHERE id = :oid
+        """), {"oid": req.original_sample_id})
         # Link the original to the finished sample
         await session.execute(text("""
             UPDATE editing_style_samples SET original_video_url = :orig_url
@@ -553,14 +684,62 @@ async def analyze_pair(
         """), {"fid": req.finished_sample_id, "orig_url": original_row.video_url})
         await session.commit()
 
-    # Run pair analysis in background
-    background_tasks.add_task(
-        _run_pair_analysis,
-        profile_id, req.finished_sample_id, req.original_sample_id,
+    # Run pair analysis with timeout wrapper
+    asyncio.create_task(_run_pair_analysis_safe(
+        req.profile_id, req.finished_sample_id, req.original_sample_id,
         finished_row.video_url, original_row.video_url,
-    )
+    ))
 
     return {"success": True, "message": "ペア分析を開始しました"}
+
+
+async def _run_pair_analysis_safe(
+    profile_id: str,
+    finished_sample_id: str,
+    original_sample_id: str,
+    finished_url: str,
+    original_url: str,
+):
+    """Wrapper with timeout and guaranteed status update"""
+    try:
+        await asyncio.wait_for(
+            _run_pair_analysis(profile_id, finished_sample_id, original_sample_id, finished_url, original_url),
+            timeout=600  # 10 minutes max for pair analysis
+        )
+    except asyncio.TimeoutError:
+        logger.error(f"[editing-style] Pair analysis timed out")
+        try:
+            async with get_session() as session:
+                await session.execute(text("""
+                    UPDATE editing_style_samples
+                    SET analysis_status = 'error', analysis_result = :err, error_message = 'タイムアウト（10分超過）'
+                    WHERE id = :fid
+                """), {"fid": finished_sample_id, "err": json.dumps({"error": "timeout_10min"})})
+                await session.execute(text("""
+                    UPDATE editing_style_samples
+                    SET analysis_status = 'error', error_message = 'タイムアウト（10分超過）'
+                    WHERE id = :oid
+                """), {"oid": original_sample_id})
+                await session.commit()
+        except Exception:
+            pass
+    except Exception as e:
+        logger.error(f"[editing-style] Pair analysis crashed: {e}")
+        try:
+            async with get_session() as session:
+                await session.execute(text("""
+                    UPDATE editing_style_samples
+                    SET analysis_status = 'error', analysis_result = :err, error_message = :msg
+                    WHERE id = :fid
+                """), {"fid": finished_sample_id, "err": json.dumps({"error": str(e)}), "msg": str(e)[:500]})
+                await session.execute(text("""
+                    UPDATE editing_style_samples
+                    SET analysis_status = 'error', error_message = :msg
+                    WHERE id = :oid
+                """), {"oid": original_sample_id, "msg": str(e)[:500]})
+                await session.commit()
+        except Exception:
+            pass
 
 
 async def _run_pair_analysis(
@@ -580,14 +759,12 @@ async def _run_pair_analysis(
     try:
         # 1. Download both videos
         logger.info(f"[editing-style] Downloading pair for analysis...")
-        async with httpx.AsyncClient(timeout=600) as client:
-            # Download finished
+        async with httpx.AsyncClient(timeout=300) as client:
             async with client.stream("GET", finished_url) as resp:
                 resp.raise_for_status()
                 with open(finished_path, "wb") as f:
                     async for chunk in resp.aiter_bytes(chunk_size=65536):
                         f.write(chunk)
-            # Download original
             async with client.stream("GET", original_url) as resp:
                 resp.raise_for_status()
                 with open(original_path, "wb") as f:
@@ -597,7 +774,6 @@ async def _run_pair_analysis(
         # 2. Get durations
         finished_duration = _get_video_duration(finished_path)
         original_duration = _get_video_duration(original_path)
-
         cut_ratio = 1.0 - (finished_duration / original_duration) if original_duration > 0 else 0
         logger.info(f"[editing-style] Pair: original={original_duration:.1f}s, "
                     f"finished={finished_duration:.1f}s, cut_ratio={cut_ratio:.1%}")
@@ -633,9 +809,11 @@ async def _run_pair_analysis(
             "type": "pair_analysis",
             "original_duration_sec": round(original_duration, 2),
             "finished_duration_sec": round(finished_duration, 2),
+            "duration_sec": round(finished_duration, 2),
             "cut_ratio": round(cut_ratio, 4),
             "original_scene_count": len(original_scenes),
             "finished_scene_count": len(finished_scenes),
+            "scene_count": len(finished_scenes),
             "avg_cut_interval": round(avg_cut_interval, 2),
             "original_transcript_segments": len(original_captions),
             "finished_transcript_segments": len(finished_captions),
@@ -660,21 +838,22 @@ async def _run_pair_analysis(
         # 9. Aggregate profile
         await _aggregate_profile_style(profile_id)
 
-        logger.info(f"[editing-style] Pair analysis complete: cut_ratio={cut_ratio:.1%}")
+        logger.info(f"[editing-style] ✅ Pair analysis complete: cut_ratio={cut_ratio:.1%}")
 
     except Exception as e:
         logger.error(f"[editing-style] Pair analysis failed: {e}", exc_info=True)
-        try:
-            async with get_session() as session:
-                await session.execute(text("""
-                    UPDATE editing_style_samples
-                    SET analysis_status = 'error', analysis_result = :err
-                    WHERE id IN (:fid, :oid)
-                """), {"fid": finished_sample_id, "oid": original_sample_id,
-                       "err": json.dumps({"error": str(e)})})
-                await session.commit()
-        except Exception:
-            pass
+        async with get_session() as session:
+            await session.execute(text("""
+                UPDATE editing_style_samples
+                SET analysis_status = 'error', analysis_result = :err, error_message = :msg
+                WHERE id = :fid
+            """), {"fid": finished_sample_id, "err": json.dumps({"error": str(e)}), "msg": str(e)[:500]})
+            await session.execute(text("""
+                UPDATE editing_style_samples
+                SET analysis_status = 'error', error_message = :msg
+                WHERE id = :oid
+            """), {"oid": original_sample_id, "msg": str(e)[:500]})
+            await session.commit()
     finally:
         import shutil
         try:
@@ -767,7 +946,6 @@ async def _transcribe_for_style(video_path: str) -> list:
     # Check file size (Whisper 25MB limit)
     file_size = os.path.getsize(audio_path)
     if file_size > 25 * 1024 * 1024:
-        # Re-encode with lower bitrate
         audio_path_small = audio_path.replace(".mp3", "_small.mp3")
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -794,9 +972,9 @@ async def _transcribe_for_style(video_path: str) -> list:
         if hasattr(response, "segments") and response.segments:
             for seg in response.segments:
                 captions.append({
-                    "start": seg.get("start", seg.start) if hasattr(seg, "start") else seg.get("start", 0),
-                    "end": seg.get("end", seg.end) if hasattr(seg, "end") else seg.get("end", 0),
-                    "text": seg.get("text", seg.text) if hasattr(seg, "text") else seg.get("text", ""),
+                    "start": getattr(seg, "start", 0),
+                    "end": getattr(seg, "end", 0),
+                    "text": getattr(seg, "text", ""),
                 })
         return captions
     except Exception as e:
@@ -819,7 +997,6 @@ async def _gpt_analyze_style(
     azure_model = os.getenv("GPT5_MODEL") or os.getenv("GPT5_DEPLOYMENT") or "gpt-4.1-mini"
 
     if not azure_key or not azure_endpoint:
-        # Fallback: return basic metrics only
         return {
             "hook_style": "unknown",
             "pacing": "medium",
@@ -848,7 +1025,6 @@ async def _gpt_analyze_style(
 
     transcript_text = "\n".join(transcript_lines) if transcript_lines else "(字幕なし)"
 
-    # Cut interval distribution
     short_cuts = len([x for x in cut_intervals if x < 2.0])
     medium_cuts = len([x for x in cut_intervals if 2.0 <= x < 5.0])
     long_cuts = len([x for x in cut_intervals if x >= 5.0])
@@ -867,18 +1043,18 @@ async def _gpt_analyze_style(
 【分析タスク】
 以下の項目をJSON形式で出力してください：
 
-1. hook_style: フック（冒頭）のスタイル ("question"=疑問形, "command"=命令形, "shock"=衝撃, "story"=ストーリー, "direct"=直接的)
-2. pacing: 編集のテンポ ("fast"=2秒未満が多い, "medium"=2-4秒, "slow"=4秒以上)
-3. silence_tolerance_sec: 無音をどの程度許容するか（秒）。短いほど無音カットが厳しい
-4. content_density: 情報密度 ("high"=隙間なし, "medium"=適度, "low"=ゆったり)
-5. cut_aggressiveness: カットの積極性 (0.0-1.0, 1.0=非常に積極的にカット)
+1. hook_style: フック（冒頭）のスタイル ("question"/"command"/"shock"/"story"/"direct")
+2. pacing: 編集のテンポ ("fast"/"medium"/"slow")
+3. silence_tolerance_sec: 無音をどの程度許容するか（秒）
+4. content_density: 情報密度 ("high"/"medium"/"low")
+5. cut_aggressiveness: カットの積極性 (0.0-1.0)
 6. preferred_clip_duration_sec: 好みのクリップ長（秒）
 7. hook_duration_sec: フック部分の長さ（秒）
-8. subtitle_style_preference: 字幕スタイルの傾向 ("pop"/"simple"/"box"/"gradient")
-9. transition_style: トランジションの傾向 ("hard_cut"=ハードカット, "fade"=フェード, "mixed"=混合)
-10. energy_level: 全体のエネルギーレベル ("high"/"medium"/"low")
+8. subtitle_style_preference: 字幕スタイル ("pop"/"simple"/"box"/"gradient")
+9. transition_style: トランジション ("hard_cut"/"fade"/"mixed")
+10. energy_level: エネルギーレベル ("high"/"medium"/"low")
 
-JSON形式のみで出力してください。説明は不要です。"""
+JSON形式のみで出力してください。"""
 
     try:
         response = await client.chat.completions.create(
@@ -888,7 +1064,6 @@ JSON形式のみで出力してください。説明は不要です。"""
             temperature=0.2,
         )
         content = response.choices[0].message.content.strip()
-        # Parse JSON
         json_match = re.search(r'\{[^{}]*\}', content, re.DOTALL)
         if json_match:
             return json.loads(json_match.group())
@@ -937,7 +1112,6 @@ async def _gpt_analyze_pair_diff(
         api_version=os.getenv("GPT5_API_VERSION", "2025-04-01-preview"),
     )
 
-    # Build original transcript excerpt
     orig_lines = []
     for cap in original_captions[:40]:
         s = float(cap.get("start", 0))
@@ -946,7 +1120,6 @@ async def _gpt_analyze_pair_diff(
         if t:
             orig_lines.append(f"[{s:.1f}-{e:.1f}] {t}")
 
-    # Build finished transcript excerpt
     fin_lines = []
     for cap in finished_captions[:40]:
         s = float(cap.get("start", 0))
@@ -978,16 +1151,16 @@ async def _gpt_analyze_pair_diff(
 編集者のカット基準をJSON形式で出力してください：
 
 1. cut_ratio: 実際のカット率 (0.0-1.0)
-2. editing_philosophy: 編集方針 ("aggressive"=積極カット, "moderate"=バランス, "conservative"=控えめ)
-3. silence_handling: 無音の扱い ("strict"=0.3秒でもカット, "moderate"=1秒以上カット, "lenient"=2秒以上のみカット)
+2. editing_philosophy: 編集方針 ("aggressive"/"moderate"/"conservative")
+3. silence_handling: 無音の扱い ("strict"/"moderate"/"lenient")
 4. silence_threshold_sec: 無音カットの閾値（秒）
-5. filler_handling: フィラーワードの扱い ("always_cut"=必ずカット, "sometimes_cut"=状況次第, "keep"=残す)
-6. content_filter: コンテンツフィルタ基準 ("strict"=商品関連のみ残す, "moderate"=関連性低いものカット, "lenient"=ほぼ残す)
+5. filler_handling: フィラーワードの扱い ("always_cut"/"sometimes_cut"/"keep")
+6. content_filter: コンテンツフィルタ基準 ("strict"/"moderate"/"lenient")
 7. preferred_segment_duration: 好みのセグメント長（秒）
 8. keeps_greetings: 挨拶を残すか (true/false)
 9. keeps_reactions: リアクション・感嘆を残すか (true/false)
-10. transition_preference: カット間のつなぎ ("hard"=ハードカット, "fade"=フェード, "mixed")
-11. hook_creation: フック作成方法 ("extract"=既存から抽出, "create"=新規作成, "none"=なし)
+10. transition_preference: カット間のつなぎ ("hard"/"fade"/"mixed")
+11. hook_creation: フック作成方法 ("extract"/"create"/"none")
 12. max_single_segment_sec: 1つのセグメントの最大長（秒）
 
 JSON形式のみで出力してください。"""
@@ -1042,14 +1215,12 @@ async def _aggregate_profile_style(profile_id: str):
     aggregated = {}
 
     if pair_analyses:
-        # Average numeric values from pair analyses
         numeric_keys = ["silence_threshold_sec", "preferred_segment_duration", "max_single_segment_sec", "cut_ratio"]
         for key in numeric_keys:
             values = [p.get(key) for p in pair_analyses if p.get(key) is not None]
             if values:
                 aggregated[key] = round(sum(values) / len(values), 2)
 
-        # Mode for categorical values
         cat_keys = ["editing_philosophy", "silence_handling", "filler_handling",
                     "content_filter", "transition_preference", "hook_creation"]
         for key in cat_keys:
@@ -1057,7 +1228,6 @@ async def _aggregate_profile_style(profile_id: str):
             if values:
                 aggregated[key] = max(set(values), key=values.count)
 
-        # Boolean values (majority vote)
         bool_keys = ["keeps_greetings", "keeps_reactions"]
         for key in bool_keys:
             values = [p.get(key) for p in pair_analyses if p.get(key) is not None]
@@ -1065,7 +1235,6 @@ async def _aggregate_profile_style(profile_id: str):
                 aggregated[key] = sum(1 for v in values if v) > len(values) / 2
 
     if all_analyses:
-        # Merge single analysis data (lower priority)
         numeric_keys_single = ["silence_tolerance_sec", "cut_aggressiveness",
                                "preferred_clip_duration_sec", "hook_duration_sec"]
         for key in numeric_keys_single:
@@ -1111,7 +1280,7 @@ async def list_samples(
                    analysis_status, filename, duration_sec, created_at
             FROM editing_style_samples
             WHERE profile_id = :pid
-            ORDER BY created_at DESC
+            ORDER BY created_at ASC
         """), {"pid": profile_id})
         rows = result.fetchall()
 

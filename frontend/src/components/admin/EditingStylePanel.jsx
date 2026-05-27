@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
@@ -42,7 +42,6 @@ export default function EditingStylePanel({ adminKey }) {
       setNewProfileDesc('');
       setShowCreateForm(false);
       fetchProfiles();
-      // Auto-select the new profile
       if (res.data?.id) {
         handleSelectProfile(res.data.id);
       }
@@ -165,7 +164,7 @@ export default function EditingStylePanel({ adminKey }) {
         </div>
       )}
 
-      {/* Selected Profile Detail - Simplified Pair Upload */}
+      {/* Selected Profile Detail */}
       {selectedProfile && (
         <PairUploadPanel
           profile={selectedProfile}
@@ -178,12 +177,13 @@ export default function EditingStylePanel({ adminKey }) {
   );
 }
 
-// ─── Simplified Pair Upload Panel ────────────────────────────────────────────
+// ─── Simplified Pair Upload Panel with Direct Azure Upload ──────────────────
 
 function PairUploadPanel({ profile, adminKey, onDelete, onRefresh }) {
   const [pairs, setPairs] = useState([]);
   const [uploading, setUploading] = useState({});
   const [autoAnalyzing, setAutoAnalyzing] = useState(false);
+  const pollRef = useRef(null);
 
   // Build pairs from samples
   useEffect(() => {
@@ -191,7 +191,6 @@ function PairUploadPanel({ profile, adminKey, onDelete, onRefresh }) {
     const finished = samples.filter(s => s.sample_type === 'finished');
     const original = samples.filter(s => s.sample_type === 'original');
     
-    // Match pairs by upload order (finished[0] + original[0], etc.)
     const builtPairs = [];
     const maxLen = Math.max(finished.length, original.length);
     for (let i = 0; i < maxLen; i++) {
@@ -206,28 +205,78 @@ function PairUploadPanel({ profile, adminKey, onDelete, onRefresh }) {
     setPairs(builtPairs);
   }, [profile.samples]);
 
-  // Upload file immediately on selection
+  // Poll for analysis status when samples are analyzing
+  useEffect(() => {
+    const samples = profile.samples || [];
+    const hasAnalyzing = samples.some(s => s.analysis_status === 'analyzing');
+    
+    if (hasAnalyzing) {
+      pollRef.current = setInterval(() => {
+        onRefresh();
+      }, 4000);
+    } else {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    }
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, [profile.samples, onRefresh]);
+
+  // Upload file - Direct to Azure Blob (FAST - bypasses server)
   const handleFileSelect = async (file, sampleType, pairIndex) => {
     const uploadKey = `${pairIndex}-${sampleType}`;
     setUploading(prev => ({ ...prev, [uploadKey]: { progress: 0, name: file.name } }));
     
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('profile_id', profile.id);
-      formData.append('sample_type', sampleType);
+      // Step 1: Get SAS upload URL from backend (fast, just generates a URL)
+      const sasRes = await axios.post(`${API_BASE}/api/v1/editing-style/get-upload-url`, {
+        profile_id: profile.id,
+        filename: file.name,
+        sample_type: sampleType,
+      }, { headers: { 'X-Admin-Key': adminKey } });
 
-      await axios.post(`${API_BASE}/api/v1/editing-style/upload-sample`, formData, {
-        headers: { 'X-Admin-Key': adminKey, 'Content-Type': 'multipart/form-data' },
-        onUploadProgress: (e) => {
-          const pct = Math.round((e.loaded / e.total) * 100);
-          setUploading(prev => ({ ...prev, [uploadKey]: { ...prev[uploadKey], progress: pct } }));
-        }
+      const { upload_url, blob_url } = sasRes.data;
+      setUploading(prev => ({ ...prev, [uploadKey]: { progress: 5, name: file.name } }));
+
+      // Step 2: Upload directly to Azure Blob (bypasses server completely!)
+      await new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) {
+            const pct = Math.round((e.loaded / e.total) * 85) + 5; // 5-90%
+            setUploading(prev => ({ ...prev, [uploadKey]: { progress: pct, name: file.name } }));
+          }
+        };
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) resolve();
+          else reject(new Error(`Azure upload failed: ${xhr.status} ${xhr.statusText}`));
+        };
+        xhr.onerror = () => reject(new Error('ネットワークエラー'));
+        xhr.ontimeout = () => reject(new Error('タイムアウト'));
+        xhr.timeout = 600000; // 10 min timeout for large files
+        xhr.open('PUT', upload_url, true);
+        xhr.setRequestHeader('x-ms-blob-type', 'BlockBlob');
+        xhr.setRequestHeader('Content-Type', file.type || 'video/mp4');
+        xhr.send(file);
       });
-      
-      setUploading(prev => ({ ...prev, [uploadKey]: { ...prev[uploadKey], progress: 100, done: true } }));
-      
-      // Auto-refresh and check if we can auto-analyze
+
+      setUploading(prev => ({ ...prev, [uploadKey]: { progress: 92, name: file.name } }));
+
+      // Step 3: Register sample in DB (fast, just a DB write)
+      await axios.post(`${API_BASE}/api/v1/editing-style/register-sample`, {
+        profile_id: profile.id,
+        video_url: blob_url,
+        filename: file.name,
+        sample_type: sampleType,
+        file_size: file.size,
+      }, { headers: { 'X-Admin-Key': adminKey } });
+
+      setUploading(prev => ({ ...prev, [uploadKey]: { progress: 100, name: file.name, done: true } }));
+
+      // Refresh
       setTimeout(() => {
         onRefresh();
         setUploading(prev => {
@@ -235,9 +284,10 @@ function PairUploadPanel({ profile, adminKey, onDelete, onRefresh }) {
           delete next[uploadKey];
           return next;
         });
-      }, 1000);
+      }, 800);
       
     } catch (e) {
+      console.error('Upload failed:', e);
       setUploading(prev => ({ ...prev, [uploadKey]: { ...prev[uploadKey], error: true } }));
       alert('アップロード失敗: ' + (e.response?.data?.detail || e.message));
       setTimeout(() => {
@@ -247,43 +297,6 @@ function PairUploadPanel({ profile, adminKey, onDelete, onRefresh }) {
           return next;
         });
       }, 3000);
-    }
-  };
-
-  // Auto-analyze: when both finished + original exist and not yet analyzed
-  const handleAutoAnalyze = async () => {
-    const samples = profile.samples || [];
-    const pendingFinished = samples.filter(s => s.sample_type === 'finished' && s.analysis_status === 'pending');
-    const pendingOriginal = samples.filter(s => s.sample_type === 'original' && s.analysis_status === 'pending');
-    
-    if (pendingFinished.length === 0 && pendingOriginal.length === 0) {
-      alert('分析対象のサンプルがありません');
-      return;
-    }
-
-    setAutoAnalyzing(true);
-    try {
-      // If we have pairs (both finished + original pending), do pair analysis
-      if (pendingFinished.length > 0 && pendingOriginal.length > 0) {
-        await axios.post(`${API_BASE}/api/v1/editing-style/analyze-pair`, {
-          profile_id: profile.id,
-          finished_sample_id: pendingFinished[0].id,
-          original_sample_id: pendingOriginal[0].id,
-        }, { headers: { 'X-Admin-Key': adminKey } });
-      } else if (pendingFinished.length > 0) {
-        // Single analysis for finished video
-        await axios.post(`${API_BASE}/api/v1/editing-style/analyze`, {
-          profile_id: profile.id,
-          sample_id: pendingFinished[0].id,
-        }, { headers: { 'X-Admin-Key': adminKey } });
-      }
-      
-      alert('✅ 分析を開始しました！数分後に自動で学習結果が反映されます。');
-      setTimeout(() => onRefresh(), 3000);
-    } catch (e) {
-      alert('分析開始失敗: ' + (e.response?.data?.detail || e.message));
-    } finally {
-      setAutoAnalyzing(false);
     }
   };
 
@@ -317,8 +330,8 @@ function PairUploadPanel({ profile, adminKey, onDelete, onRefresh }) {
         }, { headers: { 'X-Admin-Key': adminKey } });
       }
       
-      alert(`✅ ${finished.length}件の分析を開始しました！`);
-      setTimeout(() => onRefresh(), 3000);
+      // Start polling
+      setTimeout(() => onRefresh(), 2000);
     } catch (e) {
       alert('分析開始失敗: ' + (e.response?.data?.detail || e.message));
     } finally {
@@ -330,6 +343,7 @@ function PairUploadPanel({ profile, adminKey, onDelete, onRefresh }) {
   const pendingCount = samples.filter(s => s.analysis_status === 'pending').length;
   const doneCount = samples.filter(s => s.analysis_status === 'done').length;
   const analyzingCount = samples.filter(s => s.analysis_status === 'analyzing').length;
+  const errorCount = samples.filter(s => s.analysis_status === 'error').length;
 
   return (
     <div className="bg-white border border-gray-200 rounded-xl p-6 space-y-5 shadow-sm">
@@ -340,8 +354,9 @@ function PairUploadPanel({ profile, adminKey, onDelete, onRefresh }) {
           {profile.description && <p className="text-sm text-gray-500">{profile.description}</p>}
           <div className="flex gap-3 mt-1 text-xs">
             {doneCount > 0 && <span className="text-green-600">✓ {doneCount}件分析済み</span>}
-            {analyzingCount > 0 && <span className="text-yellow-600">⏳ {analyzingCount}件分析中</span>}
+            {analyzingCount > 0 && <span className="text-yellow-600 animate-pulse">⏳ {analyzingCount}件分析中...</span>}
             {pendingCount > 0 && <span className="text-gray-400">{pendingCount}件未分析</span>}
+            {errorCount > 0 && <span className="text-red-600">❌ {errorCount}件エラー</span>}
           </div>
         </div>
         <div className="flex gap-2">
@@ -375,13 +390,14 @@ function PairUploadPanel({ profile, adminKey, onDelete, onRefresh }) {
               disabled={autoAnalyzing}
               className="px-3 py-1.5 text-xs bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-50 font-medium"
             >
-              {autoAnalyzing ? '⏳ 分析中...' : `🚀 全て分析開始 (${pendingCount}件)`}
+              {autoAnalyzing ? '⏳ 送信中...' : `🚀 全て分析開始 (${pendingCount}件)`}
             </button>
           )}
         </div>
         
         <p className="text-xs text-gray-400">
           「完成動画」と「元の長尺動画」をペアでアップロード → 自動で差分学習します。完成動画だけでもOK。
+          <br/>💡 <strong>高速アップロード:</strong> ファイルはサーバーを経由せず直接クラウドにアップロードされます。
         </p>
 
         {/* Pair Upload Rows */}
@@ -429,6 +445,39 @@ function PairUploadPanel({ profile, adminKey, onDelete, onRefresh }) {
                   <div className="bg-white p-1.5 rounded border"><span className="text-gray-400">カット率</span> <span className="font-medium">{(sample.analysis_result.cut_ratio * 100).toFixed(1)}%</span></div>
                 )}
               </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Error samples */}
+      {samples.filter(s => s.analysis_status === 'error').length > 0 && (
+        <div className="space-y-2">
+          <h4 className="font-medium text-red-700 text-sm">❌ エラーが発生したサンプル</h4>
+          {samples.filter(s => s.analysis_status === 'error').map(sample => (
+            <div key={sample.id} className="bg-red-50 rounded-lg p-3 border border-red-100 text-xs flex items-center justify-between">
+              <div>
+                <span className="text-red-700">{sample.filename}</span>
+                {sample.analysis_result?.error && (
+                  <span className="text-red-500 ml-2">({sample.analysis_result.error})</span>
+                )}
+              </div>
+              <button
+                onClick={async () => {
+                  try {
+                    await axios.post(`${API_BASE}/api/v1/editing-style/analyze`, {
+                      profile_id: profile.id,
+                      sample_id: sample.id,
+                    }, { headers: { 'X-Admin-Key': adminKey } });
+                    setTimeout(() => onRefresh(), 2000);
+                  } catch (e) {
+                    alert('再試行失敗');
+                  }
+                }}
+                className="px-2 py-1 bg-red-600 text-white rounded text-[10px] hover:bg-red-700"
+              >
+                再試行
+              </button>
             </div>
           ))}
         </div>
@@ -523,11 +572,11 @@ function UploadProgress({ upload, label }) {
     return <span className="text-xs text-green-600">✅ {upload.name} 完了</span>;
   }
   return (
-    <div className="flex items-center gap-2">
-      <div className="flex-1 h-1.5 bg-gray-200 rounded-full overflow-hidden">
-        <div className="h-full bg-indigo-500 rounded-full transition-all" style={{ width: `${upload.progress}%` }}></div>
+    <div className="flex items-center gap-2 flex-1">
+      <div className="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
+        <div className="h-full bg-indigo-500 rounded-full transition-all duration-300" style={{ width: `${upload.progress}%` }}></div>
       </div>
-      <span className="text-[10px] text-gray-500">{upload.progress}%</span>
+      <span className="text-[10px] text-gray-500 w-8">{upload.progress}%</span>
     </div>
   );
 }
