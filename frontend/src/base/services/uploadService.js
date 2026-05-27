@@ -339,13 +339,14 @@ class UploadService extends BaseApiService {
     }
   }
 
-  async uploadComplete(email, video_id, filename, upload_id, language = 'ja', brand_client_id = null) {
+  async uploadComplete(email, video_id, filename, upload_id, language = 'ja', brand_client_id = null, source_email = null) {
     const token = TokenManager.getToken();
     if (!token) throw new UploadStageError(UPLOAD_STAGES.AUTH, window.__t('authTokenNotFound') || 'Auth token not found');
     if (TokenManager.isTokenExpired(token)) throw new UploadStageError(UPLOAD_STAGES.AUTH, window.__t('sessionExpired') || 'Session expired');
     try {
       const body = { email, video_id, filename, upload_id, language };
       if (brand_client_id) body.brand_client_id = brand_client_id;
+      if (source_email) body.source_email = source_email;
       return await this.retryWithBackoff(
         () => this.post(URL_CONSTANTS.UPLOAD_COMPLETE, body),
         MAX_RETRIES,

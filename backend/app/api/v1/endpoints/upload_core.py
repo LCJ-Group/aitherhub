@@ -136,12 +136,17 @@ async def upload_complete(
         if current_user["email"] != payload.email:
             raise HTTPException(status_code=403, detail="Email does not match current user")
 
+        # v15: Use source_email for blob path resolution (LP guest→register flow)
+        # When a guest uploads via LP, the blob is stored under guest_xxx@aitherhub.temp
+        # After registration, we need to use that original email for download URL generation
+        blob_email = payload.source_email or payload.email
+
         video_repo = VideoRepository(lambda: db)
         pipeline = UploadPipelineService(video_repository=video_repo)
 
         result = await pipeline.complete_upload(
             user_id=current_user["id"],
-            email=payload.email,
+            email=blob_email,
             video_id=payload.video_id,
             original_filename=payload.filename,
             db=db,

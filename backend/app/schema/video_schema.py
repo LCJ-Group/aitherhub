@@ -88,6 +88,7 @@ class UploadCompleteRequest(BaseModel):
     time_offset_seconds: Optional[float] = 0  # offset within CSV timeline (seconds)
     language: Optional[str] = "ja"  # AI analysis output language (ja, zh-TW)
     brand_client_id: Optional[str] = None  # widget_clients.client_id for auto brand assignment on clips
+    source_email: Optional[str] = None  # Original email used for blob upload (LP guest→register flow)
 
     class Config:
         schema_extra = {
@@ -98,7 +99,8 @@ class UploadCompleteRequest(BaseModel):
                 "upload_id": "550e8400-e29b-41d4-a716-446655440001",
                 "upload_type": "screen_recording",
                 "time_offset_seconds": 0,
-                "brand_client_id": None
+                "brand_client_id": None,
+                "source_email": None
             }
         }
 

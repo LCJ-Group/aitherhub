@@ -44,7 +44,9 @@ export default function AuthPage({ mode = "login" }) {
             pending.video_id,
             pending.filename,
             pending.upload_id,
-            'ja'
+            'ja',
+            null, // brand_client_id
+            pending.guestEmail // source_email: original blob path email
           );
           console.log('[AuthPage] Pending upload completed successfully');
           
@@ -102,7 +104,9 @@ export default function AuthPage({ mode = "login" }) {
             pending.video_id,
             pending.filename,
             pending.upload_id,
-            'ja'
+            'ja',
+            null, // brand_client_id
+            pending.guestEmail // source_email: original blob path email
           );
           console.log('[AuthPage] Pending upload completed after registration');
           localStorage.removeItem('aitherhub_pending_video');

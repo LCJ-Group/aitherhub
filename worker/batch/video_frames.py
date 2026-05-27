@@ -212,8 +212,14 @@ def extract_frames(
     if use_gpu:
         # GPU path: NVDEC hardware decode + GPU resize + CPU JPG encode
         # v13: Added -threads limit for CPU-side JPG encoding to prevent saturation
+        # v15: Added error tolerance flags for corrupt/VFR videos (iPhone ScreenRecording)
+        #      -err_detect ignore_err: skip corrupt frames instead of stopping
+        #      +discardcorrupt: discard corrupt packets
+        #      +genpts: regenerate PTS for consistent timing
         cmd = [
             FFMPEG_BIN, "-y",
+            "-err_detect", "ignore_err",
+            "-fflags", "+discardcorrupt+genpts",
             "-hwaccel", "cuda",
             "-hwaccel_output_format", "cuda",
             "-c:v", cuvid_decoder,
@@ -229,8 +235,11 @@ def extract_frames(
     else:
         # CPU path: software decode + scale + JPG
         # v13: Limited threads from "0" (unlimited) to FFMPEG_THREADS to prevent CPU saturation
+        # v15: Added error tolerance flags for corrupt/VFR videos (iPhone ScreenRecording)
         cmd = [
             FFMPEG_BIN, "-y",
+            "-err_detect", "ignore_err",
+            "-fflags", "+discardcorrupt+genpts",
             "-threads", FFMPEG_THREADS,
             "-i", video_path,
             "-vf", f"fps={fps},scale={_sw}:-1",
@@ -384,8 +393,11 @@ def extract_frames(
             if f.endswith('.jpg'):
                 os.remove(os.path.join(out_dir, f))
 
+        # v15: CPU fallback also gets error tolerance flags
         cmd_cpu = [
             FFMPEG_BIN, "-y",
+            "-err_detect", "ignore_err",
+            "-fflags", "+discardcorrupt+genpts",
             "-threads", FFMPEG_THREADS,
             "-i", video_path,
             "-vf", f"fps={fps},scale={_sw}:-1",

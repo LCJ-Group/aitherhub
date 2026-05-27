@@ -162,7 +162,9 @@ export default function ChatRegisterModal({ isOpen, onClose, onSuccess, pendingV
               pendingVideo.video_id,
               pendingVideo.filename,
               pendingVideo.upload_id,
-              'ja'
+              'ja',
+              null, // brand_client_id
+              pendingVideo.guestEmail // source_email: original blob path email
             );
             localStorage.removeItem('aitherhub_pending_video');
           } catch (uploadErr) {
