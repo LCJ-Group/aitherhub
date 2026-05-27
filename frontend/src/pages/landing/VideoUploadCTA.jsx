@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import UploadService from '../../base/services/uploadService';
+import ChatRegisterModal from './ChatRegisterModal';
 
 /* ─────────────────────────────────────────────
    Video Upload CTA — Real Upload + Registration Flow
@@ -94,8 +95,27 @@ export default function VideoUploadCTA() {
     }
   }, [videoLink, navigate]);
 
-  // Go to register
-  const goRegister = () => navigate('/register');
+  // Chat register modal state
+  const [showChatRegister, setShowChatRegister] = useState(false);
+
+  // Open chat register modal instead of navigating away
+  const goRegister = () => {
+    setShowChatRegister(true);
+  };
+
+  // Handle successful registration from chat modal
+  const handleChatRegisterSuccess = () => {
+    setShowChatRegister(false);
+    navigate('/');
+  };
+
+  // Get pending video data from localStorage
+  const getPendingVideo = () => {
+    try {
+      const raw = localStorage.getItem('aitherhub_pending_video');
+      return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+  };
 
   // Retry upload
   const handleRetry = () => {
@@ -412,6 +432,14 @@ export default function VideoUploadCTA() {
           )}
         </div>
       </div>
+
+      {/* Chat Register Modal */}
+      <ChatRegisterModal
+        isOpen={showChatRegister}
+        onClose={() => setShowChatRegister(false)}
+        onSuccess={handleChatRegisterSuccess}
+        pendingVideo={getPendingVideo()}
+      />
 
       {/* CSS */}
       <style>{`
