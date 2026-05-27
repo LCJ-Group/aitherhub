@@ -114,6 +114,15 @@ export default function LiverClonePage() {
   const ttsAnalyserRef = useRef(null);
   const lipSyncIntervalRef = useRef(null);
 
+  // Real-time STS (Speech-to-Speech) voice conversion
+  const [stsEnabled, setStsEnabled] = useState(() => localStorage.getItem("liverClone_stsEnabled") === "true");
+  const [stsActive, setStsActive] = useState(false); // Currently processing STS
+  const stsRecorderRef = useRef(null); // MediaRecorder for STS chunks
+  const stsIntervalRef = useRef(null); // Interval for STS chunk sending
+  const stsQueueRef = useRef([]); // Queue of audio chunks to process
+  const stsProcessingRef = useRef(false); // Lock to prevent concurrent STS calls
+  const stsAudioContextRef = useRef(null); // Dedicated AudioContext for STS playback
+
   // Voice ID management
   const [savedVoiceIds, setSavedVoiceIds] = useState(() => {
     try {
@@ -179,6 +188,9 @@ export default function LiverClonePage() {
   useEffect(() => {
     localStorage.setItem("liverClone_savedVoiceIds", JSON.stringify(savedVoiceIds));
   }, [savedVoiceIds]);
+  useEffect(() => {
+    localStorage.setItem("liverClone_stsEnabled", stsEnabled ? "true" : "false");
+  }, [stsEnabled]);
 
   // ── Poll session status ──
   useEffect(() => {
@@ -286,20 +298,26 @@ export default function LiverClonePage() {
       }
 
       // Audio passthrough: play microphone audio through speakers
-      // This lets the user hear their own voice during preview
+      // When STS is enabled, mute passthrough and use voice conversion instead
       try {
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         const source = audioCtx.createMediaStreamSource(stream);
         const gainNode = audioCtx.createGain();
-        gainNode.gain.value = 1.0; // Full volume passthrough
+        // Mute passthrough when STS is enabled (converted audio will play instead)
+        gainNode.gain.value = stsEnabled ? 0.0 : 1.0;
         source.connect(gainNode);
         gainNode.connect(audioCtx.destination);
         audioContextRef.current = audioCtx;
         audioStreamRef.current = stream;
         audioGainRef.current = gainNode;
-        console.log("[Preview] Audio passthrough enabled");
+        console.log(`[Preview] Audio passthrough ${stsEnabled ? 'MUTED (STS active)' : 'enabled'}`);
       } catch (audioErr) {
         console.warn("[Preview] Audio passthrough failed (non-critical):", audioErr);
+      }
+
+      // Start real-time STS voice conversion if enabled
+      if (stsEnabled && voiceId) {
+        startSTSConversion(stream);
       }
 
       // Get WebSocket URL from backend
@@ -465,6 +483,8 @@ export default function LiverClonePage() {
       previewWsRef.current.close();
       previewWsRef.current = null;
     }
+    // Stop STS voice conversion
+    stopSTSConversion();
     // Stop audio passthrough
     if (audioContextRef.current) {
       audioContextRef.current.close().catch(() => {});
@@ -740,6 +760,231 @@ export default function LiverClonePage() {
       }
       return updated;
     });
+  };
+
+  // ── Real-time STS (Speech-to-Speech) Voice Conversion ──
+  /**
+   * Start real-time STS voice conversion.
+   * Records microphone audio in chunks (3 seconds each),
+   * sends to backend for ElevenLabs STS conversion,
+   * and plays the converted audio with lip-sync.
+   */
+  const startSTSConversion = (stream) => {
+    if (!voiceId) {
+      console.warn("[STS] No voice ID set, cannot start STS");
+      return;
+    }
+    console.log("[STS] Starting real-time voice conversion");
+    setStsActive(true);
+    stsQueueRef.current = [];
+    stsProcessingRef.current = false;
+
+    // Create MediaRecorder to capture audio chunks
+    const audioStream = new MediaStream(stream.getAudioTracks());
+    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+      ? 'audio/webm;codecs=opus'
+      : MediaRecorder.isTypeSupported('audio/webm')
+        ? 'audio/webm'
+        : 'audio/mp4';
+
+    const recorder = new MediaRecorder(audioStream, {
+      mimeType,
+      audioBitsPerSecond: 64000,
+    });
+
+    let chunks = [];
+
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) {
+        chunks.push(e.data);
+      }
+    };
+
+    recorder.onstop = () => {
+      // When recorder stops (every chunk interval), process the audio
+      if (chunks.length > 0) {
+        const blob = new Blob(chunks, { type: mimeType });
+        chunks = [];
+        // Convert to base64 and queue for STS processing
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const base64 = reader.result.split(',')[1];
+          if (base64 && base64.length > 100) {
+            stsQueueRef.current.push(base64);
+            processSTSQueue();
+          }
+        };
+        reader.readAsDataURL(blob);
+      }
+    };
+
+    stsRecorderRef.current = recorder;
+
+    // Record in 3-second chunks
+    const CHUNK_INTERVAL = 3000;
+    recorder.start();
+
+    stsIntervalRef.current = setInterval(() => {
+      if (recorder.state === 'recording') {
+        recorder.stop();
+        // Restart recording for next chunk
+        setTimeout(() => {
+          if (stsRecorderRef.current && stsEnabled) {
+            try {
+              recorder.start();
+            } catch (e) {
+              console.warn("[STS] Failed to restart recorder:", e);
+            }
+          }
+        }, 50);
+      }
+    }, CHUNK_INTERVAL);
+
+    console.log(`[STS] Recording started (${CHUNK_INTERVAL}ms chunks, ${mimeType})`);
+  };
+
+  /**
+   * Process the STS queue - send audio chunks to backend for conversion.
+   */
+  const processSTSQueue = async () => {
+    if (stsProcessingRef.current) return; // Already processing
+    if (stsQueueRef.current.length === 0) return;
+
+    stsProcessingRef.current = true;
+
+    while (stsQueueRef.current.length > 0) {
+      const audioBase64 = stsQueueRef.current.shift();
+      try {
+        console.log(`[STS] Sending chunk (${(audioBase64.length * 0.75 / 1024).toFixed(1)}KB)`);
+        const result = await liverCloneService.previewSTS(audioBase64, voiceId, {
+          voice_stability: voiceStability,
+          voice_similarity: voiceSimilarity,
+        });
+
+        if (result.status === "ok" && result.audio_base64) {
+          // Play converted audio with lip-sync
+          await playSTSAudio(result.audio_base64);
+        }
+      } catch (err) {
+        console.error("[STS] Conversion failed:", err.response?.data?.detail || err.message);
+        // Don't stop on error - continue with next chunk
+      }
+    }
+
+    stsProcessingRef.current = false;
+  };
+
+  /**
+   * Play STS-converted audio and send lip-sync data.
+   */
+  const playSTSAudio = (audioBase64) => {
+    return new Promise(async (resolve) => {
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        if (ctx.state === "suspended") await ctx.resume();
+
+        // Decode base64 to ArrayBuffer
+        const audioData = atob(audioBase64);
+        const audioArray = new Uint8Array(audioData.length);
+        for (let i = 0; i < audioData.length; i++) {
+          audioArray[i] = audioData.charCodeAt(i);
+        }
+
+        let audioBuffer;
+        try {
+          audioBuffer = await ctx.decodeAudioData(audioArray.buffer.slice(0));
+        } catch (decodeErr) {
+          console.error("[STS] decodeAudioData failed:", decodeErr);
+          // Fallback: play via Audio element without lip-sync
+          const blob = new Blob([audioArray], { type: 'audio/mpeg' });
+          const url = URL.createObjectURL(blob);
+          const audio = new Audio(url);
+          audio.onended = () => { URL.revokeObjectURL(url); resolve(); };
+          audio.onerror = () => { URL.revokeObjectURL(url); resolve(); };
+          await audio.play().catch(() => resolve());
+          return;
+        }
+
+        // Compute envelope for lip-sync
+        const channelData = audioBuffer.getChannelData(0);
+        const sampleRate = audioBuffer.sampleRate;
+        const chunkSize = Math.floor(sampleRate / 20);
+        const numChunks = Math.ceil(channelData.length / chunkSize);
+        const envelope = new Float32Array(numChunks);
+        let maxRms = 0;
+        for (let c = 0; c < numChunks; c++) {
+          let sum = 0;
+          const start = c * chunkSize;
+          const end = Math.min(start + chunkSize, channelData.length);
+          for (let i = start; i < end; i++) sum += channelData[i] * channelData[i];
+          const rms = Math.sqrt(sum / (end - start));
+          envelope[c] = rms;
+          if (rms > maxRms) maxRms = rms;
+        }
+        const normFactor = maxRms > 0.001 ? (1.0 / maxRms) : 8.0;
+        for (let c = 0; c < numChunks; c++) {
+          envelope[c] = Math.pow(Math.min(1.0, envelope[c] * normFactor), 0.6);
+        }
+
+        // Play audio
+        const sourceNode = ctx.createBufferSource();
+        sourceNode.buffer = audioBuffer;
+        sourceNode.connect(ctx.destination);
+
+        const startTime = ctx.currentTime;
+        let lipActive = true;
+        const lipLoop = () => {
+          if (!lipActive) return;
+          const elapsed = ctx.currentTime - startTime;
+          const idx = Math.floor(elapsed * 20);
+          if (idx >= numChunks) return;
+          const mouthOpen = envelope[idx];
+          if (previewWsRef.current?.readyState === WebSocket.OPEN) {
+            previewWsRef.current.send(JSON.stringify({ type: "mouth_open", value: mouthOpen }));
+          }
+        };
+        const lipInterval = setInterval(lipLoop, 50);
+
+        sourceNode.onended = () => {
+          lipActive = false;
+          clearInterval(lipInterval);
+          if (previewWsRef.current?.readyState === WebSocket.OPEN) {
+            previewWsRef.current.send(JSON.stringify({ type: "mouth_open", value: 0 }));
+          }
+          ctx.close().catch(() => {});
+          console.log(`[STS] Playback complete (${audioBuffer.duration.toFixed(1)}s)`);
+          resolve();
+        };
+
+        sourceNode.start(0);
+        console.log(`[STS] Playing converted audio (${audioBuffer.duration.toFixed(1)}s)`);
+      } catch (err) {
+        console.error("[STS] playSTSAudio error:", err);
+        resolve();
+      }
+    });
+  };
+
+  /**
+   * Stop STS voice conversion.
+   */
+  const stopSTSConversion = () => {
+    if (stsIntervalRef.current) {
+      clearInterval(stsIntervalRef.current);
+      stsIntervalRef.current = null;
+    }
+    if (stsRecorderRef.current) {
+      try {
+        if (stsRecorderRef.current.state !== 'inactive') {
+          stsRecorderRef.current.stop();
+        }
+      } catch (e) {}
+      stsRecorderRef.current = null;
+    }
+    stsQueueRef.current = [];
+    stsProcessingRef.current = false;
+    setStsActive(false);
+    console.log("[STS] Voice conversion stopped");
   };
 
   const handleSpeak = async () => {
@@ -1520,6 +1765,44 @@ export default function LiverClonePage() {
                         </div>
                       )}
                     </div>
+                    {/* Real-time STS Voice Conversion Toggle */}
+                    <div className="flex items-center justify-between bg-gray-900/50 rounded-lg px-3 py-2">
+                      <div>
+                        <p className="text-xs font-semibold text-cyan-300">リアルタイム音声変換</p>
+                        <p className="text-[10px] text-gray-500">マイク音声をAI声に変換（プレビュー時）</p>
+                      </div>
+                      <button
+                        onClick={() => {
+                          const next = !stsEnabled;
+                          setStsEnabled(next);
+                          // If preview is active, toggle STS immediately
+                          if (previewActive && audioStreamRef.current) {
+                            if (next && voiceId) {
+                              // Mute passthrough and start STS
+                              if (audioGainRef.current) audioGainRef.current.gain.value = 0.0;
+                              startSTSConversion(audioStreamRef.current);
+                            } else {
+                              // Restore passthrough and stop STS
+                              if (audioGainRef.current) audioGainRef.current.gain.value = 1.0;
+                              stopSTSConversion();
+                            }
+                          }
+                        }}
+                        className={`relative w-10 h-5 rounded-full transition-colors ${
+                          stsEnabled ? 'bg-cyan-600' : 'bg-gray-700'
+                        }`}
+                      >
+                        <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                          stsEnabled ? 'translate-x-5' : 'translate-x-0'
+                        }`} />
+                      </button>
+                    </div>
+                    {stsActive && (
+                      <div className="flex items-center gap-2 px-3 py-1.5 bg-cyan-900/20 border border-cyan-800 rounded-lg">
+                        <div className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+                        <span className="text-[10px] text-cyan-300">音声変換中...</span>
+                      </div>
+                    )}
                     <div className="grid grid-cols-2 gap-3">
                       <div>
                         <label className="text-xs text-gray-400 mb-1 block">

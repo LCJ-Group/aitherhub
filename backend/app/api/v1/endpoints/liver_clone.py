@@ -489,3 +489,82 @@ async def preview_speak(req: PreviewSpeakRequest):
     except Exception as e:
         logger.exception("[LiverClone API] Preview speak failed")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================
+# Preview STS (Speech-to-Speech) Endpoint
+# ============================================================
+
+class PreviewSTSRequest(BaseModel):
+    """Request to convert voice using ElevenLabs STS in preview mode."""
+    audio_base64: str  # Base64-encoded audio (webm/opus from MediaRecorder)
+    voice_id: str = ""
+    voice_stability: float = 0.5
+    voice_similarity: float = 0.75
+
+
+@router.post("/preview/sts")
+async def preview_sts(req: PreviewSTSRequest):
+    """
+    Convert voice using ElevenLabs Speech-to-Speech (STS) in preview mode.
+    Accepts base64-encoded audio from the browser's MediaRecorder (webm/opus),
+    converts it using the specified voice, and returns base64-encoded MP3.
+    The frontend captures microphone audio in chunks and sends them here
+    for real-time voice conversion during preview.
+    """
+    import base64
+    from app.services.elevenlabs_tts_service import ElevenLabsTTSService
+
+    if not req.audio_base64:
+        raise HTTPException(status_code=400, detail="audio_base64 is required")
+
+    voice_id = req.voice_id
+    if not voice_id:
+        import os
+        voice_id = os.getenv("ELEVENLABS_VOICE_ID", "")
+    if not voice_id:
+        raise HTTPException(status_code=400, detail="voice_id is required")
+
+    try:
+        # Decode input audio
+        audio_bytes = base64.b64decode(req.audio_base64)
+        if len(audio_bytes) < 100:
+            raise HTTPException(status_code=400, detail="Audio data too short")
+
+        logger.info(
+            f"[LiverClone API] Preview STS: input_size={len(audio_bytes)}, "
+            f"voice={voice_id[:8]}..."
+        )
+
+        tts = ElevenLabsTTSService()
+
+        # Use STS to convert voice
+        converted_bytes = await tts.speech_to_speech(
+            audio_data=audio_bytes,
+            voice_id=voice_id,
+            output_format="mp3_44100_128",
+            voice_settings={
+                "stability": req.voice_stability,
+                "similarity_boost": req.voice_similarity,
+            },
+        )
+
+        converted_base64 = base64.b64encode(converted_bytes).decode("utf-8")
+
+        logger.info(
+            f"[LiverClone API] Preview STS success: "
+            f"input={len(audio_bytes)}B → output={len(converted_bytes)}B"
+        )
+
+        return {
+            "status": "ok",
+            "audio_base64": converted_base64,
+            "audio_format": "mp3",
+            "input_size": len(audio_bytes),
+            "output_size": len(converted_bytes),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("[LiverClone API] Preview STS failed")
+        raise HTTPException(status_code=500, detail=str(e))

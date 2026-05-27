@@ -242,6 +242,28 @@ class LiverCloneService {
     return res.data;
   }
 
+  /**
+   * Convert voice using ElevenLabs STS (Speech-to-Speech) in preview mode.
+   * Sends recorded audio chunk and receives converted audio.
+   * @param {string} audioBase64 - Base64-encoded audio (webm/opus)
+   * @param {string} voiceId - ElevenLabs voice ID
+   * @param {Object} options - { voice_stability, voice_similarity }
+   * @returns {Promise<Object>} { status, audio_base64, audio_format }
+   */
+  async previewSTS(audioBase64, voiceId, options = {}) {
+    const res = await axios.post(
+      `${this.baseURL}/api/v1/liver-clone/preview/sts`,
+      {
+        audio_base64: audioBase64,
+        voice_id: voiceId,
+        voice_stability: options.voice_stability || 0.5,
+        voice_similarity: options.voice_similarity || 0.75,
+      },
+      { headers: this._headers(), timeout: 30000 }
+    );
+    return res.data;
+  }
+
   async previewSpeak(text, voiceId, options = {}) {
     const res = await axios.post(
       `${this.baseURL}/api/v1/liver-clone/preview/speak`,
