@@ -6182,3 +6182,36 @@ async def get_users_list(
             "created_at": r.created_at.isoformat() if r.created_at else None,
         })
     return {"users": users, "total": len(users)}
+
+
+@router.delete("/users/{user_id}")
+async def delete_user(
+    user_id: int,
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a user by ID. Only for test accounts cleanup."""
+    expected_key = f"{ADMIN_ID}:{ADMIN_PASS}"
+    if x_admin_key != expected_key:
+        raise HTTPException(status_code=403, detail="Invalid admin credentials")
+
+    # Check if user exists
+    result = await db.execute(text("SELECT id, email FROM users WHERE id = :uid"), {"uid": user_id})
+    user = result.fetchone()
+    if not user:
+        raise HTTPException(status_code=404, detail=f"User {user_id} not found")
+
+    # Check if user has videos - prevent accidental deletion of active users
+    vid_result = await db.execute(text("SELECT COUNT(*) as cnt FROM videos WHERE user_id = :uid"), {"uid": user_id})
+    video_count = vid_result.scalar()
+    if video_count > 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"User {user_id} has {video_count} videos. Delete videos first or use force=true query param."
+        )
+
+    # Delete user
+    await db.execute(text("DELETE FROM users WHERE id = :uid"), {"uid": user_id})
+    await db.commit()
+
+    return {"success": True, "message": f"User {user_id} ({user.email}) deleted successfully"}
