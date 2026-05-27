@@ -38,6 +38,7 @@ from app.api.v1.endpoints.tiktok_tracking import router as tiktok_tracking_route
 from app.api.v1.endpoints.ai_clip_generator import router as ai_clip_generator_router
 from app.api.v1.endpoints.liver_clone import router as liver_clone_router
 from app.api.v1.endpoints.magic_cut import router as magic_cut_router
+from app.api.v1.endpoints.editing_style import router as editing_style_router
 
 routers = APIRouter()
 routers.include_router(auth_router, prefix="/auth", tags=["Auth"])
@@ -78,3 +79,4 @@ routers.include_router(tiktok_tracking_router, tags=["TikTok Tracking"])
 routers.include_router(ai_clip_generator_router, tags=["AI Clip Generator"])
 routers.include_router(liver_clone_router, tags=["Liver Clone"])
 routers.include_router(magic_cut_router, tags=["Magic Cut"])
+routers.include_router(editing_style_router, tags=["Editing Style Learning"])

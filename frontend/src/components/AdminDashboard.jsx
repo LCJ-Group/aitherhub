@@ -17,6 +17,7 @@ import MLTrainingDashboard from "./admin/MLTrainingDashboard";
 import TikTokTrackingPanel from "./admin/TikTokTrackingPanel";
 import AutoAIClipPanel from './admin/AutoAIClipPanel';
 import ProductMasterPanel from './admin/ProductMasterPanel';
+import EditingStylePanel from './admin/EditingStylePanel';
 import { useTranslation } from 'react-i18next';
 import { changeLanguage } from '../i18n';
 import ClipFeedbackPanel from './ClipFeedbackPanel';
@@ -658,6 +659,16 @@ export default function AdminDashboard() {
               >
                 📦 商品マスター
               </button>
+              <button
+                onClick={() => setActiveTab("editing-style")}
+                className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                  activeTab === "editing-style"
+                    ? "bg-white text-indigo-600 shadow-sm"
+                    : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                🎨 編集スタイル学習
+              </button>
             </>
           )}
         </div>
@@ -801,6 +812,9 @@ export default function AdminDashboard() {
         )}
         {activeTab === "product-master" && (
           <ProductMasterPanel adminKey={`${ADMIN_ID}:${ADMIN_PASS}`} />
+        )}
+        {activeTab === "editing-style" && (
+          <EditingStylePanel adminKey={`${ADMIN_ID}:${ADMIN_PASS}`} />
         )}
       </div>
     </div>

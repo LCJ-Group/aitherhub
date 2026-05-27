@@ -2476,6 +2476,8 @@ class GenerateRequest(BaseModel):
     enable_subtitle_animation: bool = Field(True, description="字幕出現アニメーション")
     zoom_intensity: float = Field(1.08, ge=1.0, le=1.3, description="ズーム倍率 (1.0=なし, 1.3=最大)")
     silence_threshold_db: float = Field(-30.0, ge=-60.0, le=-10.0, description="無音検出閾値(dB)")
+    # V12: 編集スタイル学習
+    editing_profile_id: Optional[str] = Field(None, description="編集プロファイルID（スタイル学習済みプロファイルを適用）")
 
 
 class GenerateFromClipRequest(BaseModel):
@@ -2506,6 +2508,8 @@ class GenerateFromClipRequest(BaseModel):
     video_mode: str = Field("original", description="映像モード: original=そのまま, product_overlay=商品画像オーバーレイ, audio_only=音声+商品スライドショー")
     product_image_urls: Optional[list] = Field(None, description="商品画像URLリスト（video_mode=product_overlay/audio_onlyの場合に使用）")
     product_video_urls: Optional[list] = Field(None, description="商品動画URLリスト（PiPで動画をオーバーレイ表示する場合に使用）")
+    # V12: 編集スタイル学習
+    editing_profile_id: Optional[str] = Field(None, description="編集プロファイルID（スタイル学習済みプロファイルを適用）")
 
 
 class JobStatusResponse(BaseModel):
@@ -4148,6 +4152,19 @@ async def _process_single_clip_v2(job_id: str, clip: dict, req: GenerateRequest,
             duration = float(probe_data["format"]["duration"])
 
         await _update_job(job_id, progress_pct=10, current_step=f"クリップ {idx+1}/{total}: 動画情報取得中...")
+
+        # ── 2b. V12: 編集プロファイル適用 ──
+        editing_profile_params = {}
+        if getattr(req, 'editing_profile_id', None):
+            try:
+                editing_profile_params = await _load_editing_profile(req.editing_profile_id)
+                if editing_profile_params:
+                    logger.info(f"[ai-clip {job_id}] Applying editing profile: {req.editing_profile_id} "
+                                f"params={list(editing_profile_params.keys())}")
+                    # プロファイルのパラメータでreqをオーバーライド
+                    req = _apply_editing_profile_to_request(req, editing_profile_params)
+            except Exception as ep_err:
+                logger.warning(f"[ai-clip {job_id}] Editing profile load failed (non-fatal): {ep_err}")
 
         # ── 3. Audio analysis (V2: volume peaks + silence detection) ── (12-20%)
         volume_peaks = []
@@ -6838,3 +6855,125 @@ async def search_product_master(
     except Exception as e:
         logger.error(f"[ai-clip] Product master search failed: {e}")
         raise HTTPException(status_code=500, detail=str(e)[:200])
+
+
+
+# ─── V12: Editing Profile Integration ─────────────────────────────────────────
+
+async def _load_editing_profile(profile_id: str) -> dict:
+    """編集プロファイルのstyle_paramsをDBから読み込む"""
+    try:
+        async with get_session() as session:
+            result = await session.execute(text("""
+                SELECT style_params, status FROM editing_profiles
+                WHERE id = :id
+            """), {"id": profile_id})
+            row = result.fetchone()
+        if row and row.style_params:
+            params = row.style_params if isinstance(row.style_params, dict) else json.loads(row.style_params)
+            logger.info(f"[ai-clip] Loaded editing profile {profile_id}: status={row.status}, "
+                        f"params_count={len(params)}")
+            return params
+        return {}
+    except Exception as e:
+        logger.warning(f"[ai-clip] Failed to load editing profile {profile_id}: {e}")
+        return {}
+
+
+def _apply_editing_profile_to_request(req: "GenerateRequest", profile_params: dict) -> "GenerateRequest":
+    """編集プロファイルのパラメータをGenerateRequestに適用する。
+    プロファイルの学習結果に基づいてreqのパラメータを調整する。
+    既存のreqフィールドを直接変更せず、新しいオブジェクトを返す。
+    """
+    # Create a mutable copy of the request
+    req_dict = req.dict() if hasattr(req, 'dict') else {}
+
+    # ── Silence threshold adjustment ──
+    # プロファイルが「silence_threshold_sec」を持っている場合、無音カット閾値を調整
+    if "silence_threshold_sec" in profile_params:
+        silence_sec = float(profile_params["silence_threshold_sec"])
+        # silence_threshold_sec → silence_threshold_db の変換
+        # 短い閾値 = より厳しい無音カット = 高いdB閾値
+        if silence_sec <= 0.3:
+            req_dict["silence_threshold_db"] = -25.0  # Very aggressive
+        elif silence_sec <= 0.5:
+            req_dict["silence_threshold_db"] = -28.0  # Aggressive
+        elif silence_sec <= 1.0:
+            req_dict["silence_threshold_db"] = -30.0  # Normal
+        else:
+            req_dict["silence_threshold_db"] = -35.0  # Lenient
+
+    # ── Silence handling from pair analysis ──
+    if "silence_handling" in profile_params:
+        handling = profile_params["silence_handling"]
+        if handling == "strict":
+            req_dict["silence_threshold_db"] = -25.0
+            req_dict["enable_silence_cut"] = True
+        elif handling == "lenient":
+            req_dict["silence_threshold_db"] = -38.0
+
+    # ── Content cut aggressiveness ──
+    if "content_filter" in profile_params:
+        cf = profile_params["content_filter"]
+        if cf == "strict":
+            req_dict["enable_content_cut"] = True
+        elif cf == "lenient":
+            req_dict["enable_content_cut"] = False
+
+    # ── Filler handling ──
+    if "filler_handling" in profile_params:
+        fh = profile_params["filler_handling"]
+        if fh == "always_cut":
+            req_dict["enable_content_cut"] = True
+        elif fh == "keep":
+            req_dict["enable_content_cut"] = False
+
+    # ── Pacing / zoom intensity ──
+    if "pacing" in profile_params:
+        pacing = profile_params["pacing"]
+        if pacing == "fast":
+            req_dict["zoom_intensity"] = 1.12  # More dynamic
+        elif pacing == "slow":
+            req_dict["zoom_intensity"] = 1.04  # Subtle
+
+    if "cut_aggressiveness" in profile_params:
+        agg = float(profile_params["cut_aggressiveness"])
+        # Higher aggressiveness = more silence cut
+        if agg > 0.7:
+            req_dict["enable_silence_cut"] = True
+            req_dict["enable_content_cut"] = True
+
+    # ── Subtitle style preference ──
+    if "subtitle_style_preference" in profile_params:
+        pref = profile_params["subtitle_style_preference"]
+        if pref in ("pop", "simple", "box", "gradient", "outline", "karaoke"):
+            req_dict["subtitle_style"] = pref
+
+    # ── Transition style ──
+    if "transition_preference" in profile_params or "transition_style" in profile_params:
+        ts = profile_params.get("transition_preference") or profile_params.get("transition_style", "")
+        if ts == "hard_cut" or ts == "hard":
+            req_dict["enable_transitions"] = False
+        elif ts == "fade":
+            req_dict["enable_transitions"] = True
+            req_dict["transition_type"] = "fade"
+            req_dict["transition_duration"] = 0.3
+
+    # ── Energy level → effects ──
+    if "energy_level" in profile_params:
+        energy = profile_params["energy_level"]
+        if energy == "high":
+            req_dict["enable_flash_intro"] = True
+            req_dict["enable_zoom_pulse"] = True
+            req_dict["enable_sfx"] = True
+        elif energy == "low":
+            req_dict["enable_flash_intro"] = False
+            req_dict["enable_zoom_pulse"] = False
+            req_dict["enable_sfx"] = False
+
+    # Reconstruct request object
+    try:
+        return GenerateRequest(**req_dict)
+    except Exception as e:
+        logger.warning(f"[ai-clip] Failed to apply editing profile params: {e}")
+        return req

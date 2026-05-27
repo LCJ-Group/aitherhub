@@ -2860,7 +2860,15 @@ function AiClipGenerationModal({ clip, onClose, onGenerate, generating, jobStatu
     enable_subtitle_animation: true,
     zoom_intensity: 1.08,
     target_language: "auto",
+    editing_profile_id: "",
   });
+  const [editingProfiles, setEditingProfiles] = useState([]);
+  useEffect(() => {
+    fetch(`${API_BASE}/api/v1/editing-style/profiles`, { headers: { 'X-Admin-Key': adminKey } })
+      .then(r => r.json())
+      .then(d => setEditingProfiles((d.profiles || []).filter(p => p.status === 'active')))
+      .catch(() => {});
+  }, [adminKey]);
 
   const isDone = jobStatus?.status === "done";
   const isFailed = jobStatus?.status === "failed";
@@ -2988,9 +2996,30 @@ function AiClipGenerationModal({ clip, onClose, onGenerate, generating, jobStatu
                 ))}
               </div>
 
+              {/* V12: Editing Profile Selection */}
+              {editingProfiles.length > 0 && (
+                <div className="flex items-center justify-between">
+                  <label className="text-xs text-gray-600">🎨 編集スタイル</label>
+                  <select
+                    value={options.editing_profile_id}
+                    onChange={(e) => setOptions({ ...options, editing_profile_id: e.target.value })}
+                    className="text-xs border border-gray-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  >
+                    <option value="">なし（デフォルト）</option>
+                    {editingProfiles.map(p => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               {/* Generate button */}
               <button
-                onClick={() => onGenerate(options)}
+                onClick={() => {
+                  const opts = { ...options };
+                  if (!opts.editing_profile_id) delete opts.editing_profile_id;
+                  onGenerate(opts);
+                }}
                 className="w-full py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-semibold text-sm transition-colors flex items-center justify-center gap-2"
               >
                 <Zap className="w-4 h-4" /> AIクリップを生成
