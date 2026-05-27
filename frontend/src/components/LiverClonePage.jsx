@@ -25,6 +25,9 @@ import {
   Download,
   Circle,
   StopCircle,
+  ShoppingBag,
+  Image,
+  Sparkles,
 } from "lucide-react";
 import liverCloneService from "../base/services/liverCloneService";
 import { useTranslation } from "react-i18next";
@@ -141,11 +144,15 @@ export default function LiverClonePage() {
   const recordingTimerRef = useRef(null);
   const recordedFramesRef = useRef([]);
 
-  // Tabs
-  const [activeTab, setActiveTab] = useState("config"); // config, comments, autopilot, metrics
-
+    // Tabs
+  const [activeTab, setActiveTab] = useState("config"); // config, comments, autopilot, products, metrics
   const pollRef = useRef(null);
   const fileInputRef = useRef(null);
+  // Product Introduction
+  const [products, setProducts] = useState([]); // [{id, image_base64, name, info, script, speaking}]
+  const [productGenerating, setProductGenerating] = useState(false);
+  const [activeProductIdx, setActiveProductIdx] = useState(null); // Currently displayed product PIP
+  const productFileInputRef = useRef(null);
 
   // ── Load health on mount ──
   useEffect(() => {
@@ -774,13 +781,24 @@ export default function LiverClonePage() {
       console.warn("[STS] No voice ID set, cannot start STS");
       return;
     }
-    console.log("[STS] Starting real-time voice conversion");
+    console.log("[STS] Starting real-time voice conversion (v2 - low latency)");
     setStsActive(true);
     stsQueueRef.current = [];
     stsProcessingRef.current = false;
 
-    // Create MediaRecorder to capture audio chunks
+    // Create a shared AudioContext for playback (reuse to avoid overhead)
+    if (!stsAudioContextRef.current || stsAudioContextRef.current.state === 'closed') {
+      stsAudioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+    }
+
+    // Set up VAD using AnalyserNode to detect silence
     const audioStream = new MediaStream(stream.getAudioTracks());
+    const vadCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const vadSource = vadCtx.createMediaStreamSource(audioStream);
+    const analyser = vadCtx.createAnalyser();
+    analyser.fftSize = 512;
+    vadSource.connect(analyser);
+
     const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
       ? 'audio/webm;codecs=opus'
       : MediaRecorder.isTypeSupported('audio/webm')
@@ -794,6 +812,17 @@ export default function LiverClonePage() {
 
     let chunks = [];
 
+    // Check if audio has voice activity (not just noise)
+    const hasVoiceActivity = () => {
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+      analyser.getByteFrequencyData(dataArray);
+      // Calculate average energy
+      let sum = 0;
+      for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+      const avg = sum / dataArray.length;
+      return avg > 15; // Threshold: above background noise
+    };
+
     recorder.ondataavailable = (e) => {
       if (e.data.size > 0) {
         chunks.push(e.data);
@@ -801,15 +830,26 @@ export default function LiverClonePage() {
     };
 
     recorder.onstop = () => {
-      // When recorder stops (every chunk interval), process the audio
       if (chunks.length > 0) {
         const blob = new Blob(chunks, { type: mimeType });
         chunks = [];
-        // Convert to base64 and queue for STS processing
+
+        // Skip if no voice activity detected
+        if (!hasVoiceActivity()) {
+          console.log("[STS] Skipping silent chunk");
+          return;
+        }
+
+        // Only keep latest chunk if queue is building up (prevent lag accumulation)
+        if (stsQueueRef.current.length > 1) {
+          console.log(`[STS] Queue overflow (${stsQueueRef.current.length}), dropping old chunks`);
+          stsQueueRef.current = [];
+        }
+
         const reader = new FileReader();
         reader.onloadend = () => {
           const base64 = reader.result.split(',')[1];
-          if (base64 && base64.length > 100) {
+          if (base64 && base64.length > 200) {
             stsQueueRef.current.push(base64);
             processSTSQueue();
           }
@@ -820,14 +860,13 @@ export default function LiverClonePage() {
 
     stsRecorderRef.current = recorder;
 
-    // Record in 3-second chunks
-    const CHUNK_INTERVAL = 3000;
+    // Record in 1.5-second chunks for lower latency
+    const CHUNK_INTERVAL = 1500;
     recorder.start();
 
     stsIntervalRef.current = setInterval(() => {
       if (recorder.state === 'recording') {
         recorder.stop();
-        // Restart recording for next chunk
         setTimeout(() => {
           if (stsRecorderRef.current && stsEnabled) {
             try {
@@ -836,51 +875,65 @@ export default function LiverClonePage() {
               console.warn("[STS] Failed to restart recorder:", e);
             }
           }
-        }, 50);
+        }, 30);
       }
     }, CHUNK_INTERVAL);
 
-    console.log(`[STS] Recording started (${CHUNK_INTERVAL}ms chunks, ${mimeType})`);
+    // Store VAD context for cleanup
+    stsRecorderRef.current._vadCtx = vadCtx;
+    console.log(`[STS] Recording started (${CHUNK_INTERVAL}ms chunks, VAD enabled, ${mimeType})`);
   };
 
   /**
    * Process the STS queue - send audio chunks to backend for conversion.
+   * Only processes one chunk at a time, drops old chunks to prevent lag.
    */
   const processSTSQueue = async () => {
-    if (stsProcessingRef.current) return; // Already processing
+    if (stsProcessingRef.current) return;
     if (stsQueueRef.current.length === 0) return;
 
     stsProcessingRef.current = true;
 
-    while (stsQueueRef.current.length > 0) {
-      const audioBase64 = stsQueueRef.current.shift();
-      try {
-        console.log(`[STS] Sending chunk (${(audioBase64.length * 0.75 / 1024).toFixed(1)}KB)`);
-        const result = await liverCloneService.previewSTS(audioBase64, voiceId, {
-          voice_stability: voiceStability,
-          voice_similarity: voiceSimilarity,
-        });
+    // Only process the latest chunk (drop older ones to reduce lag)
+    const audioBase64 = stsQueueRef.current.pop();
+    stsQueueRef.current = []; // Clear any remaining
 
-        if (result.status === "ok" && result.audio_base64) {
-          // Play converted audio with lip-sync
-          await playSTSAudio(result.audio_base64);
-        }
-      } catch (err) {
-        console.error("[STS] Conversion failed:", err.response?.data?.detail || err.message);
-        // Don't stop on error - continue with next chunk
+    try {
+      const sizeKB = (audioBase64.length * 0.75 / 1024).toFixed(1);
+      console.log(`[STS] Sending chunk (${sizeKB}KB)`);
+      const result = await liverCloneService.previewSTS(audioBase64, voiceId, {
+        voice_stability: voiceStability,
+        voice_similarity: voiceSimilarity,
+      });
+
+      if (result.status === "ok" && result.audio_base64) {
+        await playSTSAudio(result.audio_base64);
+      } else if (result.status === "skipped") {
+        console.log(`[STS] Skipped: ${result.reason}`);
       }
+    } catch (err) {
+      console.error("[STS] Conversion failed:", err.response?.data?.detail || err.message);
     }
 
     stsProcessingRef.current = false;
+
+    // Process next chunk if available
+    if (stsQueueRef.current.length > 0) {
+      processSTSQueue();
+    }
   };
 
   /**
-   * Play STS-converted audio and send lip-sync data.
+   * Play STS-converted audio with lip-sync. Reuses shared AudioContext.
    */
   const playSTSAudio = (audioBase64) => {
     return new Promise(async (resolve) => {
       try {
-        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        let ctx = stsAudioContextRef.current;
+        if (!ctx || ctx.state === 'closed') {
+          ctx = new (window.AudioContext || window.webkitAudioContext)();
+          stsAudioContextRef.current = ctx;
+        }
         if (ctx.state === "suspended") await ctx.resume();
 
         // Decode base64 to ArrayBuffer
@@ -895,7 +948,7 @@ export default function LiverClonePage() {
           audioBuffer = await ctx.decodeAudioData(audioArray.buffer.slice(0));
         } catch (decodeErr) {
           console.error("[STS] decodeAudioData failed:", decodeErr);
-          // Fallback: play via Audio element without lip-sync
+          // Fallback: play via Audio element
           const blob = new Blob([audioArray], { type: 'audio/mpeg' });
           const url = URL.createObjectURL(blob);
           const audio = new Audio(url);
@@ -905,7 +958,7 @@ export default function LiverClonePage() {
           return;
         }
 
-        // Compute envelope for lip-sync
+        // Compute envelope for lip-sync (20 samples/sec)
         const channelData = audioBuffer.getChannelData(0);
         const sampleRate = audioBuffer.sampleRate;
         const chunkSize = Math.floor(sampleRate / 20);
@@ -951,13 +1004,11 @@ export default function LiverClonePage() {
           if (previewWsRef.current?.readyState === WebSocket.OPEN) {
             previewWsRef.current.send(JSON.stringify({ type: "mouth_open", value: 0 }));
           }
-          ctx.close().catch(() => {});
-          console.log(`[STS] Playback complete (${audioBuffer.duration.toFixed(1)}s)`);
+          console.log(`[STS] Playback done (${audioBuffer.duration.toFixed(1)}s)`);
           resolve();
         };
 
         sourceNode.start(0);
-        console.log(`[STS] Playing converted audio (${audioBuffer.duration.toFixed(1)}s)`);
       } catch (err) {
         console.error("[STS] playSTSAudio error:", err);
         resolve();
@@ -975,11 +1026,18 @@ export default function LiverClonePage() {
     }
     if (stsRecorderRef.current) {
       try {
+        if (stsRecorderRef.current._vadCtx) {
+          stsRecorderRef.current._vadCtx.close().catch(() => {});
+        }
         if (stsRecorderRef.current.state !== 'inactive') {
           stsRecorderRef.current.stop();
         }
       } catch (e) {}
       stsRecorderRef.current = null;
+    }
+    if (stsAudioContextRef.current && stsAudioContextRef.current.state !== 'closed') {
+      stsAudioContextRef.current.close().catch(() => {});
+      stsAudioContextRef.current = null;
     }
     stsQueueRef.current = [];
     stsProcessingRef.current = false;
@@ -1186,6 +1244,78 @@ export default function LiverClonePage() {
         resolve();
       }
     });
+  };
+
+  // ── Product Introduction Functions ──
+  const handleProductImageUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const base64 = reader.result.split(',')[1];
+      const newProduct = {
+        id: Date.now(),
+        image_base64: base64,
+        image_preview: reader.result,
+        name: "",
+        info: "",
+        script: "",
+        speaking: false,
+      };
+      setProducts(prev => [...prev, newProduct]);
+    };
+    reader.readAsDataURL(file);
+    e.target.value = ""; // Reset input
+  };
+
+  const generateProductScript = async (productIdx) => {
+    const product = products[productIdx];
+    if (!product) return;
+    setProductGenerating(true);
+    try {
+      const result = await liverCloneService.generateProductIntro({
+        image_base64: product.image_base64,
+        product_name: product.name,
+        product_info: product.info,
+        language: language,
+        style: "enthusiastic",
+        max_length: 150,
+      });
+      if (result.status === "ok" && result.script) {
+        setProducts(prev => prev.map((p, i) =>
+          i === productIdx ? { ...p, script: result.script } : p
+        ));
+      }
+    } catch (err) {
+      console.error("[Product] Script generation failed:", err);
+      setError("商品スクリプト生成に失敗しました: " + (err.response?.data?.detail || err.message));
+    } finally {
+      setProductGenerating(false);
+    }
+  };
+
+  const speakProductScript = async (productIdx) => {
+    const product = products[productIdx];
+    if (!product?.script) return;
+    // Show product PIP
+    setActiveProductIdx(productIdx);
+    setProducts(prev => prev.map((p, i) =>
+      i === productIdx ? { ...p, speaking: true } : p
+    ));
+    // Speak the script via TTS
+    await speakWithTTS(product.script);
+    // After speaking, keep PIP visible for 2 more seconds
+    setTimeout(() => {
+      setProducts(prev => prev.map((p, i) =>
+        i === productIdx ? { ...p, speaking: false } : p
+      ));
+      setActiveProductIdx(null);
+    }, 2000);
+  };
+
+  const removeProduct = (productIdx) => {
+    setProducts(prev => prev.filter((_, i) => i !== productIdx));
+    if (activeProductIdx === productIdx) setActiveProductIdx(null);
   };
 
   // ── Status helpers ──
@@ -1509,6 +1639,7 @@ export default function LiverClonePage() {
                 { id: "config", label: "設定", icon: Settings },
                 { id: "comments", label: "コメント", icon: MessageSquare },
                 { id: "autopilot", label: "Auto Pilot", icon: Zap },
+                { id: "products", label: "商品", icon: ShoppingBag },
               ].map((tab) => (
                 <button
                   key={tab.id}
@@ -2078,9 +2209,148 @@ export default function LiverClonePage() {
                 </div>
               </div>
             )}
+
+            {/* ── Products Tab ── */}
+            {activeTab === "products" && (
+              <div className="bg-[#12121a] rounded-xl border border-gray-800 p-5">
+                <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
+                  <ShoppingBag className="w-4 h-4 text-green-400" />
+                  商品紹介
+                </h3>
+                <div className="space-y-4">
+                  {/* Upload button */}
+                  <div>
+                    <input
+                      ref={productFileInputRef}
+                      type="file"
+                      accept="image/*"
+                      onChange={handleProductImageUpload}
+                      className="hidden"
+                    />
+                    <button
+                      onClick={() => productFileInputRef.current?.click()}
+                      className="w-full flex items-center justify-center gap-2 py-3 px-4 border-2 border-dashed border-gray-600 rounded-lg text-gray-400 hover:border-green-500 hover:text-green-400 transition"
+                    >
+                      <Upload className="w-4 h-4" />
+                      商品画像をアップロード
+                    </button>
+                  </div>
+
+                  {/* Product list */}
+                  {products.map((product, idx) => (
+                    <div key={product.id} className="bg-gray-900 rounded-lg p-3 border border-gray-700">
+                      <div className="flex gap-3">
+                        {/* Product image thumbnail */}
+                        <div className="w-16 h-16 rounded-lg overflow-hidden flex-shrink-0 bg-gray-800">
+                          <img
+                            src={product.image_preview}
+                            alt="商品"
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <input
+                            type="text"
+                            value={product.name}
+                            onChange={(e) => setProducts(prev => prev.map((p, i) =>
+                              i === idx ? { ...p, name: e.target.value } : p
+                            ))}
+                            placeholder="商品名（任意）"
+                            className="w-full bg-transparent border-b border-gray-700 text-sm py-1 focus:outline-none focus:border-green-500 mb-1"
+                          />
+                          <input
+                            type="text"
+                            value={product.info}
+                            onChange={(e) => setProducts(prev => prev.map((p, i) =>
+                              i === idx ? { ...p, info: e.target.value } : p
+                            ))}
+                            placeholder="商品情報（任意：価格、特徴など）"
+                            className="w-full bg-transparent border-b border-gray-700 text-xs text-gray-400 py-1 focus:outline-none focus:border-green-500"
+                          />
+                        </div>
+                        <button
+                          onClick={() => removeProduct(idx)}
+                          className="text-gray-500 hover:text-red-400 p-1"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+
+                      {/* Script area */}
+                      {product.script ? (
+                        <div className="mt-3">
+                          <textarea
+                            value={product.script}
+                            onChange={(e) => setProducts(prev => prev.map((p, i) =>
+                              i === idx ? { ...p, script: e.target.value } : p
+                            ))}
+                            rows={3}
+                            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-green-500 resize-none"
+                          />
+                          <div className="flex gap-2 mt-2">
+                            <button
+                              onClick={() => generateProductScript(idx)}
+                              disabled={productGenerating}
+                              className="flex-1 flex items-center justify-center gap-1 py-1.5 px-3 bg-gray-700 hover:bg-gray-600 rounded-lg text-xs transition disabled:opacity-50"
+                            >
+                              <Sparkles className="w-3 h-3" />
+                              再生成
+                            </button>
+                            <button
+                              onClick={() => speakProductScript(idx)}
+                              disabled={isSpeaking || !previewActive}
+                              className="flex-1 flex items-center justify-center gap-1 py-1.5 px-3 bg-green-600 hover:bg-green-500 rounded-lg text-xs transition disabled:opacity-50"
+                            >
+                              <Volume2 className="w-3 h-3" />
+                              {product.speaking ? "読み上げ中..." : "読み上げ"}
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => generateProductScript(idx)}
+                          disabled={productGenerating}
+                          className="mt-3 w-full flex items-center justify-center gap-2 py-2 px-3 bg-green-600/20 hover:bg-green-600/30 border border-green-600/50 rounded-lg text-xs text-green-400 transition disabled:opacity-50"
+                        >
+                          {productGenerating ? (
+                            <><Loader2 className="w-3 h-3 animate-spin" /> スクリプト生成中...</>
+                          ) : (
+                            <><Sparkles className="w-3 h-3" /> AIスクリプトを生成</>
+                          )}
+                        </button>
+                      )}
+                    </div>
+                  ))}
+
+                  {products.length === 0 && (
+                    <p className="text-xs text-gray-500 text-center py-4">
+                      商品画像をアップロードすると、AIが自動で商品紹介スクリプトを生成します。
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
+
+      {/* Product PIP overlay */}
+      {activeProductIdx !== null && products[activeProductIdx] && (
+        <div className="fixed bottom-24 right-6 z-50 animate-fade-in">
+          <div className="bg-black/80 backdrop-blur-sm rounded-xl border border-green-500/50 p-2 shadow-2xl">
+            <img
+              src={products[activeProductIdx].image_preview}
+              alt="商品"
+              className="w-32 h-32 object-cover rounded-lg"
+            />
+            {products[activeProductIdx].name && (
+              <p className="text-xs text-center text-white mt-1 font-medium truncate max-w-[128px]">
+                {products[activeProductIdx].name}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -493,6 +493,7 @@ async def preview_speak(req: PreviewSpeakRequest):
 
 # ============================================================
 # Preview STS (Speech-to-Speech) Endpoint
+# Uses ElevenLabs streaming API for low-latency voice conversion
 # ============================================================
 
 class PreviewSTSRequest(BaseModel):
@@ -506,55 +507,71 @@ class PreviewSTSRequest(BaseModel):
 @router.post("/preview/sts")
 async def preview_sts(req: PreviewSTSRequest):
     """
-    Convert voice using ElevenLabs Speech-to-Speech (STS) in preview mode.
-    Accepts base64-encoded audio from the browser's MediaRecorder (webm/opus),
-    converts it using the specified voice, and returns base64-encoded MP3.
-    The frontend captures microphone audio in chunks and sends them here
-    for real-time voice conversion during preview.
+    Convert voice using ElevenLabs STS streaming API for low-latency preview.
+    Uses /v1/speech-to-speech/{voice_id}/stream for faster first-byte response.
+    Returns base64-encoded MP3 audio (22kHz/32kbps for minimal size).
     """
     import base64
-    from app.services.elevenlabs_tts_service import ElevenLabsTTSService
+    import json
+    import httpx
+    import os
 
     if not req.audio_base64:
         raise HTTPException(status_code=400, detail="audio_base64 is required")
 
     voice_id = req.voice_id
     if not voice_id:
-        import os
         voice_id = os.getenv("ELEVENLABS_VOICE_ID", "")
     if not voice_id:
         raise HTTPException(status_code=400, detail="voice_id is required")
 
+    api_key = os.getenv("ELEVENLABS_API_KEY", "")
+    base_url = os.getenv("ELEVENLABS_BASE_URL", "https://api.elevenlabs.io")
+    sts_model = os.getenv("ELEVENLABS_STS_MODEL_ID", "eleven_multilingual_sts_v2")
+
     try:
-        # Decode input audio
         audio_bytes = base64.b64decode(req.audio_base64)
-        if len(audio_bytes) < 100:
-            raise HTTPException(status_code=400, detail="Audio data too short")
+        if len(audio_bytes) < 200:
+            # Too short = likely noise, skip
+            return {"status": "skipped", "reason": "audio_too_short"}
 
-        logger.info(
-            f"[LiverClone API] Preview STS: input_size={len(audio_bytes)}, "
-            f"voice={voice_id[:8]}..."
-        )
+        logger.info(f"[STS] input={len(audio_bytes)}B voice={voice_id[:8]}...")
 
-        tts = ElevenLabsTTSService()
+        # Use streaming endpoint for lower latency
+        url = f"{base_url}/v1/speech-to-speech/{voice_id}/stream"
+        params = {"output_format": "mp3_22050_32"}
+        voice_settings = json.dumps({
+            "stability": req.voice_stability,
+            "similarity_boost": req.voice_similarity,
+        })
 
-        # Use STS to convert voice
-        converted_bytes = await tts.speech_to_speech(
-            audio_data=audio_bytes,
-            voice_id=voice_id,
-            output_format="mp3_44100_128",
-            voice_settings={
-                "stability": req.voice_stability,
-                "similarity_boost": req.voice_similarity,
-            },
-        )
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.post(
+                url,
+                files={"audio": ("chunk.webm", audio_bytes, "audio/webm")},
+                data={
+                    "model_id": sts_model,
+                    "voice_settings": voice_settings,
+                    "remove_background_noise": "true",
+                },
+                headers={"xi-api-key": api_key},
+                params=params,
+            )
+
+        if response.status_code != 200:
+            error_text = response.text[:200] if response.text else "unknown"
+            logger.error(f"[STS] ElevenLabs error: {response.status_code} {error_text}")
+            raise HTTPException(
+                status_code=502,
+                detail=f"ElevenLabs STS error: {response.status_code}"
+            )
+
+        converted_bytes = response.content
+        if len(converted_bytes) < 100:
+            return {"status": "skipped", "reason": "output_too_short"}
 
         converted_base64 = base64.b64encode(converted_bytes).decode("utf-8")
-
-        logger.info(
-            f"[LiverClone API] Preview STS success: "
-            f"input={len(audio_bytes)}B → output={len(converted_bytes)}B"
-        )
+        logger.info(f"[STS] success: {len(audio_bytes)}B -> {len(converted_bytes)}B")
 
         return {
             "status": "ok",
@@ -566,5 +583,132 @@ async def preview_sts(req: PreviewSTSRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception("[LiverClone API] Preview STS failed")
+        logger.exception("[STS] failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================
+# Product Introduction (AI Script Generation)
+# ============================================================
+
+class ProductIntroRequest(BaseModel):
+    """Request to generate product introduction script from image."""
+    image_base64: str = ""  # Base64-encoded product image
+    image_url: str = ""     # Or URL to product image
+    product_name: str = ""  # Optional product name
+    product_info: str = ""  # Optional additional product info
+    language: str = "ja"    # Language for script
+    style: str = "enthusiastic"  # Script style: enthusiastic, casual, professional
+    max_length: int = 150   # Max characters for script
+
+
+@router.post("/preview/product-intro")
+async def generate_product_intro(req: ProductIntroRequest):
+    """
+    Generate a product introduction script from a product image.
+    Uses GPT-4 Vision to analyze the product and create a live-commerce
+    style introduction script that can be read aloud via TTS.
+    """
+    import base64
+    import os
+    import httpx
+
+    if not req.image_base64 and not req.image_url:
+        raise HTTPException(status_code=400, detail="image_base64 or image_url required")
+
+    openai_key = os.getenv("OPENAI_API_KEY", "")
+    if not openai_key:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY not configured")
+
+    try:
+        # Build image content for GPT-4 Vision
+        if req.image_base64:
+            image_content = {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/jpeg;base64,{req.image_base64}",
+                    "detail": "low",
+                },
+            }
+        else:
+            image_content = {
+                "type": "image_url",
+                "image_url": {"url": req.image_url, "detail": "low"},
+            }
+
+        style_prompts = {
+            "enthusiastic": "\u30c6\u30f3\u30b7\u30e7\u30f3\u9ad8\u304f\u3001\u8208\u596e\u6c17\u5473\u306b\u5546\u54c1\u3092\u7d39\u4ecb\u3059\u308b\u30e9\u30a4\u30d6\u30b3\u30de\u30fc\u30b9\u306e\u30e9\u30a4\u30d0\u30fc",
+            "casual": "\u89aa\u3057\u307f\u3084\u3059\u304f\u30ab\u30b8\u30e5\u30a2\u30eb\u306b\u5546\u54c1\u3092\u7d39\u4ecb\u3059\u308b\u30e9\u30a4\u30d0\u30fc",
+            "professional": "\u5c02\u9580\u7684\u3067\u4fe1\u983c\u611f\u306e\u3042\u308b\u30c8\u30fc\u30f3\u3067\u5546\u54c1\u3092\u7d39\u4ecb\u3059\u308b\u30e9\u30a4\u30d0\u30fc",
+        }
+        style_desc = style_prompts.get(req.style, style_prompts["enthusiastic"])
+
+        lang_instruction = ""
+        if req.language == "ja":
+            lang_instruction = "\u65e5\u672c\u8a9e\u3067\u751f\u6210\u3057\u3066\u304f\u3060\u3055\u3044\u3002"
+        elif req.language == "en":
+            lang_instruction = "Generate in English."
+        elif req.language == "zh":
+            lang_instruction = "\u7528\u4e2d\u6587\u751f\u6210\u3002"
+
+        product_context = ""
+        if req.product_name:
+            product_context += f"\u5546\u54c1\u540d: {req.product_name}\n"
+        if req.product_info:
+            product_context += f"\u5546\u54c1\u60c5\u5831: {req.product_info}\n"
+
+        system_prompt = (
+            f"\u3042\u306a\u305f\u306f{style_desc}\u3067\u3059\u3002"
+            f"\u5546\u54c1\u753b\u50cf\u3092\u898b\u3066\u3001\u30e9\u30a4\u30d6\u30b3\u30de\u30fc\u30b9\u3067\u8996\u8074\u8005\u306b\u5411\u3051\u3066\u5546\u54c1\u3092\u7d39\u4ecb\u3059\u308b\u30b9\u30af\u30ea\u30d7\u30c8\u3092\u751f\u6210\u3057\u3066\u304f\u3060\u3055\u3044\u3002"
+            f"\u81ea\u7136\u306b\u8a71\u3059\u3088\u3046\u306b\u3001\u77ed\u304f\u30a4\u30f3\u30d1\u30af\u30c8\u306e\u3042\u308b\u6587\u7ae0\u3067\u3002"
+            f"{max(50, req.max_length)}\u6587\u5b57\u4ee5\u5185\u3067\u3002{lang_instruction}"
+        )
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": f"{product_context}\u3053\u306e\u5546\u54c1\u3092\u7d39\u4ecb\u3057\u3066\u304f\u3060\u3055\u3044\u3002"},
+                    image_content,
+                ],
+            },
+        ]
+
+        # Call OpenAI GPT-4 Vision
+        openai_base = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{openai_base}/chat/completions",
+                json={
+                    "model": "gpt-4.1-mini",
+                    "messages": messages,
+                    "max_tokens": 300,
+                    "temperature": 0.8,
+                },
+                headers={
+                    "Authorization": f"Bearer {openai_key}",
+                    "Content-Type": "application/json",
+                },
+            )
+
+        if resp.status_code != 200:
+            logger.error(f"[ProductIntro] OpenAI error: {resp.status_code} {resp.text[:200]}")
+            raise HTTPException(status_code=502, detail="AI script generation failed")
+
+        result = resp.json()
+        script = result["choices"][0]["message"]["content"].strip()
+
+        logger.info(f"[ProductIntro] Generated script: {script[:50]}...")
+
+        return {
+            "status": "ok",
+            "script": script,
+            "language": req.language,
+            "style": req.style,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("[ProductIntro] Script generation failed")
         raise HTTPException(status_code=500, detail=str(e))

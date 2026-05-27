@@ -278,6 +278,29 @@ class LiverCloneService {
     );
     return res.data;
   }
+
+  /**
+   * Generate product introduction script from image.
+   * Uses GPT-4 Vision to analyze product and create live-commerce script.
+   * @param {Object} params - { image_base64, image_url, product_name, product_info, language, style, max_length }
+   * @returns {Promise<Object>} { status, script, language, style }
+   */
+  async generateProductIntro(params = {}) {
+    const res = await axios.post(
+      `${this.baseURL}/api/v1/liver-clone/preview/product-intro`,
+      {
+        image_base64: params.image_base64 || "",
+        image_url: params.image_url || "",
+        product_name: params.product_name || "",
+        product_info: params.product_info || "",
+        language: params.language || "ja",
+        style: params.style || "enthusiastic",
+        max_length: params.max_length || 150,
+      },
+      { headers: this._headers(), timeout: 45000 }
+    );
+    return res.data;
+  }
 }
 
 export default new LiverCloneService();
