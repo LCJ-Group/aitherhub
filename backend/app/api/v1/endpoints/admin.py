@@ -1656,7 +1656,8 @@ async def repair_video_preview(
 
 
 # ── Upload Health Check ──────────────────────────────────────────────────────────────────
-@router.get("/upload-health")t_upload_health(
+@router.get("/upload-health")
+async def get_upload_health(
     x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
     db: AsyncSession = Depends(get_db),
 ):
