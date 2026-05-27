@@ -14,6 +14,12 @@ def env(key, default=None):
 
 FFMPEG_BIN = env("FFMPEG_PATH", "ffmpeg")
 
+# v13: Limit ffmpeg thread count to prevent CPU saturation when multiple jobs run concurrently.
+# With MAX_WORKERS=2 (heavy) + MAX_CLIP_WORKERS=6 (clip), unlimited threads (-threads 0)
+# causes load averages >24 on a 4-core VM, leading to stall false-positives.
+# 4 threads per ffmpeg instance is optimal for 4-core VM with concurrent workloads.
+FFMPEG_THREADS = env("FFMPEG_THREADS", "4")
+
 # v4: Sampling interval for phase detection scoring
 # Instead of comparing every frame (3600 for 1h video),
 # compare every Nth frame (720 for 5s interval at fps=1)
@@ -142,11 +148,13 @@ def extract_frames(
 
     if use_gpu:
         # GPU path: NVDEC hardware decode + GPU resize + CPU JPG encode
+        # v13: Added -threads limit for CPU-side JPG encoding to prevent saturation
         cmd = [
             FFMPEG_BIN, "-y",
             "-hwaccel", "cuda",
             "-hwaccel_output_format", "cuda",
             "-c:v", cuvid_decoder,
+            "-threads", FFMPEG_THREADS,
             "-i", video_path,
             "-vf", f"fps={fps},scale_cuda={_sw}:-1,hwdownload,format=nv12",
             "-q:v", str(_jq),
@@ -157,9 +165,10 @@ def extract_frames(
                     cuvid_decoder, codec, _sw, _jq)
     else:
         # CPU path: software decode + scale + JPG
+        # v13: Limited threads from "0" (unlimited) to FFMPEG_THREADS to prevent CPU saturation
         cmd = [
             FFMPEG_BIN, "-y",
-            "-threads", "0",
+            "-threads", FFMPEG_THREADS,
             "-i", video_path,
             "-vf", f"fps={fps},scale={_sw}:-1",
             "-q:v", str(_jq),
@@ -203,11 +212,14 @@ def extract_frames(
     )
 
     # --- Stall detection: if no new frames for STALL_TIMEOUT seconds, kill ffmpeg ---
-    # Scale timeout based on video duration: long videos may have slow initial seek
-    # For 11h (39600s) video: 39600/10 = 3960 → capped at 600s
-    # For 1h (3600s) video: 3600/10 = 360 → capped at 360s
-    # For short (<20min) video: min 120s
-    STALL_TIMEOUT = max(120, min(int(duration / 10), 600))  # 120s-600s based on duration
+    # v13: Increased timeouts to prevent false-positive stall detection under CPU load.
+    # Under high load (load avg >20), ffmpeg may produce frames slowly but NOT stalled.
+    # Old: max(120, min(duration/10, 600)) → too aggressive for loaded systems.
+    # New: max(300, min(duration/5, 1200)) → 300s-1200s, much more tolerant.
+    # For 109min (6548s) video: 6548/5 = 1309 → capped at 1200s
+    # For 49min (2983s) video: 2983/5 = 596 → 596s
+    # For short (<25min) video: min 300s
+    STALL_TIMEOUT = max(300, min(int(duration / 5), 1200))  # 300s-1200s based on duration
     logger.info("[FRAMES] STALL_TIMEOUT=%ds (duration=%.0fs, expected_frames=%d)", STALL_TIMEOUT, duration, expected_frames)
     _stall_detected = {"value": False}
 
@@ -283,7 +295,7 @@ def extract_frames(
 
         cmd_cpu = [
             FFMPEG_BIN, "-y",
-            "-threads", "0",
+            "-threads", FFMPEG_THREADS,
             "-i", video_path,
             "-vf", f"fps={fps},scale={_sw}:-1",
             "-q:v", str(_jq),

@@ -52,11 +52,16 @@ _FFMPEG_MEM_LIMIT_BYTES = int(os.getenv("FFMPEG_MEM_LIMIT_GB", "8")) * 1024 * 10
 
 
 def _limit_ffmpeg_memory():
-    """preexec_fn for subprocess: set virtual memory limit on child process."""
+    """preexec_fn for subprocess: set virtual memory limit + nice priority on child process."""
     try:
         resource.setrlimit(resource.RLIMIT_AS, (_FFMPEG_MEM_LIMIT_BYTES, _FFMPEG_MEM_LIMIT_BYTES))
     except (ValueError, OSError):
         pass  # non-fatal: some environments don't support RLIMIT_AS
+    # v13: Lower priority so clip ffmpeg doesn't starve heavy video analysis jobs
+    try:
+        os.nice(10)  # Lower priority (higher nice = lower priority)
+    except (OSError, PermissionError):
+        pass  # non-fatal
 
 # Load environment variables
 project_root = Path(__file__).parent.parent.parent
@@ -88,6 +93,9 @@ from sqlalchemy import text
 WHISPER_ENDPOINT = os.getenv("WHISPER_ENDPOINT")
 AZURE_KEY = os.getenv("AZURE_OPENAI_KEY")
 FFMPEG_BIN = os.getenv("FFMPEG_PATH", "ffmpeg")
+# v13: Limit ffmpeg threads to prevent CPU saturation with 6 concurrent clip jobs
+# 2 threads per clip (6 clips × 2 = 12 threads max) leaves headroom for heavy jobs
+FFMPEG_CLIP_THREADS = os.getenv("FFMPEG_CLIP_THREADS", "2")
 
 # OpenAI client for GPT-4o subtitle post-processing
 try:
@@ -426,6 +434,7 @@ def cut_segment(input_path: str, output_path: str, start_sec: float, end_sec: fl
     # ---- Phase 1: Stream copy (near-instant, 1080p preserved) ----
     cmd_copy = [
         FFMPEG_BIN, "-y",
+            "-threads", FFMPEG_CLIP_THREADS,
         "-ss", f"{start_sec:.3f}",
         "-i", input_path,
         "-t", f"{duration:.3f}",
@@ -463,6 +472,7 @@ def cut_segment(input_path: str, output_path: str, start_sec: float, end_sec: fl
         logger.info("[CUT_SEGMENT] Falling back to re-encode (veryfast)")
         cmd = [
             FFMPEG_BIN, "-y",
+            "-threads", FFMPEG_CLIP_THREADS,
             "-ss", f"{start_sec:.3f}",
             "-accurate_seek",
             "-i", input_path,
@@ -489,6 +499,7 @@ def cut_segment(input_path: str, output_path: str, start_sec: float, end_sec: fl
         logger.warning(f"[CUT_SEGMENT] Trying final fallback (keyframe seek, veryfast)")
         cmd_fallback = [
             FFMPEG_BIN, "-y",
+            "-threads", FFMPEG_CLIP_THREADS,
             "-ss", f"{start_sec:.3f}",
             "-i", input_path,
             "-t", f"{duration:.3f}",
@@ -648,6 +659,7 @@ def adjust_cut_to_speech_boundary(
         duration = analysis_end - analysis_start
         cmd = [
             FFMPEG_BIN, "-y",
+                "-threads", FFMPEG_CLIP_THREADS,
             "-ss", f"{analysis_start:.3f}",
             "-accurate_seek",
             "-i", source_path,
@@ -737,6 +749,7 @@ def extract_audio(video_path: str, audio_path: str) -> bool:
     """Extract audio from video as WAV."""
     cmd = [
         FFMPEG_BIN, "-y",
+            "-threads", FFMPEG_CLIP_THREADS,
         "-i", video_path,
         "-vn",
         "-acodec", "pcm_s16le",
@@ -1796,6 +1809,7 @@ def _concat_via_filter_complex(video_path: str, intervals: list, output_path: st
 
     cmd = [
         FFMPEG_BIN, "-y",
+            "-threads", FFMPEG_CLIP_THREADS,
         "-i", video_path,
         "-filter_complex", filter_str,
         "-map", "[outv]", "-map", "[outa]",
@@ -1831,6 +1845,7 @@ def _concat_via_segments(video_path: str, intervals: list, output_path: str, wor
         # Always re-encode for accurate cutting (avoids keyframe duplication)
         cmd = [
             FFMPEG_BIN, "-y",
+                "-threads", FFMPEG_CLIP_THREADS,
             "-ss", f"{start:.3f}",
             "-accurate_seek",
             "-i", video_path,
@@ -1864,6 +1879,7 @@ def _concat_via_segments(video_path: str, intervals: list, output_path: str, wor
     # all segments were re-encoded with identical codec settings)
     cmd = [
         FFMPEG_BIN, "-y",
+            "-threads", FFMPEG_CLIP_THREADS,
         "-f", "concat",
         "-safe", "0",
         "-i", concat_list_path,
@@ -2119,6 +2135,7 @@ def create_vertical_clip(
     
     cmd = [
         FFMPEG_BIN, "-y",
+        "-threads", FFMPEG_CLIP_THREADS,
         "-i", input_path,
         "-vf", filter_complex,
     ]
@@ -2219,6 +2236,7 @@ def create_vertical_clip_drawtext(
 
     cmd = [
         FFMPEG_BIN, "-y",
+            "-threads", FFMPEG_CLIP_THREADS,
         "-i", input_path,
         "-vf", vf,
         "-c:v", "libx264",
@@ -2257,6 +2275,7 @@ def create_vertical_clip_nosub(
 
     cmd = [
         FFMPEG_BIN, "-y",
+            "-threads", FFMPEG_CLIP_THREADS,
         "-i", input_path,
         "-vf", f"crop={crop_w}:{crop_h}:{crop_x}:{crop_y},scale={target_w}:{target_h}:flags=lanczos",
         "-c:v", "libx264",
@@ -2293,6 +2312,7 @@ def detect_silence_intervals(video_path: str, noise_threshold: str = "-35dB", mi
     """
     cmd = [
         FFMPEG_BIN, "-y",
+            "-threads", FFMPEG_CLIP_THREADS,
         "-i", video_path,
         "-af", f"silencedetect=noise={noise_threshold}:d={min_silence_duration}",
         "-f", "null", "-",
@@ -2521,6 +2541,7 @@ def _detect_audio_peak_window(video_path: str, window_sec: float = 2.5, skip_fir
     # Extract audio levels using FFmpeg astats
     cmd = [
         FFMPEG_BIN, "-y",
+            "-threads", FFMPEG_CLIP_THREADS,
         "-i", video_path,
         "-af", "astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level:file=-",
         "-f", "null", "-",
@@ -2635,6 +2656,7 @@ def insert_hook_intro(clip_path: str, hook_start: float, hook_end: float,
 
     cmd = [
         FFMPEG_BIN, "-y",
+            "-threads", FFMPEG_CLIP_THREADS,
         "-i", clip_path,
         "-filter_complex", filter_complex,
         "-map", "[outv]", "-map", "[outa]",
@@ -2675,6 +2697,7 @@ def _insert_hook_simple_concat(clip_path: str, hook_start: float, hook_end: floa
     hook_duration = hook_end - hook_start
     cmd_hook = [
         FFMPEG_BIN, "-y",
+            "-threads", FFMPEG_CLIP_THREADS,
         "-ss", f"{hook_start:.3f}",
         "-i", clip_path,
         "-t", f"{hook_duration:.3f}",
@@ -2698,6 +2721,7 @@ def _insert_hook_simple_concat(clip_path: str, hook_start: float, hook_end: floa
     # 3. Concatenate (stream copy since both are same codec settings)
     cmd_concat = [
         FFMPEG_BIN, "-y",
+            "-threads", FFMPEG_CLIP_THREADS,
         "-f", "concat", "-safe", "0",
         "-i", concat_list,
         "-c", "copy",
@@ -2823,6 +2847,7 @@ def _generate_synthetic_se(se_type: str, output_path: str) -> str | None:
             # Whoosh: frequency sweep 800Hz, short fade
             cmd = [
                 FFMPEG_BIN, "-y",
+                    "-threads", FFMPEG_CLIP_THREADS,
                 "-f", "lavfi", "-i", "sine=frequency=800:duration=0.5",
                 "-af", "afade=t=in:d=0.1,afade=t=out:d=0.3,asetrate=44100*1.5,aresample=44100,volume=0.6",
                 "-c:a", "aac", "-b:a", "128k",
@@ -2832,6 +2857,7 @@ def _generate_synthetic_se(se_type: str, output_path: str) -> str | None:
             # Ascending dual tone
             cmd = [
                 FFMPEG_BIN, "-y",
+                    "-threads", FFMPEG_CLIP_THREADS,
                 "-f", "lavfi", "-i", "sine=frequency=1200:duration=0.3",
                 "-f", "lavfi", "-i", "sine=frequency=1800:duration=0.3",
                 "-filter_complex", "[0][1]amix=inputs=2:duration=shortest,afade=t=in:d=0.05,afade=t=out:d=0.15,volume=0.5",
@@ -2842,6 +2868,7 @@ def _generate_synthetic_se(se_type: str, output_path: str) -> str | None:
             # Double beep
             cmd = [
                 FFMPEG_BIN, "-y",
+                    "-threads", FFMPEG_CLIP_THREADS,
                 "-f", "lavfi", "-i", "sine=frequency=1000:duration=0.15",
                 "-f", "lavfi", "-i", "sine=frequency=1500:duration=0.15",
                 "-filter_complex", "[0]apad=pad_dur=0.1[a0];[a0][1]concat=n=2:v=0:a=1,afade=t=out:d=0.1,volume=0.5",
@@ -2998,6 +3025,7 @@ def insert_sound_effects(clip_path: str, se_points: list, output_path: str,
 
     cmd = [
         FFMPEG_BIN, "-y",
+            "-threads", FFMPEG_CLIP_THREADS,
         *inputs,
         "-filter_complex", filter_complex,
         "-map", "0:v",  # Keep original video
@@ -3148,6 +3176,7 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
         wider_segment_path = os.path.join(work_dir, "wider_segment.mp4")
         cmd_direct = [
             FFMPEG_BIN, "-y",
+                "-threads", FFMPEG_CLIP_THREADS,
             "-ss", f"{safe_start:.3f}",
             "-i", blob_url,
             "-t", f"{safe_duration:.3f}",
@@ -3393,6 +3422,7 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
 
         cmd = [
             FFMPEG_BIN, "-y",
+                "-threads", FFMPEG_CLIP_THREADS,
             "-i", segment_path,
             "-vf", ",".join(vf_parts),
         ]
