@@ -106,6 +106,7 @@ export default function VideoDetail({ videoData, editorParams }) {
   const [toast, setToast] = useState(null); // { message, type }
   const [chatMessages, setChatMessages] = useState([]);
   const [previewData, setPreviewData] = useState(null); // { url, timeStart, timeEnd, isClipPreview }
+  const [inlineVideoUrl, setInlineVideoUrl] = useState(null); // Resolved video URL for inline player
   const [clipEditorOpen, setClipEditorOpen] = useState(false); // Track ClipEditorV2 open state to pause DockPlayer
   const restoringFromUrlRef = useRef(false);
   const closingRef = useRef(false); // Prevent URL restore from re-opening DockPlayer after close
@@ -221,6 +222,28 @@ export default function VideoDetail({ videoData, editorParams }) {
       console.warn('[VideoDetail] Failed to init human tags:', err);
     }
   }, [videoData?.reports_1]);
+
+  // Resolve inline video URL: use preview_url if available, otherwise fetch download URL
+  useEffect(() => {
+    if (!videoData?.id) return;
+    let cancelled = false;
+    if (videoData.preview_url) {
+      setInlineVideoUrl(videoData.preview_url);
+    } else {
+      // Fallback: fetch download URL from backend
+      (async () => {
+        try {
+          const downloadUrl = await VideoService.getDownloadUrl(videoData.id);
+          if (!cancelled && downloadUrl) {
+            setInlineVideoUrl(downloadUrl);
+          }
+        } catch (err) {
+          console.warn('[VideoDetail] Failed to resolve inline video URL:', err);
+        }
+      })();
+    }
+    return () => { cancelled = true; };
+  }, [videoData?.id, videoData?.preview_url]);
 
   // Load sales moments when video loads
   useEffect(() => {
@@ -1362,19 +1385,27 @@ export default function VideoDetail({ videoData, editorParams }) {
         )}
         {/* SCROLL AREA */}
         <div className="flex-1 overflow-y-auto scrollbar-custom text-left px-0 md:px-4 md:mb-0">
-          {/* LiveBoost Video Player — inline player for live_boost recordings */}
-          {videoData?.upload_type === 'live_boost' && videoData?.preview_url && (
+          {/* Video Player — inline player for any video with resolved URL */}
+          {inlineVideoUrl && (
             <div className="mx-4 mt-3 mb-4">
               <div className="rounded-2xl border border-purple-200/60 bg-gradient-to-br from-purple-50 to-indigo-50 p-4 shadow-sm">
                 <div className="flex items-center gap-2 mb-3">
                   <span className="text-lg">{"\uD83C\uDFA5"}</span>
                   <h3 className="text-sm font-semibold text-purple-900">\u9332\u753B\u6620\u50CF</h3>
-                  <span className="px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 text-[10px] font-medium">LiveBoost</span>
+                  {videoData?.upload_type === 'live_boost' && (
+                    <span className="px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 text-[10px] font-medium">LiveBoost</span>
+                  )}
+                  {videoData?.upload_type === 'screen_recording' && (
+                    <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 text-[10px] font-medium">{window.__t('videoDetail_screenRecording', '\u753B\u9762\u53CE\u9332')}</span>
+                  )}
+                  {videoData?.upload_type === 'clean_video' && (
+                    <span className="px-2 py-0.5 rounded-full bg-green-100 text-green-700 text-[10px] font-medium">{window.__t('csvAssetPanel_af4a16', '\u30AF\u30EA\u30FC\u30F3\u52D5\u753B')}</span>
+                  )}
                 </div>
                 <div className="relative w-full flex justify-center">
                   <div className="relative w-full max-w-md">
                     <video
-                      src={videoData.preview_url}
+                      src={inlineVideoUrl}
                       controls
                       playsInline
                       preload="metadata"
