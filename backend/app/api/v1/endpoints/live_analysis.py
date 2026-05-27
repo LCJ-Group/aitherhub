@@ -509,6 +509,26 @@ async def get_analysis_status(
             video = video_result.scalars().first()
 
             if video and video.upload_type == "live_boost":
+                # BUILD 68: If video is already DONE, return completed status
+                # without creating a new job (the original job may have been
+                # cleaned up after successful completion).
+                if video.status == "DONE":
+                    logger.info(
+                        f"[live-analysis/status] BUILD 68: Video is DONE, no job found. "
+                        f"Returning completed status for video={video_id}"
+                    )
+                    return LiveAnalysisStatusResponse(
+                        job_id="",
+                        video_id=video_id,
+                        status="completed",
+                        current_step="解析完了",
+                        progress=1.0,
+                        started_at=None,
+                        completed_at=video.updated_at,
+                        results=None,
+                        error_message=None,
+                    )
+
                 # BUILD 30: SELF-HEALING — auto-create the missing job
                 logger.warning(
                     f"[live-analysis/status] SELF-HEAL: No job but video exists. "
