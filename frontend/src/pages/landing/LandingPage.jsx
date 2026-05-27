@@ -432,6 +432,7 @@ export default function LandingPage() {
   }, []);
   
   const goRegister = () => navigate('/register');
+  const scrollToUpload = () => document.getElementById('video-upload-cta')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   const goLogin = () => navigate('/login');
   
   return (
@@ -546,7 +547,7 @@ export default function LandingPage() {
               ログイン
             </button>
             <button
-              onClick={goRegister}
+              onClick={scrollToUpload}
               style={{
                 background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
                 border: 'none',
@@ -642,7 +643,7 @@ export default function LandingPage() {
           {/* CTA buttons */}
           <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', justifyContent: 'center' }}>
             <button
-              onClick={goRegister}
+              onClick={scrollToUpload}
               style={{
                 background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
                 border: 'none',
@@ -989,6 +990,7 @@ export default function LandingPage() {
               <span style={{ fontSize: '12px', color: '#22d3ee', letterSpacing: '2px', fontFamily: 'monospace' }}>PRICING</span>
               <h2 style={{ fontSize: 'clamp(26px, 4vw, 40px)', fontWeight: '700', marginTop: '12px', letterSpacing: '-0.02em' }}>料金プラン</h2>
               <p style={{ color: '#64748b', marginTop: '12px', fontSize: '15px' }}>まずは無料で、AIの実力を体感してください。</p>
+              <p style={{ color: '#22d3ee', marginTop: '8px', fontSize: '13px', fontWeight: '500' }}>No credit card required</p>
             </div>
           </RevealSection>
           
@@ -1000,10 +1002,10 @@ export default function LandingPage() {
             gap: '20px',
           }}>
             {[
-              { name: 'Free', price: '$0', period: '', features: ['動画分析 3本/月', 'クリップ生成 5本/月', '台本生成 3回/月', 'AI分析レポート'], popular: false, cta: '無料で始める' },
-              { name: 'Starter', price: '$29', period: '/月', features: ['動画分析 15本/月', 'クリップ生成 30本/月', '台本生成 無制限', 'TikTok追跡 10本'], popular: false, cta: 'Starterを始める' },
-              { name: 'Pro', price: '$79', period: '/月', features: ['動画分析 50本/月', 'クリップ生成 100本/月', 'Face Swap 10本/月', 'TikTok追跡 50本', '優先サポート'], popular: true, cta: 'Proを始める' },
-              { name: 'Business', price: '$199', period: '/月', features: ['動画分析 無制限', 'クリップ生成 無制限', 'Face Swap 30本/月', 'Auto Video 5本/月', 'ブランドポータル'], popular: false, cta: 'Businessを始める' },
+              { name: 'Free', price: '$0', period: '', desc: 'まずは試してみたい方', features: ['動画解析 1本/月', '基本字幕生成', '商品タグ付け（1商品）', 'AI売上レポート（簡易版）'], popular: false, cta: '無料で始める' },
+              { name: 'Growth', price: '$29', period: '/mo', desc: '個人ライバー・副業', features: ['動画解析 15本/月', 'AI字幕カスタマイズ', '商品×売上 相関レポート', 'フェーズ自動分割', '売れるクリップ自動生成'], popular: false, cta: 'Start Growth' },
+              { name: 'Pro', price: '$79', period: '/mo', desc: 'プロライバー・中小EC', features: ['動画解析 無制限', '全AI機能フルアクセス', 'リアルタイムライブ分析', '売れる台本AI生成', '優先処理（2x速度）', 'チーム2名まで'], popular: true, cta: 'Start Pro' },
+              { name: 'Enterprise', price: 'Custom', period: '', desc: 'MCN・大手EC', features: ['全機能 + カスタムAIモデル', 'マルチアカウント管理', '専任サポート & SLA', 'API アクセス', 'オンボーディング支援'], popular: false, cta: 'Contact Us' },
             ].map((plan, i) => (
               <RevealSection key={i} delay={i * 100}>
                 <div style={{
@@ -1039,7 +1041,8 @@ export default function LandingPage() {
                         MOST POPULAR
                       </div>
                     )}
-                    <h3 style={{ fontSize: '18px', fontWeight: '600', color: '#e2e8f0', marginBottom: '8px' }}>{plan.name}</h3>
+                    <h3 style={{ fontSize: '18px', fontWeight: '600', color: '#e2e8f0', marginBottom: '4px' }}>{plan.name}</h3>
+                    <p style={{ fontSize: '12px', color: '#64748b', marginBottom: '16px' }}>{plan.desc}</p>
                     <div style={{ marginBottom: '20px' }}>
                       <span style={{ fontSize: '36px', fontWeight: '800', color: '#fff' }}>{plan.price}</span>
                       <span style={{ color: '#64748b', fontSize: '14px' }}>{plan.period}</span>
@@ -1102,7 +1105,7 @@ export default function LandingPage() {
               クレジットカード不要。30秒で開始。
             </p>
             <button
-              onClick={goRegister}
+              onClick={scrollToUpload}
               style={{
                 background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
                 border: 'none',
@@ -1118,7 +1121,7 @@ export default function LandingPage() {
               onMouseEnter={e => { e.target.style.transform = 'translateY(-3px) scale(1.02)'; e.target.style.boxShadow = '0 16px 60px rgba(99, 102, 241, 0.6)'; }}
               onMouseLeave={e => { e.target.style.transform = 'translateY(0) scale(1)'; e.target.style.boxShadow = '0 8px 40px rgba(99, 102, 241, 0.5)'; }}
             >
-              無料アカウントを作成
+              無料で動画を解析する
             </button>
           </RevealSection>
         </section>

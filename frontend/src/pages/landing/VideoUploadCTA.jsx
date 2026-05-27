@@ -62,7 +62,7 @@ export default function VideoUploadCTA() {
   const goRegister = () => navigate('/register');
 
   return (
-    <div style={{ position: 'relative' }}>
+    <div id="video-upload-cta" style={{ position: 'relative' }}>
       {/* Main Card */}
       <div style={{
         maxWidth: '800px',
