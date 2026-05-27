@@ -2197,15 +2197,47 @@ export default function LiverClonePage() {
                             <div
                               key={face.id}
                               className="relative group cursor-pointer border border-gray-700 rounded-lg overflow-hidden hover:border-cyan-500 transition"
-                              onClick={() => {
-                                setSourceFacePreview(face.preview);
-                                setSourceFaceUrl(face.url || "");
-                                // Upload to GPU Worker
-                                const base64 = face.preview.split(",")[1];
-                                uploadSourceFace(base64);
+                              onClick={async () => {
+                                // If preview is available, use it directly
+                                if (face.preview && face.preview.startsWith("data:")) {
+                                  setSourceFacePreview(face.preview);
+                                  setSourceFaceUrl(face.url || "");
+                                  const base64 = face.preview.split(",")[1];
+                                  if (base64) uploadSourceFace(base64);
+                                } else if (face.url) {
+                                  // Preview not available (old data before IndexedDB migration)
+                                  // Try to reload from URL
+                                  setSourceFaceUrl(face.url);
+                                  try {
+                                    const resp = await fetch(face.url);
+                                    const blob = await resp.blob();
+                                    const reader = new FileReader();
+                                    reader.onload = () => {
+                                      const dataUrl = reader.result;
+                                      setSourceFacePreview(dataUrl);
+                                      const b64 = dataUrl.split(",")[1];
+                                      if (b64) uploadSourceFace(b64);
+                                      // Save to IndexedDB for next time
+                                      saveImageToDB(`face_${face.id}`, "", dataUrl);
+                                      // Update face in state with restored preview
+                                      setSavedFaces(prev => prev.map(f => f.id === face.id ? { ...f, preview: dataUrl } : f));
+                                    };
+                                    reader.readAsDataURL(blob);
+                                  } catch (err) {
+                                    console.warn("[Faces] Failed to reload face from URL:", err);
+                                  }
+                                } else {
+                                  console.warn("[Faces] No preview or URL available for face:", face.name);
+                                }
                               }}
                             >
-                              <img src={face.preview} alt={face.name} className="w-full h-16 object-cover" />
+                              {face.preview && face.preview.startsWith("data:") ? (
+                                <img src={face.preview} alt={face.name} className="w-full h-16 object-cover" />
+                              ) : (
+                                <div className="w-full h-16 bg-gray-800 flex items-center justify-center text-gray-500 text-[10px]">
+                                  {face.url ? "Click to load" : "No image"}
+                                </div>
+                              )}
                               <div className="absolute bottom-0 left-0 right-0 bg-black/70 px-1 py-0.5 text-[10px] truncate">
                                 {face.name}
                               </div>
