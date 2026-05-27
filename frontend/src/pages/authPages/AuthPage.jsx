@@ -4,6 +4,7 @@ import Login from "./Login";
 import Register from "./Register";
 import ForgotPassword from "./ForgotPassword";
 import { Toaster } from "../../components/ui/toaster";
+import UploadService from "../../base/services/uploadService";
 
 /**
  * Standalone auth page wrapper.
@@ -24,8 +25,44 @@ export default function AuthPage({ mode = "login" }) {
     setCurrentMode(mode);
   }, [mode]);
 
-  // After successful login, save user and redirect to home
-  const handleLoginSuccess = () => {
+  // After successful login, check for pending video from LP upload and complete it
+  const handleLoginSuccess = async () => {
+    // Check for pending video uploaded from LP (before registration)
+    try {
+      const pendingRaw = localStorage.getItem('aitherhub_pending_video');
+      if (pendingRaw) {
+        const pending = JSON.parse(pendingRaw);
+        if (pending?.video_id && pending?.upload_id && pending?.filename) {
+          // Get user email from localStorage
+          const storedUser = localStorage.getItem('user');
+          const userEmail = storedUser ? JSON.parse(storedUser)?.email : pending.guestEmail;
+          
+          // Call upload-complete API (requires auth token which is now set)
+          console.log('[AuthPage] Completing pending LP upload:', pending.video_id);
+          await UploadService.uploadComplete(
+            userEmail || pending.guestEmail,
+            pending.video_id,
+            pending.filename,
+            pending.upload_id,
+            'ja'
+          );
+          console.log('[AuthPage] Pending upload completed successfully');
+          
+          // Clear pending video from localStorage
+          localStorage.removeItem('aitherhub_pending_video');
+          
+          // Redirect to home (dashboard) - the video will appear in the list
+          navigate('/');
+          return;
+        }
+      }
+    } catch (err) {
+      console.error('[AuthPage] Failed to complete pending upload:', err);
+      // Still clear the pending video to avoid infinite retry
+      localStorage.removeItem('aitherhub_pending_video');
+    }
+
+    // Normal login flow
     try {
       const storedUser = localStorage.getItem("user");
       if (storedUser) {
@@ -48,7 +85,39 @@ export default function AuthPage({ mode = "login" }) {
     navigate("/");
   };
 
-  const handleRegisterSuccess = () => {
+  // After registration, auto-login is done (token is set), so handle pending video too
+  const handleRegisterSuccess = async () => {
+    // Check for pending video uploaded from LP
+    try {
+      const pendingRaw = localStorage.getItem('aitherhub_pending_video');
+      if (pendingRaw) {
+        const pending = JSON.parse(pendingRaw);
+        if (pending?.video_id && pending?.upload_id && pending?.filename) {
+          const storedUser = localStorage.getItem('user');
+          const userEmail = storedUser ? JSON.parse(storedUser)?.email : pending.guestEmail;
+          
+          console.log('[AuthPage] Completing pending LP upload after registration:', pending.video_id);
+          await UploadService.uploadComplete(
+            userEmail || pending.guestEmail,
+            pending.video_id,
+            pending.filename,
+            pending.upload_id,
+            'ja'
+          );
+          console.log('[AuthPage] Pending upload completed after registration');
+          localStorage.removeItem('aitherhub_pending_video');
+          
+          // Redirect to dashboard directly (skip login form switch)
+          navigate('/');
+          return;
+        }
+      }
+    } catch (err) {
+      console.error('[AuthPage] Failed to complete pending upload after registration:', err);
+      localStorage.removeItem('aitherhub_pending_video');
+    }
+
+    // Normal register flow - switch to login
     setCurrentMode("login");
   };
 

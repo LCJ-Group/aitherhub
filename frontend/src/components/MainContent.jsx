@@ -1724,7 +1724,7 @@ export default function MainContent({
                       </span>
                     ))}
                   </h4>
-                  <div className={`w-full ${(uploading || uploadedVideoId) ? 'max-w-xl' : 'max-w-md'} mx-auto`}>
+                  <div className={`w-full ${(uploading || uploadedVideoId) ? 'max-w-2xl' : 'max-w-lg'} mx-auto`}>
                     <div
                       className="rounded-2xl p-8 border transition-all duration-200 border-gray-200 bg-gray-50 hover:border-gray-300 hover:bg-gray-100"
                       onDragOver={handleDragOver}

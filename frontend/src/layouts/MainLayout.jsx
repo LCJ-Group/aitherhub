@@ -145,8 +145,8 @@ export default function MainLayout() {
   }), [handleOpenSidebar, user, handleUserChange, handleUploadSuccess, selectedVideoId, showFeedback, handleCloseFeedback, editorParams]);
 
   return (
-    <div className="min-h-screen bg-gray-100 flex justify-center">
-      <div className="w-full flex">
+    <div className="min-h-screen bg-gray-100 flex">
+      <div className="w-full max-w-[1600px] mx-auto flex">
 
         <aside className="hidden xl:block w-[320px] max-w-[320px] min-w-[320px] bg-white text-black">
           <Sidebar {...sidebarProps} />

@@ -1,36 +1,71 @@
 import { useState, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import UploadService from '../../base/services/uploadService';
 
 /* ─────────────────────────────────────────────
-   Video Upload CTA — OpusClip-inspired
-   Flow: Upload → Progress → Registration Popup
+   Video Upload CTA — Real Upload + Registration Flow
+   Flow: Upload (real Azure Blob) → Progress → Registration Popup
    AitherHub positioning: 商品紹介・ライブコマース特化
+   
+   Upload flow:
+   1. generateUploadUrl (no auth) → get video_id, upload_url
+   2. uploadToAzure (direct to Azure Blob, no auth)
+   3. Save pending video to localStorage
+   4. After registration/login → upload-complete (auth required)
    ───────────────────────────────────────────── */
+
+const GUEST_EMAIL_PREFIX = 'guest_';
 
 export default function VideoUploadCTA() {
   const navigate = useNavigate();
-  const [step, setStep] = useState('idle'); // idle | uploading | confirm | done
+  const [step, setStep] = useState('idle'); // idle | uploading | confirm | error
   const [progress, setProgress] = useState(0);
   const [videoLink, setVideoLink] = useState('');
   const [fileName, setFileName] = useState('');
   const [isDragOver, setIsDragOver] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
   const fileInputRef = useRef(null);
 
-  // Simulate upload progress
-  const simulateUpload = useCallback((name) => {
-    setFileName(name);
+  // Real upload: generate SAS URL → upload to Azure Blob → save video_id for post-login
+  const startRealUpload = useCallback(async (file) => {
+    setFileName(file.name);
     setStep('uploading');
     setProgress(0);
-    let p = 0;
-    const interval = setInterval(() => {
-      p += Math.random() * 15 + 5;
-      if (p >= 100) {
-        p = 100;
-        clearInterval(interval);
-        setTimeout(() => setStep('confirm'), 500);
-      }
-      setProgress(Math.min(p, 100));
-    }, 200);
+    setErrorMsg('');
+
+    try {
+      // Generate a temporary guest email for the upload
+      const guestEmail = `${GUEST_EMAIL_PREFIX}${Date.now()}@aitherhub.temp`;
+
+      // Step 1: Get upload URL (no auth required)
+      const { video_id, upload_id, upload_url } = await UploadService.generateUploadUrl(guestEmail, file.name);
+
+      // Step 2: Upload to Azure Blob (no auth required, direct to Azure)
+      await UploadService.uploadToAzure(file, upload_url, upload_id, (pct) => {
+        setProgress(Math.min(pct, 99));
+      });
+
+      setProgress(100);
+
+      // Step 3: Save pending video info to localStorage for post-login completion
+      const pendingVideo = {
+        video_id,
+        upload_id,
+        filename: file.name,
+        fileSize: file.size,
+        guestEmail,
+        uploadedAt: new Date().toISOString(),
+      };
+      localStorage.setItem('aitherhub_pending_video', JSON.stringify(pendingVideo));
+
+      // Show confirm state after a brief delay
+      setTimeout(() => setStep('confirm'), 500);
+    } catch (error) {
+      console.error('[VideoUploadCTA] Upload failed:', error);
+      const msg = error?.userMessage || error?.message || 'アップロードに失敗しました。もう一度お試しください。';
+      setErrorMsg(msg);
+      setStep('error');
+    }
   }, []);
 
   // Handle file drop
@@ -39,27 +74,36 @@ export default function VideoUploadCTA() {
     setIsDragOver(false);
     const file = e.dataTransfer?.files?.[0];
     if (file && file.type.startsWith('video/')) {
-      simulateUpload(file.name);
+      startRealUpload(file);
     }
-  }, [simulateUpload]);
+  }, [startRealUpload]);
 
   // Handle file input
   const handleFileSelect = useCallback((e) => {
     const file = e.target.files?.[0];
     if (file) {
-      simulateUpload(file.name);
+      startRealUpload(file);
     }
-  }, [simulateUpload]);
+  }, [startRealUpload]);
 
-  // Handle link submit
+  // Handle link submit — for URL-based, redirect to register directly
   const handleLinkSubmit = useCallback(() => {
     if (videoLink.trim()) {
-      simulateUpload(videoLink.trim());
+      localStorage.setItem('aitherhub_pending_video_url', videoLink.trim());
+      navigate('/register');
     }
-  }, [videoLink, simulateUpload]);
+  }, [videoLink, navigate]);
 
   // Go to register
   const goRegister = () => navigate('/register');
+
+  // Retry upload
+  const handleRetry = () => {
+    setStep('idle');
+    setProgress(0);
+    setErrorMsg('');
+    setFileName('');
+  };
 
   return (
     <div id="video-upload-cta" style={{ position: 'relative' }}>
@@ -136,7 +180,7 @@ export default function VideoUploadCTA() {
                   または<span style={{ color: '#a78bfa', textDecoration: 'underline', marginLeft: '4px' }}>クリックしてファイルを選択</span>
                 </p>
                 <p style={{ color: '#475569', fontSize: '11px', marginTop: '12px' }}>
-                  MP4, MOV, WebM対応 ・ 最大500MB
+                  MP4, MOV, WebM対応 ・ 最大2GB
                 </p>
                 <input
                   ref={fileInputRef}
@@ -210,7 +254,7 @@ export default function VideoUploadCTA() {
             </>
           )}
 
-          {/* ─── UPLOADING STATE ─── */}
+          {/* ─── UPLOADING STATE (REAL) ─── */}
           {step === 'uploading' && (
             <div style={{ textAlign: 'center', padding: '20px 0' }}>
               <div style={{
@@ -242,12 +286,54 @@ export default function VideoUploadCTA() {
                   height: '100%',
                   background: 'linear-gradient(90deg, #6366f1, #8b5cf6, #a78bfa)',
                   borderRadius: '3px',
-                  transition: 'width 0.2s ease',
+                  transition: 'width 0.3s ease',
                 }} />
               </div>
               <p style={{ color: '#8b5cf6', fontSize: '12px', marginTop: '8px', fontFamily: 'monospace' }}>
                 {Math.round(progress)}%
               </p>
+            </div>
+          )}
+
+          {/* ─── ERROR STATE ─── */}
+          {step === 'error' && (
+            <div style={{ textAlign: 'center', padding: '20px 0' }}>
+              <div style={{
+                width: '56px',
+                height: '56px',
+                margin: '0 auto 20px',
+                borderRadius: '50%',
+                background: 'rgba(239, 68, 68, 0.15)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '24px',
+                color: '#ef4444',
+                fontWeight: '700',
+              }}>
+                ✕
+              </div>
+              <p style={{ color: '#ef4444', fontSize: '14px', fontWeight: '600', marginBottom: '8px' }}>
+                アップロードに失敗しました
+              </p>
+              <p style={{ color: '#94a3b8', fontSize: '13px', marginBottom: '20px', maxWidth: '400px', margin: '0 auto 20px' }}>
+                {errorMsg}
+              </p>
+              <button
+                onClick={handleRetry}
+                style={{
+                  background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+                  border: 'none',
+                  color: '#fff',
+                  padding: '12px 32px',
+                  borderRadius: '10px',
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  cursor: 'pointer',
+                }}
+              >
+                もう一度試す
+              </button>
             </div>
           )}
 
@@ -265,6 +351,7 @@ export default function VideoUploadCTA() {
                 alignItems: 'center',
                 justifyContent: 'center',
                 fontSize: '24px',
+                color: '#fff',
                 animation: 'popIn 0.4s ease',
               }}>
                 ✓
