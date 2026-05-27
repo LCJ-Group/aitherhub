@@ -179,9 +179,10 @@ export default function ChatRegisterModal({ isOpen, onClose, onSuccess, pendingV
         setCurrentStep('done');
         setIsProcessing(false);
 
-        // Redirect after a brief delay
+        // Redirect after a brief delay — use window.location for full page reload
+        // so HomeRouter re-evaluates login state and shows MainLayout
         setTimeout(() => {
-          if (onSuccess) onSuccess();
+          window.location.href = '/';
         }, 1200);
 
       } catch (err) {

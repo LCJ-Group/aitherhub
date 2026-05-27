@@ -425,7 +425,7 @@ export default function AdminDashboard() {
   }
   if (!stats && needsStats) return null;
 
-  const { data_volume, video_types, user_scale } = stats || {};
+  const { data_volume, video_types, user_scale, new_signups } = stats || {};
 
   // ── Dashboard ──
   return (
@@ -727,6 +727,8 @@ export default function AdminDashboard() {
 
             {/* 会員規模 (母数) */}
             <UserScaleSection userScale={user_scale} />
+            {/* 新規ユーザーアップロード */}
+            <NewSignupsSection newSignups={new_signups} />
 
             {/* クリップDB (売れる瞬間) */}
             <ClipDBStatsSection />
@@ -3160,6 +3162,73 @@ function DailyUploadsChart({ dailyUploads, monthlyUploads }) {
 }
 
 // ─── User Scale Section with detail modal ───
+
+function NewSignupsSection({ newSignups }) {
+  if (!newSignups || newSignups.length === 0) return null;
+  const totalNewUsers = newSignups.length;
+  const totalNewVideos = newSignups.reduce((sum, u) => sum + u.video_count, 0);
+  const totalPending = newSignups.reduce((sum, u) => sum + u.pending_count, 0);
+  const totalAnalyzed = newSignups.reduce((sum, u) => sum + u.analyzed_count, 0);
+  const formatDate = (iso) => {
+    if (!iso) return '-';
+    const d = new Date(iso);
+    return `${d.getMonth()+1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2,'0')}`;
+  };
+  const daysSince = (iso) => {
+    if (!iso) return '';
+    const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
+    if (diff === 0) return '今日';
+    if (diff === 1) return '昨日';
+    return `${diff}日前`;
+  };
+  return (
+    <section className="mb-8">
+      <div className="flex items-center gap-2 mb-4">
+        <span className="text-lg">🆕</span>
+        <h2 className="text-lg font-semibold text-gray-700">新規ユーザーアップロード</h2>
+        <span className="text-xs text-gray-400 ml-1">過去30日間の新規登録者</span>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+        <StatCard label="新規ユーザー数" value={totalNewUsers} unit="人" color="green" />
+        <StatCard label="アップロード数" value={totalNewVideos} unit="本" color="blue" />
+        <StatCard label="解析完了" value={totalAnalyzed} unit="本" color="teal" />
+        <StatCard label="解析待ち" value={totalPending} unit="本" color="yellow" />
+      </div>
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="text-left py-2 px-3 text-gray-500 font-medium">ユーザー</th>
+              <th className="text-left py-2 px-3 text-gray-500 font-medium">メール</th>
+              <th className="text-center py-2 px-3 text-gray-500 font-medium">登録日</th>
+              <th className="text-center py-2 px-3 text-gray-500 font-medium">動画数</th>
+              <th className="text-center py-2 px-3 text-gray-500 font-medium">解析済</th>
+              <th className="text-center py-2 px-3 text-gray-500 font-medium">待ち</th>
+              <th className="text-center py-2 px-3 text-gray-500 font-medium">最終アップ</th>
+            </tr>
+          </thead>
+          <tbody>
+            {newSignups.map((u, i) => (
+              <tr key={u.user_id || i} className="border-t border-gray-100 hover:bg-blue-50/30">
+                <td className="py-2 px-3 font-medium text-gray-800">{u.display_name || u.email?.split('@')[0] || '-'}</td>
+                <td className="py-2 px-3 text-gray-500 text-xs">{u.email}</td>
+                <td className="py-2 px-3 text-center text-gray-600 text-xs">
+                  <span className="inline-block">{formatDate(u.registered_at)}</span>
+                  <span className="text-gray-400 ml-1">({daysSince(u.registered_at)})</span>
+                </td>
+                <td className="py-2 px-3 text-center font-semibold text-blue-600">{u.video_count}</td>
+                <td className="py-2 px-3 text-center text-green-600">{u.analyzed_count}</td>
+                <td className="py-2 px-3 text-center text-yellow-600">{u.pending_count > 0 ? u.pending_count : '-'}</td>
+                <td className="py-2 px-3 text-center text-gray-500 text-xs">{formatDate(u.last_upload)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 function UserScaleSection({ userScale }) {
   const [showDetail, setShowDetail] = useState(false);
   const [users, setUsers] = useState([]);

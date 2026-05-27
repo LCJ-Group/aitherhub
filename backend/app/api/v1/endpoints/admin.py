@@ -157,6 +157,41 @@ async def _get_dashboard_data(db: AsyncSession) -> dict:
         except Exception:
             monthly_uploads = []
 
+    # ── New Signups with Uploads (past 30 days) ──
+    try:
+        new_signups_raw = await db.execute(
+            text("""
+                SELECT
+                    u.id as user_id,
+                    u.email,
+                    u.display_name,
+                    u.created_at as registered_at,
+                    COUNT(v.id) as video_count,
+                    MIN(v.created_at) as first_upload,
+                    MAX(v.created_at) as last_upload,
+                    SUM(CASE WHEN v.status IN ('analyzed', 'completed') THEN 1 ELSE 0 END) as analyzed_count,
+                    SUM(CASE WHEN v.status NOT IN ('analyzed', 'completed') THEN 1 ELSE 0 END) as pending_count
+                FROM users u
+                JOIN videos v ON v.user_id = u.id
+                WHERE u.created_at >= CURRENT_DATE - INTERVAL '30 days'
+                GROUP BY u.id, u.email, u.display_name, u.created_at
+                ORDER BY u.created_at DESC
+            """)
+        )
+        new_signups_rows = new_signups_raw.fetchall()
+        new_signups = [{
+            "user_id": str(r.user_id),
+            "email": r.email or "",
+            "display_name": r.display_name or "",
+            "registered_at": r.registered_at.isoformat() if r.registered_at else None,
+            "video_count": r.video_count,
+            "first_upload": r.first_upload.isoformat() if r.first_upload else None,
+            "last_upload": r.last_upload.isoformat() if r.last_upload else None,
+            "analyzed_count": int(r.analyzed_count or 0),
+            "pending_count": int(r.pending_count or 0),
+        } for r in new_signups_rows]
+    except Exception:
+        new_signups = []
     return {
         "data_volume": {
             "total_videos": total_videos,
@@ -177,6 +212,7 @@ async def _get_dashboard_data(db: AsyncSession) -> dict:
             "total_streamers": total_streamers,
             "this_month_uploaders": this_month_uploaders,
         },
+        "new_signups": new_signups,
     }
 
 
