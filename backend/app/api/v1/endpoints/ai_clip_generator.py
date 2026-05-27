@@ -786,26 +786,174 @@ def _detect_silence_periods(video_path: str, noise_db: float = -30.0,
         return []
 
 
-# ─── V2: Smart Silence Trimming ──────────────────────────────────────────────
+# ─── V11: Content Relevance Analysis (GPT) ───────────────────────────────────────────────
+
+async def _analyze_content_relevance(captions: list, product_name: str, duration: float) -> list:
+    """字幕セグメントをGPTで分析し、商品・セールスと無関係な区間を検出する。
+    Returns: list of (start, end) tuples for irrelevant segments to cut.
+    """
+    import openai
+
+    if not captions or len(captions) < 3:
+        return []
+
+    azure_key = os.getenv("AZURE_OPENAI_KEY", "")
+    azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
+    azure_model = os.getenv("GPT5_MODEL") or os.getenv("GPT5_DEPLOYMENT") or "gpt-4.1-mini"
+
+    if not azure_key or not azure_endpoint:
+        # GPTが使えない場合はフィラーワード検出のみ
+        return _detect_filler_segments_local(captions)
+
+    from urllib.parse import urlparse as _urlparse
+    _parsed = _urlparse(azure_endpoint)
+    clean_endpoint = f"{_parsed.scheme}://{_parsed.netloc}/"
+
+    client = openai.AsyncAzureOpenAI(
+        api_key=azure_key,
+        azure_endpoint=clean_endpoint,
+        api_version=os.getenv("GPT5_API_VERSION", "2025-04-01-preview"),
+    )
+
+    # 字幕をタイムスタンプ付きでフォーマット
+    caption_lines = []
+    for i, cap in enumerate(captions):
+        s = float(cap.get("start", 0))
+        e = float(cap.get("end", 0))
+        text = (cap.get("text") or "").strip()
+        if text:
+            caption_lines.append(f"[{s:.1f}-{e:.1f}] {text}")
+
+    if not caption_lines:
+        return []
+
+    captions_text = "\n".join(caption_lines[:50])  # 最夤50セグメント
+
+    prompt = f"""以下はライブコマース動画の字幕データです。各行は[開始秒-終了秒] テキストの形式です。
+
+商品名: {product_name or '（不明）'}
+
+{captions_text}
+
+【タスク】
+上記の字幕から、以下に該当する区間を特定してください：
+1. 商品・セールスと全く無関係な雑談（天気、挨拶、無関係な話題）
+2. フィラーワードのみ（「えーっと」「あの」「なんか」等）
+3. 主播の停頓・言い淀み（同じ言葉の繰り返し、「えー」の連続）
+4. 視聴者への単純な挨拶・コメント読み上げ（商品紹介と無関なもの）
+
+【ルール】
+- 商品説明・価格・特徴・使用感・セールストークは絶対にカットしない
+- 商品に関連する話題（使い方、効果、比較）はカットしない
+- 迷ったらカットしない（保守的に）
+
+【出力形式】
+JSON配列で出力。カットすべき区間がない場合は空配列[]。
+例: [[1.2, 3.5], [8.0, 10.2]]
+※数値のみ、説明不要"""
+
+    try:
+        response = await client.chat.completions.create(
+            model=azure_model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=200,
+            temperature=0.1,
+        )
+
+        result_text = response.choices[0].message.content.strip()
+        # JSONパース
+        # ```json ... ``` を除去
+        if result_text.startswith("```"):
+            result_text = result_text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+
+        segments = json.loads(result_text)
+        cut_segments = []
+        for seg in segments:
+            if isinstance(seg, (list, tuple)) and len(seg) == 2:
+                s, e = float(seg[0]), float(seg[1])
+                if 0 <= s < e <= duration and (e - s) >= 0.5:
+                    cut_segments.append((s, e))
+
+        logger.info(f"[ai-clip] GPT content analysis: {len(cut_segments)} irrelevant segments found")
+        return cut_segments
+
+    except Exception as e:
+        logger.warning(f"[ai-clip] GPT content relevance analysis failed: {e}")
+        # フォールバック: ローカルフィラー検出のみ
+        return _detect_filler_segments_local(captions)
+
+
+def _detect_filler_segments_local(captions: list) -> list:
+    """ローカルフィラーワード検出（GPT不要）。
+    字幕テキストがフィラーワードのみの区間を返す。
+    """
+    _FILLER_WORDS = {
+        "えー", "えっと", "あの", "あのー", "うーん", "うん", "まあ", "その",
+        "えーっと", "ええと", "ねー", "なんか", "ちょっと", "えー",
+        "那个", "就是", "然后", "就是说", "嘛", "嗯", "这个",
+        "um", "uh", "er", "ah", "like", "you know", "so",
+    }
+
+    filler_segments = []
+    for cap in (captions or []):
+        s = float(cap.get("start", 0))
+        e = float(cap.get("end", 0))
+        text = (cap.get("text") or "").strip().lower()
+        if e <= s:
+            continue
+        if text in _FILLER_WORDS or len(text) <= 2:
+            filler_segments.append((s, e))
+
+    # 連続するフィラーをマージ
+    if not filler_segments:
+        return []
+
+    merged = [filler_segments[0]]
+    for s, e in filler_segments[1:]:
+        if s <= merged[-1][1] + 0.3:  # 0.3秒以内のギャップはマージ
+            merged[-1] = (merged[-1][0], e)
+        else:
+            merged.append((s, e))
+
+    return merged
+
+
+# ─── V2: Smart Silence Trimming ────────────────────────────────────────────────────────────────────────────────
 def _build_silence_trim_segments(duration: float, silence_periods: list,
-                                  captions: list, keep_margin: float = 0.12) -> list:
-    """無音区間をカットするためのセグメントリストを構築（V2.1改善版）。
-    - 字幕がある区間は絶対にカットしない
-    - 1.5秒以上の無音は積極的にカット（自然なポーズ0.3秒残す）
-    - 0.6〜1.5秒の無音は部分カット（40%除去）
-    - 最大カット量は元の動画の30%まで（テンポ良くしつつ不自然にならない）
+                                  captions: list, keep_margin: float = 0.12,
+                                  filler_cut_segments: list = None) -> list:
+    """V11改善版: 無音区間 + フィラー区間 + 商品無関係区間をカット。
+    - 無音区間: 1.0秒以上は積極的にカット（0.2秒の自然なポーズ残す）
+    - 0.5〜1.0秒の無音は部分カット（50%除去）
+    - フィラー区間（「えーっと」「あの」等）: 字幕があってもカット対象
+    - 商品無関係区間（GPT判定）: カット対象
+    - 最大カット量は元の動画の50%まで（短動画向けに積極カット）
     Returns list of (start, end) tuples representing segments to KEEP.
     """
-    if not silence_periods:
+    if not silence_periods and not filler_cut_segments:
         return [(0, duration)]
 
     # Build "protected" intervals from captions (don't cut these)
+    # V11: フィラーワードのみの字幕はprotectedから除外
+    _FILLER_WORDS = {
+        "えー", "えっと", "あの", "あのー", "うーん", "うん", "まあ", "その",
+        "えーっと", "ええと", "ねー", "なんか", "ちょっと", "えー",
+        "那个", "就是", "然后", "就是说", "嘛", "嗯", "这个",
+        "um", "uh", "er", "ah", "like", "you know", "so",
+    }
+
     protected = []
     for cap in (captions or []):
         s = float(cap.get("start", 0))
         e = float(cap.get("end", 0))
-        if e > s:
-            protected.append((max(0, s - 0.15), min(duration, e + 0.15)))
+        cap_text = (cap.get("text") or "").strip()
+        if e <= s:
+            continue
+        # V11: フィラーワードのみの字幕はprotectedにしない
+        cap_text_lower = cap_text.lower().strip()
+        is_filler_only = cap_text_lower in _FILLER_WORDS or len(cap_text) <= 2
+        if not is_filler_only:
+            protected.append((max(0, s - 0.1), min(duration, e + 0.1)))
 
     # Merge overlapping protected intervals
     protected.sort()
@@ -826,32 +974,33 @@ def _build_silence_trim_segments(duration: float, silence_periods: list,
     # Sort by length (longest first) to prioritize removing the most impactful silences
     cuttable = []
     total_cut_time = 0.0
-    max_cut_ratio = 0.30  # 最大30%カット
+    max_cut_ratio = 0.50  # V11: 最大50%カット（短動画向けに積極カット）
     max_cut_time = duration * max_cut_ratio
 
-    for s_start, s_end in sorted(silence_periods, key=lambda x: x[1]-x[0], reverse=True):
+    # --- Phase 1: Silence cuts ---
+    for s_start, s_end in sorted(silence_periods or [], key=lambda x: x[1]-x[0], reverse=True):
         silence_len = s_end - s_start
-        # Don't cut first 0.3s or last 0.3s of video
-        if s_start < 0.3 or s_end > duration - 0.3:
+        # Don't cut first 0.2s or last 0.2s of video
+        if s_start < 0.2 or s_end > duration - 0.2:
             continue
-        # Don't cut if overlaps with caption
+        # Don't cut if overlaps with meaningful caption
         if _is_protected(s_start, s_end):
             continue
-        # Skip very short silences (natural breathing pauses)
-        if silence_len < 0.6:
+        # V11: Lower threshold - cut silences from 0.5s
+        if silence_len < 0.5:
             continue
         # Check max cut limit
         if total_cut_time >= max_cut_time:
             break
 
-        if silence_len >= 1.5:
-            # Long silence: aggressive cut, keep only 0.3s natural pause
-            cut_start = s_start + 0.15
-            cut_end = s_end - 0.15
-        elif silence_len >= 0.6:
-            # Medium silence: partial cut (remove 40% from center)
+        if silence_len >= 1.0:
+            # Long silence: aggressive cut, keep only 0.2s natural pause
+            cut_start = s_start + 0.1
+            cut_end = s_end - 0.1
+        elif silence_len >= 0.5:
+            # Medium silence: partial cut (remove 50% from center)
             mid = (s_start + s_end) / 2
-            half_cut = silence_len * 0.4 / 2
+            half_cut = silence_len * 0.5 / 2
             cut_start = mid - half_cut
             cut_end = mid + half_cut
         else:
@@ -860,18 +1009,47 @@ def _build_silence_trim_segments(duration: float, silence_periods: list,
         if cut_end > cut_start:
             actual_cut = cut_end - cut_start
             if total_cut_time + actual_cut > max_cut_time:
-                # Trim to fit within budget
                 cut_end = cut_start + (max_cut_time - total_cut_time)
                 if cut_end <= cut_start:
                     break
             cuttable.append((cut_start, cut_end))
             total_cut_time += (cut_end - cut_start)
 
+    # --- Phase 2: Filler/irrelevant content cuts (from GPT analysis) ---
+    if filler_cut_segments:
+        for seg_start, seg_end in sorted(filler_cut_segments, key=lambda x: x[1]-x[0], reverse=True):
+            if total_cut_time >= max_cut_time:
+                break
+            seg_len = seg_end - seg_start
+            if seg_len < 0.3:
+                continue
+            # Don't cut first/last 0.2s
+            if seg_start < 0.2 or seg_end > duration - 0.2:
+                continue
+            # Content cuts can override caption protection (GPT decided it's irrelevant)
+            actual_cut = seg_len
+            if total_cut_time + actual_cut > max_cut_time:
+                seg_end = seg_start + (max_cut_time - total_cut_time)
+                actual_cut = seg_end - seg_start
+                if actual_cut <= 0.1:
+                    break
+            cuttable.append((seg_start, seg_end))
+            total_cut_time += actual_cut
+
     if not cuttable:
         return [(0, duration)]
 
     # Build keep segments (inverse of cuttable, sorted by time)
     cuttable.sort(key=lambda x: x[0])
+    # Merge overlapping cuts
+    merged_cuts = []
+    for cs, ce in cuttable:
+        if merged_cuts and cs <= merged_cuts[-1][1]:
+            merged_cuts[-1] = (merged_cuts[-1][0], max(merged_cuts[-1][1], ce))
+        else:
+            merged_cuts.append((cs, ce))
+    cuttable = merged_cuts
+
     keep_segments = []
     prev_end = 0
     for cut_start, cut_end in cuttable:
@@ -882,7 +1060,7 @@ def _build_silence_trim_segments(duration: float, silence_periods: list,
         keep_segments.append((prev_end, duration))
 
     total_kept = sum(e - s for s, e in keep_segments)
-    logger.info(f"[ai-clip] Silence trim V2.1: {len(cuttable)} cuts, "
+    logger.info(f"[ai-clip] Smart trim V11: {len(cuttable)} cuts, "
                 f"{total_cut_time:.1f}s removed ({total_cut_time/duration*100:.0f}%), "
                 f"{total_kept:.1f}s kept, {len(keep_segments)} segments")
     return keep_segments
@@ -2288,6 +2466,7 @@ class GenerateRequest(BaseModel):
     position_y: float = Field(75.0, ge=0, le=100, description="字幕Y位置（%）")
     # V2 new options
     enable_silence_cut: bool = Field(True, description="無音区間を自動カットするか")
+    enable_content_cut: bool = Field(True, description="商品無関係・フィラー区間を自動カットするか（GPT判定）")
     enable_zoom_pulse: bool = Field(True, description="ズームパルスを有効にするか")
     enable_progress_bar: bool = Field(True, description="進行バーを表示するか")
     enable_flash_intro: bool = Field(True, description="最初0.5秒のフラッシュ演出")
@@ -2313,6 +2492,7 @@ class GenerateFromClipRequest(BaseModel):
     target_language: str = Field("auto", description="字幕言語 (auto/ja/zh/zh-tw)")
     position_y: float = Field(75.0, ge=0, le=100, description="字幕Y位置（%）")
     enable_silence_cut: bool = Field(True, description="無音区間を自動カットするか")
+    enable_content_cut: bool = Field(True, description="商品無関係・フィラー区間を自動カットするか（GPT判定）")
     enable_zoom_pulse: bool = Field(True, description="ズームパルスを有効にするか")
     enable_progress_bar: bool = Field(True, description="進行バーを表示するか")
     enable_flash_intro: bool = Field(True, description="最初0.5秒のフラッシュ演出")
@@ -2325,6 +2505,7 @@ class GenerateFromClipRequest(BaseModel):
     # V3: 映像モード選択
     video_mode: str = Field("original", description="映像モード: original=そのまま, product_overlay=商品画像オーバーレイ, audio_only=音声+商品スライドショー")
     product_image_urls: Optional[list] = Field(None, description="商品画像URLリスト（video_mode=product_overlay/audio_onlyの場合に使用）")
+    product_video_urls: Optional[list] = Field(None, description="商品動画URLリスト（PiPで動画をオーバーレイ表示する場合に使用）")
 
 
 class JobStatusResponse(BaseModel):
@@ -4004,9 +4185,23 @@ async def _process_single_clip_v2(job_id: str, clip: dict, req: GenerateRequest,
         if captions:
             captions = _split_long_segments(captions)
 
-        # ── 4b. Build silence trim segments (after captions, to protect caption regions) ──
-        if req.enable_silence_cut and silence_periods:
-            keep_segments = _build_silence_trim_segments(duration, silence_periods, captions)
+        # ── 4b. GPT content relevance analysis (V11: 商品無関係区間の検出) ──
+        filler_cut_segments = []
+        if getattr(req, 'enable_content_cut', True) and captions:
+            await _update_job(job_id, progress_pct=36, current_step=f"クリップ {idx+1}/{total}: コンテンツ関連性分析中 (GPT)...")
+            try:
+                filler_cut_segments = await _analyze_content_relevance(captions, product_name, duration)
+                logger.info(f"[ai-clip {job_id}] Content cut: {len(filler_cut_segments)} irrelevant segments detected")
+            except Exception as content_err:
+                logger.warning(f"[ai-clip {job_id}] Content relevance analysis failed (non-fatal): {content_err}")
+                filler_cut_segments = []
+
+        # ── 4c. Build silence trim segments (after captions, to protect caption regions) ──
+        if req.enable_silence_cut and (silence_periods or filler_cut_segments):
+            keep_segments = _build_silence_trim_segments(
+                duration, silence_periods, captions,
+                filler_cut_segments=filler_cut_segments
+            )
 
         # ── 5. Generate zoom keyframes ──
         zoom_keyframes = []
@@ -4093,12 +4288,21 @@ async def _process_single_clip_v2(job_id: str, clip: dict, req: GenerateRequest,
                 video_path = slideshow_path  # 映像をスライドショーに差し替え
                 logger.info(f"[ai-clip {job_id}] Using product slideshow as video source")
 
-        elif video_mode == "product_overlay" and product_imgs:
-            # PiPモード: 動画メイン+商品画像ポップアップ
-            await _update_job(job_id, progress_pct=54, current_step=f"クリップ {idx+1}/{total}: PiP合成中（商品ポップアップ）...")
-            pip_path = await _generate_pip_video(
-                video_path, product_imgs, duration, video_width, video_height, tmp_dir, job_id
-            )
+        elif video_mode == "product_overlay" and (product_imgs or clip.get("product_video_urls")):
+            # PiPモード: 動画メイン+商品画像/動画ポップアップ
+            product_videos = clip.get("product_video_urls") or []
+            if product_videos:
+                # V11: 商品動画PiPモード
+                await _update_job(job_id, progress_pct=54, current_step=f"クリップ {idx+1}/{total}: PiP合成中（商品動画オーバーレイ）...")
+                pip_path = await _generate_pip_video_overlay(
+                    video_path, product_videos, duration, video_width, video_height, tmp_dir, job_id
+                )
+            else:
+                # 従来の商品画像PiPモード
+                await _update_job(job_id, progress_pct=54, current_step=f"クリップ {idx+1}/{total}: PiP合成中（商品ポップアップ）...")
+                pip_path = await _generate_pip_video(
+                    video_path, product_imgs, duration, video_width, video_height, tmp_dir, job_id
+                )
             if pip_path and os.path.exists(pip_path):
                 video_path = pip_path
                 logger.info(f"[ai-clip {job_id}] Using PiP composite as video source")
@@ -4569,18 +4773,22 @@ async def _generate_hook(captions: list, clip: dict, req: GenerateRequest) -> st
 【絶対ルール】
 - 最大10文字以内（厳守！それ以上は絶対ダメ）
 - 絵文字は使わない
-- 短くインパクトのある表現のみ
 - 「。」「、」は使わない
+- 【最重要】フックは必ず動画内容・商品に直接関係すること！汎用的な「知らないと損」「これマジ」等は禁止。
+- 商品名/ブランド名がある場合は必ず含める
 
-【パターン例】
-- 「衝撃の結果」「知らないと損」「絶対やめて」
-- 「プロが愚いた」「これマジで凄い」「差がやばい」
-- 「まだやってる？」「誰も教えない」「見ないと後悔」
+【良い例】
+- 商品名がKEENの靴: 「KEENが神」「KEENの本気」
+- 脱毛膏の場合: 「ツル肌の秘密」「この脱毛が神」
+- 美容液の場合: 「肌が変わる」「美肌の答え」
+
+【悪い例（禁止）】
+- 「知らないと損する」「これマジですごい」「衰撃の結果」→ 動画内容と無関係な汎用フックは絶対禁止
 
 商品名: {product_name or '（なし）'}
-動画内容: {transcript[:200]}
+動画内容: {transcript[:300]}
 
-フックテキストのみ出力（10文字以内、説明不要）:"""
+上記の動画内容・商品に直接関係するフックテキストのみ出力（10文字以内）:"""
 
         response = client.responses.create(
             model=azure_model,
@@ -4613,61 +4821,36 @@ async def _generate_hook(captions: list, clip: dict, req: GenerateRequest) -> st
 
 
 def _generate_simple_hook(product_name: str, transcript: str) -> str:
-    """GPTが使えない場合のフォールバックフック生成。多様なパターンでランダムに選択。"""
-    # 商品名がある場合は商品名を含むフック
+    """GPTが使えない場合のフォールバックフック生成。V11: 商品名必須。"""
+    # 商品名がある場合は商品名を含むフック（必ず商品に関連）
     if product_name:
+        # 商品名が長い場合は短縮
+        short_name = product_name[:6] if len(product_name) > 6 else product_name
         product_hooks = [
-            f"知らないと損！{product_name}",
-            f"プロが選ぶ{product_name}",
-            f"衝撃の{product_name}",
-            f"なぜ{product_name}が人気？",
-            f"{product_name}の真実",
-            f"これが{product_name}の力",
-            f"まだ{product_name}使ってない？",
-            f"プロが愛用する理由",
-            f"驚きの変化を見て",
+            f"{short_name}が神",
+            f"{short_name}の本気",
+            f"{short_name}が凄い",
+            f"{short_name}の答え",
+            f"{short_name}で変わる",
+            f"この{short_name}が正解",
+            f"{short_name}の実力",
+            f"{short_name}が最強",
         ]
         return random.choice(product_hooks)[:15]
 
-    # 汎用的なバズるフック（美容に限定しない）
-    generic_hooks = [
-        # 疑問文系
-        "これ知ってた？",
-        "なぜ誰も教えないの？",
-        "これマジですごい",
-        "分かる人いる？",
-        "まだ知らないの？",
-        # 衝撃・数字系
-        "99%が知らない事実",
-        "たった3秒で分かる",
-        "これ見たら変わる",
-        "衝撃の結果がこちら",
-        "プロも驚いた方法",
-        # 禁止・警告系
-        "絶対にやめて！",
-        "これだけはやめて",
-        "知らないと損する",
-        "今すぐ確認して",
-        # 秘密・裏技系
-        "プロの裏技公開",
-        "誰も教えない秘密",
-        "業界の裏側見せます",
-        "こっそり教えます",
-        # 対比・ギャップ系
-        "プロ vs 素人の差",
-        "高いものと安いものの差",
-        "ビフォーアフター",
-        "差がやばすぎる",
-        # 共感・あるある系
-        "これ分かる人いる？",
-        "みんなやってない？",
-        "それ間違ってます",
-        # 紧急・限定系
-        "今だけのチャンス",
-        "見ないと後悔する",
-        "最後まで見て",
-    ]
-    return random.choice(generic_hooks)[:15]
+    # 商品名がない場合: transcriptからキーワードを抽出してフックに使用
+    # 汎用フックは最終手段
+    if transcript:
+        # トランスクリプトから名詞を抽出してフックに使用
+        words = transcript[:100].split()
+        # 最初の意味のある単語を使用
+        for w in words:
+            w = w.strip()
+            if len(w) >= 2 and len(w) <= 8:
+                return f"{w}が変わる"[:15]
+
+    # 最終フォールバック（極力使わない）
+    return "これ見て"
 
 
 def _assign_scene_styles(captions: list, total_duration: float, base_style: str) -> list:
@@ -5045,23 +5228,38 @@ async def _generate_pip_video(
         logger.error(f"[ai-clip {job_id}] No overlay images created")
         return None
 
-    # Calculate popup timing: show for 3s, hide for 4s, rotate through images
-    show_duration = 3.0  # seconds visible per image
-    hide_duration = 4.0  # seconds hidden between images
-    first_appear = 2.0   # first appearance at 2 seconds
-    cycle_duration = show_duration + hide_duration  # 7s per image slot
+    # V11: Smart PiP timing based on video duration
+    # Short videos (< 60s): show once at 5-10s for 3 seconds only
+    # Long videos (>= 60s): original loop behavior (3s show, 4s hide)
+    is_short_video = duration < 60.0
 
-    # Build schedule: [(start_time, end_time, image_index), ...]
-    schedule = []
-    t = first_appear
-    img_idx = 0
-    while t + show_duration <= duration:
-        schedule.append((t, t + show_duration, img_idx % len(overlay_paths)))
-        t += cycle_duration
-        img_idx += 1
-    # If video is very short, show at least one image
-    if not schedule and duration > 2:
-        schedule.append((1.0, min(duration - 0.5, 4.0), 0))
+    if is_short_video:
+        # 短動画モード: 5-10秒時点で3秒間だけ表示
+        show_duration = 3.0
+        # 表示開始位置: 動画の5秒目（動画が短い場合は調整）
+        first_appear = min(5.0, duration * 0.3)  # 最低でも動画の30%位置
+        if first_appear + show_duration > duration - 1.0:
+            first_appear = max(1.0, duration - show_duration - 1.0)
+        schedule = [(first_appear, first_appear + show_duration, 0)]
+        logger.info(f"[ai-clip {job_id}] PiP short-video mode: single appearance at {first_appear:.1f}s-{first_appear+show_duration:.1f}s")
+    else:
+        # ロング動画モード: 従来のループ表示
+        show_duration = 3.0  # seconds visible per image
+        hide_duration = 4.0  # seconds hidden between images
+        first_appear = 2.0   # first appearance at 2 seconds
+        cycle_duration = show_duration + hide_duration  # 7s per image slot
+
+        # Build schedule: [(start_time, end_time, image_index), ...]
+        schedule = []
+        t = first_appear
+        img_idx = 0
+        while t + show_duration <= duration:
+            schedule.append((t, t + show_duration, img_idx % len(overlay_paths)))
+            t += cycle_duration
+            img_idx += 1
+        # If video is very short, show at least one image
+        if not schedule and duration > 2:
+            schedule.append((1.0, min(duration - 0.5, 4.0), 0))
 
     if not schedule:
         logger.warning(f"[ai-clip {job_id}] Video too short for PiP rotation (duration={duration})")
@@ -5151,10 +5349,112 @@ async def _generate_pip_video(
     return pip_output
 
 
+# ─── V11: PiP Video Overlay (Product Video) ─────────────────────────────────────────────
 
-# ─── Product Image Upload & AI Analysis Endpoints ─────────────────────────────
+async def _generate_pip_video_overlay(
+    video_path: str, product_video_urls: list, duration: float,
+    width: int, height: int, tmp_dir: str, job_id: str
+) -> Optional[str]:
+    """V11: PiP合成 - 商品動画をメイン動画にオーバーレイ表示。
+    短動画: 5-10秒時点で3秒間表示。
+    ロング動画: 3秒表示→4秒非表示のループ。
+    """
+    import httpx
+    from app.services.storage_service import generate_read_sas_from_url
 
-@router.post("/upload-product-image")
+    if not product_video_urls:
+        return None
+
+    # Resolve SAS URLs
+    resolved_urls = []
+    for url in product_video_urls:
+        if "blob.core.windows.net" in url and "?" not in url:
+            sas_url = generate_read_sas_from_url(url, expires_hours=2)
+            resolved_urls.append(sas_url or url)
+        elif "cdn.aitherhub.com" in url:
+            blob_url = url.replace("https://cdn.aitherhub.com", "https://aitherhub.blob.core.windows.net")
+            sas_url = generate_read_sas_from_url(blob_url, expires_hours=2)
+            resolved_urls.append(sas_url or url)
+        else:
+            resolved_urls.append(url)
+
+    # Download first product video
+    product_video_path = os.path.join(tmp_dir, "pip_product_video.mp4")
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.get(resolved_urls[0])
+            resp.raise_for_status()
+            with open(product_video_path, "wb") as f:
+                f.write(resp.content)
+    except Exception as e:
+        logger.error(f"[ai-clip {job_id}] Failed to download product video: {e}")
+        return None
+
+    # Determine PiP display timing
+    is_short_video = duration < 60.0
+    if is_short_video:
+        pip_start = min(5.0, duration * 0.3)
+        pip_duration = 3.0
+        if pip_start + pip_duration > duration - 1.0:
+            pip_start = max(1.0, duration - pip_duration - 1.0)
+    else:
+        pip_start = 2.0
+        pip_duration = 3.0
+
+    # PiP overlay size and position (bottom-right corner, 30% of screen)
+    pip_w = int(width * 0.35)
+    pip_h = int(height * 0.25)
+    pip_x = width - pip_w - 30  # 30px margin from right
+    pip_y = height - pip_h - 200  # 200px from bottom (above subtitles)
+
+    pip_output = os.path.join(tmp_dir, "pip_video_output.mp4")
+
+    # Build ffmpeg command: overlay product video on main video at specific time
+    if is_short_video:
+        enable_expr = f"between(t,{pip_start:.1f},{pip_start+pip_duration:.1f})"
+    else:
+        # Loop: 3s show, 4s hide
+        cycle = 7.0
+        enable_parts = []
+        t = pip_start
+        while t + pip_duration <= duration:
+            enable_parts.append(f"between(t,{t:.1f},{t+pip_duration:.1f})")
+            t += cycle
+        enable_expr = "+".join(enable_parts) if enable_parts else f"between(t,{pip_start:.1f},{pip_start+pip_duration:.1f})"
+
+    filter_complex = (
+        f"[1:v]scale={pip_w}:{pip_h}:force_original_aspect_ratio=decrease,"
+        f"pad={pip_w}:{pip_h}:(ow-iw)/2:(oh-ih)/2:color=black@0[pip];"
+        f"[0:v][pip]overlay={pip_x}:{pip_y}:enable='{enable_expr}'[outv]"
+    )
+
+    pip_cmd = [
+        "ffmpeg", "-y",
+        "-i", video_path,
+        "-i", product_video_path,
+        "-filter_complex", filter_complex,
+        "-map", "[outv]", "-map", "0:a?",
+        "-t", str(duration),
+        "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-r", "30",
+        pip_output
+    ]
+
+    logger.info(f"[ai-clip {job_id}] PiP video overlay: start={pip_start:.1f}s, duration={pip_duration:.1f}s, short={is_short_video}")
+
+    proc = await asyncio.create_subprocess_exec(
+        *pip_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
+    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
+    if proc.returncode != 0:
+        logger.error(f"[ai-clip {job_id}] PiP video overlay ffmpeg failed: {stderr.decode()[-500:]}")
+        return None
+
+    logger.info(f"[ai-clip {job_id}] PiP video overlay generated successfully")
+    return pip_output
+
+
+# ─── Product Image Upload & AI Analysis Endpoints ─────────────────────────────────────────.post("/upload-product-image")
 async def upload_product_image(
     file: UploadFile = File(...),
     file_type: str = Form("product-image"),
