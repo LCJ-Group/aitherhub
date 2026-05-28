@@ -298,59 +298,85 @@ def extract_frames(
     _stall_detected = {"value": False}
     _partial_success = {"value": False}
 
-    if on_progress and expected_frames > 0:
-        def _monitor():
-            last_pct = -1
-            last_count = 0
-            stall_start = _time.time()
-            while proc.poll() is None:
-                try:
-                    count = len([f for f in os.listdir(out_dir) if f.endswith('.jpg')])
+    # v17: ALWAYS start monitor thread to prevent infinite hangs.
+    # Previous bug: count==0 (no frames produced) was never detected as stall,
+    # and expected_frames==0 skipped the monitor entirely → proc.wait() blocked forever.
+    # Fix: monitor starts unconditionally; uses INITIAL_GRACE_PERIOD for count==0 case.
+    def _monitor():
+        last_pct = -1
+        last_count = 0
+        stall_start = _time.time()
+        while proc.poll() is None:
+            try:
+                count = len([f for f in os.listdir(out_dir) if f.endswith('.jpg')])
+                if on_progress and expected_frames > 0:
                     pct = min(int(count / expected_frames * 100), 99)
                     if pct != last_pct:
                         on_progress(pct)
                         last_pct = pct
-                    # Stall detection
-                    if count > last_count:
-                        last_count = count
-                        stall_start = _time.time()
-                    elif count == last_count and count > 0:
-                        stall_sec = _time.time() - stall_start
-                        if stall_sec > STALL_TIMEOUT:
-                            # Check disk space
-                            disk_now = shutil.disk_usage(out_dir)
-                            free_now = disk_now.free / (1024 ** 3)
-                            # v14: Check if partial success threshold met
-                            completeness = count / expected_frames if expected_frames > 0 else 0
-                            if completeness >= PARTIAL_SUCCESS_THRESHOLD:
-                                logger.warning(
-                                    "[FRAMES] STALL but PARTIAL SUCCESS: %d/%d frames (%.0f%%) extracted. "
-                                    "Accepting partial result (threshold=%.0f%%).",
-                                    count, expected_frames, completeness * 100,
-                                    PARTIAL_SUCCESS_THRESHOLD * 100,
-                                )
-                                _partial_success["value"] = True
-                                _stall_detected["value"] = True
-                                proc.kill()
-                                return
+                # Stall detection
+                if count > last_count:
+                    last_count = count
+                    stall_start = _time.time()
+                elif count == last_count:
+                    stall_sec = _time.time() - stall_start
+                    # v17: Different timeout for count==0 (initial grace) vs count>0 (stall)
+                    effective_timeout = INITIAL_GRACE_PERIOD if count == 0 else STALL_TIMEOUT
+                    if stall_sec > effective_timeout:
+                        # Check disk space
+                        disk_now = shutil.disk_usage(out_dir)
+                        free_now = disk_now.free / (1024 ** 3)
+                        # Check if partial success threshold met
+                        completeness = count / expected_frames if expected_frames > 0 else 0
+                        if count > 0 and completeness >= PARTIAL_SUCCESS_THRESHOLD:
+                            logger.warning(
+                                "[FRAMES] STALL but PARTIAL SUCCESS: %d/%d frames (%.0f%%) extracted. "
+                                "Accepting partial result (threshold=%.0f%%).",
+                                count, expected_frames, completeness * 100,
+                                PARTIAL_SUCCESS_THRESHOLD * 100,
+                            )
+                            _partial_success["value"] = True
+                            _stall_detected["value"] = True
+                            proc.kill()
+                            return
+                        if count == 0:
+                            logger.error(
+                                "[FRAMES] ZERO-OUTPUT STALL: ffmpeg produced 0 frames after %ds "
+                                "(grace=%ds, disk_free=%.1f GB). Killing ffmpeg.",
+                                int(stall_sec), INITIAL_GRACE_PERIOD, free_now,
+                            )
+                        else:
                             logger.error(
                                 "[FRAMES] STALL DETECTED: no new frames for %ds "
                                 "(count=%d/%d=%.0f%%, disk_free=%.1f GB). Killing ffmpeg.",
                                 int(stall_sec), count, expected_frames, completeness * 100, free_now,
                             )
-                            _stall_detected["value"] = True
-                            proc.kill()
-                            return
-                except Exception as _e:
-                    logger.debug(f"Suppressed: {_e}")
-                _time.sleep(2)
-            if not _stall_detected["value"]:
-                on_progress(100)
+                        _stall_detected["value"] = True
+                        proc.kill()
+                        return
+            except Exception as _e:
+                logger.debug(f"Suppressed: {_e}")
+            _time.sleep(2)
+        if not _stall_detected["value"] and on_progress:
+            on_progress(100)
 
-        t = threading.Thread(target=_monitor, daemon=True)
-        t.start()
+    t = threading.Thread(target=_monitor, daemon=True)
+    t.start()
 
-    proc.wait()
+    # v17: Add absolute timeout to proc.wait() as safety net.
+    # Even if monitor thread fails, this prevents infinite blocking.
+    # Timeout = INITIAL_GRACE_PERIOD + STALL_TIMEOUT + 120s buffer
+    _absolute_timeout = INITIAL_GRACE_PERIOD + STALL_TIMEOUT + 120
+    try:
+        proc.wait(timeout=_absolute_timeout)
+    except subprocess.TimeoutExpired:
+        logger.error(
+            "[FRAMES] ABSOLUTE TIMEOUT: proc.wait() exceeded %ds. Force killing ffmpeg.",
+            _absolute_timeout,
+        )
+        proc.kill()
+        proc.wait(timeout=30)
+        _stall_detected["value"] = True
 
     # GPU stall → treat as GPU failure and fall through to CPU fallback
     # v14: Unless partial success was achieved, in which case accept the result
@@ -421,46 +447,66 @@ def extract_frames(
 
         _stall_detected2 = {"value": False}
 
-        if on_progress and expected_frames > 0:
-            def _monitor2():
-                last_pct = -1
-                last_count = 0
-                stall_start = _time.time()
-                while proc2.poll() is None:
-                    try:
-                        count = len([f for f in os.listdir(out_dir) if f.endswith('.jpg')])
+        # v17: Always start monitor for CPU fallback (same fix as GPU path)
+        def _monitor2():
+            last_pct = -1
+            last_count = 0
+            stall_start = _time.time()
+            while proc2.poll() is None:
+                try:
+                    count = len([f for f in os.listdir(out_dir) if f.endswith('.jpg')])
+                    if on_progress and expected_frames > 0:
                         pct = min(int(count / expected_frames * 100), 99)
                         if pct != last_pct:
                             on_progress(pct)
                             last_pct = pct
-                        if count > last_count:
-                            last_count = count
-                            stall_start = _time.time()
-                        elif count == last_count and count > 0:
-                            stall_sec = _time.time() - stall_start
-                            if stall_sec > STALL_TIMEOUT:
-                                disk_now = shutil.disk_usage(out_dir)
-                                free_now = disk_now.free / (1024 ** 3)
-                                # v14: Log completeness for CPU fallback stall
-                                _completeness2 = count / expected_frames if expected_frames > 0 else 0
+                    if count > last_count:
+                        last_count = count
+                        stall_start = _time.time()
+                    elif count == last_count:
+                        stall_sec = _time.time() - stall_start
+                        # v17: count==0 uses INITIAL_GRACE_PERIOD, count>0 uses STALL_TIMEOUT
+                        effective_timeout = INITIAL_GRACE_PERIOD if count == 0 else STALL_TIMEOUT
+                        if stall_sec > effective_timeout:
+                            disk_now = shutil.disk_usage(out_dir)
+                            free_now = disk_now.free / (1024 ** 3)
+                            _completeness2 = count / expected_frames if expected_frames > 0 else 0
+                            if count == 0:
+                                logger.error(
+                                    "[FRAMES] CPU ZERO-OUTPUT STALL: 0 frames after %ds "
+                                    "(grace=%ds, disk_free=%.1f GB). Killing ffmpeg.",
+                                    int(stall_sec), INITIAL_GRACE_PERIOD, free_now,
+                                )
+                            else:
                                 logger.error(
                                     "[FRAMES] CPU STALL DETECTED: no new frames for %ds "
                                     "(count=%d/%d=%.0f%%, disk_free=%.1f GB). Killing ffmpeg.",
                                     int(stall_sec), count, expected_frames, _completeness2 * 100, free_now,
                                 )
-                                _stall_detected2["value"] = True
-                                proc2.kill()
-                                return
-                    except Exception as _e:
-                        logger.debug(f"Suppressed: {_e}")
-                    _time.sleep(2)
-                if not _stall_detected2["value"]:
-                    on_progress(100)
+                            _stall_detected2["value"] = True
+                            proc2.kill()
+                            return
+                except Exception as _e:
+                    logger.debug(f"Suppressed: {_e}")
+                _time.sleep(2)
+            if not _stall_detected2["value"] and on_progress:
+                on_progress(100)
 
-            t2 = threading.Thread(target=_monitor2, daemon=True)
-            t2.start()
+        t2 = threading.Thread(target=_monitor2, daemon=True)
+        t2.start()
 
-        proc2.wait()
+        # v17: Absolute timeout for CPU fallback proc.wait()
+        _absolute_timeout2 = INITIAL_GRACE_PERIOD + STALL_TIMEOUT + 120
+        try:
+            proc2.wait(timeout=_absolute_timeout2)
+        except subprocess.TimeoutExpired:
+            logger.error(
+                "[FRAMES] CPU ABSOLUTE TIMEOUT: proc2.wait() exceeded %ds. Force killing.",
+                _absolute_timeout2,
+            )
+            proc2.kill()
+            proc2.wait(timeout=30)
+            _stall_detected2["value"] = True
 
         if _stall_detected2["value"]:
             # v16: CPU fallback stalled → try segment-based extraction
@@ -602,7 +648,18 @@ def _extract_with_segments(
             daemon=True,
         )
         t_seg.start()
-        proc_seg.wait()
+        # v17: Add absolute timeout to segment proc.wait() as safety net
+        _seg_absolute_timeout = SEGMENT_STALL_TIMEOUT + 60
+        try:
+            proc_seg.wait(timeout=_seg_absolute_timeout)
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                "[FRAMES][SEGMENT] Segment %d/%d ABSOLUTE TIMEOUT (%ds). Force killing.",
+                seg_idx + 1, num_segments, _seg_absolute_timeout,
+            )
+            proc_seg.kill()
+            proc_seg.wait(timeout=10)
+            _seg_stalled["value"] = True
         t_seg.join(timeout=5)
 
         seg_frames = len([f for f in os.listdir(seg_tmp) if f.endswith('.jpg')])
