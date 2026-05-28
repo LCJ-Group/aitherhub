@@ -162,8 +162,10 @@ jobs:
             git config --global --add safe.directory /opt/aitherhub
             echo "Before: $(git rev-parse HEAD)"
             git remote set-url origin https://github.com/LCJ-Group/aitherhub.git
+            # Fix .git permission BEFORE fetch (root-owned .git/objects blocks git fetch)
+            sudo chown -R $(whoami):$(whoami) /opt/aitherhub/.git 2>/dev/null || true
             git fetch origin master --force
-            # Fix permission issues on model files (owned by root from pip/training)
+            # Fix permission issues on remaining files (owned by root from pip/training)
             sudo chown -R $(whoami):$(whoami) /opt/aitherhub 2>/dev/null || true
             git reset --hard origin/master
             echo "After:  $(git rev-parse HEAD)"
