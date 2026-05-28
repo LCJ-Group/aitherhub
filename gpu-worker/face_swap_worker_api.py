@@ -628,9 +628,14 @@ _temporal_state = {
     "prev_kps": None,         # Previous smoothed 5-point landmarks
     "prev_lm106": None,       # Previous smoothed 106-point landmarks
     "frame_count": 0,         # Frame counter for adaptive smoothing
+    "prev_color_ratios": None,  # Previous color correction ratios (3 channels) for EMA
+    "prev_enhanced": None,      # Previous GFPGAN output for temporal blending
+    "prev_combined_mask": None, # Previous combined mask for EMA smoothing
 }
 _SMOOTH_ALPHA = 0.03   # EMA alpha: lower = smoother but more lag, higher = responsive but jittery
-# Reduced to 0.03 for maximum face stability at 15-16 FPS
+_COLOR_ALPHA = 0.05    # Color correction EMA alpha (slightly faster than geometry)
+_GFPGAN_ALPHA = 0.15   # GFPGAN output blend alpha (responsive but stable)
+_MASK_BLEND_ALPHA = 0.05  # Combined mask EMA alpha
 # At 15 FPS, 0.03 means each frame only takes 3% of new detection → rock-solid stable
 # Combined with change-threshold gating (Step 12), this eliminates virtually all flicker
 
@@ -643,6 +648,9 @@ def _reset_temporal_state():
     _temporal_state["prev_affine"] = None
     _temporal_state["prev_affine_large"] = None
     _temporal_state["prev_mask_params"] = None
+    _temporal_state["prev_color_ratios"] = None
+    _temporal_state["prev_enhanced"] = None
+    _temporal_state["prev_combined_mask"] = None
     _temporal_state["miss_count"] = 0
     _temporal_state["frame_count"] = 0
 
@@ -774,7 +782,19 @@ def direct_swap_frame(frame, detect_score: float = 0.5, use_enhancer: bool = Tru
 
         # Step 6: GFPGAN Enhancement (restores skin detail)
         if use_enhancer and gfpgan_session is not None:
-            enhanced = enhance_face_gfpgan(swap_result, target_size=512)
+            enhanced_raw = enhance_face_gfpgan(swap_result, target_size=512)
+            # Step 6b: Temporal blending of GFPGAN output to reduce per-frame variation
+            # GFPGAN's neural network produces slightly different results each frame
+            # even with nearly identical inputs. Blending with previous output stabilizes this.
+            if _temporal_state["prev_enhanced"] is not None and \
+               _temporal_state["prev_enhanced"].shape == enhanced_raw.shape:
+                enhanced = cv2.addWeighted(
+                    enhanced_raw, _GFPGAN_ALPHA,
+                    _temporal_state["prev_enhanced"], 1.0 - _GFPGAN_ALPHA, 0
+                )
+            else:
+                enhanced = enhanced_raw
+            _temporal_state["prev_enhanced"] = enhanced.copy()
             # Resize back to match paste requirements
             # We'll paste at higher resolution for better quality
             paste_size = 512
@@ -839,22 +859,47 @@ def direct_swap_frame(frame, detect_score: float = 0.5, use_enhancer: bool = Tru
         )
 
         # Combine: warp_mask (where face was pasted) AND face_mask (landmark-based protection)
-        combined_mask = warp_mask_warped * face_mask
+        combined_mask_raw = warp_mask_warped * face_mask
 
-        # Step 10: Stable alpha blending with color correction
+        # Step 9b: EMA smooth the combined mask to prevent boundary flicker
+        # Mask boundary jitter is a major source of visible flickering.
+        if _temporal_state["prev_combined_mask"] is not None and \
+           _temporal_state["prev_combined_mask"].shape == combined_mask_raw.shape:
+            combined_mask = _MASK_BLEND_ALPHA * combined_mask_raw + \
+                           (1.0 - _MASK_BLEND_ALPHA) * _temporal_state["prev_combined_mask"]
+        else:
+            combined_mask = combined_mask_raw
+        _temporal_state["prev_combined_mask"] = combined_mask.copy()
+
+        # Step 10: Stable alpha blending with EMA-stabilized color correction
         # seamlessClone was removed because it produces frame-to-frame instability
         # (Poisson equation solutions vary with tiny input changes → visible flicker).
         # Instead, we use color-corrected alpha blending with very soft mask edges.
         
         # Color correction: match mean color of swapped face to target region
+        # Use EMA-smoothed color ratios to prevent per-frame color jitter
         mask_binary = combined_mask > 0.1
         if np.any(mask_binary):
+            color_ratios_raw = np.ones(3, dtype=np.float32)
             for c in range(3):
                 src_mean = face_warped[:, :, c][mask_binary].mean()
                 dst_mean = result[:, :, c][mask_binary].mean()
                 if src_mean > 10:  # Avoid division by near-zero
+                    color_ratios_raw[c] = dst_mean / src_mean
+            
+            # EMA smooth the color ratios to prevent sudden color shifts
+            if _temporal_state["prev_color_ratios"] is not None:
+                color_ratios = _COLOR_ALPHA * color_ratios_raw + \
+                              (1.0 - _COLOR_ALPHA) * _temporal_state["prev_color_ratios"]
+            else:
+                color_ratios = color_ratios_raw
+            _temporal_state["prev_color_ratios"] = color_ratios.copy()
+            
+            # Apply smoothed color correction
+            for c in range(3):
+                if abs(color_ratios[c] - 1.0) > 0.01:  # Only correct if meaningful difference
                     face_warped[:, :, c] = np.clip(
-                        face_warped[:, :, c].astype(np.float32) * (dst_mean / src_mean),
+                        face_warped[:, :, c].astype(np.float32) * color_ratios[c],
                         0, 255
                     ).astype(np.uint8)
         
@@ -974,25 +1019,29 @@ def direct_swap_frame(frame, detect_score: float = 0.5, use_enhancer: bool = Tru
     # This is the most critical anti-flicker mechanism:
     # 1. If the frame barely changed from previous, return previous (skip update)
     # 2. Otherwise, heavily blend with previous frame for smooth transitions
+    # With EMA-smoothed color correction + GFPGAN blending + mask EMA,
+    # the remaining diff should be much smaller, so we can use tighter thresholds.
     if _temporal_state["prev_result"] is not None and \
        _temporal_state["prev_result"].shape == result.shape:
-        # Calculate frame difference in the face region only (more efficient)
+        # Calculate frame difference (full frame mean absolute difference)
         frame_diff = np.mean(np.abs(result.astype(np.int16) - _temporal_state["prev_result"].astype(np.int16)))
         
-        if frame_diff < 3.0:
+        if frame_diff < 4.0:
             # Difference is negligible - return previous frame unchanged
             # This eliminates micro-jitter that causes the "flickering" perception
+            # Raised from 3.0→4.0 because upstream EMA smoothing now reduces noise
             _temporal_state["miss_count"] = 0
             return _temporal_state["prev_result"]
-        elif frame_diff < 8.0:
-            # Small difference - blend very heavily with previous (20% new, 80% old)
-            result = cv2.addWeighted(result, 0.20, _temporal_state["prev_result"], 0.80, 0)
-        elif frame_diff < 20.0:
-            # Moderate difference - standard blend (40% new, 60% old)
-            result = cv2.addWeighted(result, 0.40, _temporal_state["prev_result"], 0.60, 0)
+        elif frame_diff < 10.0:
+            # Small difference - blend very heavily with previous (15% new, 85% old)
+            # More conservative than before (was 20/80) for smoother appearance
+            result = cv2.addWeighted(result, 0.15, _temporal_state["prev_result"], 0.85, 0)
+        elif frame_diff < 25.0:
+            # Moderate difference - standard blend (35% new, 65% old)
+            result = cv2.addWeighted(result, 0.35, _temporal_state["prev_result"], 0.65, 0)
         else:
-            # Large difference (head movement, expression change) - responsive blend (60% new, 40% old)
-            result = cv2.addWeighted(result, 0.60, _temporal_state["prev_result"], 0.40, 0)
+            # Large difference (head movement, expression change) - responsive blend (55% new, 45% old)
+            result = cv2.addWeighted(result, 0.55, _temporal_state["prev_result"], 0.45, 0)
 
     # Cache successful result for flicker prevention
     _temporal_state["prev_result"] = result.copy()
