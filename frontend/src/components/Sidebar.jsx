@@ -213,6 +213,25 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
         // Ignore JWT parse errors
       }
     }
+
+    // Fallback: if user is logged in but has no id (legacy session), extract from JWT
+    if (u?.isLoggedIn && !u?.id) {
+      try {
+        const token = localStorage.getItem('app_access_token');
+        if (token) {
+          const payload = JSON.parse(atob(token.split('.')[1]));
+          const tokenUserId = payload?.sub;
+          if (tokenUserId) {
+            // Patch the user object with id from JWT and persist
+            u.id = Number(tokenUserId);
+            localStorage.setItem('user', JSON.stringify(u));
+            console.info('[Sidebar] Patched missing user.id from JWT:', tokenUserId);
+          }
+        }
+      } catch {
+        // Ignore JWT parse errors
+      }
+    }
     return u;
   })();
 
