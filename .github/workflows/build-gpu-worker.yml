@@ -5,6 +5,7 @@ on:
     branches: [master]
     paths:
       - 'gpu-worker/serverless/**'
+      - 'gpu-worker/face_swap_worker_api.py'
       - 'gpu-worker/live_engine.py'
       - 'gpu-worker/liveportrait_engine.py'
       - 'gpu-worker/imtalker_generate_patch.py'
