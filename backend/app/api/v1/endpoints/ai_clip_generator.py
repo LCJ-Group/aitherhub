@@ -4436,22 +4436,35 @@ async def _process_single_clip_v2(job_id: str, clip: dict, req: GenerateRequest,
 
         elif video_mode == "product_overlay" and (product_imgs or clip.get("product_video_urls")):
             # PiPモード: 動画メイン+商品画像/動画ポップアップ
+            # V12: 商品画像と商品動画の両方がある場合、両方を合成する
+            #   Step 1: 商品画像PiP（中央にポップアップ表示）
+            #   Step 2: 商品動画PiP（右下ワイプ表示）
             product_videos = clip.get("product_video_urls") or []
-            if product_videos:
-                # V11: 商品動画PiPモード
-                await _update_job(job_id, progress_pct=54, current_step=f"クリップ {idx+1}/{total}: PiP合成中（商品動画オーバーレイ）...")
-                pip_path = await _generate_pip_video_overlay(
-                    video_path, product_videos, duration, video_width, video_height, tmp_dir, job_id
-                )
-            else:
-                # 従来の商品画像PiPモード
-                await _update_job(job_id, progress_pct=54, current_step=f"クリップ {idx+1}/{total}: PiP合成中（商品ポップアップ）...")
-                pip_path = await _generate_pip_video(
+            pip_applied = False
+            # Step 1: 商品画像PiPを適用（画像がある場合）
+            if product_imgs:
+                await _update_job(job_id, progress_pct=54, current_step=f"クリップ {idx+1}/{total}: PiP合成中（商品画像ポップアップ）...")
+                pip_img_path = await _generate_pip_video(
                     video_path, product_imgs, duration, video_width, video_height, tmp_dir, job_id
                 )
-            if pip_path and os.path.exists(pip_path):
-                video_path = pip_path
-                logger.info(f"[ai-clip {job_id}] Using PiP composite as video source")
+                if pip_img_path and os.path.exists(pip_img_path):
+                    video_path = pip_img_path
+                    pip_applied = True
+                    logger.info(f"[ai-clip {job_id}] PiP image overlay applied ({len(product_imgs)} images)")
+            # Step 2: 商品動画PiPも適用（動画がある場合）
+            if product_videos:
+                await _update_job(job_id, progress_pct=56, current_step=f"クリップ {idx+1}/{total}: PiP合成中（商品動画オーバーレイ）...")
+                pip_vid_path = await _generate_pip_video_overlay(
+                    video_path, product_videos, duration, video_width, video_height, tmp_dir, job_id
+                )
+                if pip_vid_path and os.path.exists(pip_vid_path):
+                    video_path = pip_vid_path
+                    pip_applied = True
+                    logger.info(f"[ai-clip {job_id}] PiP video overlay applied ({len(product_videos)} videos)")
+            if pip_applied:
+                logger.info(f"[ai-clip {job_id}] Using PiP composite as video source (images={len(product_imgs)}, videos={len(product_videos)})")
+            else:
+                logger.warning(f"[ai-clip {job_id}] PiP generation failed for all inputs (images={len(product_imgs)}, videos={len(product_videos)})")
 
         await _update_job(job_id, progress_pct=58, current_step=f"クリップ {idx+1}/{total}: エンコード準備中...")
         ffmpeg_cmd = _build_advanced_ffmpeg_command(
