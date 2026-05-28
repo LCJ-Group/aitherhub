@@ -483,15 +483,15 @@ def create_landmark_mask(face, frame_shape, blur_amount=0.3):
 
     # Create ellipse centered slightly below face center (protects forehead/hair)
     cx_raw = (x1 + x2) / 2.0
-    cy_raw = (y1 + y2) / 2.0 + face_h * 0.06  # Shift down 6% to protect forehead
-    # Slightly smaller ellipse to keep boundary well inside the face
-    rx_raw = face_w * 0.48
-    ry_raw = face_h * 0.44
+    cy_raw = (y1 + y2) / 2.0 + face_h * 0.08  # Shift down 8% to protect forehead
+    # Smaller ellipse to keep boundary well inside the face (prevents edge flicker)
+    rx_raw = face_w * 0.44
+    ry_raw = face_h * 0.40
 
     # EMA smooth mask parameters to prevent flickering mask edges
     mask_params_raw = np.array([cx_raw, cy_raw, rx_raw, ry_raw], dtype=np.float32)
     if _temporal_state.get("prev_mask_params") is not None:
-        mask_alpha = 0.05  # Same as face smoothing alpha - very stable
+        mask_alpha = 0.03  # Match face smoothing alpha - rock-solid stable
         mask_params = mask_alpha * mask_params_raw + (1 - mask_alpha) * _temporal_state["prev_mask_params"]
     else:
         mask_params = mask_params_raw
@@ -505,13 +505,17 @@ def create_landmark_mask(face, frame_shape, blur_amount=0.3):
     # Draw filled ellipse
     cv2.ellipse(mask, (cx, cy), (rx, ry), 0, 0, 360, 1.0, -1)
 
-    # Apply gaussian blur for very soft edges (critical for eliminating boundary flickering)
-    # Use a much larger kernel - 40% of face size for extremely smooth transitions
-    blur_ksize = max(3, int(min(face_w, face_h) * blur_amount * 2.5) | 1)
+    # Apply gaussian blur for extremely soft edges (critical for eliminating boundary flickering)
+    # Triple-pass blur with very large kernels to create a gradient so wide that
+    # any per-frame mask position jitter becomes invisible
+    blur_ksize = max(3, int(min(face_w, face_h) * blur_amount * 3.0) | 1)
     mask = cv2.GaussianBlur(mask, (blur_ksize, blur_ksize), 0)
-    # Second pass blur for even smoother gradient (double-blur technique)
-    blur_ksize2 = max(3, int(min(face_w, face_h) * blur_amount * 1.0) | 1)
+    # Second pass for even smoother gradient
+    blur_ksize2 = max(3, int(min(face_w, face_h) * blur_amount * 2.0) | 1)
     mask = cv2.GaussianBlur(mask, (blur_ksize2, blur_ksize2), 0)
+    # Third pass - ultra-smooth
+    blur_ksize3 = max(3, int(min(face_w, face_h) * blur_amount * 1.0) | 1)
+    mask = cv2.GaussianBlur(mask, (blur_ksize3, blur_ksize3), 0)
 
     return mask
 
@@ -625,10 +629,10 @@ _temporal_state = {
     "prev_lm106": None,       # Previous smoothed 106-point landmarks
     "frame_count": 0,         # Frame counter for adaptive smoothing
 }
-_SMOOTH_ALPHA = 0.05   # EMA alpha: lower = smoother but more lag, higher = responsive but jittery
-# Reduced from 0.15 to 0.05 for maximum face stability at 15-30 FPS
-# At 15 FPS, 0.05 means each frame only takes 5% of new detection → extremely stable
-# Combined with temporal output blending (Step 12), this eliminates virtually all flicker
+_SMOOTH_ALPHA = 0.03   # EMA alpha: lower = smoother but more lag, higher = responsive but jittery
+# Reduced to 0.03 for maximum face stability at 15-16 FPS
+# At 15 FPS, 0.03 means each frame only takes 3% of new detection → rock-solid stable
+# Combined with change-threshold gating (Step 12), this eliminates virtually all flicker
 
 def _reset_temporal_state():
     """Reset temporal smoothing state (called when source face changes or stream restarts)."""
@@ -670,9 +674,9 @@ def direct_swap_frame(frame, detect_score: float = 0.5, use_enhancer: bool = Tru
     if not faces:
         # No faces detected - use cached result if available (prevents flickering)
         _temporal_state["miss_count"] += 1
-        if _temporal_state["prev_result"] is not None and _temporal_state["miss_count"] <= 15:
-            # Return last successful result for up to 15 frames to bridge detection gaps
-            # At 15 FPS, this covers ~1.0 second of detection dropout
+        if _temporal_state["prev_result"] is not None and _temporal_state["miss_count"] <= 30:
+            # Return last successful result for up to 30 frames to bridge detection gaps
+            # At 15 FPS, this covers ~2.0 seconds of detection dropout
             return _temporal_state["prev_result"]
         return frame  # Too many misses, fall back to original
 
@@ -729,9 +733,11 @@ def direct_swap_frame(frame, detect_score: float = 0.5, use_enhancer: bool = Tru
         target_face.kps = landmarks_5
 
         # Step 2: Compute affine matrix and warp face to 128x128
+        # Use LMEDS instead of RANSAC for more deterministic results
+        # RANSAC with random sampling produces slightly different results each frame
         affine_matrix_raw = cv2.estimateAffinePartial2D(
             landmarks_5, ARCFACE_128_TEMPLATE,
-            method=cv2.RANSAC, ransacReprojThreshold=100
+            method=cv2.LMEDS
         )[0]
 
         if affine_matrix_raw is None:
@@ -781,7 +787,7 @@ def direct_swap_frame(frame, detect_score: float = 0.5, use_enhancer: bool = Tru
         scaled_template = ARCFACE_128_TEMPLATE * scale_factor
         affine_matrix_large_raw = cv2.estimateAffinePartial2D(
             landmarks_5, scaled_template,
-            method=cv2.RANSAC, ransacReprojThreshold=100
+            method=cv2.LMEDS
         )[0]
 
         if affine_matrix_large_raw is None:
@@ -815,14 +821,17 @@ def direct_swap_frame(frame, detect_score: float = 0.5, use_enhancer: bool = Tru
         # Create a mask for the warped face region (where pixels are non-zero)
         warp_mask = np.zeros((paste_size, paste_size), dtype=np.float32)
         # Very large border to keep blending well inside the face crop
-        border = int(paste_size * 0.12)
+        border = int(paste_size * 0.15)
         warp_mask[border:-border, border:-border] = 1.0
         # Very large blur kernel for extremely soft edges (critical for eliminating boundary flicker)
-        blur_k = max(3, int(paste_size * 0.25) | 1)
+        blur_k = max(3, int(paste_size * 0.30) | 1)
         warp_mask = cv2.GaussianBlur(warp_mask, (blur_k, blur_k), 0)
         # Second pass for even smoother gradient
-        blur_k2 = max(3, int(paste_size * 0.10) | 1)
+        blur_k2 = max(3, int(paste_size * 0.15) | 1)
         warp_mask = cv2.GaussianBlur(warp_mask, (blur_k2, blur_k2), 0)
+        # Third pass - ultra-smooth transition
+        blur_k3 = max(3, int(paste_size * 0.08) | 1)
+        warp_mask = cv2.GaussianBlur(warp_mask, (blur_k3, blur_k3), 0)
 
         warp_mask_warped = cv2.warpAffine(
             warp_mask, inv_matrix, (w, h),
@@ -832,29 +841,26 @@ def direct_swap_frame(frame, detect_score: float = 0.5, use_enhancer: bool = Tru
         # Combine: warp_mask (where face was pasted) AND face_mask (landmark-based protection)
         combined_mask = warp_mask_warped * face_mask
 
-        # Step 10: Poisson blending (seamlessClone) for invisible boundaries
-        # This is the gold standard for face compositing - it matches colors and
-        # eliminates visible edges by solving the Poisson equation at boundaries.
-        # Falls back to alpha blend if seamlessClone fails (e.g., mask too small).
-        try:
-            # Create binary mask for seamlessClone (needs uint8 0/255)
-            sc_mask = (combined_mask * 255).astype(np.uint8)
-            # Find center of the mask region for seamlessClone
-            mask_ys, mask_xs = np.where(sc_mask > 128)
-            if len(mask_ys) > 100:  # Need enough pixels for Poisson blending
-                center_x = int(np.mean(mask_xs))
-                center_y = int(np.mean(mask_ys))
-                # MIXED_CLONE preserves source face features while matching boundary colors
-                result = cv2.seamlessClone(
-                    face_warped, result, sc_mask,
-                    (center_x, center_y), cv2.MIXED_CLONE
-                )
-            else:
-                raise ValueError("Mask too small for seamlessClone")
-        except Exception:
-            # Fallback: alpha blend with very soft mask
-            mask_3ch = combined_mask[:, :, np.newaxis]
-            result = (face_warped.astype(np.float32) * mask_3ch + result.astype(np.float32) * (1 - mask_3ch)).astype(np.uint8)
+        # Step 10: Stable alpha blending with color correction
+        # seamlessClone was removed because it produces frame-to-frame instability
+        # (Poisson equation solutions vary with tiny input changes → visible flicker).
+        # Instead, we use color-corrected alpha blending with very soft mask edges.
+        
+        # Color correction: match mean color of swapped face to target region
+        mask_binary = combined_mask > 0.1
+        if np.any(mask_binary):
+            for c in range(3):
+                src_mean = face_warped[:, :, c][mask_binary].mean()
+                dst_mean = result[:, :, c][mask_binary].mean()
+                if src_mean > 10:  # Avoid division by near-zero
+                    face_warped[:, :, c] = np.clip(
+                        face_warped[:, :, c].astype(np.float32) * (dst_mean / src_mean),
+                        0, 255
+                    ).astype(np.uint8)
+        
+        # Alpha blend with soft mask (no Poisson, fully deterministic)
+        mask_3ch = combined_mask[:, :, np.newaxis]
+        result = (face_warped.astype(np.float32) * mask_3ch + result.astype(np.float32) * (1 - mask_3ch)).astype(np.uint8)
 
         # Step 11: Apply mouth opening AFTER face paste (critical: must be after Step 10)
         # Uses vectorized numpy operations for speed (~1ms)
@@ -964,17 +970,29 @@ def direct_swap_frame(frame, detect_score: float = 0.5, use_enhancer: bool = Tru
             except Exception as e:
                 logger.warning(f"[LipSync] mouth_open error: {e}")
 
-    # Step 12: Temporal output blending - blend current result with previous frame
-    # This is the most effective anti-flicker technique: even if individual components
-    # jitter slightly, the final output changes smoothly between frames.
-    output_blend_alpha = 0.65  # 65% current frame + 35% previous frame
+    # Step 12: Temporal output blending with change-threshold gating
+    # This is the most critical anti-flicker mechanism:
+    # 1. If the frame barely changed from previous, return previous (skip update)
+    # 2. Otherwise, heavily blend with previous frame for smooth transitions
     if _temporal_state["prev_result"] is not None and \
        _temporal_state["prev_result"].shape == result.shape:
-        result = cv2.addWeighted(
-            result, output_blend_alpha,
-            _temporal_state["prev_result"], 1.0 - output_blend_alpha,
-            0
-        )
+        # Calculate frame difference in the face region only (more efficient)
+        frame_diff = np.mean(np.abs(result.astype(np.int16) - _temporal_state["prev_result"].astype(np.int16)))
+        
+        if frame_diff < 3.0:
+            # Difference is negligible - return previous frame unchanged
+            # This eliminates micro-jitter that causes the "flickering" perception
+            _temporal_state["miss_count"] = 0
+            return _temporal_state["prev_result"]
+        elif frame_diff < 8.0:
+            # Small difference - blend very heavily with previous (20% new, 80% old)
+            result = cv2.addWeighted(result, 0.20, _temporal_state["prev_result"], 0.80, 0)
+        elif frame_diff < 20.0:
+            # Moderate difference - standard blend (40% new, 60% old)
+            result = cv2.addWeighted(result, 0.40, _temporal_state["prev_result"], 0.60, 0)
+        else:
+            # Large difference (head movement, expression change) - responsive blend (60% new, 40% old)
+            result = cv2.addWeighted(result, 0.60, _temporal_state["prev_result"], 0.40, 0)
 
     # Cache successful result for flicker prevention
     _temporal_state["prev_result"] = result.copy()
