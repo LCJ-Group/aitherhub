@@ -375,12 +375,20 @@ def extract_frames(
             if f.endswith('.jpg'):
                 os.remove(os.path.join(out_dir, f))
     elif _stall_detected["value"] and not use_gpu:
-        # CPU path stalled — this is a real failure
+        # CPU path stalled — v16: try segment-based extraction before failing
         _actual_count = len([f for f in os.listdir(out_dir) if f.endswith('.jpg')])
-        raise RuntimeError(
-            f"[FRAMES] ffmpeg stalled (no new frames for {STALL_TIMEOUT}s). "
-            f"Extracted {_actual_count} of {expected_frames} expected frames "
-            f"({_actual_count/expected_frames*100:.0f}% < {PARTIAL_SUCCESS_THRESHOLD*100:.0f}% threshold)."
+        logger.warning(
+            "[FRAMES] CPU stalled at %d/%d frames (%.0f%%). Trying segment-based extraction.",
+            _actual_count, expected_frames, _actual_count / expected_frames * 100 if expected_frames > 0 else 0,
+        )
+        # Clean partial output before segment extraction
+        for f in os.listdir(out_dir):
+            if f.endswith('.jpg'):
+                os.remove(os.path.join(out_dir, f))
+        # v16: Segment-based extraction as final fallback
+        return _extract_with_segments(
+            video_path, fps, out_dir, duration, expected_frames,
+            _sw, _jq, _is_vfr, on_progress,
         )
 
     # If GPU failed (error or stall), fallback to CPU
@@ -455,7 +463,7 @@ def extract_frames(
         proc2.wait()
 
         if _stall_detected2["value"]:
-            # v14: Check partial success for CPU fallback too
+            # v16: CPU fallback stalled → try segment-based extraction
             _cpu_count = len([f for f in os.listdir(out_dir) if f.endswith('.jpg')])
             _cpu_completeness = _cpu_count / expected_frames if expected_frames > 0 else 0
             if _cpu_completeness >= PARTIAL_SUCCESS_THRESHOLD:
@@ -466,9 +474,17 @@ def extract_frames(
                 if on_progress:
                     on_progress(100)
                 return out_dir
-            raise RuntimeError(
-                f"[FRAMES] ffmpeg CPU fallback stalled (no new frames for {STALL_TIMEOUT}s). "
-                f"Extracted {_cpu_count}/{expected_frames} ({_cpu_completeness*100:.0f}% < {PARTIAL_SUCCESS_THRESHOLD*100:.0f}% threshold)."
+            # v16: Instead of raising immediately, try segment-based extraction
+            logger.warning(
+                "[FRAMES] CPU fallback stalled at %d/%d (%.0f%%). Trying segment-based extraction.",
+                _cpu_count, expected_frames, _cpu_completeness * 100,
+            )
+            for f in os.listdir(out_dir):
+                if f.endswith('.jpg'):
+                    os.remove(os.path.join(out_dir, f))
+            return _extract_with_segments(
+                video_path, fps, out_dir, duration, expected_frames,
+                _sw, _jq, _is_vfr, on_progress,
             )
 
     if on_progress:
@@ -478,6 +494,181 @@ def extract_frames(
     logger.info("[OK][STEP 0][FFMPEG] %d frames extracted → %s (gpu=%s)",
                 frame_count, out_dir, use_gpu)
     return out_dir
+
+
+def _extract_with_segments(
+    video_path: str,
+    fps: int,
+    out_dir: str,
+    duration: float,
+    expected_frames: int,
+    scale_width: int,
+    jpeg_quality: int,
+    is_vfr: bool,
+    on_progress=None,
+) -> str:
+    """
+    v16: Segment-based frame extraction fallback.
+    When normal extraction stalls (due to VFR PTS gaps, corrupt sections, etc.),
+    this function extracts frames in time-based segments, skipping over problematic
+    sections that cause ffmpeg to hang.
+
+    Strategy:
+    - Split video into segments (default 120s each)
+    - Extract each segment with a short stall timeout (90s)
+    - If a segment stalls, skip ahead to the next segment
+    - Merge all extracted frames with sequential numbering
+    - Accept result if >= 15% of expected frames extracted
+    """
+    import tempfile
+    import time as _time
+    import threading
+    import shutil
+    import glob as _glob
+
+    SEGMENT_DURATION = 120  # seconds per segment
+    SEGMENT_STALL_TIMEOUT = 90  # seconds before declaring segment stall
+    SEGMENT_MIN_THRESHOLD = 0.15  # Accept if >= 15% frames extracted
+
+    num_segments = max(1, int(duration / SEGMENT_DURATION) + 1)
+    logger.info(
+        "[FRAMES][SEGMENT] Starting segment-based extraction: %d segments of %ds each "
+        "(duration=%.0fs, expected=%d frames)",
+        num_segments, SEGMENT_DURATION, duration, expected_frames,
+    )
+
+    total_extracted = 0
+    segment_results = []  # list of (segment_idx, tmp_dir, frame_count)
+    skipped_segments = []
+
+    for seg_idx in range(num_segments):
+        seg_start = seg_idx * SEGMENT_DURATION
+        seg_end = min((seg_idx + 1) * SEGMENT_DURATION, duration)
+        seg_expected = int((seg_end - seg_start) * fps)
+
+        if seg_expected <= 0:
+            continue
+
+        # Create temp directory for this segment
+        seg_tmp = tempfile.mkdtemp(prefix=f"seg{seg_idx:03d}_")
+
+        # Build ffmpeg command with -ss (seek) and -t (duration)
+        _vsync_mode = "cfr" if is_vfr else "0"
+        cmd_seg = [
+            FFMPEG_BIN, "-y",
+            "-err_detect", "ignore_err",
+            "-fflags", "+discardcorrupt+genpts",
+            "-ss", str(seg_start),
+            "-t", str(SEGMENT_DURATION),
+            "-threads", FFMPEG_THREADS,
+            "-i", video_path,
+            "-vf", f"fps={fps},scale={scale_width}:-1",
+            "-q:v", str(jpeg_quality),
+            "-vsync", _vsync_mode,
+            os.path.join(seg_tmp, "frame_%08d.jpg"),
+        ]
+
+        proc_seg = subprocess.Popen(
+            cmd_seg,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+        # Monitor this segment with short stall timeout
+        _seg_stalled = {"value": False}
+
+        def _seg_monitor(p, tmp, stalled_flag, expected_seg):
+            last_count = 0
+            stall_start = _time.time()
+            while p.poll() is None:
+                try:
+                    count = len([f for f in os.listdir(tmp) if f.endswith('.jpg')])
+                    if count > last_count:
+                        last_count = count
+                        stall_start = _time.time()
+                    elif count == last_count:
+                        stall_sec = _time.time() - stall_start
+                        if stall_sec > SEGMENT_STALL_TIMEOUT:
+                            stalled_flag["value"] = True
+                            p.kill()
+                            return
+                except Exception:
+                    pass
+                _time.sleep(2)
+
+        t_seg = threading.Thread(
+            target=_seg_monitor,
+            args=(proc_seg, seg_tmp, _seg_stalled, seg_expected),
+            daemon=True,
+        )
+        t_seg.start()
+        proc_seg.wait()
+        t_seg.join(timeout=5)
+
+        seg_frames = len([f for f in os.listdir(seg_tmp) if f.endswith('.jpg')])
+
+        if _seg_stalled["value"]:
+            logger.warning(
+                "[FRAMES][SEGMENT] Segment %d/%d STALLED at %ds-%ds (got %d/%d frames). Skipping.",
+                seg_idx + 1, num_segments, seg_start, seg_end, seg_frames, seg_expected,
+            )
+            skipped_segments.append(seg_idx)
+            # Keep whatever frames were extracted from this segment
+            if seg_frames > 0:
+                segment_results.append((seg_idx, seg_tmp, seg_frames))
+                total_extracted += seg_frames
+            else:
+                shutil.rmtree(seg_tmp, ignore_errors=True)
+        else:
+            if seg_frames > 0:
+                segment_results.append((seg_idx, seg_tmp, seg_frames))
+                total_extracted += seg_frames
+                logger.info(
+                    "[FRAMES][SEGMENT] Segment %d/%d OK: %d frames (%ds-%ds)",
+                    seg_idx + 1, num_segments, seg_frames, seg_start, seg_end,
+                )
+            else:
+                shutil.rmtree(seg_tmp, ignore_errors=True)
+
+        # Update progress
+        if on_progress and expected_frames > 0:
+            pct = min(int(total_extracted / expected_frames * 100), 99)
+            on_progress(pct)
+
+    # Merge all segment frames into out_dir with sequential numbering
+    logger.info(
+        "[FRAMES][SEGMENT] Merging %d segments: %d total frames (skipped %d segments)",
+        len(segment_results), total_extracted, len(skipped_segments),
+    )
+
+    frame_num = 1
+    for seg_idx, seg_tmp, seg_count in sorted(segment_results, key=lambda x: x[0]):
+        seg_files = sorted([f for f in os.listdir(seg_tmp) if f.endswith('.jpg')])
+        for fname in seg_files:
+            src = os.path.join(seg_tmp, fname)
+            dst = os.path.join(out_dir, f"frame_{frame_num:08d}.jpg")
+            os.rename(src, dst)
+            frame_num += 1
+        shutil.rmtree(seg_tmp, ignore_errors=True)
+
+    final_count = frame_num - 1
+    completeness = final_count / expected_frames if expected_frames > 0 else 0
+
+    if completeness >= SEGMENT_MIN_THRESHOLD:
+        logger.info(
+            "[FRAMES][SEGMENT] SUCCESS: %d/%d frames (%.0f%%) extracted via segments. "
+            "Skipped %d problematic segments.",
+            final_count, expected_frames, completeness * 100, len(skipped_segments),
+        )
+        if on_progress:
+            on_progress(100)
+        return out_dir
+    else:
+        raise RuntimeError(
+            f"[FRAMES][SEGMENT] Segment extraction failed: {final_count}/{expected_frames} "
+            f"({completeness*100:.0f}% < {SEGMENT_MIN_THRESHOLD*100:.0f}% threshold). "
+            f"Skipped segments: {skipped_segments}"
+        )
 
 
 # ======================================================
