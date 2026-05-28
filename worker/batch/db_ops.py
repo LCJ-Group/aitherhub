@@ -2,7 +2,7 @@
 Database operations for batch worker.
 Provides synchronous wrappers around async SQLAlchemy operations.
 """
-import asyncio, uuid
+import asyncio, uuid, threading
 import os, json
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
@@ -75,17 +75,26 @@ AsyncSessionLocal = sessionmaker(
     expire_on_commit=False,
 )
 
-# Global event loop for reuse (avoids asyncpg pool conflicts)
-_loop = None
+# Thread-safe event loop management.
+# Each thread gets its own event loop to avoid "This event loop is already
+# running" errors when ThreadPoolExecutor runs DB-sync calls in parallel
+# (e.g. frame extraction + audio transcription in process_video.py).
+_thread_local = threading.local()
 
 
 def get_event_loop():
-    """Get or create a persistent event loop for DB operations."""
-    global _loop
-    if _loop is None or _loop.is_closed():
-        _loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(_loop)
-    return _loop
+    """Get or create a per-thread event loop for DB operations.
+
+    Using threading.local ensures that parallel threads (e.g. frame extraction
+    + audio transcription in ThreadPoolExecutor) each get their own loop,
+    preventing 'This event loop is already running' errors.
+    """
+    loop = getattr(_thread_local, 'loop', None)
+    if loop is None or loop.is_closed():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        _thread_local.loop = loop
+    return loop
 
 
 @asynccontextmanager
@@ -128,7 +137,6 @@ def close_db_sync():
 
 async def reset_pool():
     """Dispose and recreate the connection pool to recover from stale connections."""
-    global _loop
     try:
         await engine.dispose()
     except Exception:
