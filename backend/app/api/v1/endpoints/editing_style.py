@@ -570,7 +570,7 @@ async def _run_single_analysis(profile_id: str, sample_id: str, video_url: str):
 
         # 3. Scene change detection (using ffmpeg)
         logger.info(f"[editing-style] Detecting scene changes for {sample_id}...")
-        scene_times = _detect_scene_changes(video_path)
+        scene_times = await _detect_scene_changes(video_path)
 
         # Calculate cut intervals
         cut_intervals = _calc_cut_intervals(scene_times, duration)
@@ -784,8 +784,8 @@ async def _run_pair_analysis(
         original_captions = await _transcribe_for_style(original_path)
 
         # 4. Scene detection on both
-        finished_scenes = _detect_scene_changes(finished_path)
-        original_scenes = _detect_scene_changes(original_path)
+        finished_scenes = await _detect_scene_changes(finished_path)
+        original_scenes = await _detect_scene_changes(original_path, timeout=600)  # longer timeout for long original videos
 
         # 5. Diff analysis with GPT
         logger.info(f"[editing-style] GPT diff analysis...")
@@ -877,16 +877,45 @@ def _get_video_duration(video_path: str) -> float:
     return 0.0
 
 
-def _detect_scene_changes(video_path: str, threshold: float = 0.3) -> list:
-    """Detect scene changes using ffmpeg"""
+async def _detect_scene_changes(video_path: str, threshold: float = 0.3, timeout: int = 300) -> list:
+    """Detect scene changes using ffmpeg (async, non-blocking).
+
+    For long videos (>10 min), we limit analysis to the first 30 minutes
+    to avoid excessive processing time on Azure App Service.
+    """
+    duration = _get_video_duration(video_path)
+    # For very long videos, limit to first 30 min to avoid timeout
+    time_limit_args = []
+    if duration > 600:  # > 10 minutes
+        time_limit_args = ["-t", "1800"]  # analyze first 30 min max
+        logger.info(f"[editing-style] Long video ({duration:.0f}s), limiting scene detection to first 30 min")
+
     cmd = [
-        "ffmpeg", "-i", video_path,
+        "ffmpeg", *time_limit_args, "-i", video_path,
         "-vf", f"select='gt(scene,{threshold})',showinfo",
         "-vsync", "vfr", "-f", "null", "-"
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        stderr_text = stderr_bytes.decode("utf-8", errors="replace")
+    except asyncio.TimeoutError:
+        logger.warning(f"[editing-style] Scene detection timed out after {timeout}s for {video_path}")
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        return []
+    except Exception as e:
+        logger.warning(f"[editing-style] Scene detection failed: {e}")
+        return []
+
     scene_times = []
-    for line in result.stderr.split("\n"):
+    for line in stderr_text.split("\n"):
         if "pts_time:" in line:
             match = re.search(r"pts_time:(\d+\.?\d*)", line)
             if match:
