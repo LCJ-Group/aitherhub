@@ -1,7 +1,11 @@
 import Sidebar from "../components/Sidebar";
 import MainContent from '../components/MainContent';
+import OnboardingModal from '../components/OnboardingModal';
 import { useState, useCallback, useMemo, useEffect } from "react";
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import BaseApiService from '../base/api/BaseApiService';
+
+const API_BASE = import.meta.env.VITE_API_BASE_URL;
 
 const getUserFromStorage = () => {
   try {
@@ -17,6 +21,7 @@ export default function MainLayout() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [openSidebar, setOpenSidebar] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
 
   // Extract editor params from URL (for feedback card → editor navigation)
   const editorParams = useMemo(() => {
@@ -33,6 +38,30 @@ export default function MainLayout() {
   const [user, setUser] = useState(getUserFromStorage);
   const [refreshKey, setRefreshKey] = useState(0);
   const [showFeedback, setShowFeedback] = useState(false);
+
+  // Check if onboarding is needed (only once on mount)
+  useEffect(() => {
+    const checkOnboarding = async () => {
+      try {
+        // Skip if already dismissed this session
+        if (sessionStorage.getItem('onboarding_dismissed')) return;
+        const api = new BaseApiService(API_BASE);
+        const profile = await api.get('/api/v1/profile/me');
+        if (profile && !profile.onboarding_completed) {
+          setShowOnboarding(true);
+        }
+      } catch (err) {
+        // If API fails (401, network), don't show onboarding
+        console.debug('[MainLayout] onboarding check skipped:', err?.message);
+      }
+    };
+    checkOnboarding();
+  }, []);
+
+  const handleOnboardingComplete = useCallback(() => {
+    setShowOnboarding(false);
+    sessionStorage.setItem('onboarding_dismissed', '1');
+  }, []);
 
   // Sync selectedVideoId when URL param changes
   useEffect(() => {
@@ -161,6 +190,12 @@ export default function MainLayout() {
           </MainContent>
         </main>
       </div>
+
+      {/* Onboarding Modal */}
+      <OnboardingModal
+        isOpen={showOnboarding}
+        onComplete={handleOnboardingComplete}
+      />
     </div>
   );
 }

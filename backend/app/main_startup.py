@@ -843,6 +843,24 @@ async def run_all_ddl_migrations():
         except Exception as e:
             logger.warning(f"[DDL] clip_playlists: {e}")
 
+        # ── user_profiles (onboarding counseling) ──
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(_text("""
+                    CREATE TABLE IF NOT EXISTS user_profiles (
+                        user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                        user_type VARCHAR(20) NOT NULL DEFAULT 'unknown',
+                        main_challenge VARCHAR(100),
+                        tiktok_account VARCHAR(100),
+                        onboarding_completed BOOLEAN NOT NULL DEFAULT false,
+                        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                    )
+                """))
+                logger.info("[DDL] user_profiles \u2713")
+        except Exception as e:
+            logger.warning(f"[DDL] user_profiles: {e}")
+
         elapsed = time.time() - ddl_start
         logger.info(f"[DDL] All migrations completed in {elapsed:.1f}s")
 
