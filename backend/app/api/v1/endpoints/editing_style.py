@@ -489,13 +489,39 @@ async def analyze_single(
     # Validate
     async with get_session() as session:
         result = await session.execute(text("""
-            SELECT id, video_url, profile_id FROM editing_style_samples
+            SELECT id, video_url, profile_id, sample_type FROM editing_style_samples
             WHERE id = :id AND profile_id = :pid
         """), {"id": req.sample_id, "pid": req.profile_id})
         sample = result.fetchone()
 
     if not sample:
         raise HTTPException(status_code=404, detail="サンプルが見つかりません")
+
+    # If this is an original sample, try to find its paired finished sample and run pair analysis
+    if sample.sample_type == 'original':
+        async with get_session() as session:
+            # Find a finished sample in the same profile that was paired with this original
+            pair_result = await session.execute(text("""
+                SELECT id, video_url FROM editing_style_samples
+                WHERE profile_id = :pid AND sample_type = 'finished'
+                  AND original_video_url = :orig_url
+                ORDER BY created_at DESC LIMIT 1
+            """), {"pid": req.profile_id, "orig_url": sample.video_url})
+            pair_row = pair_result.fetchone()
+
+        if pair_row:
+            # Run as pair analysis (longer timeout, proper diff analysis)
+            async with get_session() as session:
+                await session.execute(text("""
+                    UPDATE editing_style_samples SET analysis_status = 'analyzing'
+                    WHERE id IN (:fid, :oid)
+                """), {"fid": pair_row.id, "oid": req.sample_id})
+                await session.commit()
+            asyncio.create_task(_run_pair_analysis_safe(
+                req.profile_id, pair_row.id, req.sample_id,
+                pair_row.video_url, sample.video_url,
+            ))
+            return {"success": True, "message": "ペア分析（再試行）を開始しました", "sample_id": req.sample_id}
 
     # Mark as analyzing
     async with get_session() as session:
@@ -504,18 +530,20 @@ async def analyze_single(
         """), {"id": req.sample_id})
         await session.commit()
 
-    # Run analysis in background using asyncio.create_task for reliability
-    asyncio.create_task(_run_single_analysis_safe(req.profile_id, req.sample_id, sample.video_url))
+    # Determine timeout based on sample type
+    is_original = sample.sample_type == 'original'
+    asyncio.create_task(_run_single_analysis_safe(req.profile_id, req.sample_id, sample.video_url, is_original=is_original))
 
     return {"success": True, "message": "分析を開始しました", "sample_id": req.sample_id}
 
 
-async def _run_single_analysis_safe(profile_id: str, sample_id: str, video_url: str):
+async def _run_single_analysis_safe(profile_id: str, sample_id: str, video_url: str, is_original: bool = False):
     """Wrapper with timeout and guaranteed status update"""
+    timeout_sec = 900 if is_original else 300  # 15 min for originals, 5 min for finished
     try:
         await asyncio.wait_for(
             _run_single_analysis(profile_id, sample_id, video_url),
-            timeout=300  # 5 minutes max
+            timeout=timeout_sec
         )
     except asyncio.TimeoutError:
         logger.error(f"[editing-style] Analysis timed out for {sample_id}")
@@ -955,16 +983,25 @@ async def _transcribe_for_style(video_path: str) -> list:
         azure_endpoint=clean_endpoint,
     )
 
-    # Extract audio
+    # Extract audio (limit to first 15 min for long videos to avoid timeout)
     audio_path = video_path.replace(".mp4", "_audio.mp3")
+    duration = 0
+    try:
+        duration = _get_video_duration(video_path)
+    except Exception:
+        pass
+    ffmpeg_args = ["ffmpeg", "-y", "-i", video_path]
+    if duration > 600:  # > 10 min: only transcribe first 15 min
+        ffmpeg_args.extend(["-t", "900"])
+        logger.info(f"[editing-style] Long video ({duration:.0f}s), limiting audio to first 15 min")
+    ffmpeg_args.extend(["-vn", "-acodec", "libmp3lame", "-ar", "16000", "-ac", "1", "-b:a", "64k", audio_path])
+    audio_timeout = 300 if duration > 600 else 120  # longer timeout for long videos
     try:
         proc = await asyncio.create_subprocess_exec(
-            "ffmpeg", "-y", "-i", video_path,
-            "-vn", "-acodec", "libmp3lame", "-ar", "16000", "-ac", "1", "-b:a", "64k",
-            audio_path,
+            *ffmpeg_args,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
-        await asyncio.wait_for(proc.communicate(), timeout=120)
+        await asyncio.wait_for(proc.communicate(), timeout=audio_timeout)
     except Exception as e:
         logger.warning(f"[editing-style] Audio extraction failed: {e}")
         return []
