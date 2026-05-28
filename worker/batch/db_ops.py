@@ -75,26 +75,59 @@ AsyncSessionLocal = sessionmaker(
     expire_on_commit=False,
 )
 
-# Thread-safe event loop management.
-# Each thread gets its own event loop to avoid "This event loop is already
-# running" errors when ThreadPoolExecutor runs DB-sync calls in parallel
-# (e.g. frame extraction + audio transcription in process_video.py).
-_thread_local = threading.local()
+# ── Thread-safe event loop management ──
+# A SINGLE dedicated event loop runs in a daemon thread.  Every _sync()
+# wrapper submits its coroutine to this loop via run_coroutine_threadsafe(),
+# so the asyncpg connection pool (which binds to one loop) is always
+# accessed from the same loop — regardless of which thread calls _sync().
+# This fixes both:
+#   - "This event loop is already running" (old bug with global _loop)
+#   - "Future attached to a different loop" (threading.local bug)
+
+_db_loop: asyncio.AbstractEventLoop | None = None
+_db_loop_thread: threading.Thread | None = None
+_db_loop_lock = threading.Lock()
+
+
+def _start_db_loop():
+    """Start the background event loop (called once, lazily)."""
+    global _db_loop, _db_loop_thread
+    _db_loop = asyncio.new_event_loop()
+
+    def _run():
+        asyncio.set_event_loop(_db_loop)
+        _db_loop.run_forever()
+
+    _db_loop_thread = threading.Thread(target=_run, daemon=True, name="db-event-loop")
+    _db_loop_thread.start()
 
 
 def get_event_loop():
-    """Get or create a per-thread event loop for DB operations.
+    """Return the shared DB event loop, starting it if needed.
 
-    Using threading.local ensures that parallel threads (e.g. frame extraction
-    + audio transcription in ThreadPoolExecutor) each get their own loop,
-    preventing 'This event loop is already running' errors.
+    All callers — from any thread — get the SAME loop.  Use
+    run_sync() instead of loop.run_until_complete() to safely
+    execute coroutines from any thread.
     """
-    loop = getattr(_thread_local, 'loop', None)
-    if loop is None or loop.is_closed():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        _thread_local.loop = loop
-    return loop
+    global _db_loop
+    if _db_loop is None or _db_loop.is_closed():
+        with _db_loop_lock:
+            if _db_loop is None or _db_loop.is_closed():
+                _start_db_loop()
+    return _db_loop
+
+
+def run_sync(coro):
+    """Run an async coroutine from ANY thread and return the result.
+
+    Uses asyncio.run_coroutine_threadsafe to submit the coroutine to
+    the dedicated DB event loop, then blocks until the result is ready.
+    This is safe to call from the main thread, ThreadPoolExecutor workers,
+    or any other thread.
+    """
+    loop = get_event_loop()
+    future = asyncio.run_coroutine_threadsafe(coro, loop)
+    return future.result()  # blocks until done
 
 
 @asynccontextmanager
@@ -125,14 +158,12 @@ async def close_db():
 
 def init_db_sync():
     """Synchronous wrapper for database initialization."""
-    loop = get_event_loop()
-    loop.run_until_complete(init_db())
+    run_sync(init_db())
 
 
 def close_db_sync():
     """Synchronous wrapper for database cleanup."""
-    loop = get_event_loop()
-    loop.run_until_complete(close_db())
+    run_sync(close_db())
 
 
 async def reset_pool():
@@ -147,8 +178,7 @@ async def reset_pool():
 
 def reset_pool_sync():
     """Synchronous wrapper for pool reset."""
-    loop = get_event_loop()
-    loop.run_until_complete(reset_pool())
+    run_sync(reset_pool())
 
 
 async def insert_phase(
@@ -207,8 +237,7 @@ async def insert_phase(
 
 def insert_phase_sync(*args, **kwargs):
     """Synchronous wrapper for `insert_phase` that returns the new id as string."""
-    loop = get_event_loop()
-    return loop.run_until_complete(insert_phase(*args, **kwargs))
+    return run_sync(insert_phase(*args, **kwargs))
 
 
 # ---------- Helper ----------
@@ -221,8 +250,7 @@ async def get_user_id_of_video(video_id: str) -> int | None:
 
 
 def get_user_id_of_video_sync(video_id: str):
-    loop = get_event_loop()
-    return loop.run_until_complete(get_user_id_of_video(video_id))
+    return run_sync(get_user_id_of_video(video_id))
 
 
 # ---------- STEP 5: insert video_phases ----------
@@ -285,8 +313,7 @@ async def insert_video_phase(
 
 
 def insert_video_phase_sync(*args, **kwargs):
-    loop = get_event_loop()
-    return loop.run_until_complete(insert_video_phase(*args, **kwargs))
+    return run_sync(insert_video_phase(*args, **kwargs))
 
 
 # ---------- STEP 6: update phase_description ----------
@@ -314,8 +341,7 @@ async def update_video_phase_description(
 
 
 def update_video_phase_description_sync(*args, **kwargs):
-    loop = get_event_loop()
-    return loop.run_until_complete(update_video_phase_description(*args, **kwargs))
+    return run_sync(update_video_phase_description(*args, **kwargs))
 
 
 # ---------- STEP 5.5: persist audio_text (speech_text) to video_phases ----------
@@ -342,8 +368,7 @@ async def update_video_phase_audio_text(
 
 
 def update_video_phase_audio_text_sync(*args, **kwargs):
-    loop = get_event_loop()
-    return loop.run_until_complete(update_video_phase_audio_text(*args, **kwargs))
+    return run_sync(update_video_phase_audio_text(*args, **kwargs))
 
 
 # ---------- STEP 7: upsert phase_groups + update video_phases ----------
@@ -384,8 +409,7 @@ async def get_all_phase_groups(user_id: int):
 
 
 def get_all_phase_groups_sync(user_id: int):
-    loop = get_event_loop()
-    return loop.run_until_complete(get_all_phase_groups(user_id))
+    return run_sync(get_all_phase_groups(user_id))
 
 
 
@@ -432,8 +456,7 @@ async def update_phase_group_for_video_phase(video_id: str, phase_index: int, gr
 
 
 def update_phase_group_for_video_phase_sync(*args, **kwargs):
-    loop = get_event_loop()
-    return loop.run_until_complete(update_phase_group_for_video_phase(*args, **kwargs))
+    return run_sync(update_phase_group_for_video_phase(*args, **kwargs))
 
 
 async def create_phase_group(
@@ -469,8 +492,7 @@ async def create_phase_group(
 
 
 def create_phase_group_sync(*args, **kwargs):
-    loop = get_event_loop()
-    return loop.run_until_complete(create_phase_group(*args, **kwargs))
+    return run_sync(create_phase_group(*args, **kwargs))
 
 
 async def update_phase_group(group_id: int, centroid: list[float], size: int):
@@ -491,8 +513,7 @@ async def update_phase_group(group_id: int, centroid: list[float], size: int):
 
 
 def update_phase_group_sync(*args, **kwargs):
-    loop = get_event_loop()
-    return loop.run_until_complete(update_phase_group(*args, **kwargs))
+    return run_sync(update_phase_group(*args, **kwargs))
 
 # ---------- STEP 8: upsert group_best_phases ----------
 # ---------- STEP 8 BULK OPS ----------
@@ -563,8 +584,7 @@ async def bulk_upsert_group_best_phases(
 
 
 def bulk_upsert_group_best_phases_sync(user_id, rows):
-    loop = get_event_loop()
-    return loop.run_until_complete(bulk_upsert_group_best_phases(user_id, rows))
+    return run_sync(bulk_upsert_group_best_phases(user_id, rows))
 
 
 async def bulk_refresh_phase_insights(
@@ -625,8 +645,7 @@ async def bulk_refresh_phase_insights(
 
 
 def bulk_refresh_phase_insights_sync(user_id, rows):
-    loop = get_event_loop()
-    return loop.run_until_complete(
+    return run_sync(
         bulk_refresh_phase_insights(user_id, rows)
     )
 
@@ -757,8 +776,7 @@ async def upsert_phase_insight(
 
 
 def upsert_phase_insight_sync(*args, **kwargs):
-    loop = get_event_loop()
-    return loop.run_until_complete(upsert_phase_insight(*args, **kwargs))
+    return run_sync(upsert_phase_insight(*args, **kwargs))
 
 
 # =========================
@@ -793,8 +811,7 @@ async def insert_video_insight(
 
 
 def insert_video_insight_sync(*args, **kwargs):
-    loop = get_event_loop()
-    return loop.run_until_complete(insert_video_insight(*args, **kwargs))
+    return run_sync(insert_video_insight(*args, **kwargs))
 
 
 
@@ -817,8 +834,7 @@ async def update_video_status(video_id: str, status: str):
 
 
 def update_video_status_sync(video_id: str, status: str):
-    loop = get_event_loop()
-    return loop.run_until_complete(update_video_status(video_id, status))
+    return run_sync(update_video_status(video_id, status))
 
 
 async def update_video_step_progress(video_id: str, step_progress: int):
@@ -838,8 +854,7 @@ async def update_video_step_progress(video_id: str, step_progress: int):
 
 
 def update_video_step_progress_sync(video_id: str, step_progress: int):
-    loop = get_event_loop()
-    return loop.run_until_complete(update_video_step_progress(video_id, step_progress))
+    return run_sync(update_video_step_progress(video_id, step_progress))
 
 
 async def get_video_status(video_id: str):
@@ -850,8 +865,7 @@ async def get_video_status(video_id: str):
     return row[0] if row else None
 
 def get_video_status_sync(video_id: str):
-    loop = get_event_loop()
-    return loop.run_until_complete(get_video_status(video_id))
+    return run_sync(get_video_status(video_id))
 
 
 # ---------- Load phase_units for resume ----------
@@ -934,8 +948,7 @@ async def load_video_phases(
 
 
 def load_video_phases_sync(video_id: str, user_id: int):
-    loop = get_event_loop()
-    return loop.run_until_complete(
+    return run_sync(
         load_video_phases(video_id, user_id)
     )
 
@@ -1027,8 +1040,7 @@ async def upsert_video_structure_features(
 
 
 def upsert_video_structure_features_sync(*args, **kwargs):
-    loop = get_event_loop()
-    return loop.run_until_complete(upsert_video_structure_features(*args, **kwargs))
+    return run_sync(upsert_video_structure_features(*args, **kwargs))
 
 
 # =========================
@@ -1070,8 +1082,7 @@ async def get_video_structure_features(
 
 
 def get_video_structure_features_sync(video_id: str, user_id: int):
-    loop = get_event_loop()
-    return loop.run_until_complete(
+    return run_sync(
         get_video_structure_features(video_id, user_id)
     )
 
@@ -1092,8 +1103,7 @@ async def get_all_video_structure_groups(user_id: int):
 
 
 def get_all_video_structure_groups_sync(user_id: int):
-    loop = get_event_loop()
-    return loop.run_until_complete(get_all_video_structure_groups(user_id))
+    return run_sync(get_all_video_structure_groups(user_id))
 
 
 # ---------- create video_structure_group ----------
@@ -1151,8 +1161,7 @@ async def create_video_structure_group(
     return row[0]
 
 def create_video_structure_group_sync(*args, **kwargs):
-    loop = get_event_loop()
-    return loop.run_until_complete(create_video_structure_group(*args, **kwargs))
+    return run_sync(create_video_structure_group(*args, **kwargs))
 
 
 
@@ -1202,8 +1211,7 @@ async def update_video_structure_group(
 
 
 def update_video_structure_group_sync(*args, **kwargs):
-    loop = get_event_loop()
-    return loop.run_until_complete(update_video_structure_group(*args, **kwargs))
+    return run_sync(update_video_structure_group(*args, **kwargs))
 
 
 # ---------- upsert video_structure_group_members ----------
@@ -1262,8 +1270,7 @@ async def upsert_video_structure_group_member(
 
 
 def upsert_video_structure_group_member_sync(*args, **kwargs):
-    loop = get_event_loop()
-    return loop.run_until_complete(upsert_video_structure_group_member(*args, **kwargs))
+    return run_sync(upsert_video_structure_group_member(*args, **kwargs))
 
 
 # =========================
@@ -1293,8 +1300,7 @@ async def get_video_structure_group_members_by_group(
 
 
 def get_video_structure_group_members_by_group_sync(group_id: str, user_id: int):
-    loop = get_event_loop()
-    return loop.run_until_complete(
+    return run_sync(
         get_video_structure_group_members_by_group(group_id, user_id)
     )
 
@@ -1324,8 +1330,7 @@ async def get_video_structure_group_id_of_video(
 
 
 def get_video_structure_group_id_of_video_sync(video_id: str, user_id: int):
-    loop = get_event_loop()
-    return loop.run_until_complete(
+    return run_sync(
         get_video_structure_group_id_of_video(video_id, user_id)
     )
 
@@ -1356,8 +1361,7 @@ async def get_video_phase_points(video_id: str):
 
 
 def get_video_phase_points_sync(video_id: str):
-    loop = get_event_loop()
-    return loop.run_until_complete(get_video_phase_points(video_id))
+    return run_sync(get_video_phase_points(video_id))
 
 
 # ---------- get best video of structure group ----------
@@ -1390,8 +1394,7 @@ async def get_video_structure_group_best_video(
 
 
 def get_video_structure_group_best_video_sync(group_id: str, user_id: int):
-    loop = get_event_loop()
-    return loop.run_until_complete(
+    return run_sync(
         get_video_structure_group_best_video(group_id, user_id)
     )
 
@@ -1458,8 +1461,7 @@ async def upsert_video_structure_group_best_video(
 
 
 def upsert_video_structure_group_best_video_sync(*args, **kwargs):
-    loop = get_event_loop()
-    return loop.run_until_complete(
+    return run_sync(
         upsert_video_structure_group_best_video(*args, **kwargs)
     )
 
@@ -1495,8 +1497,7 @@ async def mark_video_insights_need_refresh_by_structure_group(
 
 
 def mark_video_insights_need_refresh_by_structure_group_sync(*args, **kwargs):
-    loop = get_event_loop()
-    return loop.run_until_complete(
+    return run_sync(
         mark_video_insights_need_refresh_by_structure_group(*args, **kwargs)
     )
 
@@ -1517,8 +1518,7 @@ async def clear_video_insight_need_refresh(video_id: str):
 
 
 def clear_video_insight_need_refresh_sync(video_id: str):
-    loop = get_event_loop()
-    return loop.run_until_complete(clear_video_insight_need_refresh(video_id))
+    return run_sync(clear_video_insight_need_refresh(video_id))
 
 # ---------- get video_structure_group stats ----------
 
@@ -1553,8 +1553,7 @@ async def get_video_structure_group_stats(
 
 
 def get_video_structure_group_stats_sync(group_id: str, user_id: int):
-    loop = get_event_loop()
-    return loop.run_until_complete(
+    return run_sync(
         get_video_structure_group_stats(group_id, user_id)
     )
 
@@ -1577,8 +1576,7 @@ async def get_video_split_status(video_id: str):
 
 
 def get_video_split_status_sync(video_id: str):
-    loop = get_event_loop()
-    return loop.run_until_complete(get_video_split_status(video_id))
+    return run_sync(get_video_split_status(video_id))
 
 
 async def update_video_split_status(video_id: str, split_status: str):
@@ -1597,8 +1595,7 @@ async def update_video_split_status(video_id: str, split_status: str):
 
 
 def update_video_split_status_sync(video_id: str, split_status: str):
-    loop = get_event_loop()
-    return loop.run_until_complete(
+    return run_sync(
         update_video_split_status(video_id, split_status)
     )
 
@@ -1629,8 +1626,7 @@ async def get_video_excel_urls(video_id: str):
 
 
 def get_video_excel_urls_sync(video_id: str):
-    loop = get_event_loop()
-    return loop.run_until_complete(get_video_excel_urls(video_id))
+    return run_sync(get_video_excel_urls(video_id))
 
 # =========================
 # Video Language
@@ -1650,8 +1646,7 @@ async def get_video_language(video_id: str) -> str:
     return row[0] or "ja"
 
 def get_video_language_sync(video_id: str) -> str:
-    loop = get_event_loop()
-    return loop.run_until_complete(get_video_language(video_id))
+    return run_sync(get_video_language(video_id))
 
 
 
@@ -1677,8 +1672,7 @@ async def update_video_phase_cta_score(video_id: str, phase_index: int, cta_scor
 
 
 def update_video_phase_cta_score_sync(video_id: str, phase_index: int, cta_score: int):
-    loop = get_event_loop()
-    return loop.run_until_complete(
+    return run_sync(
         update_video_phase_cta_score(video_id, phase_index, cta_score)
     )
 
@@ -1710,8 +1704,7 @@ async def update_video_phase_sales_tags(video_id: str, phase_index: int, sales_t
 
 
 def update_video_phase_sales_tags_sync(video_id: str, phase_index: int, sales_tags_json: str):
-    loop = get_event_loop()
-    return loop.run_until_complete(
+    return run_sync(
         update_video_phase_sales_tags(video_id, phase_index, sales_tags_json)
     )
 
@@ -1743,8 +1736,7 @@ async def update_video_phase_audio_features(video_id: str, phase_index: int, aud
 
 
 def update_video_phase_audio_features_sync(video_id: str, phase_index: int, audio_features_json: str):
-    loop = get_event_loop()
-    return loop.run_until_complete(
+    return run_sync(
         update_video_phase_audio_features(video_id, phase_index, audio_features_json)
     )
 
@@ -1791,8 +1783,7 @@ async def update_video_phase_csv_metrics(
 
 
 def update_video_phase_csv_metrics_sync(video_id: str, phase_index: int, **kwargs):
-    loop = get_event_loop()
-    return loop.run_until_complete(
+    return run_sync(
         update_video_phase_csv_metrics(video_id, phase_index, **kwargs)
     )
 
@@ -1835,8 +1826,7 @@ async def ensure_product_exposures_table():
 
 
 def ensure_product_exposures_table_sync():
-    loop = get_event_loop()
-    return loop.run_until_complete(ensure_product_exposures_table())
+    return run_sync(ensure_product_exposures_table())
 
 
 async def bulk_insert_product_exposures(
@@ -1884,8 +1874,7 @@ async def bulk_insert_product_exposures(
 
 
 def bulk_insert_product_exposures_sync(video_id, user_id, exposures):
-    loop = get_event_loop()
-    return loop.run_until_complete(
+    return run_sync(
         bulk_insert_product_exposures(video_id, user_id, exposures)
     )
 
@@ -1907,8 +1896,7 @@ async def get_product_exposures(video_id: str):
 
 
 def get_product_exposures_sync(video_id: str):
-    loop = get_event_loop()
-    return loop.run_until_complete(get_product_exposures(video_id))
+    return run_sync(get_product_exposures(video_id))
 
 
 # ---------- worker claimed evidence (Improvement 2) ----------
@@ -1937,8 +1925,7 @@ async def update_worker_claimed(video_id: str, instance_id: str, dequeue_count: 
 
 
 def update_worker_claimed_sync(video_id: str, instance_id: str, dequeue_count: int):
-    loop = get_event_loop()
-    return loop.run_until_complete(update_worker_claimed(video_id, instance_id, dequeue_count))
+    return run_sync(update_worker_claimed(video_id, instance_id, dequeue_count))
 
 
 # =========================================================
@@ -2019,8 +2006,7 @@ async def ensure_sales_moments_table():
 
 
 def ensure_sales_moments_table_sync():
-    loop = get_event_loop()
-    return loop.run_until_complete(ensure_sales_moments_table())
+    return run_sync(ensure_sales_moments_table())
 
 
 async def bulk_insert_sales_moments(
@@ -2091,8 +2077,7 @@ async def bulk_insert_sales_moments(
 
 
 def bulk_insert_sales_moments_sync(video_id: str, moments: list, source: str = "csv"):
-    loop = get_event_loop()
-    return loop.run_until_complete(
+    return run_sync(
         bulk_insert_sales_moments(video_id, moments, source=source)
     )
 
@@ -2130,8 +2115,7 @@ async def get_sales_moments(video_id: str, source: str = None):
 
 
 def get_sales_moments_sync(video_id: str):
-    loop = get_event_loop()
-    return loop.run_until_complete(get_sales_moments(video_id))
+    return run_sync(get_sales_moments(video_id))
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -2202,8 +2186,7 @@ def insert_video_error_log_sync(
     update_last_error: bool = True,
 ):
     """Synchronous wrapper for insert_video_error_log."""
-    loop = get_event_loop()
-    return loop.run_until_complete(
+    return run_sync(
         insert_video_error_log(
             video_id=video_id,
             error_code=error_code,
@@ -2236,8 +2219,7 @@ async def get_video_error_logs(video_id: str, limit: int = 50):
 
 
 def get_video_error_logs_sync(video_id: str, limit: int = 50):
-    loop = get_event_loop()
-    return loop.run_until_complete(get_video_error_logs(video_id, limit))
+    return run_sync(get_video_error_logs(video_id, limit))
 
 
 async def update_video_error_message(video_id: str, error_message: str):
@@ -2254,8 +2236,7 @@ async def update_video_error_message(video_id: str, error_message: str):
 
 
 def update_video_error_message_sync(video_id: str, error_message: str):
-    loop = get_event_loop()
-    loop.run_until_complete(update_video_error_message(video_id, error_message))
+    run_sync(update_video_error_message(video_id, error_message))
 
 
 # ---------- human_sales_tags lookup for report enrichment ----------
@@ -2298,8 +2279,7 @@ async def get_phase_human_sales_tags(video_id: str, user_id: int) -> dict:
 
 
 def get_phase_human_sales_tags_sync(video_id: str, user_id: int) -> dict:
-    loop = get_event_loop()
-    return loop.run_until_complete(
+    return run_sync(
         get_phase_human_sales_tags(video_id, user_id)
     )
 
@@ -2335,8 +2315,7 @@ async def get_unusable_phases(video_id: str) -> dict:
 
 
 def get_unusable_phases_sync(video_id: str) -> dict:
-    loop = get_event_loop()
-    return loop.run_until_complete(get_unusable_phases(video_id))
+    return run_sync(get_unusable_phases(video_id))
 # retrigger deploy
 
 
@@ -2375,8 +2354,7 @@ async def update_video_processing_log(video_id: str, log_message: str, step: str
 
 def update_video_processing_log_sync(video_id: str, log_message: str, step: str = "", pct: int = 0):
     """Synchronous wrapper for update_video_processing_log."""
-    loop = get_event_loop()
-    return loop.run_until_complete(update_video_processing_log(video_id, log_message, step, pct))
+    return run_sync(update_video_processing_log(video_id, log_message, step, pct))
 
 
 async def reset_video_processing_logs(video_id: str):
@@ -2397,5 +2375,4 @@ async def reset_video_processing_logs(video_id: str):
 
 def reset_video_processing_logs_sync(video_id: str):
     """Synchronous wrapper for reset_video_processing_logs."""
-    loop = get_event_loop()
-    return loop.run_until_complete(reset_video_processing_logs(video_id))
+    return run_sync(reset_video_processing_logs(video_id))

@@ -85,7 +85,7 @@ logger = logging.getLogger("generate_clip")
 BATCH_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BATCH_DIR)
 
-from db_ops import init_db_sync, close_db_sync, get_event_loop, get_session
+from db_ops import init_db_sync, close_db_sync, run_sync, get_session
 from split_video import upload_to_blob, parse_blob_url
 from sqlalchemy import text
 
@@ -200,7 +200,6 @@ def update_clip_progress(clip_id: str, progress_pct: int, progress_step: str, lo
     so the frontend can display a real-time AI processing log panel.
     Falls back to basic progress update if processing_logs column doesn't exist yet.
     """
-    loop = get_event_loop()
     async def _update():
         if log_message:
             # Try to append a structured log entry to processing_logs JSONB array
@@ -245,12 +244,11 @@ def update_clip_progress(clip_id: str, progress_pct: int, progress_step: str, lo
                     WHERE id = :clip_id
                 """)
                 await session.execute(sql, {"pct": progress_pct, "step": progress_step, "clip_id": clip_id})
-    loop.run_until_complete(_update())
+    run_sync(_update())
 
 
 def update_clip_status(clip_id: str, status: str, clip_url: str = None, error_message: str = None, captions: list = None):
     """Update clip status in database."""
-    loop = get_event_loop()
     async def _update():
         async with get_session() as session:
             if clip_url:
@@ -287,7 +285,7 @@ def update_clip_status(clip_id: str, status: str, clip_url: str = None, error_me
                     "clip_id": clip_id,
                 })
 
-    loop.run_until_complete(_update())
+    run_sync(_update())
 
 
 # =========================
@@ -1550,7 +1548,6 @@ def get_phase_context(video_id: str, phase_index: int) -> str:
     """
     Fetch phase description and insight from DB to provide context for subtitle refinement.
     """
-    loop = get_event_loop()
 
     async def _fetch():
         async with get_session() as session:
@@ -1574,7 +1571,7 @@ def get_phase_context(video_id: str, phase_index: int) -> str:
             return ""
 
     try:
-        return loop.run_until_complete(_fetch())
+        return run_sync(_fetch())
     except Exception as e:
         logger.warning(f"Failed to fetch phase context: {e}")
         return ""
@@ -1585,7 +1582,6 @@ def get_product_names(video_id: str) -> list:
     Fetch product names from video_product_exposures and video_phases tables
     to provide domain-specific vocabulary for subtitle refinement.
     """
-    loop = get_event_loop()
 
     async def _fetch():
         async with get_session() as session:
@@ -1617,7 +1613,7 @@ def get_product_names(video_id: str) -> list:
             return list(set(n for n in names if n and len(n) > 1))
 
     try:
-        return loop.run_until_complete(_fetch())
+        return run_sync(_fetch())
     except Exception as e:
         logger.warning(f"Failed to fetch product names: {e}")
         return []
@@ -1628,7 +1624,6 @@ def get_subtitle_dictionary() -> list:
     Fetch all active subtitle dictionary entries for GPT subtitle refinement.
     Returns list of dicts: [{"from": str, "to": str, "no_break": bool}, ...]
     """
-    loop = get_event_loop()
 
     async def _fetch():
         async with get_session() as session:
@@ -1651,7 +1646,7 @@ def get_subtitle_dictionary() -> list:
             ]
 
     try:
-        return loop.run_until_complete(_fetch())
+        return run_sync(_fetch())
     except Exception as e:
         logger.warning(f"Failed to fetch subtitle dictionary: {e}")
         return []
@@ -2427,7 +2422,6 @@ def _check_is_ml_clip(clip_id: str) -> bool:
     Check if this clip was generated via ML scoring (has ml_model_version set).
     Hook intro is only applied to ML-scored clips.
     """
-    loop = get_event_loop()
 
     async def _check():
         async with get_session() as session:
@@ -2439,7 +2433,7 @@ def _check_is_ml_clip(clip_id: str) -> bool:
             return False
 
     try:
-        return loop.run_until_complete(_check())
+        return run_sync(_check())
     except Exception as e:
         logger.warning(f"[HOOK] Failed to check ml_model_version: {e}")
         return False
@@ -3105,7 +3099,6 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
     init_db_sync()
 
     # --- DEDUP CHECK: Skip if a completed version already exists ---
-    _dedup_loop = get_event_loop()
     async def _check_dedup():
         try:
             async with get_session() as _s:
@@ -3118,7 +3111,7 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
         except Exception as e:
             logger.warning(f"Dedup check failed (proceeding anyway): {e}")
             return None
-    existing_completed = _dedup_loop.run_until_complete(_check_dedup())
+    existing_completed = run_sync(_check_dedup())
     if existing_completed:
         logger.info(f"DEDUP: Completed clip already exists ({existing_completed[0]}), skipping {clip_id}")
         update_clip_status(clip_id, "cancelled")
@@ -3128,7 +3121,7 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
                 await _s.execute(text(
                     "UPDATE video_clips SET progress_step = 'skipped_completed_exists' WHERE id = :cid"
                 ), {"cid": clip_id})
-        _dedup_loop.run_until_complete(_mark_dedup())
+        run_sync(_mark_dedup())
         return
 
     # Ensure blob_url has a fresh SAS token (expired tokens cause download failures)
@@ -3137,14 +3130,13 @@ def generate_clip(clip_id: str, video_id: str, blob_url: str, time_start: float,
     # Update status to processing + clear previous logs
     update_clip_status(clip_id, "processing")
     # Reset processing_logs for fresh run (graceful if column doesn't exist yet)
-    _reset_loop = get_event_loop()
     async def _reset_logs():
         try:
             async with get_session() as _s:
                 await _s.execute(text("UPDATE video_clips SET processing_logs = CAST('[]' AS jsonb) WHERE id = :cid"), {"cid": clip_id})
         except Exception:
             logger.debug("processing_logs column not available yet, skipping reset")
-    _reset_loop.run_until_complete(_reset_logs())
+    run_sync(_reset_logs())
     # Add metadata to processing_logs for AI Editor Monitor UI
     _clip_meta_msg = (f"\U0001f4cb Clip metadata: source={time_start:.1f}s-{time_end:.1f}s "
                       f"(duration={time_end - time_start:.1f}s), phase_index={phase_index}")
@@ -3696,7 +3688,6 @@ def _enrich_clip_after_generation(clip_id: str, video_id: str, phase_index, capt
     Copies relevant data from video_phases into video_clips columns
     so clips become searchable in the Clip DB.
     """
-    loop = get_event_loop()
 
     async def _do_enrich():
         async with get_session() as session:
@@ -3823,7 +3814,7 @@ def _enrich_clip_after_generation(clip_id: str, video_id: str, phase_index, capt
             except Exception as brand_err:
                 logger.warning(f"[ClipDB] Auto brand assignment failed (non-fatal): {brand_err}")
 
-    loop.run_until_complete(_do_enrich())
+    run_sync(_do_enrich())
 
 
 # =========================

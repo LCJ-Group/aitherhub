@@ -1802,7 +1802,7 @@ def main():
                     # (e.g., after deploy/VM restart that deletes local files)
                     if not transcription_segments:
                         try:
-                            from db_ops import get_event_loop, AsyncSessionLocal
+                            from db_ops import run_sync, AsyncSessionLocal
                             async def _load_transcription_from_db():
                                 async with AsyncSessionLocal() as sess:
                                     r = await sess.execute(
@@ -1829,7 +1829,7 @@ def main():
                                                 "text": txt
                                             })
                                     return segments
-                            db_segments = get_event_loop().run_until_complete(_load_transcription_from_db())
+                            db_segments = run_sync(_load_transcription_from_db())
                             if db_segments:
                                 transcription_segments = db_segments
                                 logger.info("[PRODUCT] Loaded %d transcription segments from DB (fallback)", len(transcription_segments))
@@ -1849,7 +1849,7 @@ def main():
                         # DBからduration_secを取得（resume時にtotal_framesがない場合）
                         # 優先順位: videos.duration_sec > video_phases.MAX(time_end)
                         try:
-                            from db_ops import get_event_loop, AsyncSessionLocal
+                            from db_ops import run_sync as _run_sync, AsyncSessionLocal
                             async def _get_duration_from_db():
                                 async with AsyncSessionLocal() as sess:
                                     # まずvideos.duration_secを確認（最も信頼性が高い）
@@ -1867,7 +1867,7 @@ def main():
                                     )
                                     row2 = r2.fetchone()
                                     return float(row2[0]) if row2 and row2[0] else 0
-                            _product_duration = get_event_loop().run_until_complete(_get_duration_from_db())
+                            _product_duration = _run_sync(_get_duration_from_db())
                             if _product_duration > 0:
                                 logger.info("[PRODUCT] Duration from DB: %.1f sec", _product_duration)
                         except Exception as _dur_err:

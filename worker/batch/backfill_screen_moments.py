@@ -56,7 +56,7 @@ from db_ops import (
     close_db_sync,
     ensure_sales_moments_table_sync,
     bulk_insert_sales_moments_sync,
-    get_event_loop,
+    run_sync,
     AsyncSessionLocal,
 )
 from sqlalchemy import text as sa_text
@@ -339,8 +339,7 @@ def main():
     ensure_sales_moments_table_sync()
 
     # Fetch target videos
-    loop = get_event_loop()
-    videos = loop.run_until_complete(
+    videos = run_sync(
         _fetch_screen_recording_videos(limit=args.limit, video_id=args.video_id)
     )
     logger.info("Found %d screen_recording videos (status=DONE)", len(videos))
@@ -355,7 +354,7 @@ def main():
         filtered = []
         for v in videos:
             vid = str(v["id"])
-            existing = loop.run_until_complete(_count_existing_screen_moments(vid))
+            existing = run_sync(_count_existing_screen_moments(vid))
             if existing > 0:
                 logger.info("  [SKIP] %s (%s) – already has %d screen moments",
                             vid[:8], v.get("original_filename", "?"), existing)

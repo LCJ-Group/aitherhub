@@ -24,7 +24,7 @@ from db_ops import (
     ensure_sales_moments_table_sync,
     bulk_insert_sales_moments_sync,
     get_sales_moments_sync,
-    get_event_loop,
+    run_sync,
 )
 from sqlalchemy import text
 
@@ -213,5 +213,5 @@ async def main():
 
 
 if __name__ == "__main__":
-    loop = get_event_loop()
-    loop.run_until_complete(main())
+
+    run_sync(main())

@@ -41,7 +41,7 @@ from video_compressor import (
 def update_compressed_blob_url(video_id: str, compressed_blob_url: str):
     """Update the compressed_blob_url column in the videos table."""
     try:
-        from db_ops import AsyncSessionLocal, get_event_loop
+        from db_ops import AsyncSessionLocal, run_sync
         from sqlalchemy import text
 
         async def _update():
@@ -54,8 +54,7 @@ def update_compressed_blob_url(video_id: str, compressed_blob_url: str):
                 )
                 await session.commit()
 
-        loop = get_event_loop()
-        loop.run_until_complete(_update())
+        run_sync(_update())
         logger.info("DB updated: compressed_blob_url set for video %s", video_id)
     except Exception as e:
         logger.error("Failed to update DB with compressed_blob_url: %s", e)
