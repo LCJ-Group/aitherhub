@@ -19,15 +19,18 @@ import ChatRegisterModal from './ChatRegisterModal';
 const GUEST_EMAIL_PREFIX = 'guest_';
 
 // Estimate analysis metrics from file metadata
-function estimateMetrics(file, videoDuration) {
+function estimateMetrics(file, videoDurationSec) {
   const fileSizeMB = file.size / (1024 * 1024);
-  // Rough estimates based on typical live commerce videos
-  const estimatedDuration = videoDuration || Math.round(fileSizeMB * 0.8); // ~0.8 min per MB for typical live video
-  const estimatedFrames = Math.round(estimatedDuration * 60 * 0.5); // 0.5 fps analysis rate
-  const estimatedScenes = Math.max(3, Math.round(estimatedDuration * 1.5)); // ~1.5 scenes per minute
+  // videoDurationSec is actual duration in seconds from video metadata
+  // Fallback: estimate from file size only if no duration available
+  const durationSec = videoDurationSec || Math.round(fileSizeMB * 0.8 * 60); // fallback: ~0.8 min per MB
+  const durationMin = durationSec / 60;
+  const estimatedFrames = Math.round(durationSec * 0.5); // 0.5 fps analysis rate
+  const estimatedScenes = Math.max(1, Math.round(durationMin * 1.5)); // ~1.5 scenes per minute
   const estimatedProducts = Math.max(1, Math.round(estimatedScenes * 0.4)); // ~40% of scenes have products
   return {
-    duration: estimatedDuration,
+    durationSec: Math.round(durationSec), // actual seconds
+    durationMin: durationMin,
     frames: estimatedFrames,
     scenes: estimatedScenes,
     products: estimatedProducts,
@@ -144,8 +147,8 @@ export default function VideoUploadCTA() {
       const { thumbnail, duration } = await thumbnailPromise;
       setThumbnailUrl(thumbnail);
 
-      // Step 4: Calculate estimated metrics
-      const estimatedMetrics = estimateMetrics(file, duration ? Math.round(duration / 60) : null);
+      // Step 4: Calculate estimated metrics (duration is in seconds from video element)
+      const estimatedMetrics = estimateMetrics(file, duration ? Math.round(duration) : null);
       setMetrics(estimatedMetrics);
 
       // Step 5: Save pending video info to localStorage for post-login completion
@@ -575,7 +578,10 @@ export default function VideoUploadCTA() {
                       }}>
                         <p style={{ color: '#8b5cf6', fontSize: '10px', fontWeight: '600', margin: '0 0 4px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>推定配信時間</p>
                         <p style={{ color: '#e2e8f0', fontSize: '18px', fontWeight: '700', margin: 0 }}>
-                          {metrics.duration < 1 ? '<1' : metrics.duration}<span style={{ fontSize: '12px', color: '#94a3b8', marginLeft: '2px' }}>分</span>
+                          {metrics.durationSec >= 60
+                            ? <>{Math.round(metrics.durationMin)}<span style={{ fontSize: '12px', color: '#94a3b8', marginLeft: '2px' }}>分</span></>
+                            : <>{metrics.durationSec}<span style={{ fontSize: '12px', color: '#94a3b8', marginLeft: '2px' }}>秒</span></>
+                          }
                         </p>
                       </div>
                       <div style={{
