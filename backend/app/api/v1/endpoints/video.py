@@ -2190,6 +2190,80 @@ async def assign_brand_to_video(
 
 
 # ============================================================
+# Public status endpoint (no auth) for LP instant preview polling
+# ============================================================
+@router.get("/{video_id}/status/public")
+async def get_video_status_public(
+    video_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Public (no-auth) endpoint for LP polling.
+    Returns minimal status info so the landing page can show
+    real-time analysis progress without requiring login.
+    Only exposes non-sensitive fields.
+    """
+    try:
+        result = await db.execute(
+            text("""
+                SELECT v.status, v.step_progress, v.duration,
+                       v.top_products, v.processing_logs,
+                       v.created_at, v.updated_at,
+                       (SELECT COUNT(*) FROM video_phases vp
+                        WHERE CAST(vp.video_id AS VARCHAR) = CAST(v.id AS VARCHAR)
+                       ) as phase_count
+                FROM videos v
+                WHERE v.id = :vid
+            """),
+            {"vid": video_id},
+        )
+        row = result.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Video not found")
+
+        current_status = row.status
+        progress = calculate_progress(current_status)
+        message = get_status_message(current_status)
+        step_progress = row.step_progress or 0
+
+        # Parse processing_logs
+        _processing_logs = None
+        if row.processing_logs:
+            try:
+                _processing_logs = json.loads(row.processing_logs) if isinstance(row.processing_logs, str) else row.processing_logs
+            except Exception:
+                _processing_logs = None
+
+        # Parse top_products
+        _top_products = None
+        if row.top_products:
+            try:
+                _top_products = json.loads(row.top_products) if isinstance(row.top_products, str) else row.top_products
+            except Exception:
+                _top_products = None
+
+        return {
+            "video_id": video_id,
+            "status": current_status,
+            "progress": progress,
+            "step_progress": step_progress,
+            "message": message,
+            "duration": row.duration,
+            "phase_count": row.phase_count or 0,
+            "top_products": _top_products,
+            "processing_logs": _processing_logs,
+            "is_done": current_status == "DONE",
+            "is_error": current_status == "ERROR",
+            "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(f"Public status check failed for {video_id}: {exc}")
+        raise HTTPException(status_code=500, detail="Status check failed")
+
+
+# ============================================================
 # Include split sub-modules
 # ============================================================
 from app.api.v1.endpoints.video_clips import router as clips_router
