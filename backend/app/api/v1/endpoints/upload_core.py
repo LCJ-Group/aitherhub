@@ -155,7 +155,7 @@ async def upload_complete(
             excel_product_blob_url=payload.excel_product_blob_url,
             excel_trend_blob_url=payload.excel_trend_blob_url,
             time_offset_seconds=payload.time_offset_seconds or 0,
-            language=payload.language or "ja",
+            language=payload.language or "auto",
             brand_client_id=payload.brand_client_id,
         )
         return UploadCompleteResponse(**result.to_dict())
@@ -230,7 +230,7 @@ async def batch_upload_complete(
                     excel_product_blob_url=payload.excel_product_blob_url,
                     excel_trend_blob_url=payload.excel_trend_blob_url,
                     time_offset_seconds=v.time_offset_seconds or 0,
-                    language=payload.language or "ja",
+                    language=payload.language or "auto",
                     brand_client_id=payload.brand_client_id,
                 )
                 video_ids.append(result.video_id)

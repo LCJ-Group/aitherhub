@@ -1390,5 +1390,12 @@
   "sidebar_cancelUpload": "Cancel",
   "sidebar_cancelled": "Cancelled",
   "brandAssigned": "Brand assigned",
-  "brandAssignFailed": "Failed to assign brand"
+  "brandAssignFailed": "Failed to assign brand",
+  "videoLanguageLabel": "Video Language (Optional)",
+  "langAuto": "Auto-detect",
+  "langJa": "日本語 (Japanese)",
+  "langZhTW": "中文 (Chinese)",
+  "langEn": "English",
+  "langTh": "ไทย (Thai)",
+  "langKo": "한국어 (Korean)"
 }

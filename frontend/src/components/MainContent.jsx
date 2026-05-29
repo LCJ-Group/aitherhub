@@ -304,6 +304,7 @@ export default function MainContent({
   // Brand selection states (optional, 1 video = 1 brand)
   const [brands, setBrands] = useState([]);
   const [selectedBrandId, setSelectedBrandId] = useState('');  // '' = no brand selected
+  const [selectedVideoLang, setSelectedVideoLang] = useState('auto');  // V11: video content language for Whisper
   const [brandsLoading, setBrandsLoading] = useState(false);
 
   useEffect(() => {
@@ -625,7 +626,8 @@ export default function MainContent({
     const capturedProductExcel = productExcelFile;
     const capturedTrendExcel = trendExcelFile;
     const userEmail = user.email;
-    const analysisLang = i18n.language === 'zh-TW' ? 'zh-TW' : i18n.language === 'en' ? 'en' : 'ja';
+    const uiLang = i18n.language === 'zh-TW' ? 'zh-TW' : i18n.language === 'en' ? 'en' : 'ja';
+    const analysisLang = selectedVideoLang !== 'auto' ? selectedVideoLang : 'auto';
     const userId = user?.id;
     const capturedBrandId = selectedBrandId || null;
 
@@ -635,6 +637,7 @@ export default function MainContent({
     setProductExcelFile(null);
     setTrendExcelFile(null);
     setSelectedBrandId('');
+    setSelectedVideoLang('auto');
     setUploadMode(null);
     setResumeUploadId(null);
     setUploadedVideoId(null);
@@ -878,7 +881,8 @@ export default function MainContent({
     const capturedMetadata = metadata;
     const userEmail = user.email;
     const userId = user?.id;
-    const analysisLang = i18n.language === 'zh-TW' ? 'zh-TW' : i18n.language === 'en' ? 'en' : 'ja';
+    const uiLang = i18n.language === 'zh-TW' ? 'zh-TW' : i18n.language === 'en' ? 'en' : 'ja';
+    const analysisLang = selectedVideoLang !== 'auto' ? selectedVideoLang : 'auto';
 
     // Reset UI immediately
     setSelectedFile(null);
@@ -994,13 +998,15 @@ export default function MainContent({
     // Capture file and settings before resetting UI
     const fileToUpload = selectedFile;
     const userEmail = user.email;
-    const analysisLang = i18n.language === 'zh-TW' ? 'zh-TW' : i18n.language === 'en' ? 'en' : 'ja';
+    const uiLang = i18n.language === 'zh-TW' ? 'zh-TW' : i18n.language === 'en' ? 'en' : 'ja';
+    const analysisLang = selectedVideoLang !== 'auto' ? selectedVideoLang : 'auto';
     const userId = user?.id;
     const capturedBrandId = selectedBrandId || null;
 
     // Reset UI immediately so user can start next upload
     setSelectedFile(null);
     setSelectedBrandId('');
+    setSelectedVideoLang('auto');
     setResumeUploadId(null);
     setUploadedVideoId(null);
     setVideoData(null);
@@ -1860,6 +1866,24 @@ export default function MainContent({
                                 </select>
                               </div>
                             )}
+                            {/* Video content language selector */}
+                            <div className="w-full max-w-xs">
+                              <label className="block text-xs text-gray-500 mb-1">
+                                {window.__t('videoLanguageLabel') || '動画の言語（任意）'}
+                              </label>
+                              <select
+                                value={selectedVideoLang}
+                                onChange={(e) => setSelectedVideoLang(e.target.value)}
+                                className="w-full h-[36px] px-3 text-sm border border-gray-300 rounded-md bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#7D01FF]/30 focus:border-[#7D01FF]"
+                              >
+                                <option value="auto">{window.__t('langAuto') || '自動検出'}</option>
+                                <option value="ja">{window.__t('langJa') || '日本語'}</option>
+                                <option value="zh-TW">{window.__t('langZhTW') || '中文（繁体）'}</option>
+                                <option value="en">{window.__t('langEn') || 'English'}</option>
+                                <option value="th">{window.__t('langTh') || 'ไทย (Thai)'}</option>
+                                <option value="ko">{window.__t('langKo') || '한국어 (Korean)'}</option>
+                              </select>
+                            </div>
                             <div className="flex gap-2">
                               <button
                                 onClick={handleUpload}
@@ -2084,6 +2108,24 @@ export default function MainContent({
                                 </select>
                               </div>
                             )}
+                            {/* Video content language selector */}
+                            <div className="w-full">
+                              <label className="block text-left text-xs text-gray-400 mb-1">
+                                {window.__t('videoLanguageLabel') || '動画の言語（任意）'}
+                              </label>
+                              <select
+                                value={selectedVideoLang}
+                                onChange={(e) => setSelectedVideoLang(e.target.value)}
+                                className="w-full h-[38px] px-3 text-sm border border-gray-300 rounded-md bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#7D01FF]/30 focus:border-[#7D01FF]"
+                              >
+                                <option value="auto">{window.__t('langAuto') || '自動検出'}</option>
+                                <option value="ja">{window.__t('langJa') || '日本語'}</option>
+                                <option value="zh-TW">{window.__t('langZhTW') || '中文（繁体）'}</option>
+                                <option value="en">{window.__t('langEn') || 'English'}</option>
+                                <option value="th">{window.__t('langTh') || 'ไทย (Thai)'}</option>
+                                <option value="ko">{window.__t('langKo') || '한국어 (Korean)'}</option>
+                              </select>
+                            </div>
 
                             <div className="flex gap-2 pt-2">
                               <button
@@ -2213,6 +2255,24 @@ export default function MainContent({
                                 </select>
                               </div>
                             )}
+                            {/* Video content language selector */}
+                            <div className="w-full max-w-xs">
+                              <label className="block text-xs text-gray-500 mb-1">
+                                {window.__t('videoLanguageLabel') || '動画の言語（任意）'}
+                              </label>
+                              <select
+                                value={selectedVideoLang}
+                                onChange={(e) => setSelectedVideoLang(e.target.value)}
+                                className="w-full h-[36px] px-3 text-sm border border-gray-300 rounded-md bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#7D01FF]/30 focus:border-[#7D01FF]"
+                              >
+                                <option value="auto">{window.__t('langAuto') || '自動検出'}</option>
+                                <option value="ja">{window.__t('langJa') || '日本語'}</option>
+                                <option value="zh-TW">{window.__t('langZhTW') || '中文（繁体）'}</option>
+                                <option value="en">{window.__t('langEn') || 'English'}</option>
+                                <option value="th">{window.__t('langTh') || 'ไทย (Thai)'}</option>
+                                <option value="ko">{window.__t('langKo') || '한국어 (Korean)'}</option>
+                              </select>
+                            </div>
                             <div className="flex flex-col sm:flex-row gap-3">
                               <label
                                 className="

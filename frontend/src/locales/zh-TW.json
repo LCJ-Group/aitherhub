@@ -1390,5 +1390,12 @@
   "sidebar_cancelUpload": "取消",
   "sidebar_cancelled": "已取消",
   "brandAssigned": "品牌設定完成",
-  "brandAssignFailed": "品牌設定失敗"
+  "brandAssignFailed": "品牌設定失敗",
+  "videoLanguageLabel": "影片語言（可選）",
+  "langAuto": "自動偵測",
+  "langJa": "日本語",
+  "langZhTW": "中文（繁體）",
+  "langEn": "English",
+  "langTh": "ไทย (Thai)",
+  "langKo": "한국어 (Korean)"
 }

@@ -787,6 +787,9 @@ def transcribe_audio(audio_path: str, subtitle_language: str = "ja") -> list:
     whisper_lang_map = {
         'ja': 'ja',
         'zh-TW': 'zh',
+        'en': 'en',
+        'th': 'th',
+        'ko': 'ko',
         'auto': None,  # Let Whisper auto-detect
     }
     whisper_lang = whisper_lang_map.get(subtitle_language, 'ja')
@@ -817,9 +820,42 @@ def transcribe_audio(audio_path: str, subtitle_language: str = "ja") -> list:
         "膠原蛋白、玻尿酸、精華液、乳霜、"
         "免運費、點數、優惠券、限時特賣"
     )
+    # English prompt for beauty/cosmetics live commerce
+    whisper_prompt_en = (
+        "live stream, live commerce, product introduction, viewers, comments, "
+        "purchase, cart, set, limited, stock, price, discount, deal, "
+        "thank you, welcome, hello, "
+        "KYOGOKU, shampoo, treatment, color, bleach, hair care, beauty, salon, hair, scalp, "
+        "NMN, RENOVATIO, collagen, hyaluronic acid, serum, cream, "
+        "free shipping, points, coupon, flash sale"
+    )
+    # Thai prompt for beauty/cosmetics live commerce
+    whisper_prompt_th = (
+        "ไลฟ์สด, ไลฟ์คอมเมิร์ซ, แนะนำสินค้า, ผู้ชม, คอมเมนต์, "
+        "ซื้อ, ตะกร้า, เซ็ต, จำกัด, สต็อก, ราคา, ลดราคา, ส่วนลด, "
+        "ขอบคุณ, สวัสดี, "
+        "KYOGOKU, แชมพู, ทรีทเมนท์, สีผม, ฟอกสี, ดูแลผม, ความงาม, ซาลอน, ผม, หนังศีรษะ, "
+        "NMN, RENOVATIO, คอลลาเจน, ไฮยาลูรอนิค, เซรั่ม, ครีม, "
+        "ส่งฟรี, แต้ม, คูปอง, แฟลชเซล"
+    )
+    # Korean prompt for beauty/cosmetics live commerce
+    whisper_prompt_ko = (
+        "라이브 방송, 라이브 커머스, 상품 소개, 시청자, 댓글, "
+        "구매, 장바구니, 세트, 한정, 재고, 가격, 할인, "
+        "감사합니다, 안녕하세요, "
+        "KYOGOKU, 샴푸, 트리트먼트, 칼라, 탈색, 헤어케어, 미용, 살롱, 머리카락, 두피, "
+        "NMN, RENOVATIO, 콜라겐, 히알루론산, 세럼, 크림, "
+        "무료배송, 포인트, 쿠폰, 타임세일"
+    )
     
     if subtitle_language == 'zh-TW':
         whisper_prompt = whisper_prompt_zh
+    elif subtitle_language == 'en':
+        whisper_prompt = whisper_prompt_en
+    elif subtitle_language == 'th':
+        whisper_prompt = whisper_prompt_th
+    elif subtitle_language == 'ko':
+        whisper_prompt = whisper_prompt_ko
     elif subtitle_language == 'auto':
         # For auto-detect, provide minimal prompt to avoid biasing language detection
         whisper_prompt = "KYOGOKU, RENOVATIO, NMN"
