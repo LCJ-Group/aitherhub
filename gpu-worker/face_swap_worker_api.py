@@ -628,7 +628,8 @@ _temporal_state = {
     "prev_kps": None,         # Previous smoothed 5-point landmarks
     "prev_lm106": None,       # Previous smoothed 106-point landmarks
     "frame_count": 0,         # Frame counter for adaptive smoothing
-
+    "prev_gray": None,        # Previous frame grayscale for optical flow
+    "prev_result_for_flow": None,  # Previous result for optical flow warping
 }
 _SMOOTH_ALPHA = 0.02   # EMA alpha: lower = smoother but more lag, higher = responsive but jittery
 
@@ -644,7 +645,8 @@ def _reset_temporal_state():
     _temporal_state["prev_affine"] = None
     _temporal_state["prev_affine_large"] = None
     _temporal_state["prev_mask_params"] = None
-
+    _temporal_state["prev_gray"] = None
+    _temporal_state["prev_result_for_flow"] = None
     _temporal_state["miss_count"] = 0
     _temporal_state["frame_count"] = 0
 
@@ -969,42 +971,84 @@ def direct_swap_frame(frame, detect_score: float = 0.5, use_enhancer: bool = Tru
             except Exception as e:
                 logger.warning(f"[LipSync] mouth_open error: {e}")
 
-    # Step 12: Temporal output blending with change-threshold gating (FACE REGION ONLY)
-    # Anti-flicker: compare only the face region to avoid background changes triggering blending.
-    # Uses the combined_mask to isolate face pixels for difference calculation.
-    # IMPORTANT: Blend the FULL frame but calculate diff on FACE ONLY.
-    if _temporal_state["prev_result"] is not None and \
-       _temporal_state["prev_result"].shape == result.shape:
-        # Calculate frame difference in FACE REGION ONLY (not full frame)
-        # This prevents background changes (lighting, camera noise) from affecting face stability
+    # Step 12: Optical Flow Temporal Warping (Root-cause flicker fix)
+    # Instead of naive blending (which causes ghosting), we:
+    # 1. Compute optical flow between previous and current frame
+    # 2. Warp the previous RESULT to align with current frame's motion
+    # 3. Blend warped previous with current ONLY in the face region
+    # This eliminates flicker without ghosting because the blend follows motion.
+    curr_gray = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
+    
+    if _temporal_state["prev_gray"] is not None and \
+       _temporal_state["prev_result_for_flow"] is not None and \
+       _temporal_state["prev_result_for_flow"].shape == result.shape:
         try:
-            _cm = combined_mask
-        except NameError:
-            _cm = None
-        if _cm is not None:
-            face_pixels = combined_mask > 0.3
-            if np.any(face_pixels):
-                diff_map = np.abs(result.astype(np.int16) - _temporal_state["prev_result"].astype(np.int16))
-                face_diff = np.mean(diff_map[face_pixels])
+            # Compute dense optical flow (Farneback)
+            # This tells us how each pixel moved from prev frame to current frame
+            flow = cv2.calcOpticalFlowFarneback(
+                _temporal_state["prev_gray"], curr_gray, None,
+                pyr_scale=0.5, levels=3, winsize=15, iterations=3,
+                poly_n=5, poly_sigma=1.2, flags=0
+            )
+            
+            # Warp previous result to current frame's position using the flow
+            h, w = result.shape[:2]
+            map_x = np.arange(w, dtype=np.float32).reshape(1, -1).repeat(h, axis=0) + flow[:, :, 0]
+            map_y = np.arange(h, dtype=np.float32).reshape(-1, 1).repeat(w, axis=1) + flow[:, :, 1]
+            warped_prev = cv2.remap(
+                _temporal_state["prev_result_for_flow"], map_x, map_y,
+                interpolation=cv2.INTER_LINEAR,
+                borderMode=cv2.BORDER_REPLICATE
+            )
+            
+            # Blend ONLY in face region (background stays untouched)
+            try:
+                _cm = combined_mask
+            except NameError:
+                _cm = None
+            
+            if _cm is not None:
+                # Soft face mask for blending (0 = background, 1 = face center)
+                blend_mask = np.clip(_cm, 0, 1).astype(np.float32)
+                # Reduce blend at edges (only blend strongly in face interior)
+                blend_mask = np.clip((blend_mask - 0.2) / 0.6, 0, 1)
+                
+                # Calculate face-region difference to determine blend strength
+                face_pixels = _cm > 0.3
+                if np.any(face_pixels):
+                    diff_map = np.abs(result.astype(np.float32) - warped_prev.astype(np.float32))
+                    face_diff = np.mean(diff_map[face_pixels])
+                else:
+                    face_diff = 999.0  # No face pixels, skip blending
+                
+                if face_diff < 2.0:
+                    # Nearly identical after flow warp - use previous (no flicker)
+                    result = np.where(
+                        blend_mask[:, :, np.newaxis] > 0.1,
+                        _temporal_state["prev_result_for_flow"],
+                        result
+                    ).astype(np.uint8)
+                elif face_diff < 25.0:
+                    # Normal range: blend 60% current + 40% warped previous in face region
+                    # This is safe because warped_prev follows motion (no ghosting)
+                    blend_weight = 0.4 * blend_mask[:, :, np.newaxis]  # 0-0.4 based on mask
+                    result = (
+                        result.astype(np.float32) * (1.0 - blend_weight) +
+                        warped_prev.astype(np.float32) * blend_weight
+                    ).astype(np.uint8)
+                # else: very large diff (scene change) - use current result as-is
             else:
-                face_diff = np.mean(np.abs(result.astype(np.int16) - _temporal_state["prev_result"].astype(np.int16)))
-        else:
-            face_diff = np.mean(np.abs(result.astype(np.int16) - _temporal_state["prev_result"].astype(np.int16)))
-        
-        if face_diff < 3.0:
-            # Face region barely changed (GFPGAN noise + sub-pixel jitter) - return previous
-            _temporal_state["miss_count"] = 0
-            return _temporal_state["prev_result"]
-        elif face_diff < 8.0:
-            # Small face change - blend to smooth out GFPGAN non-determinism
-            # 40% new / 60% old: strong enough to suppress flicker, not enough to ghost
-            result = cv2.addWeighted(result, 0.4, _temporal_state["prev_result"], 0.6, 0)
-        elif face_diff < 20.0:
-            # Moderate face change (slight movement) - lighter blend
-            result = cv2.addWeighted(result, 0.7, _temporal_state["prev_result"], 0.3, 0)
-        # else: large difference (head turn, etc.) - pass through unchanged (no ghosting)
-
-    # Cache successful result for flicker prevention
+                # No mask available - skip optical flow blending
+                pass
+                
+        except Exception as e:
+            # Optical flow failed - just use current result
+            if _temporal_state["frame_count"] % 60 == 0:
+                logger.warning(f"[OpticalFlow] Error: {e}")
+    
+    # Update state for next frame
+    _temporal_state["prev_gray"] = curr_gray
+    _temporal_state["prev_result_for_flow"] = result.copy()
     _temporal_state["prev_result"] = result.copy()
     _temporal_state["miss_count"] = 0
     return result

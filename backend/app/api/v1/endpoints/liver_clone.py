@@ -539,7 +539,7 @@ async def preview_sts(req: PreviewSTSRequest):
 
         # Use streaming endpoint for lower latency
         url = f"{base_url}/v1/speech-to-speech/{voice_id}/stream"
-        params = {"output_format": "mp3_22050_32"}
+        params = {"output_format": "mp3_44100_128"}
         voice_settings = json.dumps({
             "stability": req.voice_stability,
             "similarity_boost": req.voice_similarity,
