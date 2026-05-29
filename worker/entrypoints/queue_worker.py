@@ -1242,6 +1242,78 @@ def _run_live_monitor_job(payload: dict) -> bool:
     return result.returncode == 0
 
 
+def _enqueue_process_video_for_liveboost(video_id: str, email: str):
+    """After LiveBoost pipeline completes, enqueue the video for the standard
+    process_video pipeline so it gets phase detection, reports, etc.
+
+    Steps:
+      1. Query DB for compressed_blob_url and original_filename
+      2. Generate a fresh SAS URL for the assembled blob
+      3. Reset video status to STEP_0_EXTRACT_FRAMES
+      4. Send a video_analysis job to the Azure Queue
+    """
+    import asyncio
+    from sqlalchemy import text as sa_text
+
+    engine, loop = _get_fallback_engine()
+    from sqlalchemy.ext.asyncio import AsyncSession
+    from sqlalchemy.orm import sessionmaker
+    factory = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+
+    result_data = {}
+
+    async def _do():
+        async with factory() as session:
+            row = (await session.execute(
+                sa_text("""
+                    SELECT compressed_blob_url, original_filename, user_id
+                    FROM videos WHERE id = :vid
+                """),
+                {"vid": video_id},
+            )).fetchone()
+            if not row:
+                raise ValueError(f"Video {video_id} not found")
+
+            blob_path = row.compressed_blob_url
+            if not blob_path:
+                raise ValueError(f"Video {video_id} has no compressed_blob_url")
+
+            result_data["blob_path"] = blob_path
+            result_data["filename"] = row.original_filename or "liveboost.mp4"
+            result_data["user_id"] = row.user_id
+
+            # Reset video status so process_video starts from STEP_0
+            await session.execute(
+                sa_text("""
+                    UPDATE videos
+                    SET status = 'STEP_0_EXTRACT_FRAMES',
+                        step_progress = 0,
+                        worker_claimed_at = NULL,
+                        dequeue_count = 0,
+                        updated_at = NOW()
+                    WHERE id = :vid
+                """),
+                {"vid": video_id},
+            )
+            await session.commit()
+
+    loop.run_until_complete(_do())
+
+    # Generate SAS URL (sync)
+    from shared.storage.blob import generate_sas_url
+    blob_url = generate_sas_url(result_data["blob_path"], expiry_minutes=1440)
+
+    # Enqueue to Azure Queue
+    client = get_queue_client()
+    job_payload = {
+        "video_id": video_id,
+        "blob_url": blob_url,
+        "original_filename": result_data["filename"],
+    }
+    client.send_message(json.dumps(job_payload, ensure_ascii=False))
+    print(f"[worker] LiveBoost → process_video enqueued: video={video_id}")
+
+
 def _run_live_analysis_job(payload: dict) -> bool:
     """Run LiveBoost analysis pipeline as subprocess.
 
@@ -1332,6 +1404,16 @@ def _run_live_analysis_job(payload: dict) -> bool:
             print(f"[worker] Live analysis completed: job={job_id}")
             if metrics:
                 metrics.finish(status="completed")
+
+            # ── BUILD 80: Enqueue video for full process_video pipeline ──
+            # LiveBoost pipeline only does assembly + STT + OCR + sales detection.
+            # The regular process_video pipeline does phase detection, reports, etc.
+            try:
+                _enqueue_process_video_for_liveboost(video_id, email)
+            except Exception as e:
+                print(f"[worker] WARNING: Failed to enqueue process_video for LiveBoost {video_id}: {e}")
+                # Don't fail the live_analysis job - it completed successfully
+
             return True
         elif proc.returncode == 2:
             print(f"[worker] Live analysis skipped (input error): job={job_id}")

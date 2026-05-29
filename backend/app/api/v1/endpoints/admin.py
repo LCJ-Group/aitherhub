@@ -1129,6 +1129,7 @@ async def get_video_detail(
 async def retry_video(
     video_id: str,
     from_step: Optional[str] = Query(None, description="Resume from specific step, e.g. STEP_12_5_PRODUCT_DETECTION"),
+    force_standard: bool = Query(False, description="Force standard process_video pipeline even for LiveBoost videos"),
     db: AsyncSession = Depends(get_db),
     x_admin_key: Optional[str] = Header(None),
 ):
@@ -1136,7 +1137,8 @@ async def retry_video(
     Supports both standard videos and LiveBoost (live_boost) videos.
     For standard videos: generates a fresh SAS URL and pushes a new job.
     For LiveBoost videos: creates/resets a LiveAnalysisJob and enqueues live_analysis.
-    Optional from_step: resume from a specific pipeline step instead of STEP_0."""
+    Optional from_step: resume from a specific pipeline step instead of STEP_0.
+    Optional force_standard: force standard pipeline for LiveBoost videos (skip live_analysis)."""
     if x_admin_key != f"{ADMIN_ID}:{ADMIN_PASS}":
         raise HTTPException(status_code=403, detail="Forbidden")
 
@@ -1158,13 +1160,54 @@ async def retry_video(
         upload_type = row.upload_type or ""
 
         # ── LiveBoost (live_boost) videos: use live_analysis pipeline ──
-        if upload_type == "live_boost":
+        if upload_type == "live_boost" and not force_standard:
             return await _retry_live_boost_admin(
                 db=db,
                 video_id=str(row.id),
                 user_id=row.user_id,
                 user_email=row.user_email,
             )
+
+        # ── LiveBoost with force_standard: use compressed_blob_url ──
+        if upload_type == "live_boost" and force_standard:
+            from app.services.storage_service import (
+                generate_read_sas_from_url,
+                ACCOUNT_NAME as _ACCT,
+                CONTAINER_NAME as _CTR,
+            )
+            # LiveBoost videos use compressed_blob_url (assembled video)
+            compressed_sql = text("SELECT compressed_blob_url FROM videos WHERE id = :vid")
+            compressed_row = (await db.execute(compressed_sql, {"vid": video_id})).fetchone()
+            if not compressed_row or not compressed_row.compressed_blob_url:
+                raise HTTPException(
+                    status_code=400,
+                    detail="LiveBoost video has no assembled video. Run live_analysis first.",
+                )
+            blob_path = compressed_row.compressed_blob_url
+            # Build full URL from blob path (use storage_service constants)
+            full_url = f"https://{_ACCT}.blob.core.windows.net/{_CTR}/{blob_path}"
+            download_url = generate_read_sas_from_url(full_url, expires_hours=24)
+            if not download_url:
+                raise HTTPException(status_code=500, detail="Failed to generate SAS URL for assembled video")
+
+            resume_status = from_step or 'STEP_0_EXTRACT_FRAMES'
+            await db.execute(
+                text("UPDATE videos SET status = :status, step_progress = 0, worker_claimed_at = NULL, dequeue_count = 0, updated_at = NOW() WHERE id = :vid"),
+                {"vid": video_id, "status": resume_status},
+            )
+            await db.commit()
+
+            from app.services.queue_service import enqueue_job
+            await enqueue_job({
+                "video_id": str(row.id),
+                "blob_url": download_url,
+                "original_filename": row.original_filename or "liveboost.mp4",
+            })
+            return {
+                "status": "ok",
+                "video_id": video_id,
+                "message": f"LiveBoost video enqueued for standard process_video pipeline, resume_from={resume_status}",
+            }
 
         # ── Standard videos: use standard pipeline ──
         # v18: Verify blob actually exists before re-enqueuing
