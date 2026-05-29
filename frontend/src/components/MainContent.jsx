@@ -1661,7 +1661,13 @@ export default function MainContent({
                           toast({ title: window.__t('analysisRestarted'), description: window.__t('videoDataPreserved') });
                         } catch (err) {
                           console.error('Retry analysis failed:', err);
-                          toast({ title: window.__t('retryFailed'), description: err?.message || window.__t('tryAgainLater'), variant: 'destructive' });
+                          const status = err?.response?.status || err?.status;
+                          if (status === 410) {
+                            // Blob doesn't exist - show delete suggestion
+                            toast({ title: window.__t('blobMissing') || '動甾ファイルが存在しません', description: window.__t('blobMissingDesc') || 'アップロードが完了していなかった可能性があります。この動画を削除して再アップロードしてください。', variant: 'destructive' });
+                          } else {
+                            toast({ title: window.__t('retryFailed'), description: err?.message || window.__t('tryAgainLater'), variant: 'destructive' });
+                          }
                           e.currentTarget.disabled = false;
                           e.currentTarget.textContent = window.__t('retryAnalysis');
                         }

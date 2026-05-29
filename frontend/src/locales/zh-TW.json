@@ -387,6 +387,8 @@
   "analysisRestarted": "分析已重新開始",
   "videoDataPreserved": "影片資料已保留。",
   "retryFailed": "重試失敗",
+  "blobMissing": "影片檔案不存在",
+  "blobMissingDesc": "上傳可能未完成。請刪除此影片並重新上傳。",
   "tryAgainLater": "請稍後再試。",
   "retryAnalysis": "重新分析",
   "videoAlreadyAnalyzed": "此影片已分析過",

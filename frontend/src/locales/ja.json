@@ -387,6 +387,8 @@
   "analysisRestarted": "解析を再開しました",
   "videoDataPreserved": "動画データはそのまま保持されています。",
   "retryFailed": "再試行に失敗しました",
+  "blobMissing": "動画ファイルが存在しません",
+  "blobMissingDesc": "アップロードが完了していなかった可能性があります。この動画を削除して再アップロードしてください。",
   "tryAgainLater": "しばらくしてからもう一度お試しください。",
   "retryAnalysis": "解析を再試行",
   "videoAlreadyAnalyzed": "この動画はすでに解析済みです",

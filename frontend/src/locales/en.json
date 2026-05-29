@@ -387,6 +387,8 @@
   "analysisRestarted": "Analysis restarted",
   "videoDataPreserved": "Video data has been preserved.",
   "retryFailed": "Retry failed",
+  "blobMissing": "Video file not found",
+  "blobMissingDesc": "The upload may not have completed. Please delete this video and re-upload.",
   "tryAgainLater": "Please try again later.",
   "retryAnalysis": "Retry Analysis",
   "videoAlreadyAnalyzed": "This video has already been analyzed",

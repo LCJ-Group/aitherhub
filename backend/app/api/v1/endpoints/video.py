@@ -1719,8 +1719,20 @@ async def retry_analysis(
             )
 
         # ── Standard videos: use standard video_analysis pipeline ──
+        # Verify blob exists before generating SAS URL
+        from app.services.storage_service import generate_download_sas, verify_blob_exists
+        blob_exists = await verify_blob_exists(
+            email=row.user_email,
+            video_id=str(row.id),
+            filename=row.original_filename,
+        )
+        if not blob_exists:
+            raise HTTPException(
+                status_code=410,
+                detail="動画ファイルがストレージに存在しません。アップロードが完了していなかった可能性があります。この動画を削除して、再度アップロードしてください。",
+            )
+
         # Generate fresh SAS URL for the existing blob
-        from app.services.storage_service import generate_download_sas
         download_url, expiry = await generate_download_sas(
             email=row.user_email,
             video_id=str(row.id),
