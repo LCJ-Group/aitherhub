@@ -1,6 +1,9 @@
 """
-train.py  –  LCJ AI 学習パイプライン v10
+train.py  –  LCJ AI 学習パイプライン v11
 ========================================
+変更点 (v11 - NG率改善とバージョン統一):
+  - AI Clip生成とMLモデルのバージョンタグをv11に統一
+  - 品質スコア閾値引き上げ、NG履歴フィードバックループ追加
 変更点 (v10 - 学習シグナル全面強化):
   - TikTokパフォーマンスデータ特徴量追加 (11個: views, likes, engagement_rate等)
   - ブランド割当成功特徴量追加 (3個: is_brand_assigned, brand_assignment_count, has_brand_success)
@@ -189,7 +192,7 @@ KNOWN_EVENT_TYPES = [
     "CTA", "OBJECTION", "SOCIAL_PROOF", "URGENCY",
     "EMPATHY", "EDUCATION", "CHAT", "TRANSITION", "CLOSING", "UNKNOWN",
 ]
-MODEL_VERSION = 10
+MODEL_VERSION = 11
 DATE_TAG = datetime.now().strftime("%Y%m%d")
 
 # ── Label definition (for manifest traceability) ──
