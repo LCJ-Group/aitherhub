@@ -37,7 +37,7 @@ from app.models.orm.upload import Upload
 from app.models.orm.video import Video
 from app.repository.video_repository import VideoRepository
 from app.services.queue_service import EnqueueResult, enqueue_job
-from app.services.storage_service import generate_download_sas
+from app.services.storage_service import generate_download_sas, verify_blob_exists
 
 _logger = logging.getLogger(__name__)
 
@@ -309,6 +309,48 @@ class UploadPipelineService:
             except Exception as _e:
                 logger.debug(f"Suppressed: {_e}")
             raise
+
+        # ── Step 2.5: Verify blob exists in Azure ────────────────────────
+        t0 = time.monotonic()
+        try:
+            blob_ok = await verify_blob_exists(
+                email=email,
+                video_id=str(video.id),
+                filename=original_filename,
+            )
+            if not blob_ok:
+                _logger.error(
+                    f"[upload_pipeline] Step 2.5 FAILED: Blob does not exist "
+                    f"for video {video.id} ({original_filename}). "
+                    f"The file may not have been fully uploaded to Azure."
+                )
+                # Mark video as ERROR so it doesn't get stuck
+                try:
+                    vid_uuid = uuid_module.UUID(str(video.id))
+                    await db.execute(
+                        update(Video).where(Video.id == vid_uuid).values(
+                            status="ERROR",
+                            enqueue_status="BLOB_MISSING",
+                        )
+                    )
+                    await db.commit()
+                except Exception as _e:
+                    _logger.debug(f"Suppressed video status update error: {_e}")
+                raise ValueError(
+                    f"Blob not found in Azure Storage for video {video.id}. "
+                    f"Please re-upload the file."
+                )
+            _logger.info(
+                f"[upload_pipeline] Step 2.5 OK: Blob verified "
+                f"({int((time.monotonic() - t0) * 1000)}ms)"
+            )
+        except ValueError:
+            raise
+        except Exception as exc:
+            _logger.warning(
+                f"[upload_pipeline] Step 2.5 WARN: Blob check failed ({exc}), "
+                f"proceeding anyway to avoid false negatives"
+            )
 
         # ── Step 3: Generate download SAS URL ─────────────────────────────
         t0 = time.monotonic()

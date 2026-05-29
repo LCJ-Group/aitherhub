@@ -27,6 +27,8 @@ from datetime import datetime, timezone, timedelta
 
 from sqlalchemy import text
 
+from app.services.storage_service import verify_blob_exists
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
@@ -248,6 +250,40 @@ async def _requeue_video(db, row, video_id, old_status, current_retries, reason_
     update was rolled back.
     """
     try:
+        # Step 0: Verify blob exists before attempting requeue
+        try:
+            blob_ok = await verify_blob_exists(
+                email=row.user_email,
+                video_id=video_id,
+                filename=row.original_filename,
+            )
+            if not blob_ok:
+                logger.error(
+                    f"[stuck-monitor] Blob NOT found for {video_id} "
+                    f"({row.original_filename}). Marking as ERROR to stop retries."
+                )
+                await db.execute(
+                    text("""
+                        UPDATE videos SET status = 'ERROR',
+                            enqueue_status = 'BLOB_MISSING',
+                            updated_at = NOW()
+                        WHERE id = :vid::uuid
+                    """),
+                    {"vid": video_id},
+                )
+                await db.commit()
+                await _record_requeue_error(
+                    db, video_id, "BLOB_MISSING", old_status,
+                    f"Blob does not exist in Azure Storage. Video cannot be processed.",
+                    current_retries,
+                )
+                return False
+        except Exception as blob_err:
+            logger.warning(
+                f"[stuck-monitor] Blob check failed for {video_id}: {blob_err}. "
+                f"Proceeding with requeue anyway."
+            )
+
         # Step 1: Generate SAS URL with retry
         try:
             download_url, _expiry = await _generate_sas_with_retry(
