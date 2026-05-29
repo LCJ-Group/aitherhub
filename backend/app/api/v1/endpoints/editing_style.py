@@ -583,10 +583,11 @@ async def _run_single_analysis(profile_id: str, sample_id: str, video_url: str):
     video_path = os.path.join(tmp_dir, "sample.mp4")
 
     try:
-        # 1. Download video
+        # 1. Download video (refresh SAS token to avoid 403 on retry)
+        download_url = _refresh_sas_url(video_url)
         logger.info(f"[editing-style] Downloading sample {sample_id}...")
         async with httpx.AsyncClient(timeout=600) as client:  # 10 min for large file download
-            async with client.stream("GET", video_url) as resp:
+            async with client.stream("GET", download_url) as resp:
                 resp.raise_for_status()
                 with open(video_path, "wb") as f:
                     async for chunk in resp.aiter_bytes(chunk_size=65536):
@@ -785,15 +786,17 @@ async def _run_pair_analysis(
     original_path = os.path.join(tmp_dir, "original.mp4")
 
     try:
-        # 1. Download both videos
+        # 1. Download both videos (refresh SAS tokens to avoid 403 on retry)
+        finished_download_url = _refresh_sas_url(finished_url)
+        original_download_url = _refresh_sas_url(original_url)
         logger.info(f"[editing-style] Downloading pair for analysis...")
         async with httpx.AsyncClient(timeout=600) as client:  # 10 min for large file downloads
-            async with client.stream("GET", finished_url) as resp:
+            async with client.stream("GET", finished_download_url) as resp:
                 resp.raise_for_status()
                 with open(finished_path, "wb") as f:
                     async for chunk in resp.aiter_bytes(chunk_size=65536):
                         f.write(chunk)
-            async with client.stream("GET", original_url) as resp:
+            async with client.stream("GET", original_download_url) as resp:
                 resp.raise_for_status()
                 with open(original_path, "wb") as f:
                     async for chunk in resp.aiter_bytes(chunk_size=65536):
@@ -890,7 +893,30 @@ async def _run_pair_analysis(
             pass
 
 
-# ─── Helper Functions ─────────────────────────────────────────────────────────
+# ─── Helper Functions ───────────────────────────────────────────────────────────────────────────
+
+def _refresh_sas_url(url: str) -> str:
+    """Regenerate a fresh SAS token for an Azure Blob URL.
+    
+    This prevents 403 errors when retrying analysis on samples whose
+    original SAS token has expired. If the URL is not an Azure Blob URL
+    or SAS generation fails, returns the original URL unchanged.
+    """
+    try:
+        from app.services.storage_service import generate_read_sas_from_url
+        # Strip existing SAS query params to get base blob URL
+        base_url = url.split("?")[0] if "?" in url else url
+        # Only refresh if it looks like an Azure Blob URL
+        if "blob.core.windows.net" not in base_url:
+            return url
+        fresh_url = generate_read_sas_from_url(base_url, expires_hours=24)
+        if fresh_url:
+            logger.info(f"[editing-style] Refreshed SAS token for: {base_url[:80]}")
+            return fresh_url
+    except Exception as e:
+        logger.warning(f"[editing-style] Failed to refresh SAS: {e}")
+    return url
+
 
 def _get_video_duration(video_path: str) -> float:
     """Get video duration using ffprobe"""
