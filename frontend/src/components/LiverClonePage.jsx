@@ -1021,8 +1021,9 @@ export default function LiverClonePage() {
         if (dataArray[i] > peak) peak = dataArray[i];
       }
       const avg = sum / dataArray.length;
-      // Require BOTH: average > 25 AND peak > 80 (real speech has high peaks)
-      const isVoice = avg > 25 && peak > 80;
+      // Require BOTH: average > 15 AND peak > 50 (lowered for better sensitivity)
+      // Previous thresholds (avg>25, peak>80) were too strict and missed quiet speech
+      const isVoice = avg > 15 && peak > 50;
       if (!isVoice && avg > 10) {
         console.log(`[STS] VAD: avg=${avg.toFixed(1)}, peak=${peak} → skipped (below threshold)`);
       }

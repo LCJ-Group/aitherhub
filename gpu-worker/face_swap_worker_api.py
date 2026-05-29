@@ -631,7 +631,8 @@ _temporal_state = {
     "prev_gray": None,        # Previous frame grayscale for optical flow
     "prev_result_for_flow": None,  # Previous result for optical flow warping
 }
-_SMOOTH_ALPHA = 0.02   # EMA alpha: lower = smoother but more lag, higher = responsive but jittery
+_SMOOTH_ALPHA = 0.08   # EMA alpha: 0.08 balances smoothness and responsiveness
+# Optical Flow (Step 12) handles flicker, so EMA can be more responsive
 
 # At 15 FPS, 0.02 means each frame only takes 2% of new detection → extremely stable
 # Combined with change-threshold gating (Step 12), this eliminates virtually all flicker
@@ -977,6 +978,10 @@ def direct_swap_frame(frame, detect_score: float = 0.5, use_enhancer: bool = Tru
     # 2. Warp the previous RESULT to align with current frame's motion
     # 3. Blend warped previous with current ONLY in the face region
     # This eliminates flicker without ghosting because the blend follows motion.
+    #
+    # CRITICAL: When mouth_open > 0 (lip-sync active), we REDUCE temporal blending
+    # to prevent the optical flow from overwriting mouth deformation with the
+    # previous (closed-mouth) frame. This is the root cause of "mouth doesn't move".
     curr_gray = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
     
     if _temporal_state["prev_gray"] is not None and \
@@ -984,7 +989,6 @@ def direct_swap_frame(frame, detect_score: float = 0.5, use_enhancer: bool = Tru
        _temporal_state["prev_result_for_flow"].shape == result.shape:
         try:
             # Compute dense optical flow (Farneback)
-            # This tells us how each pixel moved from prev frame to current frame
             flow = cv2.calcOpticalFlowFarneback(
                 _temporal_state["prev_gray"], curr_gray, None,
                 pyr_scale=0.5, levels=3, winsize=15, iterations=3,
@@ -1001,11 +1005,9 @@ def direct_swap_frame(frame, detect_score: float = 0.5, use_enhancer: bool = Tru
                 borderMode=cv2.BORDER_REPLICATE
             )
             
-            # Blend ONLY in face region (background stays untouched)
-            try:
-                _cm = combined_mask
-            except NameError:
-                _cm = None
+            # Get combined_mask from the for-loop scope (last face processed)
+            # Use locals() check instead of try/except NameError for reliability
+            _cm = locals().get('combined_mask', None)
             
             if _cm is not None:
                 # Soft face mask for blending (0 = background, 1 = face center)
@@ -1021,22 +1023,38 @@ def direct_swap_frame(frame, detect_score: float = 0.5, use_enhancer: bool = Tru
                 else:
                     face_diff = 999.0  # No face pixels, skip blending
                 
-                if face_diff < 2.0:
-                    # Nearly identical after flow warp - use previous (no flicker)
-                    result = np.where(
-                        blend_mask[:, :, np.newaxis] > 0.1,
-                        _temporal_state["prev_result_for_flow"],
-                        result
-                    ).astype(np.uint8)
-                elif face_diff < 25.0:
-                    # Normal range: blend 60% current + 40% warped previous in face region
-                    # This is safe because warped_prev follows motion (no ghosting)
-                    blend_weight = 0.4 * blend_mask[:, :, np.newaxis]  # 0-0.4 based on mask
-                    result = (
-                        result.astype(np.float32) * (1.0 - blend_weight) +
-                        warped_prev.astype(np.float32) * blend_weight
-                    ).astype(np.uint8)
-                # else: very large diff (scene change) - use current result as-is
+                # When lip-sync is active (mouth_open > 0), SKIP temporal blending
+                # entirely to preserve the mouth deformation from Step 11.
+                # Without this, optical flow detects the mouth region as "nearly identical"
+                # to the previous frame and overwrites it with the closed-mouth result.
+                if mouth_open > 0.01:
+                    # Lip-sync active: do NOT blend in the mouth region
+                    # Only apply very light blending (10%) in non-mouth areas for stability
+                    if face_diff < 25.0 and face_diff >= 2.0:
+                        light_weight = 0.1 * blend_mask[:, :, np.newaxis]
+                        result = (
+                            result.astype(np.float32) * (1.0 - light_weight) +
+                            warped_prev.astype(np.float32) * light_weight
+                        ).astype(np.uint8)
+                    # else: skip blending entirely during lip-sync
+                else:
+                    # No lip-sync: apply full temporal blending for flicker reduction
+                    if face_diff < 2.0:
+                        # Nearly identical after flow warp - use previous (no flicker)
+                        result = np.where(
+                            blend_mask[:, :, np.newaxis] > 0.1,
+                            _temporal_state["prev_result_for_flow"],
+                            result
+                        ).astype(np.uint8)
+                    elif face_diff < 25.0:
+                        # Normal range: blend 70% current + 30% warped previous
+                        # Reduced from 40% to 30% to preserve more detail
+                        blend_weight = 0.3 * blend_mask[:, :, np.newaxis]
+                        result = (
+                            result.astype(np.float32) * (1.0 - blend_weight) +
+                            warped_prev.astype(np.float32) * blend_weight
+                        ).astype(np.uint8)
+                    # else: very large diff (scene change) - use current result as-is
             else:
                 # No mask available - skip optical flow blending
                 pass
