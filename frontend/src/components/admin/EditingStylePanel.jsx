@@ -321,7 +321,7 @@ function PairUploadPanel({ profile, adminKey, onDelete, onRefresh }) {
         };
         xhr.onerror = () => reject(new Error('ネットワークエラー'));
         xhr.ontimeout = () => reject(new Error('タイムアウト'));
-        xhr.timeout = 600000; // 10 min timeout for large files
+        xhr.timeout = 1800000; // 30 min timeout for large files
         xhr.open('PUT', upload_url, true);
         xhr.setRequestHeader('x-ms-blob-type', 'BlockBlob');
         xhr.setRequestHeader('Content-Type', file.type || 'video/mp4');

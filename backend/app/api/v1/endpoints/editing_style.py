@@ -416,7 +416,7 @@ async def upload_sample(
             filename=filename,
         )
 
-        async with httpx.AsyncClient(timeout=300) as client:
+        async with httpx.AsyncClient(timeout=600) as client:  # 10 min for large file upload
             resp = await client.put(
                 upload_url,
                 content=content,
@@ -539,7 +539,7 @@ async def analyze_single(
 
 async def _run_single_analysis_safe(profile_id: str, sample_id: str, video_url: str, is_original: bool = False):
     """Wrapper with timeout and guaranteed status update"""
-    timeout_sec = 900 if is_original else 300  # 15 min for originals, 5 min for finished
+    timeout_sec = 1800  # 30 min for all analysis (long videos need more time)
     try:
         await asyncio.wait_for(
             _run_single_analysis(profile_id, sample_id, video_url),
@@ -553,9 +553,9 @@ async def _run_single_analysis_safe(profile_id: str, sample_id: str, video_url: 
                     UPDATE editing_style_samples
                     SET analysis_status = 'error',
                         analysis_result = :err,
-                        error_message = 'タイムアウト（5分超過）'
+                        error_message = 'タイムアウト（30分超過）'
                     WHERE id = :id
-                """), {"id": sample_id, "err": json.dumps({"error": "timeout_5min"})})
+                """), {"id": sample_id, "err": json.dumps({"error": "timeout_30min"})})
                 await session.commit()
         except Exception:
             pass
@@ -585,7 +585,7 @@ async def _run_single_analysis(profile_id: str, sample_id: str, video_url: str):
     try:
         # 1. Download video
         logger.info(f"[editing-style] Downloading sample {sample_id}...")
-        async with httpx.AsyncClient(timeout=180) as client:
+        async with httpx.AsyncClient(timeout=600) as client:  # 10 min for large file download
             async with client.stream("GET", video_url) as resp:
                 resp.raise_for_status()
                 with open(video_path, "wb") as f:
@@ -732,7 +732,7 @@ async def _run_pair_analysis_safe(
     try:
         await asyncio.wait_for(
             _run_pair_analysis(profile_id, finished_sample_id, original_sample_id, finished_url, original_url),
-            timeout=600  # 10 minutes max for pair analysis
+            timeout=1800  # 30 minutes max for pair analysis (long videos need more time)
         )
     except asyncio.TimeoutError:
         logger.error(f"[editing-style] Pair analysis timed out")
@@ -740,12 +740,12 @@ async def _run_pair_analysis_safe(
             async with get_session() as session:
                 await session.execute(text("""
                     UPDATE editing_style_samples
-                    SET analysis_status = 'error', analysis_result = :err, error_message = 'タイムアウト（10分超過）'
+                    SET analysis_status = 'error', analysis_result = :err, error_message = 'タイムアウト（30分超過）'
                     WHERE id = :fid
-                """), {"fid": finished_sample_id, "err": json.dumps({"error": "timeout_10min"})})
+                """), {"fid": finished_sample_id, "err": json.dumps({"error": "timeout_30min"})})
                 await session.execute(text("""
                     UPDATE editing_style_samples
-                    SET analysis_status = 'error', error_message = 'タイムアウト（10分超過）'
+                    SET analysis_status = 'error', error_message = 'タイムアウト（30分超過）'
                     WHERE id = :oid
                 """), {"oid": original_sample_id})
                 await session.commit()
@@ -787,7 +787,7 @@ async def _run_pair_analysis(
     try:
         # 1. Download both videos
         logger.info(f"[editing-style] Downloading pair for analysis...")
-        async with httpx.AsyncClient(timeout=300) as client:
+        async with httpx.AsyncClient(timeout=600) as client:  # 10 min for large file downloads
             async with client.stream("GET", finished_url) as resp:
                 resp.raise_for_status()
                 with open(finished_path, "wb") as f:
@@ -813,7 +813,7 @@ async def _run_pair_analysis(
 
         # 4. Scene detection on both
         finished_scenes = await _detect_scene_changes(finished_path)
-        original_scenes = await _detect_scene_changes(original_path, timeout=600)  # longer timeout for long original videos
+        original_scenes = await _detect_scene_changes(original_path, timeout=900)  # longer timeout for long original videos
 
         # 5. Diff analysis with GPT
         logger.info(f"[editing-style] GPT diff analysis...")
@@ -905,7 +905,7 @@ def _get_video_duration(video_path: str) -> float:
     return 0.0
 
 
-async def _detect_scene_changes(video_path: str, threshold: float = 0.3, timeout: int = 300) -> list:
+async def _detect_scene_changes(video_path: str, threshold: float = 0.3, timeout: int = 600) -> list:
     """Detect scene changes using ffmpeg (async, non-blocking).
 
     For long videos (>10 min), we limit analysis to the first 30 minutes
@@ -914,9 +914,9 @@ async def _detect_scene_changes(video_path: str, threshold: float = 0.3, timeout
     duration = _get_video_duration(video_path)
     # For very long videos, limit to first 30 min to avoid timeout
     time_limit_args = []
-    if duration > 600:  # > 10 minutes
-        time_limit_args = ["-t", "1800"]  # analyze first 30 min max
-        logger.info(f"[editing-style] Long video ({duration:.0f}s), limiting scene detection to first 30 min")
+    if duration > 3600:  # > 60 minutes
+        time_limit_args = ["-t", "3600"]  # analyze first 60 min max
+        logger.info(f"[editing-style] Very long video ({duration:.0f}s), limiting scene detection to first 60 min")
 
     cmd = [
         "ffmpeg", *time_limit_args, "-i", video_path,
@@ -991,11 +991,11 @@ async def _transcribe_for_style(video_path: str) -> list:
     except Exception:
         pass
     ffmpeg_args = ["ffmpeg", "-y", "-i", video_path]
-    if duration > 600:  # > 10 min: only transcribe first 15 min
-        ffmpeg_args.extend(["-t", "900"])
-        logger.info(f"[editing-style] Long video ({duration:.0f}s), limiting audio to first 15 min")
+    if duration > 3600:  # > 60 min: only transcribe first 30 min
+        ffmpeg_args.extend(["-t", "1800"])
+        logger.info(f"[editing-style] Very long video ({duration:.0f}s), limiting audio to first 30 min")
     ffmpeg_args.extend(["-vn", "-acodec", "libmp3lame", "-ar", "16000", "-ac", "1", "-b:a", "64k", audio_path])
-    audio_timeout = 300 if duration > 600 else 120  # longer timeout for long videos
+    audio_timeout = 600 if duration > 600 else 300  # longer timeout for long videos
     try:
         proc = await asyncio.create_subprocess_exec(
             *ffmpeg_args,
