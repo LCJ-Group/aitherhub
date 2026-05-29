@@ -234,6 +234,9 @@ COPY gpu-worker/serverless/setup.sh /app/setup.sh
 COPY gpu-worker/live_engine.py /app/live_engine.py
 COPY gpu-worker/liveportrait_engine.py /app/liveportrait_engine.py
 COPY gpu-worker/imtalker_generate_patch.py /app/imtalker_generate_patch.py
+COPY gpu-worker/face_swap_worker_api.py /app/face_swap_worker_api.py
+COPY gpu-worker/start_worker.sh /app/start_worker.sh
+RUN chmod +x /app/start_worker.sh
 
 RUN chmod +x /app/setup.sh
 
@@ -257,6 +260,7 @@ RUN mkdir -p /workspace && \
     ln -sf /app/live_engine.py /workspace/live_engine.py && \
     ln -sf /app/liveportrait_engine.py /workspace/liveportrait_engine.py && \
     ln -sf /app/imtalker_generate_patch.py /workspace/imtalker_generate_patch.py && \
+    ln -sf /app/face_swap_worker_api.py /workspace/face_swap_worker_api.py && \
     mkdir -p /workspace/source_faces /workspace/tmp /tmp/aitherhub
 
 # ── Environment Variables ────────────────────────────────────────────────────
@@ -275,4 +279,6 @@ RUN pip install --no-cache-dir --force-reinstall "numpy==1.26.4" && \
     python3 -c "import numpy; print(f'Final numpy version: {numpy.__version__}'); assert numpy.__version__ == '1.26.4', f'Expected 1.26.4, got {numpy.__version__}'"
 
 # ── Entrypoint ───────────────────────────────────────────────────────────────
-CMD ["/bin/bash", "-c", "/app/setup.sh && python3 -u /app/handler.py"]
+# Start face_swap_worker_api (port 11434) in background for real-time Liver Clone,
+# then start RunPod Serverless handler.py in foreground for batch jobs.
+CMD ["/bin/bash", "-c", "/app/setup.sh && cd /workspace && PORT=11434 WORKER_API_KEY=aitherhub-gpu-worker-secret-2024 python3 -u /app/face_swap_worker_api.py &>> /var/log/worker_api.log & sleep 2 && python3 -u /app/handler.py"]

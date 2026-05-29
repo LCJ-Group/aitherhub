@@ -16,6 +16,7 @@
 #   ├── MuseTalk/            — MuseTalk repo (models downloaded at first start)
 #   ├── models/              — Shared model files (GFPGAN, etc.)
 #   ├── handler.py           — RunPod Serverless handler
+#   ├── face_swap_worker_api.py — Real-time face swap FastAPI (port 11434)
 #   ├── live_engine.py       — MuseTalk engine
 #   ├── liveportrait_engine.py
 #   └── setup.sh             — This script
@@ -358,4 +359,5 @@ else:
 
 echo ""
 echo "=== Setup Complete ==="
-echo "Starting RunPod Serverless handler..."
+echo "face_swap_worker_api.py will be started on port 11434 (background)"
+echo "Starting RunPod Serverless handler (foreground)..."
