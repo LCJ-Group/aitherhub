@@ -301,6 +301,54 @@ class LiverCloneService {
     );
     return res.data;
   }
+  // ============================================================
+  // User Settings Persistence (DB-backed)
+  // ============================================================
+
+  /**
+   * Get user's saved Liver Clone settings from the server.
+   * @param {number} userId - User ID (defaults to 1 for single-user mode)
+   * @returns {Promise<Object>} { status, exists, settings }
+   */
+  async getSettings(userId = 1) {
+    const res = await axios.get(
+      `${this.baseURL}/api/v1/liver-clone/settings`,
+      { headers: this._headers(), params: { user_id: userId }, timeout: 10000 }
+    );
+    return res.data;
+  }
+
+  /**
+   * Save user's Liver Clone settings to the server.
+   * @param {Object} settings - All settings to persist
+   * @param {number} userId - User ID (defaults to 1 for single-user mode)
+   * @returns {Promise<Object>} { status, user_id }
+   */
+  async saveSettings(settings, userId = 1) {
+    const res = await axios.put(
+      `${this.baseURL}/api/v1/liver-clone/settings`,
+      settings,
+      { headers: this._headers(), params: { user_id: userId }, timeout: 10000 }
+    );
+    return res.data;
+  }
+
+  /**
+   * Upload a face image to cloud storage for persistent access.
+   * @param {string} faceId - Unique face identifier
+   * @param {string} imageBase64 - Base64-encoded image data
+   * @param {string} name - Display name for the face
+   * @param {number} userId - User ID
+   * @returns {Promise<Object>} { status, face_id, image_url }
+   */
+  async uploadFaceImage(faceId, imageBase64, name = "", userId = 1) {
+    const res = await axios.post(
+      `${this.baseURL}/api/v1/liver-clone/settings/upload-face`,
+      { face_id: faceId, image_base64: imageBase64, name },
+      { headers: this._headers(), params: { user_id: userId }, timeout: 30000 }
+    );
+    return res.data;
+  }
 }
 
 export default new LiverCloneService();

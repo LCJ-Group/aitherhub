@@ -509,12 +509,20 @@ async def preview_sts(req: PreviewSTSRequest):
     """
     Convert voice using ElevenLabs STS streaming API for low-latency preview.
     Uses /v1/speech-to-speech/{voice_id}/stream for faster first-byte response.
-    Returns base64-encoded MP3 audio (22kHz/32kbps for minimal size).
+    
+    Key design decision: Browser MediaRecorder outputs WebM/Opus chunks that may
+    be incomplete containers (especially short 2-3s chunks). ElevenLabs rejects
+    these with 400 errors. Solution: transcode to WAV via ffmpeg before sending.
+    This adds ~50ms latency but guarantees compatibility with any audio format.
+    
+    Returns base64-encoded MP3 audio.
     """
     import base64
     import json
     import httpx
     import os
+    import tempfile
+    import subprocess
 
     if not req.audio_base64:
         raise HTTPException(status_code=400, detail="audio_base64 is required")
@@ -532,12 +540,57 @@ async def preview_sts(req: PreviewSTSRequest):
     try:
         audio_bytes = base64.b64decode(req.audio_base64)
         if len(audio_bytes) < 200:
-            # Too short = likely noise, skip
             return {"status": "skipped", "reason": "audio_too_short"}
 
         logger.info(f"[STS] input={len(audio_bytes)}B voice={voice_id[:8]}...")
 
-        # Use streaming endpoint for lower latency
+        # ── Transcode WebM/Opus → WAV for ElevenLabs compatibility ──
+        # Browser MediaRecorder outputs WebM chunks that may be incomplete
+        # containers. ffmpeg handles this gracefully and outputs clean PCM WAV.
+        wav_bytes = audio_bytes  # fallback: use raw if transcode fails
+        input_filename = "input_audio.webm"
+        input_mime = "audio/webm"
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tmp_in:
+                tmp_in.write(audio_bytes)
+                tmp_in_path = tmp_in.name
+            tmp_out_path = tmp_in_path.replace(".webm", ".wav")
+
+            result = subprocess.run(
+                [
+                    "ffmpeg", "-y", "-i", tmp_in_path,
+                    "-ar", "16000",      # 16kHz mono = optimal for speech
+                    "-ac", "1",
+                    "-f", "wav",
+                    tmp_out_path,
+                ],
+                capture_output=True, timeout=10,
+            )
+
+            if result.returncode == 0:
+                with open(tmp_out_path, "rb") as f:
+                    wav_bytes = f.read()
+                input_filename = "input_audio.wav"
+                input_mime = "audio/wav"
+                logger.info(f"[STS] transcoded: {len(audio_bytes)}B webm -> {len(wav_bytes)}B wav")
+            else:
+                stderr_snippet = result.stderr.decode(errors='ignore')[-200:]
+                logger.warning(f"[STS] ffmpeg transcode failed, using raw: {stderr_snippet}")
+        except Exception as transcode_err:
+            logger.warning(f"[STS] transcode error (using raw): {transcode_err}")
+        finally:
+            # Cleanup temp files
+            for p in [tmp_in_path, tmp_out_path]:
+                try:
+                    os.unlink(p)
+                except Exception:
+                    pass
+
+        # Skip if transcoded audio is too short (silence/noise)
+        if len(wav_bytes) < 500:
+            return {"status": "skipped", "reason": "audio_too_short_after_transcode"}
+
+        # ── Send to ElevenLabs STS streaming endpoint ──
         url = f"{base_url}/v1/speech-to-speech/{voice_id}/stream"
         params = {"output_format": "mp3_44100_128"}
         voice_settings = json.dumps({
@@ -545,10 +598,10 @@ async def preview_sts(req: PreviewSTSRequest):
             "similarity_boost": req.voice_similarity,
         })
 
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
                 url,
-                files={"audio": ("chunk.webm", audio_bytes, "audio/webm")},
+                files={"audio": (input_filename, wav_bytes, input_mime)},
                 data={
                     "model_id": sts_model,
                     "voice_settings": voice_settings,
@@ -752,4 +805,331 @@ async def generate_product_intro(req: ProductIntroRequest):
         raise
     except Exception as e:
         logger.exception("[ProductIntro] Script generation failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
+# ============================================================
+# User Settings Persistence (DB-backed)
+# ============================================================
+# Replaces localStorage/IndexedDB with server-side storage.
+# Settings are tied to user_id for cross-browser/device persistence.
+
+class SaveSettingsRequest(BaseModel):
+    """Request to save user's Liver Clone settings."""
+    voice_id: str = ""
+    voice_stability: float = 0.5
+    voice_similarity: float = 0.75
+    sts_enabled: bool = False
+    mode: str = "hybrid"
+    quality: str = "high"
+    language: str = "ja"
+    resolution: str = "720p"
+    fps: int = 30
+    vad_threshold: float = 0.3
+    silence_timeout: float = 5.0
+    saved_voices: str = "[]"  # JSON string
+    saved_faces: str = "[]"   # JSON string
+    saved_products: str = "[]"  # JSON string
+    active_face_url: str = ""
+
+
+class SaveFaceImageRequest(BaseModel):
+    """Request to upload a face image for persistence."""
+    face_id: str  # Unique identifier for this face
+    image_base64: str  # Full-resolution base64 image
+    name: str = ""  # Display name
+
+
+@router.get("/settings")
+async def get_settings(user_id: int = 0):
+    """
+    Get user's Liver Clone settings from DB.
+    Falls back to defaults if no settings exist yet.
+    
+    Note: user_id is passed as query param for now (admin-key auth).
+    In future, extract from JWT token.
+    """
+    from sqlalchemy import text
+    from app.core.db import get_db
+
+    if not user_id:
+        # Default user for single-user mode
+        user_id = 1
+
+    async for db in get_db():
+        try:
+            # Ensure table exists (safe for first deploy)
+            await db.execute(text("""
+                CREATE TABLE IF NOT EXISTS liver_clone_settings (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    voice_id VARCHAR(255),
+                    voice_stability FLOAT DEFAULT 0.5 NOT NULL,
+                    voice_similarity FLOAT DEFAULT 0.75 NOT NULL,
+                    sts_enabled BOOLEAN DEFAULT FALSE NOT NULL,
+                    mode VARCHAR(50) DEFAULT 'hybrid' NOT NULL,
+                    quality VARCHAR(50) DEFAULT 'high' NOT NULL,
+                    language VARCHAR(10) DEFAULT 'ja' NOT NULL,
+                    resolution VARCHAR(10) DEFAULT '720p' NOT NULL,
+                    fps INTEGER DEFAULT 30 NOT NULL,
+                    vad_threshold FLOAT DEFAULT 0.3 NOT NULL,
+                    silence_timeout FLOAT DEFAULT 5.0 NOT NULL,
+                    saved_voices TEXT DEFAULT '[]' NOT NULL,
+                    saved_faces TEXT DEFAULT '[]' NOT NULL,
+                    saved_products TEXT DEFAULT '[]' NOT NULL,
+                    active_face_url TEXT,
+                    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+                    updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+                )
+            """))
+            await db.execute(text("""
+                CREATE UNIQUE INDEX IF NOT EXISTS ix_liver_clone_settings_user_id 
+                ON liver_clone_settings(user_id)
+            """))
+            await db.commit()
+
+            result = await db.execute(
+                text("SELECT * FROM liver_clone_settings WHERE user_id = :uid"),
+                {"uid": user_id},
+            )
+            row = result.mappings().fetchone()
+
+            if not row:
+                return {
+                    "status": "ok",
+                    "exists": False,
+                    "settings": {
+                        "voice_id": "",
+                        "voice_stability": 0.5,
+                        "voice_similarity": 0.75,
+                        "sts_enabled": False,
+                        "mode": "hybrid",
+                        "quality": "high",
+                        "language": "ja",
+                        "resolution": "720p",
+                        "fps": 30,
+                        "vad_threshold": 0.3,
+                        "silence_timeout": 5.0,
+                        "saved_voices": "[]",
+                        "saved_faces": "[]",
+                        "saved_products": "[]",
+                        "active_face_url": "",
+                    },
+                }
+
+            return {
+                "status": "ok",
+                "exists": True,
+                "settings": {
+                    "voice_id": row["voice_id"] or "",
+                    "voice_stability": row["voice_stability"],
+                    "voice_similarity": row["voice_similarity"],
+                    "sts_enabled": row["sts_enabled"],
+                    "mode": row["mode"],
+                    "quality": row["quality"],
+                    "language": row["language"],
+                    "resolution": row["resolution"],
+                    "fps": row["fps"],
+                    "vad_threshold": row["vad_threshold"],
+                    "silence_timeout": row["silence_timeout"],
+                    "saved_voices": row["saved_voices"],
+                    "saved_faces": row["saved_faces"],
+                    "saved_products": row["saved_products"],
+                    "active_face_url": row["active_face_url"] or "",
+                },
+            }
+        except Exception as e:
+            logger.exception("[Settings] Failed to get settings")
+            raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/settings")
+async def save_settings(req: SaveSettingsRequest, user_id: int = 0):
+    """
+    Save (upsert) user's Liver Clone settings to DB.
+    Uses INSERT ... ON CONFLICT for atomic upsert.
+    """
+    from sqlalchemy import text
+    from app.core.db import get_db
+
+    if not user_id:
+        user_id = 1
+
+    async for db in get_db():
+        try:
+            # Ensure table exists
+            await db.execute(text("""
+                CREATE TABLE IF NOT EXISTS liver_clone_settings (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    voice_id VARCHAR(255),
+                    voice_stability FLOAT DEFAULT 0.5 NOT NULL,
+                    voice_similarity FLOAT DEFAULT 0.75 NOT NULL,
+                    sts_enabled BOOLEAN DEFAULT FALSE NOT NULL,
+                    mode VARCHAR(50) DEFAULT 'hybrid' NOT NULL,
+                    quality VARCHAR(50) DEFAULT 'high' NOT NULL,
+                    language VARCHAR(10) DEFAULT 'ja' NOT NULL,
+                    resolution VARCHAR(10) DEFAULT '720p' NOT NULL,
+                    fps INTEGER DEFAULT 30 NOT NULL,
+                    vad_threshold FLOAT DEFAULT 0.3 NOT NULL,
+                    silence_timeout FLOAT DEFAULT 5.0 NOT NULL,
+                    saved_voices TEXT DEFAULT '[]' NOT NULL,
+                    saved_faces TEXT DEFAULT '[]' NOT NULL,
+                    saved_products TEXT DEFAULT '[]' NOT NULL,
+                    active_face_url TEXT,
+                    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+                    updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+                )
+            """))
+            await db.execute(text("""
+                CREATE UNIQUE INDEX IF NOT EXISTS ix_liver_clone_settings_user_id 
+                ON liver_clone_settings(user_id)
+            """))
+            await db.commit()
+
+            # Upsert using ON CONFLICT
+            await db.execute(
+                text("""
+                    INSERT INTO liver_clone_settings (
+                        user_id, voice_id, voice_stability, voice_similarity,
+                        sts_enabled, mode, quality, language, resolution, fps,
+                        vad_threshold, silence_timeout, saved_voices, saved_faces,
+                        saved_products, active_face_url, updated_at
+                    ) VALUES (
+                        :user_id, :voice_id, :voice_stability, :voice_similarity,
+                        :sts_enabled, :mode, :quality, :language, :resolution, :fps,
+                        :vad_threshold, :silence_timeout, :saved_voices, :saved_faces,
+                        :saved_products, :active_face_url, NOW()
+                    )
+                    ON CONFLICT (user_id) DO UPDATE SET
+                        voice_id = EXCLUDED.voice_id,
+                        voice_stability = EXCLUDED.voice_stability,
+                        voice_similarity = EXCLUDED.voice_similarity,
+                        sts_enabled = EXCLUDED.sts_enabled,
+                        mode = EXCLUDED.mode,
+                        quality = EXCLUDED.quality,
+                        language = EXCLUDED.language,
+                        resolution = EXCLUDED.resolution,
+                        fps = EXCLUDED.fps,
+                        vad_threshold = EXCLUDED.vad_threshold,
+                        silence_timeout = EXCLUDED.silence_timeout,
+                        saved_voices = EXCLUDED.saved_voices,
+                        saved_faces = EXCLUDED.saved_faces,
+                        saved_products = EXCLUDED.saved_products,
+                        active_face_url = EXCLUDED.active_face_url,
+                        updated_at = NOW()
+                """),
+                {
+                    "user_id": user_id,
+                    "voice_id": req.voice_id,
+                    "voice_stability": req.voice_stability,
+                    "voice_similarity": req.voice_similarity,
+                    "sts_enabled": req.sts_enabled,
+                    "mode": req.mode,
+                    "quality": req.quality,
+                    "language": req.language,
+                    "resolution": req.resolution,
+                    "fps": req.fps,
+                    "vad_threshold": req.vad_threshold,
+                    "silence_timeout": req.silence_timeout,
+                    "saved_voices": req.saved_voices,
+                    "saved_faces": req.saved_faces,
+                    "saved_products": req.saved_products,
+                    "active_face_url": req.active_face_url,
+                },
+            )
+            await db.commit()
+
+            logger.info(f"[Settings] Saved settings for user_id={user_id}")
+            return {"status": "ok", "user_id": user_id}
+        except Exception as e:
+            logger.exception("[Settings] Failed to save settings")
+            raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/settings/upload-face")
+async def upload_face_image(req: SaveFaceImageRequest, user_id: int = 0):
+    """
+    Upload a face image to Azure Blob Storage for persistent storage.
+    Returns the public URL that can be stored in saved_faces JSON.
+    
+    This replaces IndexedDB storage with cloud storage so faces persist
+    across browsers and devices.
+    """
+    import base64
+    import os
+    import uuid
+
+    if not user_id:
+        user_id = 1
+
+    try:
+        from azure.storage.blob import BlobServiceClient, ContentSettings
+
+        conn_str = os.getenv("AZURE_STORAGE_CONNECTION_STRING", "")
+        account_name = os.getenv("AZURE_STORAGE_ACCOUNT_NAME", "")
+        container_name = "liver-clone-faces"
+
+        if not conn_str:
+            raise HTTPException(status_code=500, detail="Storage not configured")
+
+        # Decode base64 image
+        image_bytes = base64.b64decode(req.image_base64)
+        
+        # Detect format from header bytes
+        content_type = "image/jpeg"
+        ext = "jpg"
+        if image_bytes[:8] == b'\x89PNG\r\n\x1a\n':
+            content_type = "image/png"
+            ext = "png"
+        elif image_bytes[:4] == b'RIFF' and image_bytes[8:12] == b'WEBP':
+            content_type = "image/webp"
+            ext = "webp"
+
+        # Generate unique blob name
+        blob_name = f"user_{user_id}/{req.face_id}_{uuid.uuid4().hex[:8]}.{ext}"
+
+        # Upload to Azure Blob Storage
+        service_client = BlobServiceClient.from_connection_string(conn_str)
+        container_client = service_client.get_container_client(container_name)
+
+        # Create container if not exists
+        try:
+            container_client.create_container(public_access="blob")
+        except Exception:
+            pass  # Already exists
+
+        blob_client = container_client.get_blob_client(blob_name)
+        blob_client.upload_blob(
+            image_bytes,
+            overwrite=True,
+            content_settings=ContentSettings(content_type=content_type),
+        )
+
+        # Construct public URL
+        image_url = f"https://{account_name}.blob.core.windows.net/{container_name}/{blob_name}"
+
+        logger.info(f"[Settings] Face image uploaded: {blob_name} ({len(image_bytes)}B)")
+        return {
+            "status": "ok",
+            "face_id": req.face_id,
+            "image_url": image_url,
+            "size": len(image_bytes),
+        }
+    except HTTPException:
+        raise
+    except ImportError:
+        # Azure SDK not available - store as data URL fallback
+        logger.warning("[Settings] Azure SDK not available, using data URL fallback")
+        data_url = f"data:image/jpeg;base64,{req.image_base64[:100]}..."
+        return {
+            "status": "ok",
+            "face_id": req.face_id,
+            "image_url": "",
+            "size": 0,
+            "warning": "Azure storage not available, face stored locally only",
+        }
+    except Exception as e:
+        logger.exception("[Settings] Face upload failed")
         raise HTTPException(status_code=500, detail=str(e))

@@ -250,12 +250,59 @@ export default function LiverClonePage() {
   const productFileInputRef = useRef(null);
   const productsInitializedRef = useRef(false); // Prevent double-init
 
-  // ── Load health on mount + restore images from IndexedDB ──
+  // ── Load settings from server on mount (DB persistence) ──
+  const settingsLoadedRef = useRef(false);
+  const saveTimerRef = useRef(null);
+
   useEffect(() => {
     checkHealth();
     loadExistingSessions();
 
-    // Restore product images from IndexedDB
+    // Load settings from server DB (primary source of truth)
+    (async () => {
+      try {
+        const resp = await liverCloneService.getSettings();
+        if (resp.status === "ok" && resp.exists) {
+          const s = resp.settings;
+          // Apply server settings to state
+          if (s.voice_id) setVoiceId(s.voice_id);
+          if (s.mode) setMode(s.mode);
+          if (s.quality) setQuality(s.quality);
+          if (s.language) setLanguage(s.language);
+          if (s.resolution) setResolution(s.resolution);
+          if (s.fps) setFps(s.fps);
+          if (s.voice_stability !== undefined) setVoiceStability(s.voice_stability);
+          if (s.voice_similarity !== undefined) setVoiceSimilarity(s.voice_similarity);
+          if (s.vad_threshold !== undefined) setVadThreshold(s.vad_threshold);
+          if (s.silence_timeout !== undefined) setSilenceTimeout(s.silence_timeout);
+          if (s.sts_enabled !== undefined) setStsEnabled(s.sts_enabled);
+          // Restore saved voices
+          try {
+            const voices = JSON.parse(s.saved_voices || "[]");
+            if (voices.length > 0) setSavedVoiceIds(voices);
+          } catch (e) { /* ignore parse error */ }
+          // Restore saved faces
+          try {
+            const faces = JSON.parse(s.saved_faces || "[]");
+            if (faces.length > 0) setSavedFaces(faces);
+          } catch (e) { /* ignore parse error */ }
+          // Restore saved products (metadata only, images loaded separately)
+          try {
+            const prods = JSON.parse(s.saved_products || "[]");
+            if (prods.length > 0) setProducts(prods);
+          } catch (e) { /* ignore parse error */ }
+          console.log("[Settings] Loaded from server DB");
+        } else {
+          console.log("[Settings] No server settings found, using localStorage fallback");
+        }
+      } catch (e) {
+        console.warn("[Settings] Failed to load from server, using localStorage:", e);
+      } finally {
+        settingsLoadedRef.current = true;
+      }
+    })();
+
+    // Restore product images from IndexedDB (still used as image cache)
     (async () => {
       try {
         const saved = JSON.parse(localStorage.getItem("liverClone_savedProducts") || "[]");
@@ -270,13 +317,22 @@ export default function LiverClonePage() {
               }
               return p;
             });
-            setProducts(restored);
+            setProducts(prev => {
+              // Merge: if server already loaded products, merge images into them
+              if (prev.length > 0) {
+                return prev.map(p => {
+                  const match = restored.find(r => r.id === p.id);
+                  if (match) return { ...p, image_base64: match.image_base64 || p.image_base64, image_preview: match.image_preview || p.image_preview };
+                  return p;
+                });
+              }
+              return restored;
+            });
           }
         }
       } catch (e) {
         console.warn("[Products] Failed to restore images from IndexedDB:", e);
       } finally {
-        // Mark initialization complete AFTER restore attempt (even if no products)
         productsInitializedRef.current = true;
       }
     })();
@@ -293,7 +349,6 @@ export default function LiverClonePage() {
           if (img?.image_preview) {
             return { ...f, preview: img.image_preview };
           }
-          // If no image in IndexedDB but URL exists, try to fetch from URL
           if (f.url) {
             try {
               const resp = await fetch(f.url);
@@ -304,7 +359,6 @@ export default function LiverClonePage() {
                   reader.onload = () => res(reader.result);
                   reader.readAsDataURL(blob);
                 });
-                // Save to IndexedDB for future use
                 await saveImageToDB(`face_${f.id}`, "", dataUrl);
                 return { ...f, preview: dataUrl };
               }
@@ -314,51 +368,70 @@ export default function LiverClonePage() {
           }
           return { ...f, preview: f.preview || "" };
         }));
-        setSavedFaces(restoredFaces);
+        setSavedFaces(prev => prev.length > 0 ? prev : restoredFaces);
       } catch (e) {
         console.warn("[Faces] Failed to restore images from IndexedDB:", e);
       }
     })();
   }, []);
 
-  // ── Persist voice/config settings to localStorage ──
+  // ── Persist settings to localStorage (immediate cache) + server DB (debounced) ──
   useEffect(() => {
     localStorage.setItem("liverClone_voiceId", voiceId);
-    setVoiceValidation(null); // Reset validation when voice ID changes
+    setVoiceValidation(null);
   }, [voiceId]);
+  useEffect(() => { localStorage.setItem("liverClone_mode", mode); }, [mode]);
+  useEffect(() => { localStorage.setItem("liverClone_quality", quality); }, [quality]);
+  useEffect(() => { localStorage.setItem("liverClone_language", language); }, [language]);
+  useEffect(() => { localStorage.setItem("liverClone_resolution", resolution); }, [resolution]);
+  useEffect(() => { localStorage.setItem("liverClone_fps", String(fps)); }, [fps]);
+  useEffect(() => { localStorage.setItem("liverClone_voiceStability", String(voiceStability)); }, [voiceStability]);
+  useEffect(() => { localStorage.setItem("liverClone_voiceSimilarity", String(voiceSimilarity)); }, [voiceSimilarity]);
+  useEffect(() => { localStorage.setItem("liverClone_vadThreshold", String(vadThreshold)); }, [vadThreshold]);
+  useEffect(() => { localStorage.setItem("liverClone_silenceTimeout", String(silenceTimeout)); }, [silenceTimeout]);
+  useEffect(() => { localStorage.setItem("liverClone_savedVoiceIds", JSON.stringify(savedVoiceIds)); }, [savedVoiceIds]);
+  useEffect(() => { localStorage.setItem("liverClone_stsEnabled", stsEnabled ? "true" : "false"); }, [stsEnabled]);
+
+  // ── Debounced save to server DB (2s after last change) ──
   useEffect(() => {
-    localStorage.setItem("liverClone_mode", mode);
-  }, [mode]);
-  useEffect(() => {
-    localStorage.setItem("liverClone_quality", quality);
-  }, [quality]);
-  useEffect(() => {
-    localStorage.setItem("liverClone_language", language);
-  }, [language]);
-  useEffect(() => {
-    localStorage.setItem("liverClone_resolution", resolution);
-  }, [resolution]);
-  useEffect(() => {
-    localStorage.setItem("liverClone_fps", String(fps));
-  }, [fps]);
-  useEffect(() => {
-    localStorage.setItem("liverClone_voiceStability", String(voiceStability));
-  }, [voiceStability]);
-  useEffect(() => {
-    localStorage.setItem("liverClone_voiceSimilarity", String(voiceSimilarity));
-  }, [voiceSimilarity]);
-  useEffect(() => {
-    localStorage.setItem("liverClone_vadThreshold", String(vadThreshold));
-  }, [vadThreshold]);
-  useEffect(() => {
-    localStorage.setItem("liverClone_silenceTimeout", String(silenceTimeout));
-  }, [silenceTimeout]);
-  useEffect(() => {
-    localStorage.setItem("liverClone_savedVoiceIds", JSON.stringify(savedVoiceIds));
-  }, [savedVoiceIds]);
-  useEffect(() => {
-    localStorage.setItem("liverClone_stsEnabled", stsEnabled ? "true" : "false");
-  }, [stsEnabled]);
+    if (!settingsLoadedRef.current) return; // Don't save during initial load
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(async () => {
+      try {
+        // Prepare saved_faces without preview (binary data)
+        const facesForServer = savedFaces.map(f => {
+          const { preview, ...rest } = f;
+          return rest;
+        });
+        // Prepare saved_products without image_base64/image_preview
+        const productsForServer = products.map(p => {
+          const { image_base64, image_preview, speaking, identifying, ...rest } = p;
+          return { ...rest, speaking: false, identifying: false };
+        });
+        await liverCloneService.saveSettings({
+          voice_id: voiceId,
+          voice_stability: voiceStability,
+          voice_similarity: voiceSimilarity,
+          sts_enabled: stsEnabled,
+          mode,
+          quality,
+          language,
+          resolution,
+          fps,
+          vad_threshold: vadThreshold,
+          silence_timeout: silenceTimeout,
+          saved_voices: JSON.stringify(savedVoiceIds),
+          saved_faces: JSON.stringify(facesForServer),
+          saved_products: JSON.stringify(productsForServer),
+          active_face_url: sourceFaceUrl || "",
+        });
+        console.log("[Settings] Saved to server DB");
+      } catch (e) {
+        console.warn("[Settings] Failed to save to server (localStorage still valid):", e);
+      }
+    }, 2000);
+    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
+  }, [voiceId, mode, quality, language, resolution, fps, voiceStability, voiceSimilarity, vadThreshold, silenceTimeout, savedVoiceIds, stsEnabled, savedFaces, products, sourceFaceUrl]);
   useEffect(() => {
     // Persist products: metadata to localStorage, images to IndexedDB
     // Exclude image_base64 and image_preview from localStorage to avoid quota exceeded
