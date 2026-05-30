@@ -124,9 +124,13 @@ class LiveAnalysisPipeline:
                 from app.services.storage_service import generate_upload_sas
                 import aiohttp
                 import asyncio as _asyncio
-
                 preview_filename = f"{video_id}_assembled.mp4"
                 blob_name = f"assembled/{preview_filename}"
+                # BUILD 82 FIX: Compute full blob path for DB storage.
+                # generate_upload_sas prepends email/video_id/ to blob_name,
+                # so the actual blob is at email/video_id/assembled/VIDEO_ID_assembled.mp4.
+                # We must store this full path in compressed_blob_url for the worker to find it.
+                full_blob_path = f"{email}/{video_id}/{blob_name}"
 
                 file_size = os.path.getsize(assembled_path)
                 # Azure single-block limit is 256MB. Use block upload for larger files.
@@ -155,7 +159,7 @@ class LiveAnalysisPipeline:
                                     timeout=aiohttp.ClientTimeout(total=300),
                                 ) as resp:
                                     if resp.status in (200, 201):
-                                        compressed_blob_path = blob_name
+                                        compressed_blob_path = full_blob_path
                                     else:
                                         logger.warning(
                                             f"[pipeline] Upload failed: HTTP {resp.status} "
@@ -532,7 +536,8 @@ class LiveAnalysisPipeline:
                             f"[pipeline] Block upload complete: {blob_name} "
                             f"blocks={len(block_ids)} size={file_size/(1024*1024):.1f}MB"
                         )
-                        return blob_name
+                        # BUILD 82 FIX: Return full blob path for DB storage
+                        return f"{email}/{video_id}/{blob_name}"
                     else:
                         body = await resp.text()
                         logger.error(
