@@ -741,6 +741,99 @@ async def _check_and_requeue_stuck_videos():
                 except Exception as e:
                     logger.warning(f"[stuck-monitor] Zombie cleanup query error: {e}")
 
+                # ── Part 3b: Dead-zone cleanup (BUILD 81) ────────────────────
+                # Videos stuck at ANY step (not just STEP_0) with retries
+                # exhausted AND no update for >ZOMBIE_HOURS. These are in a
+                # "dead zone" — not retried by Part 1 (dequeue_count >= MAX_AUTO_RETRIES)
+                # and not caught by Part 3 (only targets STEP_0).
+                try:
+                    sql_deadzone = text("""
+                        SELECT v.id, v.original_filename, v.status, v.user_id,
+                               v.updated_at, v.dequeue_count,
+                               v.worker_claimed_at, v.step_progress,
+                               u.email as user_email
+                        FROM videos v
+                        LEFT JOIN users u ON v.user_id = u.id
+                        WHERE v.status NOT IN ('DONE', 'ERROR', 'STEP_0_EXTRACT_FRAMES')
+                          AND (v.status LIKE 'STEP_%%' OR v.status IN ('uploaded', 'QUEUED', 'STEP_COMPRESS_1080P'))
+                          AND v.updated_at < :zombie_threshold
+                          AND COALESCE(v.dequeue_count, 0) >= :max_retries
+                        ORDER BY v.updated_at ASC
+                        LIMIT :zombie_batch
+                    """)
+                    result_deadzone = await db.execute(sql_deadzone, {
+                        "zombie_threshold": zombie_threshold,
+                        "max_retries": MAX_AUTO_RETRIES,
+                        "zombie_batch": ZOMBIE_MAX_BATCH,
+                    })
+                    deadzone_videos = result_deadzone.fetchall()
+
+                    if deadzone_videos:
+                        logger.info(
+                            f"[stuck-monitor] Found {len(deadzone_videos)} dead-zone video(s) "
+                            f"(non-STEP_0, >{ZOMBIE_HOURS}h old, retries exhausted)"
+                        )
+
+                    for row in deadzone_videos:
+                        video_id = str(row.id)
+                        try:
+                            _err_msg = (
+                                f"Dead-zone cleanup: stuck at {row.status} "
+                                f"for >{ZOMBIE_HOURS}h after {row.dequeue_count} retries. "
+                                f"Use admin retry to re-process."
+                            )
+                            _upd_result = await db.execute(
+                                text("""
+                                    UPDATE videos
+                                    SET status = 'ERROR',
+                                        error_message = :err_msg,
+                                        last_error_code = 'DEADZONE_CLEANUP',
+                                        last_error_message = :err_msg,
+                                        updated_at = NOW()
+                                    WHERE id = :vid
+                                      AND status = :current_status
+                                """),
+                                {"vid": video_id, "err_msg": _err_msg, "current_status": row.status},
+                            )
+                            await db.commit()
+
+                            if _upd_result.rowcount > 0:
+                                health["zombie_cleaned"] += 1
+                                logger.info(
+                                    f"[stuck-monitor] Dead-zone cleanup: {video_id} "
+                                    f"({row.original_filename}) {row.status} → ERROR"
+                                )
+                                try:
+                                    await db.execute(
+                                        text("""
+                                            INSERT INTO video_error_logs
+                                                (video_id, error_code, error_step, error_message, source)
+                                            VALUES
+                                                (:vid, 'DEADZONE_CLEANUP', :step,
+                                                 :msg, 'monitor')
+                                        """),
+                                        {
+                                            "vid": video_id,
+                                            "step": row.status,
+                                            "msg": _err_msg,
+                                        },
+                                    )
+                                    await db.commit()
+                                except Exception:
+                                    try:
+                                        await db.rollback()
+                                    except Exception:
+                                        pass
+                        except Exception as e:
+                            logger.warning(f"[stuck-monitor] Dead-zone cleanup failed for {video_id}: {e}")
+                            try:
+                                await db.rollback()
+                            except Exception:
+                                pass
+
+                except Exception as e:
+                    logger.warning(f"[stuck-monitor] Dead-zone cleanup query error: {e}")
+
                 # ── Record health ──────────────────────────────────────────
                 errors_str = "; ".join(health["errors"]) if health["errors"] else None
                 await _record_health(

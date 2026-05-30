@@ -807,6 +807,11 @@ def main():
                     # Map transcription 0-100 to overall audio 20-100
                     _on_audio_progress(20 + int(pct * 0.8))
 
+                # BUILD 81: Get per-video language for Whisper STT
+                from db_ops import get_video_language_sync as _get_stt_lang
+                _stt_language = _get_stt_lang(video_id)
+                logger.info("[STEP3] Whisper language: %s", _stt_language)
+
                 # v7: Extract full audio first (for BatchedInferencePipeline)
                 _on_audio_progress(0)
                 full_path = extract_audio_full(video_path, ad)
@@ -821,7 +826,7 @@ def main():
                     _on_audio_progress(20)
 
                 update_video_processing_log_sync(video_id, "\U0001f9e0 Whisper large-v3\u3067\u97f3\u58f0\u8a8d\u8b58\u4e2d...", "transcribe", 15)
-                transcribe_audio_chunks(ad, atd, on_progress=_on_transcription_progress)
+                transcribe_audio_chunks(ad, atd, on_progress=_on_transcription_progress, language=_stt_language)
                 # Read first transcription result for display
                 _first_speech = ""
                 try:
@@ -1037,11 +1042,15 @@ def main():
             _current_step_name = VideoStatus.STEP_3_TRANSCRIBE_AUDIO
             update_video_status_sync(video_id, VideoStatus.STEP_3_TRANSCRIBE_AUDIO)
             logger.info("=== STEP 3 – AUDIO TO TEXT ===")
+            # BUILD 81: Get per-video language for Whisper STT
+            from db_ops import get_video_language_sync as _get_stt_lang_fb
+            _stt_lang_fb = _get_stt_lang_fb(video_id)
+            logger.info("[STEP3-fallback] Whisper language: %s", _stt_lang_fb)
             # v7: Extract full audio first, skip chunks if successful
             full_path = extract_audio_full(video_path, ad)
             if not full_path:
                 extract_audio_chunks(video_path, ad)
-            transcribe_audio_chunks(ad, atd)
+            transcribe_audio_chunks(ad, atd, language=_stt_lang_fb)
         elif start_step <= 0:
             # Already done in parallel above
             logger.info("[SKIP] STEP 3 (already done in parallel)")

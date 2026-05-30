@@ -23,6 +23,10 @@ class LiveAnalysisStartRequest(BaseModel):
     total_chunks: Optional[int] = Field(
         None, description="Total number of uploaded chunks",
     )
+    language: str = Field(
+        default="ja",
+        description="Whisper STT + AI output language: ja | zh-TW | en | th",
+    )
 
     class Config:
         json_schema_extra = {
@@ -30,6 +34,7 @@ class LiveAnalysisStartRequest(BaseModel):
                 "video_id": "550e8400-e29b-41d4-a716-446655440000",
                 "stream_source": "tiktok_live",
                 "total_chunks": 42,
+                "language": "ja",
             }
         }
 

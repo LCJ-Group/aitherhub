@@ -213,8 +213,11 @@ class LiveAnalysisPipeline:
             await self._update_step(job_uuid, "audio_extraction", 0.20, video_id=video_id)
 
             # Step 3: Speech to Text
+            # BUILD 81: Fetch per-video language for Whisper STT
+            _stt_language = await self._get_video_language(video_id)
+            logger.info(f"[pipeline] Whisper STT language: {_stt_language}")
             await self._update_step(job_uuid, "speech_to_text", 0.20, video_id=video_id)
-            transcript = await self._speech_to_text(audio_path)
+            transcript = await self._speech_to_text(audio_path, language=_stt_language)
             await self._update_step(job_uuid, "speech_to_text", 0.45, video_id=video_id)
 
             # Step 4: OCR Processing
@@ -850,7 +853,21 @@ class LiveAnalysisPipeline:
     # Step 3: Speech to Text
     # ──────────────────────────────────────────
 
-    async def _speech_to_text(self, audio_path: str) -> List[Dict[str, Any]]:
+    async def _get_video_language(self, video_id: str) -> str:
+        """Fetch per-video language from DB (BUILD 81)."""
+        try:
+            from sqlalchemy import text as sa_text
+            result = await self.db.execute(
+                sa_text("SELECT COALESCE(language, 'ja') FROM videos WHERE id = :vid"),
+                {"vid": video_id},
+            )
+            row = result.scalar_one_or_none()
+            return row or "ja"
+        except Exception as e:
+            logger.warning(f"[pipeline] Failed to fetch video language: {e}")
+            return "ja"
+
+    async def _speech_to_text(self, audio_path: str, language: str = "ja") -> List[Dict[str, Any]]:
         """
         Transcribe audio using OpenAI Whisper API or local Whisper model.
 
@@ -859,20 +876,24 @@ class LiveAnalysisPipeline:
         """
         try:
             # Try OpenAI Whisper API first
-            return await self._stt_openai_whisper(audio_path)
+            return await self._stt_openai_whisper(audio_path, language=language)
         except Exception as e:
             logger.warning(f"[stt] OpenAI Whisper failed, trying local: {e}")
             try:
-                return await self._stt_local_whisper(audio_path)
+                return await self._stt_local_whisper(audio_path, language=language)
             except Exception as e2:
                 logger.error(f"[stt] Local Whisper also failed: {e2}")
                 return []
 
-    async def _stt_openai_whisper(self, audio_path: str) -> List[Dict[str, Any]]:
+    async def _stt_openai_whisper(self, audio_path: str, language: str = "ja") -> List[Dict[str, Any]]:
         """Transcribe using OpenAI Whisper API."""
         import openai
 
         client = openai.AsyncOpenAI()
+
+        # BUILD 81: Map language codes for Whisper API
+        _whisper_lang = self._map_whisper_language(language)
+        logger.info(f"[stt] OpenAI Whisper language: {_whisper_lang}")
 
         # Split audio into 25MB chunks if needed (Whisper API limit)
         file_size = os.path.getsize(audio_path)
@@ -884,7 +905,7 @@ class LiveAnalysisPipeline:
                     model="whisper-1",
                     file=f,
                     response_format="verbose_json",
-                    language="ja",
+                    language=_whisper_lang,
                     timestamp_granularities=["segment"],
                 )
             segments = []
@@ -898,15 +919,30 @@ class LiveAnalysisPipeline:
             return segments
         else:
             # Split and transcribe in parts
-            return await self._stt_chunked_whisper(audio_path, max_size)
+            return await self._stt_chunked_whisper(audio_path, max_size, language=language)
+
+    @staticmethod
+    def _map_whisper_language(language: str) -> str:
+        """Map app language codes to Whisper API language codes (BUILD 81)."""
+        mapping = {
+            "ja": "ja",
+            "zh-TW": "zh",
+            "zh": "zh",
+            "en": "en",
+            "th": "th",
+            "ko": "ko",
+            "auto": None,  # Let Whisper auto-detect
+        }
+        return mapping.get(language, language)
 
     async def _stt_chunked_whisper(
-        self, audio_path: str, max_size: int
+        self, audio_path: str, max_size: int, language: str = "ja"
     ) -> List[Dict[str, Any]]:
         """Split large audio and transcribe each part."""
         import openai
 
         client = openai.AsyncOpenAI()
+        _whisper_lang = self._map_whisper_language(language)
         duration = await self._get_audio_duration(audio_path)
         chunk_duration = 600  # 10 minutes per chunk
         segments = []
@@ -935,7 +971,7 @@ class LiveAnalysisPipeline:
                             model="whisper-1",
                             file=f,
                             response_format="verbose_json",
-                            language="ja",
+                            language=_whisper_lang,
                             timestamp_granularities=["segment"],
                         )
                     if hasattr(response, "segments"):
@@ -961,13 +997,14 @@ class LiveAnalysisPipeline:
 
         return segments
 
-    async def _stt_local_whisper(self, audio_path: str) -> List[Dict[str, Any]]:
+    async def _stt_local_whisper(self, audio_path: str, language: str = "ja") -> List[Dict[str, Any]]:
         """Transcribe using local Whisper model (fallback)."""
         try:
             import whisper
 
+            _whisper_lang = self._map_whisper_language(language)
             model = whisper.load_model("base")
-            result = model.transcribe(audio_path, language="ja")
+            result = model.transcribe(audio_path, language=_whisper_lang)
             return [
                 {
                     "start": seg["start"],

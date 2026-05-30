@@ -43,6 +43,26 @@ WHISPER_COMPUTE_TYPE = env("WHISPER_COMPUTE_TYPE", "auto")  # "auto", "float16",
 WHISPER_BEAM_SIZE = int(env("WHISPER_BEAM_SIZE", "5"))
 WHISPER_LANGUAGE = env("WHISPER_LANGUAGE", "ja")
 
+# BUILD 81: Map app language codes to Whisper-compatible ISO 639-1 codes
+_WHISPER_LANG_MAP = {
+    "ja": "ja",
+    "zh-TW": "zh",
+    "zh": "zh",
+    "en": "en",
+    "th": "th",
+    "ko": "ko",
+    "auto": None,  # Let Whisper auto-detect
+}
+
+def _map_whisper_language(lang: str) -> str:
+    """Convert app language code to Whisper-compatible code."""
+    if not lang:
+        return WHISPER_LANGUAGE
+    mapped = _WHISPER_LANG_MAP.get(lang)
+    if mapped is None and lang == "auto":
+        return WHISPER_LANGUAGE  # faster-whisper requires a language, fallback to env default
+    return mapped or lang
+
 # v6: Batch size for BatchedInferencePipeline (T4 16GB: 16 is safe)
 WHISPER_BATCH_SIZE = int(env("WHISPER_BATCH_SIZE", "16"))
 
@@ -262,7 +282,7 @@ def extract_audio_chunks(video_path: str, out_dir: str) -> str:
 # STEP 3.2 – TRANSCRIBE (LOCAL) – v6 BATCHED
 # =========================
 
-def _transcribe_batched_local(audio_path: str, text_dir: str, on_progress=None):
+def _transcribe_batched_local(audio_path: str, text_dir: str, on_progress=None, language: str = None):
     """
     v6: Transcribe a full audio file using BatchedInferencePipeline.
     This is 2-4x faster than sequential chunk processing because:
@@ -274,13 +294,15 @@ def _transcribe_batched_local(audio_path: str, text_dir: str, on_progress=None):
     """
     pipeline = _get_batched_pipeline()
 
+    # Per-video language override (BUILD 81)
+    _lang = _map_whisper_language(language)
     t0 = time.time()
-    print(f"[WHISPER-BATCHED] Starting batched transcription (batch_size={WHISPER_BATCH_SIZE})")
+    print(f"[WHISPER-BATCHED] Starting batched transcription (batch_size={WHISPER_BATCH_SIZE}, language={_lang})")
 
     segments_iter, info = pipeline.transcribe(
         audio_path,
         batch_size=WHISPER_BATCH_SIZE,
-        language=WHISPER_LANGUAGE,
+        language=_lang,
         word_timestamps=True,
     )
 
@@ -355,7 +377,7 @@ import threading
 _whisper_lock = threading.Lock()
 
 
-def _transcribe_chunk_local(audio_path: str, chunk_index: int) -> dict:
+def _transcribe_chunk_local(audio_path: str, chunk_index: int, language: str = None) -> dict:
     """
     Transcribe a single audio chunk using local faster-whisper.
     Thread-safe: uses lock to serialize GPU access.
@@ -370,12 +392,14 @@ def _transcribe_chunk_local(audio_path: str, chunk_index: int) -> dict:
     t0 = time.time()
     print(f"[WHISPER-LOCAL] Transcribing chunk_{chunk_index:03d}.wav ...")
 
+    # Per-video language override (BUILD 81)
+    _lang = _map_whisper_language(language)
     # Lock for thread-safe model access
     with _whisper_lock:
         segments_iter, info = model.transcribe(
             audio_path,
             beam_size=WHISPER_BEAM_SIZE,
-            language=WHISPER_LANGUAGE,
+            language=_lang,
             vad_filter=True,
             vad_parameters=dict(min_silence_duration_ms=500),
             word_timestamps=True,
@@ -410,7 +434,7 @@ def _transcribe_chunk_local(audio_path: str, chunk_index: int) -> dict:
 # STEP 3.2 – TRANSCRIBE (AZURE API) – fallback
 # =========================
 
-def _transcribe_chunk_azure(audio_path: str, chunk_index: int, filename: str) -> dict:
+def _transcribe_chunk_azure(audio_path: str, chunk_index: int, filename: str, language: str = None) -> dict:
     """
     Transcribe a single audio chunk using Azure Whisper API.
     Kept as fallback when WHISPER_ENGINE="azure".
@@ -442,7 +466,7 @@ def _transcribe_chunk_azure(audio_path: str, chunk_index: int, filename: str) ->
                     "timestamp_granularities[]": (None, "segment"),
                     "temperature": (None, "0"),
                     "task": (None, "transcribe"),
-                    "language": (None, "ja"),
+                    "language": (None, _map_whisper_language(language)),
                 },
                 timeout=120,
             )
@@ -487,7 +511,7 @@ def _transcribe_chunk_azure(audio_path: str, chunk_index: int, filename: str) ->
 # STEP 3.2 – TRANSCRIBE (UNIFIED ENTRY POINT)
 # =========================
 
-def transcribe_audio_chunks(audio_dir: str, text_dir: str, on_progress=None):
+def transcribe_audio_chunks(audio_dir: str, text_dir: str, on_progress=None, language: str = None):
     """
     Transcribe all audio in audio_dir, write results to text_dir.
 
@@ -515,7 +539,7 @@ def transcribe_audio_chunks(audio_dir: str, text_dir: str, on_progress=None):
         if os.path.exists(full_audio_path) and os.path.getsize(full_audio_path) > 100:
             print(f"[TRANSCRIBE] v6: Using BatchedInferencePipeline on full audio")
             try:
-                _transcribe_batched_local(full_audio_path, text_dir, on_progress)
+                _transcribe_batched_local(full_audio_path, text_dir, on_progress, language=language)
                 return
             except Exception as e:
                 print(f"[TRANSCRIBE][WARN] Batched transcription failed, falling back to chunks: {e}")
@@ -561,7 +585,7 @@ def transcribe_audio_chunks(audio_dir: str, text_dir: str, on_progress=None):
             def _process_chunk(f):
                 audio_path = os.path.join(audio_dir, f)
                 chunk_index = int(f.split("_")[1].split(".")[0])
-                result = _transcribe_chunk_local(audio_path, chunk_index)
+                result = _transcribe_chunk_local(audio_path, chunk_index, language=language)
                 results_map[chunk_index] = (f, result)
                 completed[0] += 1
                 if on_progress and total_chunks > 0:
@@ -590,7 +614,7 @@ def transcribe_audio_chunks(audio_dir: str, text_dir: str, on_progress=None):
                 audio_path = os.path.join(audio_dir, f)
                 txt_path = os.path.join(text_dir, f.replace(".wav", ".txt"))
                 chunk_index = int(f.split("_")[1].split(".")[0])
-                result = _transcribe_chunk_local(audio_path, chunk_index)
+                result = _transcribe_chunk_local(audio_path, chunk_index, language=language)
                 _write_transcription(txt_path, result)
                 print(f"[OK] Saved → {txt_path}")
                 if on_progress and total_chunks > 0:
@@ -610,7 +634,7 @@ def transcribe_audio_chunks(audio_dir: str, text_dir: str, on_progress=None):
             audio_path = os.path.join(audio_dir, f)
             txt_path = os.path.join(text_dir, f.replace(".wav", ".txt"))
             chunk_index = int(f.split("_")[1].split(".")[0])
-            result = _transcribe_chunk_azure(audio_path, chunk_index, f)
+            result = _transcribe_chunk_azure(audio_path, chunk_index, f, language=language)
             _write_transcription(txt_path, result)
             print(f"[OK] Saved → {txt_path}")
             if on_progress and total_chunks > 0:

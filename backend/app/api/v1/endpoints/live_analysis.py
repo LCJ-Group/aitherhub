@@ -146,10 +146,12 @@ async def _ensure_video_record(
     video_id: str,
     user_id: int,
     status_value: str = "uploaded",
+    language: str = "ja",
 ) -> None:
     """
     Ensure a corresponding record exists in the `videos` table
     so that LiveBoost sessions appear in AitherHub's History view.
+    BUILD 81: Also persists language for per-video Whisper STT.
     """
     try:
         result = await db.execute(
@@ -158,13 +160,16 @@ async def _ensure_video_record(
         existing = result.scalars().first()
 
         if existing:
+            # BUILD 81: Always update language on existing record
+            existing.language = language or "ja"
             if existing.status in ("ERROR", "failed") and status_value in ("uploaded", "pending"):
                 existing.status = "uploaded"
                 existing.step_progress = 0
-                await db.flush()
+            await db.flush()
+            if existing.status == "uploaded":
                 logger.info(
                     f"[live-analysis] Reset videos record for retry: "
-                    f"video={video_id} status=uploaded"
+                    f"video={video_id} status=uploaded language={language}"
                 )
         else:
             video = Video(
@@ -174,12 +179,13 @@ async def _ensure_video_record(
                 status=status_value,
                 upload_type="live_boost",
                 step_progress=0,
+                language=language,
             )
             db.add(video)
             await db.flush()
             logger.info(
                 f"[live-analysis] Created videos record: "
-                f"video={video_id} user={user_id} upload_type=live_boost"
+                f"video={video_id} user={user_id} upload_type=live_boost language={language}"
             )
     except Exception as e:
         logger.warning(f"[live-analysis] Failed to ensure video record: {e}")
@@ -359,7 +365,7 @@ async def start_live_analysis(
                 # BUILD 36: Clean up any duplicate jobs
                 await _cleanup_duplicate_jobs(db, video_id, user_id, job.id)
 
-                await _ensure_video_record(db, video_id, user_id, "uploaded")
+                await _ensure_video_record(db, video_id, user_id, "uploaded", language=payload.language)
                 await db.commit()
                 await db.refresh(job)
                 logger.info(f"[live-analysis/start] Reset failed job: {job.id}")
@@ -375,7 +381,7 @@ async def start_live_analysis(
                 progress=0,
             )
             db.add(job)
-            await _ensure_video_record(db, video_id, user_id, "uploaded")
+            await _ensure_video_record(db, video_id, user_id, "uploaded", language=payload.language)
             await db.commit()
             await db.refresh(job)
             logger.info(f"[live-analysis/start] Created new job: {job.id}")
