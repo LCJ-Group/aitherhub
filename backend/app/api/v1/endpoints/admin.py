@@ -1184,6 +1184,21 @@ async def retry_video(
                     detail="LiveBoost video has no assembled video. Run live_analysis first.",
                 )
             blob_path = compressed_row.compressed_blob_url
+            # BUILD 82b: Resolve relative blob path to full path.
+            # Old records store 'assembled/VIDEO_ID_assembled.mp4' but actual blob
+            # is at 'email/video_id/assembled/VIDEO_ID_assembled.mp4'.
+            import re as _re
+            _segments = blob_path.split("/")
+            if "@" not in _segments[0] and len(_segments) < 3:
+                # Relative path — prepend email/video_id
+                _fname = _segments[-1]
+                _uuid_match = _re.search(
+                    r'([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})',
+                    _fname,
+                )
+                _original_case_vid = _uuid_match.group(1) if _uuid_match else video_id
+                blob_path = f"{row.user_email}/{_original_case_vid}/{blob_path}"
+                logger.info(f"[admin/retry-video/force_standard] Resolved blob path → {blob_path}")
             # Build full URL from blob path (use storage_service constants)
             full_url = f"https://{_ACCT}.blob.core.windows.net/{_CTR}/{blob_path}"
             download_url = generate_read_sas_from_url(full_url, expires_hours=24)

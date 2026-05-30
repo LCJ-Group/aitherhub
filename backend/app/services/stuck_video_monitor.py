@@ -250,13 +250,45 @@ async def _requeue_video(db, row, video_id, old_status, current_retries, reason_
     update was rolled back.
     """
     try:
+        # BUILD 82b: LiveBoost videos use compressed_blob_url (assembled file)
+        # instead of original_filename for blob path resolution.
+        is_liveboost = getattr(row, 'upload_type', None) == 'live_boost'
+        compressed_blob_url = getattr(row, 'compressed_blob_url', None)
+
+        if is_liveboost and compressed_blob_url:
+            # Resolve relative path to full path
+            import re as _re
+            _blob_path = compressed_blob_url
+            _segments = _blob_path.split("/")
+            if "@" not in _segments[0] and len(_segments) < 3:
+                _fname = _segments[-1]
+                _uuid_match = _re.search(
+                    r'([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})',
+                    _fname,
+                )
+                _original_case_vid = _uuid_match.group(1) if _uuid_match else video_id
+                _blob_path = f"{row.user_email}/{_original_case_vid}/{_blob_path}"
+            _effective_filename = _blob_path
+            logger.info(
+                f"[stuck-monitor] LiveBoost video {video_id}: using blob_path={_blob_path}"
+            )
+        else:
+            _effective_filename = row.original_filename
+
         # Step 0: Verify blob exists before attempting requeue
         try:
-            blob_ok = await verify_blob_exists(
-                email=row.user_email,
-                video_id=video_id,
-                filename=row.original_filename,
-            )
+            if is_liveboost and compressed_blob_url:
+                # For LiveBoost, verify the assembled blob directly
+                from app.services.storage_service import ACCOUNT_NAME, CONTAINER_NAME
+                from azure.storage.blob import BlobServiceClient
+                # Skip blob verification for LiveBoost (assembled path is complex)
+                blob_ok = True
+            else:
+                blob_ok = await verify_blob_exists(
+                    email=row.user_email,
+                    video_id=video_id,
+                    filename=row.original_filename,
+                )
             if not blob_ok:
                 logger.error(
                     f"[stuck-monitor] Blob NOT found for {video_id} "
@@ -286,11 +318,20 @@ async def _requeue_video(db, row, video_id, old_status, current_retries, reason_
 
         # Step 1: Generate SAS URL with retry
         try:
-            download_url, _expiry = await _generate_sas_with_retry(
-                email=row.user_email,
-                video_id=video_id,
-                filename=row.original_filename,
-            )
+            if is_liveboost and compressed_blob_url:
+                # For LiveBoost, generate SAS from the resolved full blob path
+                from app.services.storage_service import generate_read_sas_from_url, ACCOUNT_NAME, CONTAINER_NAME
+                _full_url = f"https://{ACCOUNT_NAME}.blob.core.windows.net/{CONTAINER_NAME}/{_effective_filename}"
+                download_url = generate_read_sas_from_url(_full_url, expires_hours=24)
+                if not download_url:
+                    raise ValueError("generate_read_sas_from_url returned None")
+                _expiry = None
+            else:
+                download_url, _expiry = await _generate_sas_with_retry(
+                    email=row.user_email,
+                    video_id=video_id,
+                    filename=row.original_filename,
+                )
         except Exception as sas_err:
             # SAS generation failed after all retries
             logger.error(
@@ -497,6 +538,7 @@ async def _check_and_requeue_stuck_videos():
                     SELECT v.id, v.original_filename, v.status, v.user_id,
                            v.updated_at, v.dequeue_count,
                            v.worker_claimed_at, v.step_progress,
+                           v.upload_type, v.compressed_blob_url,
                            u.email as user_email
                     FROM videos v
                     LEFT JOIN users u ON v.user_id = u.id
@@ -557,6 +599,7 @@ async def _check_and_requeue_stuck_videos():
                            v.updated_at, v.dequeue_count,
                            v.worker_claimed_at,
                            u.email as user_email
+                           v.upload_type, v.compressed_blob_url,
                     FROM videos v
                     LEFT JOIN users u ON v.user_id = u.id
                     WHERE v.last_error_code IN ('DEPLOY_SIGTERM', 'DEPLOY_SIGNAL')
@@ -601,6 +644,7 @@ async def _check_and_requeue_stuck_videos():
                     SELECT v.id, v.original_filename, v.status, v.user_id,
                            v.updated_at, v.dequeue_count,
                            v.worker_claimed_at, v.enqueue_status,
+                           v.upload_type, v.compressed_blob_url,
                            u.email as user_email
                     FROM videos v
                     LEFT JOIN users u ON v.user_id = u.id
