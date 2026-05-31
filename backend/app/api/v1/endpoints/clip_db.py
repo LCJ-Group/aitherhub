@@ -2430,22 +2430,24 @@ async def list_regenerations(
         if source_clip_ids:
             try:
                 from app.services.storage_service import generate_read_sas_from_url
-                clip_lookup_sql = text("""
+                ids_list = list(source_clip_ids)
+                # Build IN clause with positional params for compatibility
+                placeholders = ", ".join([f"'{cid}'" for cid in ids_list])
+                clip_lookup_sql = text(f"""
                     SELECT id::text as clip_id, clip_url, sas_token, sas_expireddate, thumbnail_url, duration_sec
                     FROM video_clips
-                    WHERE id = ANY(:ids::uuid[])
+                    WHERE id::text IN ({placeholders})
                 """)
-                clip_result = await db.execute(clip_lookup_sql, {"ids": list(source_clip_ids)})
+                clip_result = await db.execute(clip_lookup_sql)
                 for cr in clip_result.fetchall():
                     url = None
                     if cr.clip_url:
                         # Try cached SAS first
                         if cr.sas_token and cr.sas_expireddate:
-                            from datetime import timezone as tz
-                            now = datetime.now(tz.utc)
+                            now = datetime.now(timezone.utc)
                             expiry = cr.sas_expireddate
                             if expiry.tzinfo is None:
-                                expiry = expiry.replace(tzinfo=tz.utc)
+                                expiry = expiry.replace(tzinfo=timezone.utc)
                             if expiry > now:
                                 url = cr.sas_token
                         if not url:
