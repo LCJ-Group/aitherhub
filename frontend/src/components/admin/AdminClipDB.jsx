@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { TikTokUrlRegisterButton } from "./TikTokTrackingPanel";
 import CaptionOverlayPlayer from "./CaptionOverlayPlayer";
+import RegenList from "./RegenList";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
 
@@ -1414,6 +1415,7 @@ export default function AdminClipDB({ adminKey }) {
   const [hasSubtitleFilter, setHasSubtitleFilter] = useState(null);
   const [hasTrimFilter, setHasTrimFilter] = useState(null);
   const [notDownloadedFilter, setNotDownloadedFilter] = useState(null);
+  const [showRegenList, setShowRegenList] = useState(false);
   const [languageFilter, setLanguageFilter] = useState("");
   const [aiVersionFilter, setAiVersionFilter] = useState("");
   const [playlists, setPlaylists] = useState([]);
@@ -1781,6 +1783,11 @@ export default function AdminClipDB({ adminKey }) {
     loadBrands();
     loadReviewStats();
   }, [searchQuery, selectedTag, selectedProduct, selectedLiver, selectedBrand, soldFilter, ratingFilter, unusableFilter, noBrandFilter, hasSubtitleFilter, hasTrimFilter, notDownloadedFilter, page, sortBy, sortOrder]);
+
+  // Show RegenList view when active
+  if (showRegenList) {
+    return <RegenList adminKey={adminKey} onBack={() => setShowRegenList(false)} />;
+  }
 
   return (
     <div>
@@ -2504,6 +2511,15 @@ export default function AdminClipDB({ adminKey }) {
             >
               <Download className="w-3 h-3 inline mr-1" />
               DL済 {stats.downloaded_clips > 0 && <span className="ml-0.5 font-bold">{stats.downloaded_clips}</span>}
+            </button>
+
+            {/* 再生成済み button */}
+            <button
+              onClick={() => setShowRegenList(true)}
+              className="px-3 py-1.5 rounded-full text-xs font-medium border transition-all bg-white border-blue-200 text-blue-600 hover:border-blue-400 hover:bg-blue-50"
+            >
+              <RefreshCw className="w-3 h-3 inline mr-1" />
+              再生成済み
             </button>
 
             {/* NG by reason breakdown */}
