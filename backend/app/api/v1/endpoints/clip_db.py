@@ -2338,3 +2338,25 @@ async def get_clip_playlists(
     except Exception as e:
         logger.error(f"[clip-db] Get clip playlists failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+
+@router.post("/reset-sold-data")
+async def reset_sold_data(
+    x_admin_key: str = Header(None, alias="X-Admin-Key"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Reset all is_sold data to NULL (one-time data cleansing)."""
+    expected = f"{ADMIN_ID}:{ADMIN_PASS}"
+    if x_admin_key != expected:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    try:
+        result = await db.execute(
+            text("UPDATE video_clips SET is_sold = NULL WHERE is_sold IS NOT NULL")
+        )
+        await db.commit()
+        return {"status": "ok", "rows_updated": result.rowcount}
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"[clip-db] Reset sold data failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
