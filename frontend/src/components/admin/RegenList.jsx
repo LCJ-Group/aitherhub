@@ -316,8 +316,62 @@ export default function RegenList({ adminKey, onBack }) {
                     {item.after?.hook_text && <div>フック: {item.after.hook_text}</div>}
                     {item.after?.cta_text && <div>CTA: {item.after.cta_text}</div>}
                     {item.after?.captions_count > 0 && <div>字幕: {item.after.captions_count}件</div>}
+                    {/* Sellability Badge */}
+                    {item.after?.sellability && (
+                      <div className="mt-1">
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                          item.after.sellability === "high" ? "bg-green-100 text-green-700 border border-green-300" :
+                          item.after.sellability === "medium" ? "bg-yellow-100 text-yellow-700 border border-yellow-300" :
+                          "bg-red-100 text-red-700 border border-red-300"
+                        }`}>
+                          {item.after.sellability === "high" ? "🔥 売れる" :
+                           item.after.sellability === "medium" ? "⚡ まあまあ" : "❄️ 売れない"}
+                        </span>
+                      </div>
+                    )}
+                    {/* Content Evaluation Breakdown */}
+                    {item.after?.content_evaluation?.breakdown && (
+                      <div className="mt-2 bg-gray-50 rounded-lg p-2 text-left">
+                        <div className="text-[9px] font-bold text-gray-600 mb-1">コンテンツ品質内訳:</div>
+                        <div className="space-y-0.5">
+                          {[
+                            { key: "product_appeal", label: "商品訴求", max: 30 },
+                            { key: "hook_quality", label: "フック質", max: 20 },
+                            { key: "story_flow", label: "ストーリー", max: 20 },
+                            { key: "viewer_engagement", label: "語りかけ", max: 15 },
+                            { key: "specificity", label: "具体性", max: 15 },
+                          ].map(({ key, label, max }) => {
+                            const val = item.after.content_evaluation.breakdown[key] || 0;
+                            const pct = (val / max) * 100;
+                            return (
+                              <div key={key} className="flex items-center gap-1">
+                                <span className="text-[9px] text-gray-500 w-14 shrink-0">{label}</span>
+                                <div className="flex-1 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                                  <div
+                                    className={`h-full rounded-full ${
+                                      pct >= 70 ? "bg-green-500" : pct >= 40 ? "bg-yellow-500" : "bg-red-400"
+                                    }`}
+                                    style={{ width: `${pct}%` }}
+                                  />
+                                </div>
+                                <span className="text-[9px] text-gray-500 w-8 text-right">{val}/{max}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        {item.after.content_evaluation.reasons?.length > 0 && (
+                          <div className="mt-1.5 text-[9px] text-gray-500">
+                            {item.after.content_evaluation.reasons.map((r, i) => (
+                              <span key={i} className="inline-block mr-1 mb-0.5 px-1.5 py-0.5 bg-white rounded border border-gray-200">
+                                {r}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
                     {item.after?.effects_applied && (
-                      <div className="flex gap-1 flex-wrap justify-center">
+                      <div className="flex gap-1 flex-wrap justify-center mt-1">
                         {item.after.effects_applied.subtitle_style && (
                           <span className="px-1.5 py-0.5 bg-blue-50 text-blue-600 rounded text-[9px]">
                             字幕: {item.after.effects_applied.subtitle_style}

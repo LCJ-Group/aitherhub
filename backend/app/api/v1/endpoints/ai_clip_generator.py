@@ -4165,6 +4165,249 @@ def _compute_clip_quality_score(clip: dict) -> float:
     return max(0.0, min(100.0, score))
 
 
+async def _gpt_content_quality_score(clip: dict, job_id: str = "") -> dict:
+    """
+    GPTによるコンテンツ品質評価。「売れる動画かどうか」を判定する。
+    構造スコア（_compute_clip_quality_score）とは別に、内容の質を評価。
+    
+    Returns:
+        {
+            "content_score": float (0-100),
+            "breakdown": {
+                "product_appeal": float (0-30),  # 商品訴求力
+                "hook_quality": float (0-20),    # フックの質
+                "story_flow": float (0-20),      # ストーリー性
+                "viewer_engagement": float (0-15), # 視聴者への語りかけ
+                "specificity": float (0-15),     # 具体性
+            },
+            "reasons": [str],  # 評価理由
+            "sellability": str,  # "high" / "medium" / "low"
+        }
+    """
+    transcript = (clip.get("transcript_text") or "")[:600]
+    product_name = clip.get("product_name") or ""
+    
+    # トランスクリプトが空の場合はフォールバック
+    if not transcript.strip():
+        return {
+            "content_score": 0.0,
+            "breakdown": {
+                "product_appeal": 0, "hook_quality": 0,
+                "story_flow": 0, "viewer_engagement": 0, "specificity": 0,
+            },
+            "reasons": ["発話なし"],
+            "sellability": "low",
+        }
+    
+    try:
+        import openai
+        azure_key = os.getenv("AZURE_OPENAI_KEY", "")
+        azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
+        azure_model = os.getenv("GPT5_MODEL") or os.getenv("GPT5_DEPLOYMENT") or "gpt-4.1-mini"
+        
+        if not azure_key or not azure_endpoint:
+            # GPTが使えない場合は構造スコアのみで推定
+            return _estimate_content_score_without_gpt(transcript, product_name)
+        
+        from urllib.parse import urlparse as _urlparse
+        _parsed = _urlparse(azure_endpoint)
+        clean_endpoint = f"{_parsed.scheme}://{_parsed.netloc}/"
+        
+        client = openai.AzureOpenAI(
+            api_key=azure_key,
+            azure_endpoint=clean_endpoint,
+            api_version=os.getenv("GPT5_API_VERSION", "2025-04-01-preview"),
+        )
+        
+        prompt = f"""あなたはTikTokライブコマース動画の品質評価専門家です。
+以下の動画の書き起こし内容を読み、「この動画を見た視聴者が商品を購入したくなるか」を評価してください。
+
+【評価項目】各項目を0点〜満点で採点してください。
+
+1. 商品訴求力 (0-30点): 商品の効果・使い方・メリットを具体的に説明しているか
+   - 30点: 商品の具体的な効果や使用感を詳しく説明、ビフォーアフターあり
+   - 20点: 商品について触れているが具体性がやや不足
+   - 10点: 商品名は出るが説明が薄い
+   - 0点: 商品について全く触れていない
+
+2. フックの質 (0-20点): 最初の部分で「見たい」と思わせる内容か
+   - 20点: 具体的な悩み解決や驚きの結果を提示
+   - 10点: 興味は引くが具体性に欠ける
+   - 0点: 意味不明な切り出しや無関係な内容
+
+3. ストーリー性 (0-20点): 問題提起→解決→CTAの流れがあるか
+   - 20点: 明確な起承転結がある
+   - 10点: 部分的に流れがある
+   - 0点: 脈絡なく話が飛ぶ
+
+4. 視聴者への語りかけ (0-15点): 共感・質問・呼びかけがあるか
+   - 15点: 「〜で悩んでませんか？」等の共感要素が豊富
+   - 8点: 多少の語りかけがある
+   - 0点: 一方的な独り言
+
+5. 具体性 (0-15点): 数字・体験談・比較など具体的な情報があるか
+   - 15点: 具体的な数字や体験談が複数ある
+   - 8点: 多少の具体的情報がある
+   - 0点: 抽象的な表現のみ
+
+商品名: {product_name or '（不明）'}
+動画の書き起こし:
+{transcript}
+
+JSON形式で回答してください（JSONのみ出力）:
+{{"product_appeal": 数値, "hook_quality": 数値, "story_flow": 数値, "viewer_engagement": 数値, "specificity": 数値, "reasons": ["理由1", "理由2"], "sellability": "high/medium/low"}}"""
+        
+        response = client.responses.create(
+            model=azure_model,
+            input=[{"role": "user", "content": prompt}],
+            max_output_tokens=300,
+        )
+        
+        result_text = ""
+        if hasattr(response, "output_text") and response.output_text:
+            result_text = response.output_text.strip()
+        elif hasattr(response, "output") and response.output:
+            for item in response.output:
+                if hasattr(item, "content"):
+                    for part in item.content:
+                        if hasattr(part, "text"):
+                            result_text += part.text
+            result_text = result_text.strip()
+        
+        # JSONパース
+        json_match = re.search(r'\{.*\}', result_text, re.DOTALL)
+        if json_match:
+            evaluation = json.loads(json_match.group())
+            breakdown = {
+                "product_appeal": min(float(evaluation.get("product_appeal", 0)), 30),
+                "hook_quality": min(float(evaluation.get("hook_quality", 0)), 20),
+                "story_flow": min(float(evaluation.get("story_flow", 0)), 20),
+                "viewer_engagement": min(float(evaluation.get("viewer_engagement", 0)), 15),
+                "specificity": min(float(evaluation.get("specificity", 0)), 15),
+            }
+            content_score = sum(breakdown.values())
+            reasons = evaluation.get("reasons", [])
+            sellability = evaluation.get("sellability", "low")
+            
+            logger.info(
+                f"[gpt-quality {job_id}] Content score: {content_score:.1f} "
+                f"(appeal={breakdown['product_appeal']}, hook={breakdown['hook_quality']}, "
+                f"story={breakdown['story_flow']}, engage={breakdown['viewer_engagement']}, "
+                f"specific={breakdown['specificity']}) sellability={sellability}"
+            )
+            
+            return {
+                "content_score": content_score,
+                "breakdown": breakdown,
+                "reasons": reasons[:5],
+                "sellability": sellability,
+            }
+        else:
+            logger.warning(f"[gpt-quality {job_id}] Failed to parse GPT response: {result_text[:200]}")
+            return _estimate_content_score_without_gpt(transcript, product_name)
+    
+    except Exception as e:
+        logger.warning(f"[gpt-quality {job_id}] GPT content evaluation failed: {e}")
+        return _estimate_content_score_without_gpt(transcript, product_name)
+
+
+def _estimate_content_score_without_gpt(transcript: str, product_name: str) -> dict:
+    """
+    GPTが使えない場合のフォールバック: キーワードベースでコンテンツ品質を推定。
+    """
+    score = 0.0
+    breakdown = {
+        "product_appeal": 0.0, "hook_quality": 0.0,
+        "story_flow": 0.0, "viewer_engagement": 0.0, "specificity": 0.0,
+    }
+    reasons = []
+    
+    # 商品訴求力の推定
+    product_keywords = [
+        "効果", "使い方", "成分", "仕上がり", "変わる", "改善",
+        "塗る", "つける", "洗う", "乾かす", "ツヤ", "サラサラ",
+        "ダメージ", "補修", "保湿", "香り", "テクスチャ",
+    ]
+    appeal_hits = sum(1 for kw in product_keywords if kw in transcript)
+    if product_name and product_name in transcript:
+        appeal_hits += 3
+    breakdown["product_appeal"] = min(appeal_hits * 5, 30)
+    if appeal_hits >= 3:
+        reasons.append("商品関連キーワードが複数含まれる")
+    
+    # 視聴者への語りかけ推定
+    engagement_patterns = [
+        "ですよね", "でしょ", "ませんか", "知ってる", "悩んで",
+        "おすすめ", "試して", "使ってみて", "見て",
+    ]
+    engage_hits = sum(1 for p in engagement_patterns if p in transcript)
+    breakdown["viewer_engagement"] = min(engage_hits * 5, 15)
+    
+    # 具体性の推定（数字があるか）
+    import re as _re
+    numbers = _re.findall(r'\d+[%％円個本ml]', transcript)
+    breakdown["specificity"] = min(len(numbers) * 5, 15)
+    if numbers:
+        reasons.append(f"具体的な数値が{len(numbers)}箇所")
+    
+    # フックの質（最初の50文字に商品関連語があるか）
+    first_50 = transcript[:50]
+    if product_name and product_name in first_50:
+        breakdown["hook_quality"] = 15
+    elif any(kw in first_50 for kw in product_keywords[:8]):
+        breakdown["hook_quality"] = 10
+    else:
+        breakdown["hook_quality"] = 5
+    
+    # ストーリー性（長さと構造から推定）
+    if len(transcript) > 200:
+        breakdown["story_flow"] = 10
+    elif len(transcript) > 100:
+        breakdown["story_flow"] = 5
+    
+    content_score = sum(breakdown.values())
+    sellability = "high" if content_score >= 60 else "medium" if content_score >= 35 else "low"
+    
+    return {
+        "content_score": content_score,
+        "breakdown": breakdown,
+        "reasons": reasons or ["GPT未使用（キーワードベース推定）"],
+        "sellability": sellability,
+    }
+
+
+async def _compute_combined_quality_score(clip: dict, job_id: str = "") -> dict:
+    """
+    統合品質スコア: 構造スコア（40%）+ GPTコンテンツスコア（60%）を統合。
+    
+    Returns:
+        {
+            "total_score": float (0-100),
+            "structure_score": float (0-100),
+            "content_score": float (0-100),
+            "breakdown": dict,
+            "reasons": [str],
+            "sellability": str,
+        }
+    """
+    structure_score = _compute_clip_quality_score(clip)
+    content_eval = await _gpt_content_quality_score(clip, job_id)
+    content_score = content_eval["content_score"]
+    
+    # 統合スコア: 構造40% + コンテンツ60%
+    total_score = (structure_score * 0.4) + (content_score * 0.6)
+    total_score = max(0.0, min(100.0, total_score))
+    
+    return {
+        "total_score": total_score,
+        "structure_score": structure_score,
+        "content_score": content_score,
+        "breakdown": content_eval["breakdown"],
+        "reasons": content_eval["reasons"],
+        "sellability": content_eval["sellability"],
+    }
+
+
 async def _validate_and_filter_candidates(
     candidates: list, req: GenerateRequest, job_id: str
 ) -> list:
@@ -6835,23 +7078,46 @@ async def _run_regeneration_from_source_inner(job_id: str, clip_row, req: RegenF
     await _update_job(job_id, progress_pct=90, current_step="アップロード中...")
     output_size = os.path.getsize(output_path)
     download_url, blob_url = await _upload_to_blob(output_path, clip_id, job_id)
-    # ── Step 11: Compute new quality score ──
-    new_quality_score = _compute_clip_quality_score({
+    # ── Step 11: Compute new quality score (V12: GPTコンテンツ品質評価統合) ──
+    new_clip_data = {
         "transcript_text": transcript_text,
         "product_name": (clip_row["product_name"] if isinstance(clip_row, dict) else clip_row.product_name) or "",
         "cta_score": (clip_row["cta_score"] if isinstance(clip_row, dict) else clip_row.cta_score) or 0,
         "importance_score": (clip_row["importance_score"] if isinstance(clip_row, dict) else clip_row.importance_score) or 0,
         "duration_sec": actual_duration,
         "captions": captions,
-    })
-    original_quality_score = _compute_clip_quality_score({
+    }
+    orig_clip_data = {
         "transcript_text": clip_row["transcript_text"] if isinstance(clip_row, dict) else clip_row.transcript_text,
         "product_name": clip_row["product_name"] if isinstance(clip_row, dict) else clip_row.product_name,
         "cta_score": clip_row["cta_score"] if isinstance(clip_row, dict) else clip_row.cta_score,
         "importance_score": clip_row["importance_score"] if isinstance(clip_row, dict) else clip_row.importance_score,
         "duration_sec": clip_row["duration_sec"] if isinstance(clip_row, dict) else clip_row.duration_sec,
         "captions": clip_row["captions"] if isinstance(clip_row, dict) else clip_row.captions,
-    })
+    }
+    # V12: 統合スコア（構造40% + GPTコンテンツ60%）
+    try:
+        combined_new = await _compute_combined_quality_score(new_clip_data, job_id)
+        new_quality_score = combined_new["total_score"]
+        content_evaluation = {
+            "content_score": combined_new["content_score"],
+            "structure_score": combined_new["structure_score"],
+            "breakdown": combined_new["breakdown"],
+            "reasons": combined_new["reasons"],
+            "sellability": combined_new["sellability"],
+        }
+        logger.info(
+            f"[v12-regen {job_id}] Combined score: {new_quality_score:.1f} "
+            f"(structure={combined_new['structure_score']:.1f}, content={combined_new['content_score']:.1f}, "
+            f"sellability={combined_new['sellability']})"
+        )
+    except Exception as e:
+        logger.warning(f"[v12-regen {job_id}] GPT scoring failed, falling back to structure only: {e}")
+        new_quality_score = _compute_clip_quality_score(new_clip_data)
+        content_evaluation = None
+    
+    original_quality_score = _compute_clip_quality_score(orig_clip_data)
+    
     regen_result = {
         "clip_id": clip_id,
         "status": "done",
@@ -6866,6 +7132,7 @@ async def _run_regeneration_from_source_inner(job_id: str, clip_row, req: RegenF
         "transcript_text": transcript_text[:500],
         "original_quality_score": original_quality_score,
         "new_quality_score": new_quality_score,
+        "content_evaluation": content_evaluation,
         "source_clip_id": clip_id,
         "expanded_time_range": {"start": new_start, "end": new_end, "duration": actual_duration},
         "effects_applied": {
@@ -6909,11 +7176,16 @@ async def _run_regeneration_from_source_inner(job_id: str, clip_row, req: RegenF
         job_data["status"] = "done"
         job_data["progress_pct"] = 100
         job_data["config"]["new_quality_score"] = new_quality_score
+        if content_evaluation:
+            job_data["config"]["content_evaluation"] = content_evaluation
         await _save_job(job_id, job_data)
     # Cleanup
     import shutil
     shutil.rmtree(tmp_dir, ignore_errors=True)
-    logger.info(f"[v10-regen {job_id}] Complete! Score: {original_quality_score:.1f} → {new_quality_score:.1f}")
+    logger.info(
+        f"[v12-regen {job_id}] Complete! Score: {original_quality_score:.1f} → {new_quality_score:.1f}"
+        f" (sellability={content_evaluation['sellability'] if content_evaluation else 'n/a'})"
+    )
 
 async def _run_batch_regeneration(batch_job_id: str, req: BatchRegenRequest):
     """V10: 一括再生成のバックグラウンド処理"""

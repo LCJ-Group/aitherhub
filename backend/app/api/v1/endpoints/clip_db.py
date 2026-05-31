@@ -2501,6 +2501,8 @@ async def list_regenerations(
                     "captions_count": regen_result.get("captions_count"),
                     "transcript_text": (regen_result.get("transcript_text") or "")[:200],
                     "effects_applied": regen_result.get("effects_applied"),
+                    "content_evaluation": regen_result.get("content_evaluation") or job_config.get("content_evaluation"),
+                    "sellability": (regen_result.get("content_evaluation") or job_config.get("content_evaluation") or {}).get("sellability"),
                 },
                 # Metadata
                 "current_version": source_clip.get("ml_model_version"),
