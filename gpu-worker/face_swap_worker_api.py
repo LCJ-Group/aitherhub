@@ -1102,7 +1102,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="FaceFusion GPU Worker",
     description="Ultra-fast face swap worker (Direct ONNX + GFPGAN + Hair Protection, ~34ms/frame)",
-    version="3.1.0",
+    version="4.0.0",
     lifespan=lifespan,
 )
 
