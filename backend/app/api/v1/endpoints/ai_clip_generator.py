@@ -7188,16 +7188,22 @@ async def _run_regeneration_from_source_inner(job_id: str, clip_row, req: RegenF
     )
 
 async def _run_batch_regeneration(batch_job_id: str, req: BatchRegenRequest):
-    """V10: 一括再生成のバックグラウンド処理"""
+    """V12: 一括再生成のバックグラウンド処理（GPTプレフィルター付き）"""
     try:
         clip_ids = req.clip_ids
         total = len(clip_ids)
         completed = 0
+        skipped = 0
         results = []
+        
+        # ─── Phase 1: GPTプレフィルター（商品訴求力チェック）───
+        await _update_job(batch_job_id, progress_pct=5,
+                          current_step=f"GPT事前評価中... (0/{total})")
+        
+        prefilter_results = []  # [{clip_id, clip_row, eligible, reason, content_eval}]
+        
         for i, clip_id in enumerate(clip_ids):
             try:
-                await _update_job(batch_job_id, progress_pct=int((i / total) * 100),
-                                  current_step=f"クリップ {i+1}/{total} 再生成中...")
                 # Get clip data
                 async with get_session() as session:
                     result = await session.execute(text("""
@@ -7213,11 +7219,17 @@ async def _run_batch_regeneration(batch_job_id: str, req: BatchRegenRequest):
                         WHERE vc.id = CAST(:clip_id AS uuid)
                     """), {"clip_id": clip_id})
                     clip_row = result.fetchone()
+                
                 if not clip_row:
-                    results.append({"clip_id": clip_id, "status": "error", "error": "クリップが見つかりません"})
+                    prefilter_results.append({
+                        "clip_id": clip_id, "clip_row": None,
+                        "eligible": False, "reason": "クリップが見つかりません",
+                        "content_eval": None,
+                    })
                     continue
-                # Convert Row to dict for safe access after session close
-                clip_row = {
+                
+                # Convert Row to dict
+                clip_dict = {
                     "id": str(clip_row.id),
                     "video_id": str(clip_row.video_id) if clip_row.video_id else None,
                     "phase_index": clip_row.phase_index,
@@ -7238,6 +7250,81 @@ async def _run_batch_regeneration(batch_job_id: str, req: BatchRegenRequest):
                     "original_filename": clip_row.original_filename,
                     "user_email": clip_row.user_email,
                 }
+                
+                # GPTプレフィルター: コンテンツ品質を事前評価
+                content_eval = await _gpt_content_quality_score(clip_dict, batch_job_id)
+                product_appeal = content_eval.get("breakdown", {}).get("product_appeal", 0)
+                sellability = content_eval.get("sellability", "low")
+                
+                # 判定: 商品訴求力が5以下 かつ sellability=low → スキップ
+                if product_appeal <= 5 and sellability == "low":
+                    skip_reason = content_eval.get("reasons", ["商品説明なし"])
+                    prefilter_results.append({
+                        "clip_id": clip_id, "clip_row": clip_dict,
+                        "eligible": False,
+                        "reason": f"商品訴求力不足 (appeal={product_appeal}/30): {skip_reason[0] if skip_reason else '商品説明なし'}",
+                        "content_eval": content_eval,
+                    })
+                    logger.info(f"[v12-batch {batch_job_id}] SKIP clip {clip_id}: appeal={product_appeal}, sellability={sellability}")
+                else:
+                    prefilter_results.append({
+                        "clip_id": clip_id, "clip_row": clip_dict,
+                        "eligible": True, "reason": None,
+                        "content_eval": content_eval,
+                    })
+                    logger.info(f"[v12-batch {batch_job_id}] PASS clip {clip_id}: appeal={product_appeal}, sellability={sellability}")
+                
+                await _update_job(batch_job_id, progress_pct=int(5 + (i + 1) / total * 25),
+                                  current_step=f"GPT事前評価中... ({i+1}/{total})")
+            except Exception as e:
+                logger.error(f"[v12-batch {batch_job_id}] Prefilter error for {clip_id}: {e}")
+                prefilter_results.append({
+                    "clip_id": clip_id, "clip_row": None,
+                    "eligible": False, "reason": f"評価エラー: {str(e)[:100]}",
+                    "content_eval": None,
+                })
+        
+        # ─── Phase 2: eligible なクリップのみ再生成実行 ───
+        eligible_clips = [p for p in prefilter_results if p["eligible"]]
+        skipped_clips = [p for p in prefilter_results if not p["eligible"]]
+        skipped = len(skipped_clips)
+        
+        # スキップされたクリップの結果を先に追加
+        for sc in skipped_clips:
+            results.append({
+                "clip_id": sc["clip_id"],
+                "status": "skipped",
+                "reason": sc["reason"],
+                "content_eval": sc["content_eval"],
+            })
+        
+        if not eligible_clips:
+            # 全てスキップされた場合
+            await _update_job(batch_job_id, status="done", progress_pct=100,
+                              current_step=f"完了: 全{total}件スキップ（商品訴求力不足）")
+            batch_data = _load_job(batch_job_id)
+            if not batch_data:
+                batch_data = await _load_job_db(batch_job_id)
+            if batch_data:
+                batch_data["results"] = results
+                batch_data["status"] = "done"
+                batch_data["progress_pct"] = 100
+                batch_data["config"]["skipped_count"] = skipped
+                batch_data["config"]["eligible_count"] = 0
+                await _save_job(batch_job_id, batch_data)
+            logger.info(f"[v12-batch {batch_job_id}] All {total} clips skipped (low product appeal)")
+            return
+        
+        eligible_total = len(eligible_clips)
+        await _update_job(batch_job_id, progress_pct=30,
+                          current_step=f"再生成実行中... (0/{eligible_total}) [スキップ: {skipped}件]")
+        
+        for i, ec in enumerate(eligible_clips):
+            clip_id = ec["clip_id"]
+            clip_row = ec["clip_row"]
+            try:
+                await _update_job(batch_job_id, progress_pct=int(30 + (i / eligible_total) * 65),
+                                  current_step=f"再生成中... ({i+1}/{eligible_total}) [スキップ: {skipped}件]")
                 # Create individual regen request (AI auto-optimizes all settings)
                 single_req = RegenFromSourceRequest(
                     target_duration=req.target_duration,
@@ -7266,6 +7353,7 @@ async def _run_batch_regeneration(batch_job_id: str, req: BatchRegenRequest):
                         "status": "done",
                         "sub_job_id": sub_job_id,
                         "result": sub_results[0] if sub_results else None,
+                        "content_eval": ec["content_eval"],
                     })
                     completed += 1
                 else:
@@ -7273,13 +7361,15 @@ async def _run_batch_regeneration(batch_job_id: str, req: BatchRegenRequest):
                         "clip_id": clip_id,
                         "status": "error",
                         "error": sub_data.get("error", "Unknown error") if sub_data else "Job not found",
+                        "content_eval": ec["content_eval"],
                     })
             except Exception as e:
-                logger.error(f"[v10-batch {batch_job_id}] Clip {clip_id} failed: {e}")
+                logger.error(f"[v12-batch {batch_job_id}] Clip {clip_id} failed: {e}")
                 results.append({"clip_id": clip_id, "status": "error", "error": str(e)[:200]})
-        # Update batch job
+        
+        # ─── Phase 3: 結果保存 ───
         await _update_job(batch_job_id, status="done", progress_pct=100,
-                          current_step=f"一括再生成完了 ({completed}/{total}件成功)")
+                          current_step=f"一括再生成完了 ({completed}/{eligible_total}件成功, {skipped}件スキップ)")
         batch_data = _load_job(batch_job_id)
         if not batch_data:
             batch_data = await _load_job_db(batch_job_id)
@@ -7287,10 +7377,13 @@ async def _run_batch_regeneration(batch_job_id: str, req: BatchRegenRequest):
             batch_data["results"] = results
             batch_data["status"] = "done"
             batch_data["progress_pct"] = 100
+            batch_data["config"]["skipped_count"] = skipped
+            batch_data["config"]["eligible_count"] = eligible_total
+            batch_data["config"]["completed_count"] = completed
             await _save_job(batch_job_id, batch_data)
-        logger.info(f"[v10-batch {batch_job_id}] Complete: {completed}/{total} succeeded")
+        logger.info(f"[v12-batch {batch_job_id}] Complete: {completed}/{eligible_total} succeeded, {skipped} skipped")
     except Exception as e:
-        logger.error(f"[v10-batch {batch_job_id}] Fatal error: {e}", exc_info=True)
+        logger.error(f"[v12-batch {batch_job_id}] Fatal error: {e}", exc_info=True)
         await _update_job(batch_job_id, status="error", error=str(e)[:500])
 
 

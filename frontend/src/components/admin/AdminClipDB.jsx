@@ -6,7 +6,7 @@ import {
   Download, Subtitles, Scissors, CheckCircle, Ban, AlertTriangle, Undo2,
   MessageSquare, SkipBack, SkipForward, Volume2, VolumeX,
   TrendingUp, Activity, Brain, Clock, Zap, Target, Eye, Layers,
-  ListPlus, List, Trash2, Palette, Edit3,
+  ListPlus, List, Trash2, Palette, Edit3, CheckSquare, Square,
 } from "lucide-react";
 import { TikTokUrlRegisterButton } from "./TikTokTrackingPanel";
 import CaptionOverlayPlayer from "./CaptionOverlayPlayer";
@@ -118,7 +118,7 @@ const NG_REASONS = [
   { key: "other", label: "その他" },
 ];
 
-function ClipCard({ clip, onPlay, brands, adminKey, onBrandChange, allPlaylists, onPlaylistChange }) {
+function ClipCard({ clip, onPlay, brands, adminKey, onBrandChange, allPlaylists, onPlaylistChange, isSelected, onToggleSelect }) {
   const [expanded, setExpanded] = useState(false);
   const [showParams, setShowParams] = useState(false);
   const [showBrandPicker, setShowBrandPicker] = useState(false);
@@ -274,8 +274,23 @@ function ClipCard({ clip, onPlay, brands, adminKey, onBrandChange, allPlaylists,
 
   return (
     <div className={`rounded-xl border overflow-hidden hover:shadow-lg transition-all duration-300 group relative ${
-      localUnusable ? "border-red-300 bg-red-50 opacity-75" : "border-gray-200 bg-white"
+      localUnusable ? "border-red-300 bg-red-50 opacity-75" :
+      isSelected ? "border-blue-400 bg-blue-50 ring-2 ring-blue-200" : "border-gray-200 bg-white"
     }`}>
+      {/* Selection checkbox */}
+      {onToggleSelect && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onToggleSelect(clip.clip_id || clip.id); }}
+          className={`absolute top-2 left-2 z-20 w-6 h-6 rounded flex items-center justify-center transition-all ${
+            isSelected
+              ? "bg-blue-500 text-white shadow-md"
+              : "bg-white/80 text-gray-400 hover:bg-blue-100 hover:text-blue-500 opacity-0 group-hover:opacity-100"
+          }`}
+          title={isSelected ? "選択解除" : "選択"}
+        >
+          {isSelected ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
+        </button>
+      )}
       {/* NG overlay */}
       {localUnusable && (
         <div className="absolute inset-0 z-10 pointer-events-none">
@@ -1470,6 +1485,12 @@ export default function AdminClipDB({ adminKey }) {
   const [pipJobId, setPipJobId] = useState(null);
   const [pipJobStatus, setPipJobStatus] = useState(null);
   const [pipGenerating, setPipGenerating] = useState(false);
+  // V12: Batch regeneration (bulk select) state
+  const [selectedClips, setSelectedClips] = useState([]);
+  const [batchRegenJobId, setBatchRegenJobId] = useState(null);
+  const [batchRegenStatus, setBatchRegenStatus] = useState(null);
+  const [batchRegenRunning, setBatchRegenRunning] = useState(false);
+  const [showBatchRegenModal, setShowBatchRegenModal] = useState(false);
   // Register global callback for ClipCard AI clip button
   useEffect(() => {
     window.__openAiClipModal = (clip) => setAiClipModalClip(clip);
@@ -1788,6 +1809,76 @@ export default function AdminClipDB({ adminKey }) {
     loadBrands();
     loadReviewStats();
   }, [searchQuery, selectedTag, selectedProduct, selectedLiver, selectedBrand, soldFilter, ratingFilter, unusableFilter, noBrandFilter, hasSubtitleFilter, hasTrimFilter, notDownloadedFilter, page, sortBy, sortOrder]);
+
+  // V12: Toggle clip selection
+  const toggleClipSelect = useCallback((clipId) => {
+    setSelectedClips((prev) =>
+      prev.includes(clipId) ? prev.filter((id) => id !== clipId) : [...prev, clipId]
+    );
+  }, []);
+
+  // V12: Select all / deselect all on current page
+  const selectAllOnPage = useCallback(() => {
+    const pageClipIds = clips.map((c) => c.clip_id || c.id);
+    setSelectedClips((prev) => {
+      const newSet = new Set(prev);
+      pageClipIds.forEach((id) => newSet.add(id));
+      return [...newSet];
+    });
+  }, [clips]);
+
+  const deselectAll = useCallback(() => {
+    setSelectedClips([]);
+  }, []);
+
+  // V12: Start batch regeneration
+  async function startBatchRegeneration() {
+    if (selectedClips.length === 0) return;
+    setBatchRegenRunning(true);
+    setBatchRegenStatus(null);
+    setShowBatchRegenModal(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/ai-clip/clips/batch-regenerate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Admin-Key": adminKey },
+        body: JSON.stringify({ clip_ids: selectedClips }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `API error ${res.status}`);
+      }
+      const data = await res.json();
+      setBatchRegenJobId(data.job_id);
+      setBatchRegenStatus({ status: "processing", progress_pct: 0, current_step: "GPT事前評価開始..." });
+    } catch (e) {
+      alert(`一括再生成エラー: ${e.message}`);
+      setBatchRegenRunning(false);
+      setShowBatchRegenModal(false);
+    }
+  }
+
+  // V12: Poll batch regen job
+  useEffect(() => {
+    if (!batchRegenJobId) return;
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/v1/ai-clip/jobs/${batchRegenJobId}`, {
+          headers: { "X-Admin-Key": adminKey },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setBatchRegenStatus(data);
+          if (data.status === "done" || data.status === "error") {
+            setBatchRegenRunning(false);
+            clearInterval(interval);
+          }
+        }
+      } catch (e) {
+        console.warn("[BatchRegen] Poll failed:", e);
+      }
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [batchRegenJobId]);
 
   // Show RegenList view when active
   if (showRegenList) {
@@ -2703,6 +2794,8 @@ export default function AdminClipDB({ adminKey }) {
                 onBrandChange={handleBrandChange}
                 allPlaylists={playlists}
                 onPlaylistChange={() => { loadClips(); loadPlaylists(); }}
+                isSelected={selectedClips.includes(clip.clip_id || clip.id)}
+                onToggleSelect={toggleClipSelect}
               />
             ))}
           </div>
@@ -2810,9 +2903,228 @@ export default function AdminClipDB({ adminKey }) {
           onRefresh={loadPlaylists}
         />
       )}
+
+      {/* V12: Floating action bar for bulk selection */}
+      {selectedClips.length > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 bg-white border border-gray-200 rounded-2xl shadow-2xl px-6 py-3 flex items-center gap-4 animate-in slide-in-from-bottom-4">
+          <div className="flex items-center gap-2">
+            <CheckSquare className="w-5 h-5 text-blue-500" />
+            <span className="text-sm font-bold text-gray-800">{selectedClips.length}件選択中</span>
+          </div>
+          <div className="w-px h-6 bg-gray-200" />
+          <button
+            onClick={selectAllOnPage}
+            className="text-xs text-blue-600 hover:text-blue-800 font-medium transition"
+          >
+            ページ全選択
+          </button>
+          <button
+            onClick={deselectAll}
+            className="text-xs text-gray-500 hover:text-gray-700 font-medium transition"
+          >
+            全解除
+          </button>
+          <div className="w-px h-6 bg-gray-200" />
+          <button
+            onClick={startBatchRegeneration}
+            disabled={batchRegenRunning}
+            className="px-4 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 text-white text-sm font-bold rounded-xl hover:from-blue-700 hover:to-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2 shadow-lg"
+          >
+            {batchRegenRunning ? (
+              <><Loader2 className="w-4 h-4 animate-spin" /> 処理中...</>
+            ) : (
+              <><Sparkles className="w-4 h-4" /> 一括AI再生成</>
+            )}
+          </button>
+        </div>
+      )}
+
+      {/* V12: Batch Regeneration Modal */}
+      {showBatchRegenModal && (
+        <BatchRegenModal
+          jobStatus={batchRegenStatus}
+          running={batchRegenRunning}
+          selectedCount={selectedClips.length}
+          onClose={() => {
+            setShowBatchRegenModal(false);
+            if (!batchRegenRunning) {
+              setBatchRegenJobId(null);
+              setBatchRegenStatus(null);
+              setSelectedClips([]);
+              loadClips();
+            }
+          }}
+        />
+      )}
     </div>
   );
 }
+
+
+// ═══════════════════════════════════════════════
+// ─── V12: Batch Regeneration Modal ───
+// ═══════════════════════════════════════════════
+function BatchRegenModal({ jobStatus, running, selectedCount, onClose }) {
+  const results = jobStatus?.results || [];
+  const doneResults = results.filter((r) => r.status === "done");
+  const skippedResults = results.filter((r) => r.status === "skipped");
+  const errorResults = results.filter((r) => r.status === "error");
+  const config = jobStatus?.config || {};
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl max-w-xl w-full mx-4 max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-500 flex items-center justify-center">
+              <Sparkles className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <h3 className="text-lg font-bold text-gray-900">一括AI再生成</h3>
+              <p className="text-xs text-gray-500">{selectedCount}件のクリップを処理中</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-2 rounded-lg hover:bg-gray-100 transition">
+            <X className="w-5 h-5 text-gray-400" />
+          </button>
+        </div>
+
+        {/* Progress */}
+        <div className="px-6 py-4">
+          {jobStatus && (
+            <div className="space-y-3">
+              {/* Status indicator */}
+              <div className="flex items-center gap-2">
+                {running && <Loader2 className="w-4 h-4 text-blue-500 animate-spin" />}
+                {jobStatus.status === "done" && <CheckCircle className="w-4 h-4 text-green-500" />}
+                {jobStatus.status === "error" && <AlertTriangle className="w-4 h-4 text-red-500" />}
+                <span className="text-sm font-medium text-gray-700">
+                  {jobStatus.status === "done" ? "完了" : jobStatus.status === "error" ? "エラー" : jobStatus.current_step || "処理中..."}
+                </span>
+              </div>
+              {/* Progress bar */}
+              {running && (
+                <div className="space-y-1">
+                  <div className="w-full bg-gray-200 rounded-full h-2.5">
+                    <div
+                      className="bg-gradient-to-r from-blue-500 to-indigo-500 h-2.5 rounded-full transition-all duration-700"
+                      style={{ width: `${jobStatus.progress_pct || 0}%` }}
+                    />
+                  </div>
+                  <p className="text-xs text-gray-500 text-right">{jobStatus.progress_pct || 0}%</p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Results summary (shown when done) */}
+        {jobStatus?.status === "done" && results.length > 0 && (
+          <div className="px-6 pb-4 space-y-4">
+            {/* Summary cards */}
+            <div className="grid grid-cols-3 gap-3">
+              <div className="bg-green-50 border border-green-200 rounded-xl p-3 text-center">
+                <div className="text-2xl font-bold text-green-600">{doneResults.length}</div>
+                <div className="text-[10px] text-green-700 font-medium">再生成成功</div>
+              </div>
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-center">
+                <div className="text-2xl font-bold text-amber-600">{skippedResults.length}</div>
+                <div className="text-[10px] text-amber-700 font-medium">スキップ</div>
+              </div>
+              <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-center">
+                <div className="text-2xl font-bold text-red-600">{errorResults.length}</div>
+                <div className="text-[10px] text-red-700 font-medium">エラー</div>
+              </div>
+            </div>
+
+            {/* Skipped details */}
+            {skippedResults.length > 0 && (
+              <div className="bg-amber-50 border border-amber-100 rounded-xl p-3">
+                <h4 className="text-xs font-bold text-amber-800 mb-2 flex items-center gap-1">
+                  <Ban className="w-3.5 h-3.5" /> スキップされたクリップ（GPT判定: 商品訴求力不足）
+                </h4>
+                <div className="space-y-1.5 max-h-32 overflow-y-auto">
+                  {skippedResults.map((r) => (
+                    <div key={r.clip_id} className="flex items-start gap-2 text-xs">
+                      <span className="text-amber-500 flex-shrink-0 mt-0.5">●</span>
+                      <div className="min-w-0">
+                        <span className="text-gray-600 font-mono text-[10px]">{r.clip_id?.slice(0, 8)}...</span>
+                        <span className="text-amber-700 ml-1">{r.reason || "商品訴求力不足"}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Success details */}
+            {doneResults.length > 0 && (
+              <div className="bg-green-50 border border-green-100 rounded-xl p-3">
+                <h4 className="text-xs font-bold text-green-800 mb-2 flex items-center gap-1">
+                  <CheckCircle className="w-3.5 h-3.5" /> 再生成成功
+                </h4>
+                <div className="space-y-1.5 max-h-32 overflow-y-auto">
+                  {doneResults.map((r) => (
+                    <div key={r.clip_id} className="flex items-center gap-2 text-xs">
+                      <span className="text-green-500 flex-shrink-0">●</span>
+                      <span className="text-gray-600 font-mono text-[10px]">{r.clip_id?.slice(0, 8)}...</span>
+                      {r.result?.new_quality_score != null && (
+                        <span className="text-green-700 font-medium">
+                          スコア: {r.result.new_quality_score.toFixed(1)}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Error details */}
+            {errorResults.length > 0 && (
+              <div className="bg-red-50 border border-red-100 rounded-xl p-3">
+                <h4 className="text-xs font-bold text-red-800 mb-2 flex items-center gap-1">
+                  <AlertTriangle className="w-3.5 h-3.5" /> エラー
+                </h4>
+                <div className="space-y-1.5 max-h-32 overflow-y-auto">
+                  {errorResults.map((r) => (
+                    <div key={r.clip_id} className="flex items-start gap-2 text-xs">
+                      <span className="text-red-500 flex-shrink-0 mt-0.5">●</span>
+                      <div className="min-w-0">
+                        <span className="text-gray-600 font-mono text-[10px]">{r.clip_id?.slice(0, 8)}...</span>
+                        <span className="text-red-600 ml-1">{r.error || "不明なエラー"}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Error state */}
+        {jobStatus?.status === "error" && (
+          <div className="px-6 pb-4">
+            <div className="p-3 bg-red-50 border border-red-200 rounded-xl">
+              <p className="text-sm text-red-700">{jobStatus.error || "不明なエラーが発生しました"}</p>
+            </div>
+          </div>
+        )}
+
+        {/* Footer */}
+        <div className="px-6 py-4 border-t border-gray-100 flex items-center justify-end">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-800 bg-gray-100 hover:bg-gray-200 rounded-lg transition"
+          >
+            {running ? "バックグラウンドで継続" : "閉じる"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 
 // ═══════════════════════════════════════════════
 // ─── AI Clip Generation Modal ───
