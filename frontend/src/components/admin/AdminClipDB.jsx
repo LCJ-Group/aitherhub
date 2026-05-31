@@ -356,6 +356,11 @@ function ClipCard({ clip, onPlay, brands, adminKey, onBrandChange, allPlaylists,
               <Download className="w-2.5 h-2.5" /> DL {clip.download_count}
             </span>
           )}
+          {clip.has_regeneration && (
+            <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-blue-500 text-white shadow flex items-center gap-0.5">
+              <RefreshCw className="w-2.5 h-2.5" /> 再生成済
+            </span>
+          )}
         </div>
         {/* Duration badge */}
         <div className="absolute bottom-2 right-2">

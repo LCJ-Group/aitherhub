@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { RefreshCw, ThumbsUp, ThumbsDown, RotateCcw, ArrowLeft, Sparkles, Clock, TrendingUp, Filter } from "lucide-react";
+import { RefreshCw, ThumbsUp, ThumbsDown, RotateCcw, ArrowLeft, Sparkles, Clock, TrendingUp, Filter, HelpCircle, X } from "lucide-react";
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
 
@@ -11,6 +11,7 @@ export default function RegenList({ adminKey, onBack }) {
   const [total, setTotal] = useState(0);
   const [gradeFilter, setGradeFilter] = useState(null);
   const [gradingJob, setGradingJob] = useState(null);
+  const [showHelp, setShowHelp] = useState(false);
 
   const perPage = 12;
   const totalPages = Math.ceil(total / perPage);
@@ -98,6 +99,13 @@ export default function RegenList({ adminKey, onBack }) {
             <RefreshCw className="w-5 h-5 text-blue-600" />
             再生成一覧
           </h2>
+          <button
+            onClick={() => setShowHelp(!showHelp)}
+            className="p-1.5 rounded-full hover:bg-blue-50 text-blue-500 transition-colors"
+            title="採点データの活用方法"
+          >
+            <HelpCircle className="w-4 h-4" />
+          </button>
         </div>
         <button
           onClick={loadRegens}
@@ -106,6 +114,56 @@ export default function RegenList({ adminKey, onBack }) {
           <RefreshCw className="w-3 h-3 inline mr-1" /> 更新
         </button>
       </div>
+
+      {/* Help Panel - ML Learning Explanation */}
+      {showHelp && (
+        <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-4 relative">
+          <button
+            onClick={() => setShowHelp(false)}
+            className="absolute top-2 right-2 p-1 rounded-full hover:bg-blue-100 text-blue-400"
+          >
+            <X className="w-4 h-4" />
+          </button>
+          <h3 className="text-sm font-bold text-blue-900 mb-2 flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-blue-600" />
+            採点データ → ML学習への反映
+          </h3>
+          <div className="text-xs text-blue-800 space-y-2">
+            <p className="font-medium">採点データは自動的にMLモデルの学習に反映されます：</p>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div className="bg-white/60 rounded-lg p-2.5 border border-green-200">
+                <div className="font-bold text-green-700 mb-1">👍 OK採点</div>
+                <p className="text-[10px] text-green-800">
+                  再生成パラメータ（フック位置、CTA配置、字幕スタイル、カット範囲）を「成功パターン」として学習。
+                  次回の再生成で優先的に適用されます。
+                </p>
+              </div>
+              <div className="bg-white/60 rounded-lg p-2.5 border border-red-200">
+                <div className="font-bold text-red-700 mb-1">👎 NG採点</div>
+                <p className="text-[10px] text-red-800">
+                  「失敗パターン」として記録。同様のパラメータ組み合わせを避けるようモデルが学習します。
+                  品質スコアの重み付けにも反映。
+                </p>
+              </div>
+              <div className="bg-white/60 rounded-lg p-2.5 border border-yellow-200">
+                <div className="font-bold text-yellow-700 mb-1">🔄 再トライ</div>
+                <p className="text-[10px] text-yellow-800">
+                  「改善の余地あり」として記録。パラメータを微調整して再生成を試行。
+                  境界ケースの学習データとして活用。
+                </p>
+              </div>
+            </div>
+            <div className="bg-white/60 rounded-lg p-2.5 border border-indigo-200 mt-2">
+              <div className="font-bold text-indigo-700 mb-1">📊 自動再学習トリガー</div>
+              <p className="text-[10px] text-indigo-800">
+                採点データが50件蓄積されると自動で再学習がトリガーされます。
+                再学習後は新しいモデルバージョンが適用され、再生成の品質が向上します。
+                「AI学習」タブで学習状況を確認できます。
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Stats Cards */}
       {stats && (
@@ -187,7 +245,7 @@ export default function RegenList({ adminKey, onBack }) {
                 "border-gray-200"
               }`}
             >
-              {/* Before / After comparison */}
+              {/* Before / After comparison - 9:16 ratio videos */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {/* BEFORE */}
                 <div className="space-y-2">
@@ -197,24 +255,33 @@ export default function RegenList({ adminKey, onBack }) {
                       スコア: <span className="font-bold text-orange-600">{item.before?.quality_score?.toFixed(1) || "--"}</span>
                     </span>
                   </div>
-                  {item.before?.thumbnail_url ? (
-                    <img
-                      src={item.before.thumbnail_url}
-                      alt="Before"
-                      className="w-full h-40 object-cover rounded-lg bg-gray-100"
-                    />
-                  ) : (
-                    <div className="w-full h-40 bg-gray-100 rounded-lg flex items-center justify-center text-gray-400 text-xs">
-                      サムネイルなし
+                  {/* 9:16 Video Player for Before */}
+                  <div className="relative w-full max-w-[240px] mx-auto">
+                    <div className="aspect-[9/16] bg-gray-900 rounded-lg overflow-hidden">
+                      {item.before?.clip_url ? (
+                        <video
+                          src={item.before.clip_url}
+                          className="w-full h-full object-cover"
+                          controls
+                          preload="metadata"
+                        />
+                      ) : item.before?.thumbnail_url ? (
+                        <img
+                          src={item.before.thumbnail_url}
+                          alt="Before"
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center text-gray-500 text-xs">
+                          動画なし
+                        </div>
+                      )}
                     </div>
-                  )}
-                  <div className="text-xs text-gray-500 space-y-1">
+                  </div>
+                  <div className="text-xs text-gray-500 space-y-1 text-center">
                     {item.before?.product_name && <div>商品: {item.before.product_name}</div>}
                     {item.before?.liver_name && <div>ライバー: {item.before.liver_name}</div>}
                     {item.before?.duration_sec && <div>長さ: {item.before.duration_sec}秒</div>}
-                    {item.before?.transcript_text && (
-                      <div className="text-[10px] text-gray-400 line-clamp-2">{item.before.transcript_text}</div>
-                    )}
                   </div>
                 </div>
 
@@ -227,25 +294,30 @@ export default function RegenList({ adminKey, onBack }) {
                     </span>
                     <ScoreChange before={item.before?.quality_score} after={item.after?.quality_score} />
                   </div>
-                  {item.after?.download_url ? (
-                    <video
-                      src={item.after.download_url}
-                      className="w-full h-40 object-cover rounded-lg bg-gray-900"
-                      controls
-                      preload="metadata"
-                    />
-                  ) : (
-                    <div className="w-full h-40 bg-gray-900 rounded-lg flex items-center justify-center text-gray-400 text-xs">
-                      動画なし
+                  {/* 9:16 Video Player for After */}
+                  <div className="relative w-full max-w-[240px] mx-auto">
+                    <div className="aspect-[9/16] bg-gray-900 rounded-lg overflow-hidden">
+                      {item.after?.download_url ? (
+                        <video
+                          src={item.after.download_url}
+                          className="w-full h-full object-cover"
+                          controls
+                          preload="metadata"
+                        />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center text-gray-500 text-xs">
+                          動画なし
+                        </div>
+                      )}
                     </div>
-                  )}
-                  <div className="text-xs text-gray-500 space-y-1">
+                  </div>
+                  <div className="text-xs text-gray-500 space-y-1 text-center">
                     {item.after?.duration_sec && <div>長さ: {item.after.duration_sec.toFixed(1)}秒</div>}
                     {item.after?.hook_text && <div>フック: {item.after.hook_text}</div>}
                     {item.after?.cta_text && <div>CTA: {item.after.cta_text}</div>}
                     {item.after?.captions_count > 0 && <div>字幕: {item.after.captions_count}件</div>}
                     {item.after?.effects_applied && (
-                      <div className="flex gap-1 flex-wrap">
+                      <div className="flex gap-1 flex-wrap justify-center">
                         {item.after.effects_applied.subtitle_style && (
                           <span className="px-1.5 py-0.5 bg-blue-50 text-blue-600 rounded text-[9px]">
                             字幕: {item.after.effects_applied.subtitle_style}
@@ -257,9 +329,6 @@ export default function RegenList({ adminKey, onBack }) {
                           </span>
                         )}
                       </div>
-                    )}
-                    {item.after?.transcript_text && (
-                      <div className="text-[10px] text-gray-400 line-clamp-2">{item.after.transcript_text}</div>
                     )}
                   </div>
                 </div>

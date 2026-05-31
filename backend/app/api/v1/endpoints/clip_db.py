@@ -164,6 +164,8 @@ class ClipSearchResult(BaseModel):
     ml_model_version: Optional[str] = None
     # Playlists
     playlists: Optional[list] = None  # [{id, name, color, icon}]
+    # Regeneration status
+    has_regeneration: Optional[bool] = None  # True if clip has been regenerated
 
 
 class ClipSearchResponse(BaseModel):
@@ -509,7 +511,13 @@ async def search_clips(
                 COALESCE(vc.gmv, 0) as sort_gmv,
                 COALESCE(vc.cta_score, 0) as sort_cta_score,
                 COALESCE(vc.importance_score, 0) as sort_importance_score,
-                COALESCE(vc.duration_sec, 0) as sort_duration_sec
+                COALESCE(vc.duration_sec, 0) as sort_duration_sec,
+                EXISTS(
+                    SELECT 1 FROM ai_clip_jobs acj
+                    WHERE acj.config->>'source_clip_id' = vc.id::text
+                      AND acj.config->>'type' = 'regenerate_from_source'
+                      AND acj.status = 'done'
+                ) as has_regeneration
             FROM video_clips vc
             LEFT JOIN video_phases vp ON vp.video_id = vc.video_id
                 AND vp.phase_index = CASE
@@ -660,6 +668,7 @@ async def search_clips(
                 detected_language=row.detected_language if hasattr(row, 'detected_language') else None,
                 ml_model_version=row.ml_model_version if hasattr(row, 'ml_model_version') else None,
                 playlists=playlist_map.get(str(row.clip_id)),
+                has_regeneration=bool(row.has_regeneration) if hasattr(row, 'has_regeneration') else None,
             ))
 
         return ClipSearchResponse(
@@ -2404,27 +2413,77 @@ async def list_regenerations(
         result = await db.execute(sql, {"limit": per_page, "offset": offset})
         rows = result.fetchall()
 
-        items = []
+        # Collect all source clip IDs to batch-fetch their clip_urls
+        parsed_rows = []
+        source_clip_ids = set()
         for row in rows:
             job_results = row.results if isinstance(row.results, list) else json.loads(row.results or "[]")
             job_config = row.config if isinstance(row.config, dict) else json.loads(row.config or "{}")
             source_clip = row.source_clip if isinstance(row.source_clip, dict) else json.loads(row.source_clip or "{}") if row.source_clip else {}
+            clip_id = job_config.get("source_clip_id")
+            if clip_id:
+                source_clip_ids.add(clip_id)
+            parsed_rows.append((row, job_results, job_config, source_clip, clip_id))
 
-            # Extract regen result
+        # Batch lookup clip_url from video_clips for Before videos
+        clip_url_map = {}  # clip_id -> signed url
+        if source_clip_ids:
+            try:
+                from app.services.storage_service import generate_read_sas_from_url
+                clip_lookup_sql = text("""
+                    SELECT id::text as clip_id, clip_url, sas_token, sas_expireddate, thumbnail_url, duration_sec
+                    FROM video_clips
+                    WHERE id = ANY(:ids::uuid[])
+                """)
+                clip_result = await db.execute(clip_lookup_sql, {"ids": list(source_clip_ids)})
+                for cr in clip_result.fetchall():
+                    url = None
+                    if cr.clip_url:
+                        # Try cached SAS first
+                        if cr.sas_token and cr.sas_expireddate:
+                            from datetime import timezone as tz
+                            now = datetime.now(tz.utc)
+                            expiry = cr.sas_expireddate
+                            if expiry.tzinfo is None:
+                                expiry = expiry.replace(tzinfo=tz.utc)
+                            if expiry > now:
+                                url = cr.sas_token
+                        if not url:
+                            try:
+                                sas_url = generate_read_sas_from_url(cr.clip_url)
+                                url = _replace_blob_url_to_cdn(sas_url) if sas_url else _replace_blob_url_to_cdn(cr.clip_url)
+                            except Exception:
+                                url = _replace_blob_url_to_cdn(cr.clip_url)
+                    clip_url_map[cr.clip_id] = {
+                        "clip_url": url,
+                        "thumbnail_url": cr.thumbnail_url,
+                        "duration_sec": cr.duration_sec,
+                    }
+            except Exception as e:
+                logger.warning(f"[clip-db] Batch clip URL lookup failed: {e}")
+
+        items = []
+        for (row, job_results, job_config, source_clip, clip_id) in parsed_rows:
             regen_result = job_results[0] if job_results else {}
+
+            # Get before clip_url from batch lookup (fallback to source_clip snapshot)
+            before_lookup = clip_url_map.get(clip_id, {}) if clip_id else {}
+            before_clip_url = before_lookup.get("clip_url") or source_clip.get("clip_url")
+            before_thumbnail = before_lookup.get("thumbnail_url") or source_clip.get("thumbnail_url")
+            before_duration = source_clip.get("duration_sec") or before_lookup.get("duration_sec")
 
             items.append({
                 "job_id": row.job_id,
-                "clip_id": job_config.get("source_clip_id"),
+                "clip_id": clip_id,
                 "created_at": row.job_created_at.isoformat() if row.job_created_at else None,
                 "grade": job_config.get("regen_grade"),
                 "grade_comment": job_config.get("regen_grade_comment"),
-                # Before (original) - from source_clip snapshot
+                # Before (original) - from video_clips lookup + source_clip snapshot
                 "before": {
-                    "clip_url": source_clip.get("clip_url"),
-                    "thumbnail_url": source_clip.get("thumbnail_url"),
+                    "clip_url": before_clip_url,
+                    "thumbnail_url": before_thumbnail,
                     "quality_score": regen_result.get("original_quality_score") or source_clip.get("quality_score"),
-                    "duration_sec": source_clip.get("duration_sec"),
+                    "duration_sec": before_duration,
                     "product_name": source_clip.get("product_name"),
                     "liver_name": source_clip.get("liver_name"),
                     "transcript_text": (source_clip.get("transcript_text") or "")[:200],

@@ -783,7 +783,25 @@ async def get_auto_retrain_status(
             """))
         new_brands = brand_result.scalar() or 0
 
-    total_new_signals = new_ratings + new_ngs + new_brands
+        # 前回学習以降の新しい再生成採点数（regen_grade）
+        if last_train_at:
+            regen_grade_result = await session.execute(text("""
+                SELECT COUNT(*) FROM ai_clip_jobs
+                WHERE config->>'type' = 'regenerate_from_source'
+                  AND config->>'regen_grade' IS NOT NULL
+                  AND config->>'regen_grade' != ''
+                  AND updated_at > :last_train
+            """), {"last_train": last_train_at})
+        else:
+            regen_grade_result = await session.execute(text("""
+                SELECT COUNT(*) FROM ai_clip_jobs
+                WHERE config->>'type' = 'regenerate_from_source'
+                  AND config->>'regen_grade' IS NOT NULL
+                  AND config->>'regen_grade' != ''
+            """))
+        new_regen_grades = regen_grade_result.scalar() or 0
+
+    total_new_signals = new_ratings + new_ngs + new_brands + new_regen_grades
     should_retrain = total_new_signals >= AUTO_RETRAIN_THRESHOLD
 
     return {
@@ -792,6 +810,7 @@ async def get_auto_retrain_status(
         "new_ratings_since_last_train": new_ratings,
         "new_ng_since_last_train": new_ngs,
         "new_brand_assignments_since_last_train": new_brands,
+        "new_regen_grades_since_last_train": new_regen_grades,
         "threshold": AUTO_RETRAIN_THRESHOLD,
         "last_train_at": str(last_train_at) if last_train_at else None,
         "recommendation": "再学習を推奨します" if should_retrain else f"あと{AUTO_RETRAIN_THRESHOLD - total_new_signals}件の採点で自動トリガー",
@@ -829,14 +848,16 @@ async def auto_retrain_trigger(
                 SELECT 
                     (SELECT COUNT(*) FROM video_phases WHERE user_rating > 0 AND updated_at > :lt) +
                     (SELECT COUNT(*) FROM video_clips WHERE unusable_at > :lt) +
-                    (SELECT COUNT(*) FROM widget_clip_assignments WHERE created_at > :lt) as total
+                    (SELECT COUNT(*) FROM widget_clip_assignments WHERE created_at > :lt) +
+                    (SELECT COUNT(*) FROM ai_clip_jobs WHERE config->>'type' = 'regenerate_from_source' AND config->>'regen_grade' IS NOT NULL AND config->>'regen_grade' != '' AND updated_at > :lt) as total
             """), {"lt": last_train_at})
         else:
             total_result = await session.execute(text("""
                 SELECT 
                     (SELECT COUNT(*) FROM video_phases WHERE user_rating > 0) +
                     (SELECT COUNT(*) FROM video_clips WHERE unusable_at IS NOT NULL) +
-                    (SELECT COUNT(*) FROM widget_clip_assignments) as total
+                    (SELECT COUNT(*) FROM widget_clip_assignments) +
+                    (SELECT COUNT(*) FROM ai_clip_jobs WHERE config->>'type' = 'regenerate_from_source' AND config->>'regen_grade' IS NOT NULL AND config->>'regen_grade' != '') as total
             """))
         total_new = total_result.scalar() or 0
 
@@ -907,7 +928,10 @@ async def get_learning_progress(
                 (SELECT COUNT(*) FROM widget_clip_assignments) as total_brand_assignments,
                 (SELECT COUNT(*) FROM clip_feedback) as total_clip_feedback,
                 (SELECT COUNT(*) FROM video_phases) as total_phases,
-                (SELECT COUNT(DISTINCT video_id) FROM video_phases) as total_videos
+                (SELECT COUNT(DISTINCT video_id) FROM video_phases) as total_videos,
+                (SELECT COUNT(*) FROM ai_clip_jobs WHERE config->>'type' = 'regenerate_from_source' AND config->>'regen_grade' IS NOT NULL AND config->>'regen_grade' != '') as total_regen_grades,
+                (SELECT COUNT(*) FROM ai_clip_jobs WHERE config->>'type' = 'regenerate_from_source' AND config->>'regen_grade' = 'ok') as total_regen_ok,
+                (SELECT COUNT(*) FROM ai_clip_jobs WHERE config->>'type' = 'regenerate_from_source' AND config->>'regen_grade' = 'ng') as total_regen_ng
         """))
         signals = signals_result.fetchone()
 
@@ -964,6 +988,9 @@ async def get_learning_progress(
     total_feedback = signals[3] if signals else 0
     total_phases = signals[4] if signals else 0
     total_videos = signals[5] if signals else 0
+    total_regen_grades = signals[6] if signals else 0
+    total_regen_ok = signals[7] if signals else 0
+    total_regen_ng = signals[8] if signals else 0
 
     return {
         "data_signals": {
@@ -974,11 +1001,15 @@ async def get_learning_progress(
             "total_phases": total_phases,
             "total_videos": total_videos,
             "coverage_rate": round(total_ratings / max(total_phases, 1) * 100, 1),
+            "total_regen_grades": total_regen_grades,
+            "total_regen_ok": total_regen_ok,
+            "total_regen_ng": total_regen_ng,
         },
         "signal_quality": {
             "rating_diversity": "good" if total_ratings > 100 else "needs_more",
             "ng_diversity": "good" if total_ng > 50 else "needs_more",
             "brand_signal_strength": "strong" if total_brand > 200 else "moderate" if total_brand > 50 else "weak",
+            "regen_grade_strength": "strong" if total_regen_grades > 50 else "moderate" if total_regen_grades > 10 else "weak",
         },
         "training_history": training_history,
         "review_trend": review_trend,
