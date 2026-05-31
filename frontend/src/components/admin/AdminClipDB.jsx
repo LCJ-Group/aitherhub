@@ -302,12 +302,7 @@ function ClipCard({ clip, onPlay, brands, adminKey, onBrandChange, allPlaylists,
         )}
         {/* Overlay badges */}
         <div className="absolute top-2 left-2 flex flex-wrap gap-1">
-          {clip.is_sold === true && (
-            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-green-500 text-white shadow">SOLD</span>
-          )}
-          {clip.is_sold === false && (
-            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-gray-500 text-white shadow">未売</span>
-          )}
+
           {clip.rating === "good" && (
             <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-blue-500 text-white shadow flex items-center gap-0.5">
               <ThumbsUp className="w-2.5 h-2.5" /> Good
@@ -831,22 +826,7 @@ function StatsOverview({ stats }) {
         <div className="text-2xl font-bold text-gray-900">{stats.total_clips}</div>
         <div className="text-xs text-gray-500 mt-1">総クリップ数</div>
       </div>
-      <div className="bg-white rounded-xl border border-green-200 p-4 text-center">
-        <div className="text-2xl font-bold text-green-600">{stats.sold_clips}</div>
-        <div className="text-xs text-gray-500 mt-1">売れた</div>
-      </div>
-      <div className="bg-white rounded-xl border border-gray-200 p-4 text-center">
-        <div className="text-2xl font-bold text-gray-400">{stats.unsold_clips}</div>
-        <div className="text-xs text-gray-500 mt-1">未売</div>
-      </div>
-      <div className="bg-white rounded-xl border border-purple-200 p-4 text-center">
-        <div className="text-2xl font-bold text-purple-600">{formatGMV(stats.total_gmv)}</div>
-        <div className="text-xs text-gray-500 mt-1">総GMV</div>
-      </div>
-      <div className="bg-white rounded-xl border border-blue-200 p-4 text-center">
-        <div className="text-2xl font-bold text-blue-600">{formatGMV(stats.avg_gmv)}</div>
-        <div className="text-xs text-gray-500 mt-1">平均GMV</div>
-      </div>
+
       {stats.avg_cta_score != null && (
         <div className="bg-white rounded-xl border border-orange-200 p-4 text-center">
           <div className="text-2xl font-bold text-orange-600">{Math.round(stats.avg_cta_score)}</div>
@@ -1174,9 +1154,7 @@ function VideoPlayerModal({ clip, clips, onClose, brands, adminKey, onBrandChang
             <div className="flex items-center gap-3 text-white">
               <span className="text-sm font-bold">{clip.gmv > 0 ? formatGMV(clip.gmv) : "--"}</span>
               <span className="text-xs text-gray-400">CTA {clip.cta_score || "--"}</span>
-              <span className={`text-xs px-2 py-0.5 rounded-full ${clip.is_sold ? "bg-green-500/20 text-green-400" : "bg-gray-700 text-gray-400"}`}>
-                {clip.is_sold ? "SOLD" : "未売"}
-              </span>
+
               {clip.duration_sec && <span className="text-xs text-gray-500">{formatDuration(clip.duration_sec)}</span>}
               {clip.detected_language && clip.detected_language !== 'unknown' && (
                 <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
@@ -1969,19 +1947,7 @@ export default function AdminClipDB({ adminKey }) {
               ))}
             </select>
 
-            <select
-              value={soldFilter === null ? "" : soldFilter.toString()}
-              onChange={(e) => {
-                const v = e.target.value;
-                setSoldFilter(v === "" ? null : v === "true");
-                setPage(1);
-              }}
-              className="px-3 py-1.5 rounded-lg border border-gray-300 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-purple-500"
-            >
-              <option value="">売上: すべて</option>
-              <option value="true">売れた</option>
-              <option value="false">売れてない</option>
-            </select>
+
 
             <select
               value={ratingFilter}
@@ -2321,31 +2287,7 @@ export default function AdminClipDB({ adminKey }) {
                       </div>
                     )}
 
-                    {/* Sold vs Unsold */}
-                    {analyticsData.mlInsights.sold_vs_unsold?.length > 0 && (
-                      <div className="bg-white rounded-xl border border-gray-200 p-4">
-                        <h5 className="text-xs font-bold text-gray-600 mb-2 flex items-center gap-1">
-                          <Sparkles className="w-3.5 h-3.5 text-green-500" />
-                          売れた vs 売れなかった パターン比較
-                        </h5>
-                        <div className="grid grid-cols-2 gap-4">
-                          {analyticsData.mlInsights.sold_vs_unsold.map((s, i) => (
-                            <div key={i} className={`rounded-lg p-3 ${s.is_sold ? "bg-green-50 border border-green-200" : "bg-gray-50 border border-gray-200"}`}>
-                              <div className="text-xs font-bold mb-2 ${s.is_sold ? 'text-green-700' : 'text-gray-600'}">
-                                {s.is_sold ? "売れた動画" : "未売動画"}
-                              </div>
-                              <div className="space-y-1 text-xs">
-                                <div className="flex justify-between"><span className="text-gray-500">クリップ数</span><span className="font-bold">{s.clip_count}</span></div>
-                                <div className="flex justify-between"><span className="text-gray-500">平均長さ</span><span className="font-bold">{s.avg_duration}s</span></div>
-                                <div className="flex justify-between"><span className="text-gray-500">平均タグ数</span><span className="font-bold">{s.avg_tag_count}</span></div>
-                                <div className="flex justify-between"><span className="text-gray-500">完了率</span><span className="font-bold text-green-600">{s.completion_rate}%</span></div>
-                                <div className="flex justify-between"><span className="text-gray-500">CTR</span><span className="font-bold text-orange-600">{s.ctr}%</span></div>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
+
 
                     {/* Winning Tag Combos */}
                     {analyticsData.mlInsights.winning_combos?.length > 0 && (
@@ -2693,16 +2635,10 @@ export default function AdminClipDB({ adminKey }) {
                     <span className="text-[10px] text-gray-400">クリップ</span>
                   </div>
                   <div className="flex items-center gap-2 mt-1 text-[10px]">
-                    {b.sold_count > 0 && (
-                      <span className="text-green-600 font-medium">{"\u2713"} {b.sold_count}売</span>
-                    )}
                     {b.subtitle_count > 0 && (
                       <span className="text-purple-600 font-medium flex items-center gap-0.5">
                         <Subtitles className="w-2.5 h-2.5" />{b.subtitle_count}
                       </span>
-                    )}
-                    {b.total_gmv > 0 && (
-                      <span className="text-blue-600 font-medium">{formatGMV(b.total_gmv)}</span>
                     )}
                   </div>
                 </button>
@@ -2722,7 +2658,7 @@ export default function AdminClipDB({ adminKey }) {
         <div className="text-center py-20">
           <Database className="w-12 h-12 text-gray-300 mx-auto mb-3" />
           <p className="text-gray-500 text-sm">
-            {searchQuery || selectedTag || soldFilter !== null || selectedBrand
+            {searchQuery || selectedTag || selectedBrand
               ? "条件に一致するクリップが見つかりませんでした"
               : "クリップデータを読み込み中..."}
           </p>
