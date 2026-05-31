@@ -920,51 +920,88 @@ async def get_learning_progress(
     _check_admin(x_admin_key)
 
     async with get_session() as session:
-        # 各データソースの学習シグナル数（clip_feedbackが存在しない場合に備えてCOALESCE使用）
-        signals_result = await session.execute(text("""
-            SELECT 
-                (SELECT COUNT(*) FROM video_phases WHERE user_rating > 0) as total_ratings,
-                (SELECT COUNT(*) FROM video_clips WHERE is_unusable = true) as total_ng,
-                (SELECT COUNT(*) FROM widget_clip_assignments) as total_brand_assignments,
-                COALESCE((SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'clip_feedback' AND table_schema = 'public'), 0) as clip_feedback_exists,
-                (SELECT COUNT(*) FROM video_phases) as total_phases,
-                (SELECT COUNT(DISTINCT video_id) FROM video_phases) as total_videos,
-                (SELECT COUNT(*) FROM ai_clip_jobs WHERE config->>'type' = 'regenerate_from_source' AND config->>'regen_grade' IS NOT NULL AND config->>'regen_grade' != '') as total_regen_grades,
-                (SELECT COUNT(*) FROM ai_clip_jobs WHERE config->>'type' = 'regenerate_from_source' AND config->>'regen_grade' = 'ok') as total_regen_ok,
-                (SELECT COUNT(*) FROM ai_clip_jobs WHERE config->>'type' = 'regenerate_from_source' AND config->>'regen_grade' = 'ng') as total_regen_ng
-        """))
-        signals = signals_result.fetchone()
-
-        # clip_feedbackテーブルが存在する場合のみカウント
+        # 各データソースの学習シグナル数（各テーブルが存在しない場合に備えて個別クエリ）
+        total_ratings = 0
+        total_ng = 0
+        total_brand = 0
         total_feedback = 0
-        if signals and signals[3] > 0:  # clip_feedback_exists
-            try:
-                fb_result = await session.execute(text("SELECT COUNT(*) FROM clip_feedback"))
-                total_feedback = fb_result.scalar() or 0
-            except Exception:
-                total_feedback = 0
+        total_phases = 0
+        total_videos = 0
+        total_regen_grades = 0
+        total_regen_ok = 0
+        total_regen_ng = 0
+
+        try:
+            r = await session.execute(text("SELECT COUNT(*) FROM video_phases WHERE user_rating > 0"))
+            total_ratings = r.scalar() or 0
+        except Exception:
+            await session.rollback()
+
+        try:
+            r = await session.execute(text("SELECT COUNT(*) FROM video_clips WHERE is_unusable = true"))
+            total_ng = r.scalar() or 0
+        except Exception:
+            await session.rollback()
+
+        try:
+            r = await session.execute(text("SELECT COUNT(*) FROM widget_clip_assignments"))
+            total_brand = r.scalar() or 0
+        except Exception:
+            await session.rollback()
+
+        try:
+            r = await session.execute(text("SELECT COUNT(*) FROM clip_feedback"))
+            total_feedback = r.scalar() or 0
+        except Exception:
+            await session.rollback()
+
+        try:
+            r = await session.execute(text("SELECT COUNT(*) FROM video_phases"))
+            total_phases = r.scalar() or 0
+            r2 = await session.execute(text("SELECT COUNT(DISTINCT video_id) FROM video_phases"))
+            total_videos = r2.scalar() or 0
+        except Exception:
+            await session.rollback()
+
+        try:
+            r = await session.execute(text("SELECT COUNT(*) FROM ai_clip_jobs WHERE config->>'type' = 'regenerate_from_source' AND config->>'regen_grade' IS NOT NULL AND config->>'regen_grade' != ''"))
+            total_regen_grades = r.scalar() or 0
+            r2 = await session.execute(text("SELECT COUNT(*) FROM ai_clip_jobs WHERE config->>'type' = 'regenerate_from_source' AND config->>'regen_grade' = 'ok'"))
+            total_regen_ok = r2.scalar() or 0
+            r3 = await session.execute(text("SELECT COUNT(*) FROM ai_clip_jobs WHERE config->>'type' = 'regenerate_from_source' AND config->>'regen_grade' = 'ng'"))
+            total_regen_ng = r3.scalar() or 0
+        except Exception:
+            await session.rollback()
 
         # 直近の学習履歴
-        history_result = await session.execute(text("""
-            SELECT run_id, target, status, started_at, completed_at,
-                   metrics
-            FROM ml_training_runs
-            ORDER BY started_at DESC
-            LIMIT 10
-        """))
-        history_rows = history_result.fetchall()
+        history_rows = []
+        try:
+            history_result = await session.execute(text("""
+                SELECT run_id, target, status, started_at, completed_at,
+                       metrics
+                FROM ml_training_runs
+                ORDER BY started_at DESC
+                LIMIT 10
+            """))
+            history_rows = history_result.fetchall()
+        except Exception:
+            await session.rollback()
 
         # 日別の採点トレンド（直近14日）
-        trend_result = await session.execute(text("""
-            SELECT 
-                DATE(updated_at) as review_date,
-                COUNT(*) as review_count
-            FROM video_phases
-            WHERE user_rating > 0 AND updated_at > NOW() - INTERVAL '14 days'
-            GROUP BY DATE(updated_at)
-            ORDER BY review_date
-        """))
-        trend_rows = trend_result.fetchall()
+        trend_rows = []
+        try:
+            trend_result = await session.execute(text("""
+                SELECT 
+                    DATE(updated_at) as review_date,
+                    COUNT(*) as review_count
+                FROM video_phases
+                WHERE user_rating > 0 AND updated_at > NOW() - INTERVAL '14 days'
+                GROUP BY DATE(updated_at)
+                ORDER BY review_date
+            """))
+            trend_rows = trend_result.fetchall()
+        except Exception:
+            await session.rollback()
 
     # 学習履歴のフォーマット
     training_history = []
@@ -991,15 +1028,7 @@ async def get_learning_progress(
         for r in trend_rows
     ]
 
-    total_ratings = signals[0] if signals else 0
-    total_ng = signals[1] if signals else 0
-    total_brand = signals[2] if signals else 0
-    # total_feedback is already set above from clip_feedback table check
-    total_phases = signals[4] if signals else 0
-    total_videos = signals[5] if signals else 0
-    total_regen_grades = signals[6] if signals else 0
-    total_regen_ok = signals[7] if signals else 0
-    total_regen_ng = signals[8] if signals else 0
+    # All signal values are already set above from individual queries
 
     return {
         "data_signals": {
