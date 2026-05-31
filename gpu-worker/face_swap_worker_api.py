@@ -1135,8 +1135,8 @@ async def health_check(auth: bool = Depends(verify_api_key)):
         "session_id": current_session["id"],
         "config": current_config,
         "engine": {
-            "type": "direct_onnx_pipeline_v3.1",
-            "version": "3.1.0",
+            "type": "direct_onnx_pipeline_v4.0",
+            "version": "4.0.0",
             "onnx_engine_ready": onnx_engine_ready,
             "gfpgan_ready": gfpgan_session is not None,
             "source_face_loaded": source_face_embedding is not None,
