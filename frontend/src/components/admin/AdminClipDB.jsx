@@ -1180,10 +1180,17 @@ function VideoPlayerModal({ clip, clips, onClose, brands, adminKey, onBrandChang
 
           {/* Info bar under video */}
           <div className="bg-gray-900 rounded-bl-2xl px-4 py-3 space-y-2">
+            {/* Video ID & Clip ID */}
+            <div className="flex items-center gap-2 text-[10px] text-gray-500">
+              <span className="font-mono" title="Video ID">📹 {clip.video_id ? clip.video_id.slice(0, 8) : '--'}</span>
+              <span className="text-gray-700">|</span>
+              <span className="font-mono" title="Clip ID">🎬 {clip.clip_id ? clip.clip_id.slice(0, 8) : '--'}</span>
+              {clip.liver_name && <><span className="text-gray-700">|</span><span className="text-purple-400">{clip.liver_name}</span></>}
+              {clip.stream_date && <><span className="text-gray-700">|</span><span>{clip.stream_date}</span></>}
+            </div>
             <div className="flex items-center gap-3 text-white">
               <span className="text-sm font-bold">{clip.gmv > 0 ? formatGMV(clip.gmv) : "--"}</span>
               <span className="text-xs text-gray-400">CTA {clip.cta_score || "--"}</span>
-
               {clip.duration_sec && <span className="text-xs text-gray-500">{formatDuration(clip.duration_sec)}</span>}
               {clip.detected_language && clip.detected_language !== 'unknown' && (
                 <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
