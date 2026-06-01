@@ -616,6 +616,22 @@ async def run_all_ddl_migrations():
         except Exception as e:
             logger.warning(f"[DDL] ml_model_version: {e}")
 
+        # ── regen_skipped / skip_reason columns on video_clips ──
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(_text("""
+                    ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS regen_skipped BOOLEAN DEFAULT FALSE
+                """))
+                await conn.execute(_text("""
+                    ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS skip_reason TEXT
+                """))
+                await conn.execute(_text("""
+                    ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS skip_evaluated_at TIMESTAMPTZ
+                """))
+                logger.info("[DDL] regen_skipped / skip_reason columns \u2713")
+        except Exception as e:
+            logger.warning(f"[DDL] regen_skipped: {e}")
+
         # ── upload_event_log table + upload stage columns on videos ──
         try:
             async with engine.begin() as conn:

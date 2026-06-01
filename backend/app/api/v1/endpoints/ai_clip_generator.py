@@ -7289,7 +7289,7 @@ async def _run_batch_regeneration(batch_job_id: str, req: BatchRegenRequest):
         skipped_clips = [p for p in prefilter_results if not p["eligible"]]
         skipped = len(skipped_clips)
         
-        # スキップされたクリップの結果を先に追加
+        # スキップされたクリップの結果を先に追加 + DBに永続化
         for sc in skipped_clips:
             results.append({
                 "clip_id": sc["clip_id"],
@@ -7297,6 +7297,19 @@ async def _run_batch_regeneration(batch_job_id: str, req: BatchRegenRequest):
                 "reason": sc["reason"],
                 "content_eval": sc["content_eval"],
             })
+            # DBにスキップ情報を永続化（将来の切り抜き精度向上に活用）
+            try:
+                async with engine.begin() as conn:
+                    await conn.execute(text("""
+                        UPDATE video_clips
+                        SET regen_skipped = TRUE,
+                            skip_reason = :reason,
+                            skip_evaluated_at = NOW()
+                        WHERE id = CAST(:clip_id AS uuid)
+                    """), {"clip_id": sc["clip_id"], "reason": sc["reason"]})
+                logger.info(f"[v12-batch {batch_job_id}] Persisted skip for {sc['clip_id']}: {sc['reason']}")
+            except Exception as e:
+                logger.warning(f"[v12-batch {batch_job_id}] Failed to persist skip for {sc['clip_id']}: {e}")
         
         if not eligible_clips:
             # 全てスキップされた場合

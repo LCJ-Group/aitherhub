@@ -166,6 +166,9 @@ class ClipSearchResult(BaseModel):
     playlists: Optional[list] = None  # [{id, name, color, icon}]
     # Regeneration status
     has_regeneration: Optional[bool] = None  # True if clip has been regenerated
+    # Batch regen skip status
+    regen_skipped: Optional[bool] = None  # True if GPT prefilter skipped this clip
+    skip_reason: Optional[str] = None  # Reason for skipping (e.g. "商品訴求力不足")
 
 
 class ClipSearchResponse(BaseModel):
@@ -508,6 +511,8 @@ async def search_clips(
                 vc.unusable_comment,
                 vc.detected_language,
                 vc.ml_model_version,
+                COALESCE(vc.regen_skipped, FALSE) as regen_skipped,
+                vc.skip_reason,
                 COALESCE(vc.gmv, 0) as sort_gmv,
                 COALESCE(vc.cta_score, 0) as sort_cta_score,
                 COALESCE(vc.importance_score, 0) as sort_importance_score,
@@ -669,6 +674,8 @@ async def search_clips(
                 ml_model_version=row.ml_model_version if hasattr(row, 'ml_model_version') else None,
                 playlists=playlist_map.get(str(row.clip_id)),
                 has_regeneration=bool(row.has_regeneration) if hasattr(row, 'has_regeneration') else None,
+                regen_skipped=bool(row.regen_skipped) if hasattr(row, 'regen_skipped') else None,
+                skip_reason=row.skip_reason if hasattr(row, 'skip_reason') else None,
             ))
 
         return ClipSearchResponse(

@@ -376,6 +376,14 @@ function ClipCard({ clip, onPlay, brands, adminKey, onBrandChange, allPlaylists,
               <RefreshCw className="w-2.5 h-2.5" /> 再生成済
             </span>
           )}
+          {clip.regen_skipped && (
+            <span
+              className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-gray-500 text-white shadow flex items-center gap-0.5 cursor-help"
+              title={clip.skip_reason || 'GPT判定によりスキップ'}
+            >
+              <Ban className="w-2.5 h-2.5" /> スキップ済
+            </span>
+          )}
         </div>
         {/* Duration badge */}
         <div className="absolute bottom-2 right-2">
