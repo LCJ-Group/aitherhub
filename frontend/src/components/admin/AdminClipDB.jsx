@@ -378,7 +378,7 @@ function ClipCard({ clip, onPlay, brands, adminKey, onBrandChange, allPlaylists,
           )}
           {clip.regen_skipped && (
             <span
-              className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-gray-500 text-white shadow flex items-center gap-0.5 cursor-help"
+              className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-500 text-white shadow flex items-center gap-0.5 cursor-help"
               title={clip.skip_reason || 'GPT判定によりスキップ'}
             >
               <Ban className="w-2.5 h-2.5" /> スキップ済
@@ -1238,6 +1238,45 @@ function VideoPlayerModal({ clip, clips, onClose, brands, adminKey, onBrandChang
           </div>
 
           <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+            {/* Skip review banner */}
+            {clip.regen_skipped && (
+              <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 mb-2">
+                <div className="flex items-center gap-1.5 mb-1">
+                  <Ban className="w-3.5 h-3.5 text-amber-400" />
+                  <span className="text-amber-300 text-xs font-bold">AIスキップ済み</span>
+                </div>
+                <p className="text-amber-200/70 text-[10px] leading-relaxed">{clip.skip_reason || 'GPT判定によりスキップ'}</p>
+                <div className="flex gap-2 mt-2">
+                  <button
+                    onClick={async () => {
+                      try {
+                        const res = await fetch(`${API_BASE}/api/v1/clip-db/unskip?clip_id=${clip.clip_id}`, {
+                          method: "POST", headers: { "X-Admin-Key": adminKey }
+                        });
+                        if (res.ok) { setActionDone("brand"); onBrandChange?.(); setTimeout(() => { if (hasNext) navigate(1); }, 800); }
+                      } catch (e) { console.error("Unskip failed:", e); }
+                    }}
+                    className="flex-1 py-2 rounded-lg bg-green-600 hover:bg-green-500 text-white font-bold text-[11px] transition-colors flex items-center justify-center gap-1"
+                  >
+                    <CheckCircle className="w-3 h-3" /> 復活（使える）
+                  </button>
+                  <button
+                    onClick={async () => {
+                      try {
+                        const res = await fetch(`${API_BASE}/api/v1/clip-db/confirm-skip?clip_id=${clip.clip_id}`, {
+                          method: "POST", headers: { "X-Admin-Key": adminKey }
+                        });
+                        if (res.ok) { setActionDone("ng"); onBrandChange?.(); setTimeout(() => { if (hasNext) navigate(1); }, 800); }
+                      } catch (e) { console.error("Confirm skip failed:", e); }
+                    }}
+                    className="flex-1 py-2 rounded-lg bg-red-600/80 hover:bg-red-500 text-white font-bold text-[11px] transition-colors flex items-center justify-center gap-1"
+                  >
+                    <Ban className="w-3 h-3" /> 確定（NG）
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* NG or Usable action */}
             {!showNg && !showBrands && (
               <div className="space-y-2">
@@ -1439,6 +1478,7 @@ export default function AdminClipDB({ adminKey }) {
   const [soldFilter, setSoldFilter] = useState(null);
   const [ratingFilter, setRatingFilter] = useState("");
   const [unusableFilter, setUnusableFilter] = useState(null);
+  const [skippedFilter, setSkippedFilter] = useState(null);
   const [noBrandFilter, setNoBrandFilter] = useState(null);
   const [hasSubtitleFilter, setHasSubtitleFilter] = useState(null);
   const [hasTrimFilter, setHasTrimFilter] = useState(null);
@@ -1592,7 +1632,7 @@ export default function AdminClipDB({ adminKey }) {
     if (searchMode === "structured" && enrichTriggered.current) {
       loadClips();
     }
-  }, [page, sortBy, sortOrder, selectedTag, soldFilter, ratingFilter, selectedBrand, unusableFilter, noBrandFilter, hasSubtitleFilter, hasTrimFilter, notDownloadedFilter, languageFilter, aiVersionFilter, selectedPlaylistFilter, clipIdFilter]);
+  }, [page, sortBy, sortOrder, selectedTag, soldFilter, ratingFilter, selectedBrand, unusableFilter, skippedFilter, noBrandFilter, hasSubtitleFilter, hasTrimFilter, notDownloadedFilter, languageFilter, aiVersionFilter, selectedPlaylistFilter, clipIdFilter]);
 
   async function autoEnrichAndLoad() {
     // 1. Auto enrich (non-blocking for already-enriched clips)
@@ -1724,6 +1764,7 @@ export default function AdminClipDB({ adminKey }) {
       if (soldFilter !== null) params.is_sold = soldFilter;
       if (ratingFilter) params.rating = ratingFilter;
       if (unusableFilter !== null) params.is_unusable = unusableFilter;
+      if (skippedFilter !== null) params.is_skipped = skippedFilter;
       if (noBrandFilter !== null) params.no_brand = noBrandFilter;
       if (hasSubtitleFilter !== null) params.has_subtitle = hasSubtitleFilter;
       if (hasTrimFilter !== null) params.has_trim = hasTrimFilter;
@@ -1816,7 +1857,7 @@ export default function AdminClipDB({ adminKey }) {
     loadClips();
     loadBrands();
     loadReviewStats();
-  }, [searchQuery, selectedTag, selectedProduct, selectedLiver, selectedBrand, soldFilter, ratingFilter, unusableFilter, noBrandFilter, hasSubtitleFilter, hasTrimFilter, notDownloadedFilter, page, sortBy, sortOrder]);
+  }, [searchQuery, selectedTag, selectedProduct, selectedLiver, selectedBrand, soldFilter, ratingFilter, unusableFilter, skippedFilter, noBrandFilter, hasSubtitleFilter, hasTrimFilter, notDownloadedFilter, page, sortBy, sortOrder]);
 
   // V12: Toggle clip selection
   const toggleClipSelect = useCallback((clipId) => {
@@ -2140,11 +2181,11 @@ export default function AdminClipDB({ adminKey }) {
               className="px-3 py-1.5 rounded-lg border border-gray-300 text-xs w-32 focus:outline-none focus:ring-2 focus:ring-purple-500"
             />
 
-            {(selectedTag || selectedProduct || selectedLiver || selectedBrand || soldFilter !== null || ratingFilter || unusableFilter !== null || noBrandFilter !== null || hasSubtitleFilter !== null || hasTrimFilter !== null || notDownloadedFilter !== null || selectedPlaylistFilter) && (
+            {(selectedTag || selectedProduct || selectedLiver || selectedBrand || soldFilter !== null || ratingFilter || unusableFilter !== null || skippedFilter !== null || noBrandFilter !== null || hasSubtitleFilter !== null || hasTrimFilter !== null || notDownloadedFilter !== null || selectedPlaylistFilter) && (
               <button
                 onClick={() => {
                   setSelectedTag(""); setSelectedProduct(""); setSelectedLiver("");
-                  setSelectedBrand(""); setSoldFilter(null); setRatingFilter(""); setUnusableFilter(null);
+                  setSelectedBrand(""); setSoldFilter(null); setRatingFilter(""); setUnusableFilter(null); setSkippedFilter(null);
                   setNoBrandFilter(null); setHasSubtitleFilter(null); setHasTrimFilter(null); setNotDownloadedFilter(null); setSelectedPlaylistFilter(""); setPage(1);
                 }}
                 className="px-2 py-1.5 rounded-lg text-xs text-red-500 hover:bg-red-50 border border-red-200"
@@ -2626,6 +2667,34 @@ export default function AdminClipDB({ adminKey }) {
               再生成済み
             </button>
 
+            {/* スキップ済み (GPT判定) */}
+            <button
+              onClick={() => {
+                if (skippedFilter === true) { setSkippedFilter(null); }
+                else { setSkippedFilter(true); setUnusableFilter(null); }
+                setPage(1);
+              }}
+              className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${
+                skippedFilter === true
+                  ? "bg-amber-100 border-amber-400 text-amber-700 shadow-sm"
+                  : "bg-white border-gray-200 text-gray-600 hover:border-amber-300 hover:bg-amber-50"
+              }`}
+            >
+              <Ban className="w-3 h-3 inline mr-1" />
+              スキップ済み {stats.skipped_clips > 0 && <span className="ml-0.5 font-bold">{stats.skipped_clips}</span>}
+            </button>
+
+            {/* Skip by reason breakdown */}
+            {stats.skip_by_reason && stats.skip_by_reason.length > 0 && skippedFilter === true && (
+              <div className="flex gap-1.5 ml-2 pl-2 border-l border-gray-200">
+                {stats.skip_by_reason.map((r) => (
+                  <span key={r.reason} className="px-2 py-1 rounded-full text-[10px] bg-amber-50 text-amber-600 border border-amber-200">
+                    {r.reason} ({r.count})
+                  </span>
+                ))}
+              </div>
+            )}
+
             {/* NG by reason breakdown */}
             {stats.ng_by_reason && stats.ng_by_reason.length > 0 && unusableFilter === true && (
               <div className="flex gap-1.5 ml-2 pl-2 border-l border-gray-200">
@@ -2638,10 +2707,10 @@ export default function AdminClipDB({ adminKey }) {
             )}
 
             {/* Clear all status filters */}
-            {(unusableFilter !== null || noBrandFilter !== null || hasSubtitleFilter !== null || hasTrimFilter !== null || notDownloadedFilter !== null) && (
+            {(unusableFilter !== null || skippedFilter !== null || noBrandFilter !== null || hasSubtitleFilter !== null || hasTrimFilter !== null || notDownloadedFilter !== null) && (
               <button
                 onClick={() => {
-                  setUnusableFilter(null); setNoBrandFilter(null);
+                  setUnusableFilter(null); setSkippedFilter(null); setNoBrandFilter(null);
                   setHasSubtitleFilter(null); setHasTrimFilter(null);
                   setNotDownloadedFilter(null);
                   setPage(1);

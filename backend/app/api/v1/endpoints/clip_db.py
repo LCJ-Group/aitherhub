@@ -197,7 +197,9 @@ class ClipStatsResponse(BaseModel):
     trimmed_clips: Optional[int] = 0
     downloaded_clips: Optional[int] = 0
     not_downloaded_clips: Optional[int] = 0
+    skipped_clips: Optional[int] = 0
     ng_by_reason: Optional[list] = None  # [{reason: str, count: int}]
+    skip_by_reason: Optional[list] = None  # [{reason: str, count: int}]
     language_stats: Optional[list] = None  # [{language: str, count: int}]
 
 
@@ -227,6 +229,7 @@ async def search_clips(
     clip_id: Optional[str] = Query(None, description="Filter by specific clip ID (vc.id)"),
     brand: Optional[str] = Query(None, description="Filter by brand client_id"),
     is_unusable: Optional[bool] = Query(None, description="Filter by unusable status"),
+    is_skipped: Optional[bool] = Query(None, description="Filter by regen_skipped status (GPT prefilter skip)"),
     no_brand: Optional[bool] = Query(None, description="Filter clips with no brand assigned"),
     has_subtitle: Optional[bool] = Query(None, description="Filter clips with/without subtitle export"),
     has_trim: Optional[bool] = Query(None, description="Filter clips with/without trim data"),
@@ -338,6 +341,12 @@ async def search_clips(
     else:
         # Default: exclude NG clips from normal listing
         conditions.append("COALESCE(vc.is_unusable, FALSE) = FALSE")
+
+    # Skipped filter (GPT prefilter skip)
+    if is_skipped is True:
+        conditions.append("COALESCE(vc.regen_skipped, FALSE) = TRUE")
+    elif is_skipped is False:
+        conditions.append("COALESCE(vc.regen_skipped, FALSE) = FALSE")
 
     # No brand assigned filter (always excludes NG clips)
     if no_brand is True:
@@ -805,6 +814,7 @@ async def get_clip_stats(
         ng_stats_sql = text("""
             SELECT
                 COUNT(*) FILTER (WHERE COALESCE(vc.is_unusable, FALSE) = TRUE) as ng_count,
+                COUNT(*) FILTER (WHERE COALESCE(vc.regen_skipped, FALSE) = TRUE) as skipped_count,
                 COUNT(*) FILTER (WHERE COALESCE(vc.is_unusable, FALSE) = FALSE AND vc.exported_url IS NOT NULL) as subtitle_count,
                 COUNT(*) FILTER (WHERE COALESCE(vc.is_unusable, FALSE) = FALSE AND vc.trim_data IS NOT NULL) as trimmed_count,
                 COUNT(*) FILTER (WHERE COALESCE(vc.is_unusable, FALSE) = FALSE AND vc.id::text NOT IN (
@@ -841,6 +851,22 @@ async def get_clip_stats(
             for r in ng_reason_result.fetchall()
         ]
 
+        # Skip by reason breakdown
+        skip_reason_sql = text("""
+            SELECT vc.skip_reason, COUNT(*) as cnt
+            FROM video_clips vc
+            WHERE vc.status = 'completed' AND vc.clip_url IS NOT NULL
+                AND COALESCE(vc.regen_skipped, FALSE) = TRUE
+                AND vc.skip_reason IS NOT NULL
+            GROUP BY vc.skip_reason
+            ORDER BY cnt DESC
+        """)
+        skip_reason_result = await db.execute(skip_reason_sql)
+        skip_by_reason = [
+            {"reason": r.skip_reason, "count": r.cnt}
+            for r in skip_reason_result.fetchall()
+        ]
+
         # Language statistics
         lang_sql = text("""
             SELECT COALESCE(vc.detected_language, 'unknown') as lang, COUNT(*) as cnt
@@ -869,12 +895,14 @@ async def get_clip_stats(
             top_livers=top_livers,
             clips_by_date=clips_by_date,
             ng_clips=ng_stats_row.ng_count or 0,
+            skipped_clips=ng_stats_row.skipped_count or 0,
             no_brand_clips=ng_stats_row.no_brand_count or 0,
             subtitle_clips=ng_stats_row.subtitle_count or 0,
             trimmed_clips=ng_stats_row.trimmed_count or 0,
             downloaded_clips=ng_stats_row.downloaded_count or 0,
             not_downloaded_clips=(stats_row.total or 0) - (ng_stats_row.ng_count or 0) - (ng_stats_row.downloaded_count or 0),
             ng_by_reason=ng_by_reason,
+            skip_by_reason=skip_by_reason,
             language_stats=language_stats,
         )
 
@@ -2609,4 +2637,112 @@ async def grade_regeneration(
         raise
     except Exception as e:
         logger.error(f"[clip-db] Grade regen failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── Skip Review Endpoints ───
+
+@router.post("/unskip")
+async def unskip_clip(
+    clip_id: str = Query(..., description="Clip ID to unskip (restore from skipped)"),
+    db: AsyncSession = Depends(get_db),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """
+    Restore a skipped clip (set regen_skipped=FALSE).
+    Human review determined the clip is actually usable.
+    """
+    _check_admin_or_user(x_admin_key=x_admin_key)
+    try:
+        result = await db.execute(text("""
+            UPDATE video_clips
+            SET regen_skipped = FALSE,
+                skip_reason = NULL,
+                skip_evaluated_at = NULL,
+                updated_at = NOW()
+            WHERE id = CAST(:clip_id AS uuid)
+            RETURNING id
+        """), {"clip_id": clip_id})
+        await db.commit()
+        row = result.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Clip not found")
+        logger.info(f"[clip-db] Unskipped clip {clip_id} (human review: usable)")
+        return {"status": "ok", "clip_id": clip_id, "action": "unskipped"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[clip-db] Unskip failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/confirm-skip")
+async def confirm_skip_clip(
+    clip_id: str = Query(..., description="Clip ID to confirm as skipped"),
+    reason: Optional[str] = Query(None, description="Optional updated reason"),
+    db: AsyncSession = Depends(get_db),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """
+    Confirm a skipped clip as truly unusable (mark as NG).
+    Human review confirmed the AI's skip decision was correct.
+    """
+    _check_admin_or_user(x_admin_key=x_admin_key)
+    try:
+        # Mark as both skipped AND unusable (confirmed by human)
+        update_parts = [
+            "is_unusable = TRUE",
+            "unusable_reason = COALESCE(:reason, skip_reason, 'GPT判定確認済み')",
+            "updated_at = NOW()",
+        ]
+        result = await db.execute(text(f"""
+            UPDATE video_clips
+            SET {', '.join(update_parts)}
+            WHERE id = CAST(:clip_id AS uuid)
+            RETURNING id
+        """), {"clip_id": clip_id, "reason": reason})
+        await db.commit()
+        row = result.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Clip not found")
+        logger.info(f"[clip-db] Confirmed skip for clip {clip_id} → marked as NG (human review)")
+        return {"status": "ok", "clip_id": clip_id, "action": "confirmed_skip"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[clip-db] Confirm skip failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/batch-unskip")
+async def batch_unskip_clips(
+    clip_ids: list = [],
+    db: AsyncSession = Depends(get_db),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """
+    Batch restore multiple skipped clips.
+    """
+    _check_admin_or_user(x_admin_key=x_admin_key)
+    if not clip_ids:
+        raise HTTPException(status_code=400, detail="clip_ids is required")
+    try:
+        restored = 0
+        for cid in clip_ids:
+            result = await db.execute(text("""
+                UPDATE video_clips
+                SET regen_skipped = FALSE,
+                    skip_reason = NULL,
+                    skip_evaluated_at = NULL,
+                    updated_at = NOW()
+                WHERE id = CAST(:clip_id AS uuid) AND COALESCE(regen_skipped, FALSE) = TRUE
+                RETURNING id
+            """), {"clip_id": cid})
+            if result.fetchone():
+                restored += 1
+        await db.commit()
+        logger.info(f"[clip-db] Batch unskipped {restored}/{len(clip_ids)} clips")
+        return {"status": "ok", "restored": restored, "total": len(clip_ids)}
+    except Exception as e:
+        logger.error(f"[clip-db] Batch unskip failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
