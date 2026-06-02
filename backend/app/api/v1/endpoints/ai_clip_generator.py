@@ -2061,32 +2061,41 @@ def _build_advanced_ffmpeg_command(video_path: str, ass_path: str, output_path: 
         vf_parts.append(f"select='{select_expr}'")
         vf_parts.append("setpts=N/FRAME_RATE/TB")
         af_chain = f"aselect='{select_expr}',asetpts=N/SR/TB"
-        # V14: セグメント境界にミニフェードを挿入してカクつきを軽減
-        # select+setpts後の出力時間軸でセグメント境界を計算し、
-        # 各境界に短いフェードイン/アウトを適用する
+        # V14.1: セグメント境界にミニフェードを挿入してカクつきを軽減
+        # 【修正】ffmpegのfadeフィルタは累積適用されるため、境界数が多いと
+        # 映像全体が黒くなるバグがあった。最大2境界（4フィルタ）に制限し、
+        # セグメントが短い場合はスキップする。
         enable_transitions = getattr(req, 'enable_transitions', True)
         if enable_transitions and len(keep_segments) >= 2:
-            # V14: セグメント境界に短いフェードを挿入してカクつきを軽減
-            # transition_durationが設定されていればそれを使用、なければ0.12秒（知覚しにくい程度）
             raw_fade_dur = getattr(req, 'transition_duration', 0.12)
-            fade_dur = max(0.06, min(raw_fade_dur, 0.25))  # 0.06-0.25秒の範囲
+            fade_dur = max(0.06, min(raw_fade_dur, 0.15))  # 0.06-0.15秒の範囲（短縮）
             # セグメント境界の出力時間軸上の位置を計算
             boundary_times = []
             cumulative = 0.0
             for seg_start, seg_end in keep_segments[:-1]:
-                cumulative += (seg_end - seg_start)
-                boundary_times.append(cumulative)
+                seg_duration = seg_end - seg_start
+                cumulative += seg_duration
+                # セグメントが短すぎる場合（fade_dur*6未満）はスキップ
+                if seg_duration >= fade_dur * 6:
+                    boundary_times.append(cumulative)
+            # 【重要】境界数が多すぎる場合はfadeを完全にスキップ（黒画面防止）
+            # ffmpegのfadeフィルタは全フレームに対して順番に適用されるため、
+            # 多数のfadeが累積すると映像が暗く/黒くなる
+            MAX_FADE_BOUNDARIES = 2
+            if len(boundary_times) > MAX_FADE_BOUNDARIES:
+                # 境界が多すぎる場合、最初と最後の境界のみ保持（視覚的に最も効果的）
+                logger.info(f"[ai-clip] V14.1: Limited fade boundaries from {len(boundary_times)} to {MAX_FADE_BOUNDARIES}")
+                boundary_times = [boundary_times[0], boundary_times[-1]]
             # 各境界にfade out→fade inを適用（短いクロスフェード効果）
             fade_parts = []
             for bt in boundary_times:
                 fade_out_start = max(0, bt - fade_dur)
                 fade_in_start = bt
-                # fade to/from black (alpha=0 is default, not alpha channel)
                 fade_parts.append(f"fade=t=out:st={fade_out_start:.3f}:d={fade_dur:.3f}")
                 fade_parts.append(f"fade=t=in:st={fade_in_start:.3f}:d={fade_dur:.3f}")
             if fade_parts:
                 vf_parts.extend(fade_parts)
-                logger.info(f"[ai-clip] V14: Added {len(boundary_times)} segment boundary fades "
+                logger.info(f"[ai-clip] V14.1: Added {len(boundary_times)} segment boundary fades "
                             f"(fade_dur={fade_dur:.2f}s, boundaries={[f'{t:.1f}s' for t in boundary_times]})")
                 # 音声にも同様のフェードを適用（ポップノイズ防止）
                 audio_fades = []
