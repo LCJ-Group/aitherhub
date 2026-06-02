@@ -384,8 +384,12 @@ async def get_clip_status(
                 })
                 queue_row = queue_result.fetchone()
                 queue_position = (queue_row.ahead if queue_row else 0) + 1
-                # Estimate: ~90 seconds per clip on average
-                queue_estimated_seconds = queue_position * 90
+                # V14.2: Accurate estimate considering 6 parallel workers
+                # Each "batch" of 6 clips takes ~90 seconds
+                import math
+                _parallel_workers = 6
+                _avg_clip_time = 90  # seconds per clip
+                queue_estimated_seconds = math.ceil(queue_position / _parallel_workers) * _avg_clip_time
             except Exception as qe:
                 logger.warning(f"Queue position query failed: {qe}")
 

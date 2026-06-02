@@ -1515,8 +1515,9 @@ def poll_and_process(executor: ThreadPoolExecutor, clip_executor: ThreadPoolExec
     clip_slots_full = clip_count >= MAX_CLIP_WORKERS
 
     client = get_queue_client()
+    # V14.2: Increased from 5→8 to process queue faster
     messages = list(client.receive_messages(
-        messages_per_page=5,
+        messages_per_page=8,
         visibility_timeout=VISIBILITY_TIMEOUT,
     ))
 
@@ -1699,8 +1700,9 @@ def periodic_disk_cleanup():
 # DB Fallback: Poll pending clips directly from database
 # =============================================================================
 
-CLIP_FALLBACK_INTERVAL = 60   # Check every 60 seconds
-CLIP_FALLBACK_AGE = 120       # Clips pending for > 2 minutes
+# V14.2: Reduced interval 60→30s and age 120→90s to reduce queue wait times
+CLIP_FALLBACK_INTERVAL = int(os.getenv("CLIP_FALLBACK_INTERVAL", "30"))   # Check every 30 seconds
+CLIP_FALLBACK_AGE = int(os.getenv("CLIP_FALLBACK_AGE", "90"))             # Clips pending for > 90 seconds
 _last_clip_fallback_check = 0
 
 
@@ -1797,7 +1799,7 @@ def poll_pending_clips_from_db():
                         )
                         SELECT id, job_payload FROM ranked WHERE rn <= 2
                         ORDER BY clip_duration ASC, rn ASC
-                        LIMIT 8
+                        LIMIT 12
                     """)
                     result = await session.execute(sql)
                     return result.fetchall()

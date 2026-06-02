@@ -191,7 +191,8 @@ async def _ensure_feedback_table():
         logger.warning(f"[ai-clip] Failed to ensure ai_clip_deletion_feedback table: {e}")
 
 # Concurrency limiter
-_AI_CLIP_SEMAPHORE = asyncio.Semaphore(2)  # 2並列まで許可
+# V14.2: Increased from 2→3 to reduce queue wait times
+_AI_CLIP_SEMAPHORE = asyncio.Semaphore(int(os.getenv("AI_CLIP_CONCURRENCY", "3")))
 
 # ─── ASS Subtitle Styles ────────────────────────────────────────────────────
 _ASS_STYLES = {
@@ -2213,6 +2214,7 @@ def _build_advanced_ffmpeg_command(video_path: str, ass_path: str, output_path: 
         
         cmd = [
             "ffmpeg", "-y",
+            "-threads", "2",
             *input_args,
             "-filter_complex", fc_str,
             "-map", "[vout]",
@@ -2231,6 +2233,7 @@ def _build_advanced_ffmpeg_command(video_path: str, ass_path: str, output_path: 
         fc = f"[0:v]{video_chain}[vout];[0:a]{af_chain}[aout]"
         cmd = [
             "ffmpeg", "-y",
+            "-threads", "2",
             *input_args,
             "-filter_complex", fc,
             "-map", "[vout]", "-map", "[aout]",
@@ -2248,6 +2251,7 @@ def _build_advanced_ffmpeg_command(video_path: str, ass_path: str, output_path: 
         vf_str = ",".join(vf_parts) if vf_parts else "null"
         cmd = [
             "ffmpeg", "-y",
+            "-threads", "2",
             *input_args,
             "-vf", vf_str,
             "-c:v", "libx264",
@@ -3904,7 +3908,7 @@ async def _run_ai_clip_generation_inner(job_id: str, req: GenerateRequest):
                 current_step=f"{clips_total}件の高品質クリップを選定完了")
 
     results = []
-    PARALLEL_BATCH = 2  # 2クリップずつ並列処理
+    PARALLEL_BATCH = 3  # V14.2: 3クリップずつ並列処理 (matches _AI_CLIP_SEMAPHORE=3)
     selected = candidates[:clips_total]
 
     for batch_start in range(0, len(selected), PARALLEL_BATCH):

@@ -81,7 +81,7 @@ AZURE_DEAD_LETTER_QUEUE_NAME: str = os.getenv("AZURE_DEAD_LETTER_QUEUE_NAME", "v
 # =============================================================================
 
 WORKER_MAX_CONCURRENT: int = int(os.getenv("WORKER_MAX_CONCURRENT", "4"))  # BUILD 81: Increased 2→4. VM has 27GB RAM. With Whisper using ~6GB/job, 4 concurrent is feasible if STT steps are staggered.
-WORKER_CLIP_CONCURRENT: int = int(os.getenv("WORKER_CLIP_CONCURRENT", "4"))  # v13: Reduced 6→4 to prevent CPU saturation (2threads×4clips=8 + 4threads×2heavy=16 total, safe for 4-core VM)
+WORKER_CLIP_CONCURRENT: int = int(os.getenv("WORKER_CLIP_CONCURRENT", "6"))  # V14.2: Increased 4→6 to reduce queue wait. Clip ffmpeg is mostly I/O-bound (download+upload). Env var override available.
 WORKER_MAX_RETRIES: int = int(os.getenv("WORKER_MAX_RETRIES", "10"))  # Increased from 6: visibility renewal failures cause extra dequeues
 WORKER_VIDEO_TIMEOUT: int = int(os.getenv("WORKER_VIDEO_TIMEOUT", str(720 * 60)))  # 12h default (reduced from 24h to free worker capacity sooner)
 WORKER_CLIP_TIMEOUT: int = int(os.getenv("WORKER_CLIP_TIMEOUT", str(30 * 60)))

@@ -59,7 +59,8 @@ live_monitor_lock = Lock()
 
 # Separate executor for clip generation jobs (not subject to MAX_WORKERS)
 # Clip jobs are lightweight (10min timeout) and should not be blocked by heavy video analysis
-clip_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="clip-gen")
+# V14.2: Increased from 2→4 to reduce queue wait times (clip ffmpeg uses ~1-2GB, well within 14GB cgroup)
+clip_executor = ThreadPoolExecutor(max_workers=int(os.getenv("CLIP_MAX_WORKERS", "4")), thread_name_prefix="clip-gen")
 clip_jobs: dict[str, dict] = {}
 clip_jobs_lock = Lock()
 
@@ -772,8 +773,8 @@ def process_video_job(payload: dict):
 # =============================================================================
 
 _last_clip_fallback_check = 0
-CLIP_FALLBACK_INTERVAL = 60  # Check every 60 seconds
-CLIP_FALLBACK_AGE = 120  # Clips pending for > 2 minutes
+CLIP_FALLBACK_INTERVAL = int(os.getenv("CLIP_FALLBACK_INTERVAL", "30"))  # Check every 30 seconds (was 60)
+CLIP_FALLBACK_AGE = 90  # Clips pending for > 90 seconds (was 120)
 
 
 def poll_pending_clips_from_db():
@@ -801,7 +802,7 @@ def poll_pending_clips_from_db():
                     WHERE status = 'pending'
                     AND COALESCE(updated_at, created_at) < NOW() - INTERVAL '{CLIP_FALLBACK_AGE} seconds'
                     AND job_payload IS NOT NULL
-                    LIMIT 5
+                    LIMIT 10
                 """)
                 result = await session.execute(sql)
                 return result.fetchall()
