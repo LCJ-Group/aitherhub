@@ -433,24 +433,19 @@ export default function SalesMomentClips({ videoData, onRequestClip, clipStates 
                               uploading: window.__t('uploadButton', 'アップロード'),
                             };
                             if (isQueued) {
-                              // Show queue waiting status with estimated time
-                              const qPos = clipState?.queue_position;
-                              const qEst = clipState?.queue_estimated_seconds;
+                              // V14.3: Show AI preparing status (no queue numbers)
                               return (
                                 <div className="flex-1 flex flex-col gap-1">
                                   <div className="flex items-center justify-between">
-                                    <span className="text-amber-600 text-xs font-medium">
-                                      キュー待ち...
-                                      {qPos && <span className="ml-1 text-amber-500">(#{qPos})</span>}
+                                    <span className="text-cyan-600 text-xs font-medium">
+                                      🤖 AI Editor 準備中...
                                     </span>
-                                    {qEst && (
-                                      <span className="text-amber-500 text-xs font-bold">
-                                        ≈{qEst >= 60 ? `${Math.ceil(qEst / 60)}分` : `${qEst}秒`}
-                                      </span>
-                                    )}
+                                    <span className="text-cyan-500 text-xs font-bold animate-pulse">
+                                      ✨ Starting
+                                    </span>
                                   </div>
-                                  <div className="w-full h-1.5 bg-amber-100 rounded-full overflow-hidden">
-                                    <div className="h-full bg-gradient-to-r from-amber-400 to-yellow-300 rounded-full animate-pulse" style={{ width: '40%' }} />
+                                  <div className="w-full h-1.5 bg-cyan-100 rounded-full overflow-hidden">
+                                    <div className="h-full bg-gradient-to-r from-cyan-400 to-purple-400 rounded-full animate-pulse" style={{ width: '45%' }} />
                                   </div>
                                   <AIEditorMonitor
                                     logs={clipLogs}

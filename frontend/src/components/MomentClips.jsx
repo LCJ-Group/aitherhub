@@ -531,31 +531,25 @@ export default function MomentClips({ videoData, onRequestClip, clipStates = {},
                                 uploading: window.__t('momentClips_uploading'),
                                 auto_retry: window.__t('momentClips_queued', '\u30AD\u30E5\u30FC\u5F85\u3061'),
                               };
+                              // V14.3: Hide queue numbers, show AI preparing status
                               const label = isQueued
-                                ? window.__t('momentClips_queued', '\u30AD\u30E5\u30FC\u5F85\u3061')
+                                ? '🤖 AI Editor 準備中'
                                 : (stepLabels[step] || window.__t('momentClips_generating'));
                               return (
                                 <div className="flex-1 flex flex-col gap-1">
                                   <div className="flex items-center justify-between">
-                                    <span className={`text-xs font-medium ${isQueued ? 'text-amber-600' : 'text-gray-600'}`}>
+                                    <span className={`text-xs font-medium ${isQueued ? 'text-cyan-600' : 'text-gray-600'}`}>
                                       {label}...
-                                      {isQueued && clipState?.queue_position && (
-                                        <span className="ml-1 text-[10px] text-amber-500">(#{clipState.queue_position})</span>
-                                      )}
                                     </span>
-                                    <span className={`text-xs font-bold ${isQueued ? 'text-amber-500' : 'text-purple-600'}`}>
+                                    <span className={`text-xs font-bold ${isQueued ? 'text-cyan-500' : 'text-purple-600'}`}>
                                       {isQueued
-                                        ? (clipState?.queue_estimated_seconds
-                                            ? (clipState.queue_estimated_seconds >= 60
-                                                ? `\u2248${Math.ceil(clipState.queue_estimated_seconds / 60)}\u5206`
-                                                : `\u2248${clipState.queue_estimated_seconds}\u79d2`)
-                                            : '\u2014')
+                                        ? '✨ Starting'
                                         : `${pct}%`}
                                     </span>
                                   </div>
                                   {isQueued ? (
-                                    <div className="w-full h-1.5 bg-amber-100 rounded-full overflow-hidden">
-                                      <div className="h-full bg-gradient-to-r from-amber-300 to-amber-400 rounded-full animate-pulse" style={{ width: '30%' }} />
+                                    <div className="w-full h-1.5 bg-cyan-100 rounded-full overflow-hidden">
+                                      <div className="h-full bg-gradient-to-r from-cyan-400 to-purple-400 rounded-full animate-pulse" style={{ width: '40%' }} />
                                     </div>
                                   ) : (
                                     <div className="w-full h-1.5 bg-gray-200 rounded-full overflow-hidden">

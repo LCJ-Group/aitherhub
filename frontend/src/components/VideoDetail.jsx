@@ -413,7 +413,7 @@ export default function VideoDetail({ videoData, editorParams }) {
     console.log('[AutoClipGen] Starting auto clip generation...');
 
     const CONCURRENCY = 2; // Max parallel clip generations
-    const MAX_AUTO_CLIPS = 10; // Maximum auto-generated clips
+    const MAX_AUTO_CLIPS = 3; // V14.3: Reduced to top 3 highest-scoring clips only
     const MIN_CLIPS = 5; // Minimum clips to generate (relax threshold if needed)
 
     // ── Greeting/chitchat detection patterns ──
@@ -1468,7 +1468,7 @@ export default function VideoDetail({ videoData, editorParams }) {
              <SalesMomentClips
               videoData={videoData}
               clipStates={clipStates}
-              autoGenerate={true}
+              autoGenerate={false}
               onRequestClip={(candidate) => {
                 handleClipGeneration(
                   { time_start: candidate.time_start, time_end: candidate.time_end },
@@ -1482,7 +1482,7 @@ export default function VideoDetail({ videoData, editorParams }) {
             <MomentClips
               videoData={videoData}
               clipStates={clipStates}
-              autoGenerate={true}
+              autoGenerate={false}
               onRequestClip={(candidate) => {
                 handleClipGeneration(
                   { time_start: candidate.time_start, time_end: candidate.time_end },
@@ -2234,13 +2234,15 @@ export default function VideoDetail({ videoData, editorParams }) {
                                             uploading: window.__t('stepUploading'),
                                             completed: window.__t('stepCompleted'),
                                           };
-                                          const label = stepLabels[step] || window.__t('generatingClip');
                                           const logs = clipState?.processing_logs || [];
+                                          // V14.3: Show AI preparing label when pending/requesting with no progress
+                                          const isPreparing = ['pending', 'requesting'].includes(clipState?.status) && pct === 0 && logs.length === 0;
+                                          const label = isPreparing ? '🤖 AI Editor 準備中' : (stepLabels[step] || window.__t('generatingClip'));
                                           return (
                                             <div className="flex-1 flex flex-col gap-1.5">
                                               <div className="flex items-center justify-between">
-                                                <span className="text-gray-600 text-xs font-medium">{label}...</span>
-                                                <span className="text-purple-600 text-xs font-bold">{pct}%</span>
+                                                <span className={`text-xs font-medium ${isPreparing ? 'text-cyan-600' : 'text-gray-600'}`}>{label}...</span>
+                                                <span className={`text-xs font-bold ${isPreparing ? 'text-cyan-500 animate-pulse' : 'text-purple-600'}`}>{isPreparing ? '✨ Starting' : `${pct}%`}</span>
                                               </div>
                                               <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
                                                 <div
@@ -2248,8 +2250,8 @@ export default function VideoDetail({ videoData, editorParams }) {
                                                   style={{ width: `${Math.max(pct, 2)}%` }}
                                                 />
                                               </div>
-                                              {/* AI Processing Live Log Panel */}
-                                              {logs.length > 0 && (
+                                              {/* AI Processing Live Log Panel - V14.3: Show even when logs empty (AI preparing overlay) */}
+                                              {(logs.length > 0 || ['pending', 'requesting'].includes(clipState?.status)) && (
                                                 <AIEditorMonitor
                                                   logs={logs}
                                                   progressPct={pct}

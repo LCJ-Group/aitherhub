@@ -561,6 +561,102 @@ function SourceVideoPlayer({ url, timeStart = 0, timeEnd = null, isActive }) {
   );
 }
 
+// ─── AI Preparing Overlay (replaces queue waiting display) ───
+function AIPreparingOverlay({ queuePosition, queueEstimatedSeconds }) {
+  const [currentMsgIdx, setCurrentMsgIdx] = useState(0);
+  const [dots, setDots] = useState('');
+  const [fakeProgress, setFakeProgress] = useState(0);
+
+  // Rotating preparation messages that give the impression AI is actively working
+  const prepMessages = useMemo(() => [
+    { icon: '🔍', text: 'Analyzing video structure...' },
+    { icon: '🧠', text: 'Loading AI editing model...' },
+    { icon: '🎯', text: 'Detecting optimal cut points...' },
+    { icon: '⚡', text: 'Reserving render pipeline...' },
+    { icon: '🎬', text: 'Preparing editing workspace...' },
+    { icon: '📊', text: 'Calculating scene transitions...' },
+    { icon: '🤖', text: 'AI Editor Pro initializing...' },
+    { icon: '🔧', text: 'Configuring export settings...' },
+  ], []);
+
+  // Rotate messages every 3 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCurrentMsgIdx(prev => (prev + 1) % prepMessages.length);
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [prepMessages.length]);
+
+  // Animate dots
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setDots(prev => prev.length >= 3 ? '' : prev + '.');
+    }, 500);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Fake progress that slowly increases (never reaches 100)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setFakeProgress(prev => {
+        if (prev >= 85) return 85 + Math.random() * 2;
+        return prev + Math.random() * 3 + 0.5;
+      });
+    }, 2000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const currentMsg = prepMessages[currentMsgIdx];
+
+  return (
+    <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[#0d0d0d]/80">
+      {/* Animated AI brain icon */}
+      <div className="relative">
+        <div className="w-16 h-16 rounded-full border-2 border-gray-700 border-t-cyan-400 border-r-purple-400 animate-spin" style={{ animationDuration: '2.5s' }} />
+        <span className="absolute inset-0 flex items-center justify-center text-2xl">🤖</span>
+        {/* Pulse ring */}
+        <div className="absolute inset-0 w-16 h-16 rounded-full border border-cyan-400/30 animate-ping" style={{ animationDuration: '2s' }} />
+      </div>
+
+      {/* Current preparation step */}
+      <div className="flex flex-col items-center gap-1.5">
+        <span className="text-xs font-mono text-cyan-400 transition-all duration-500">
+          {currentMsg.icon} {currentMsg.text}{dots}
+        </span>
+        <span className="text-[10px] font-mono text-gray-500">
+          AI Editor Pro — Preparing
+        </span>
+      </div>
+
+      {/* Fake progress bar */}
+      <div className="w-32 h-1 bg-gray-800 rounded-full overflow-hidden">
+        <div
+          className="h-full bg-gradient-to-r from-cyan-500 via-purple-500 to-pink-500 rounded-full transition-all duration-1000 ease-out"
+          style={{ width: `${Math.min(fakeProgress, 90)}%` }}
+        />
+      </div>
+
+      {/* Terminal-style fake log lines */}
+      <div className="w-48 mt-1">
+        <div className="text-[8px] font-mono text-gray-600 space-y-0.5">
+          <div className="flex items-center gap-1 opacity-60">
+            <span className="text-green-500">$</span>
+            <span>model.load("editor-pro-v3")</span>
+          </div>
+          <div className="flex items-center gap-1 opacity-40">
+            <span className="text-green-500">$</span>
+            <span>gpu.allocate(render_slot)</span>
+          </div>
+          <div className="flex items-center gap-1 animate-pulse">
+            <span className="text-green-500">$</span>
+            <span className="text-cyan-400">▊</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Component ───
 export default function AIEditorMonitor({
   logs = [],
@@ -578,7 +674,10 @@ export default function AIEditorMonitor({
   const [isExpanded, setIsExpanded] = useState(true);
   const [selectedPreviewIdx, setSelectedPreviewIdx] = useState(-1);
 
-  const isQueued = status === 'queued';
+  // V14.3: Treat pending/requesting with no progress as "queued" (AI preparing)
+  const isQueued = status === 'queued' || (
+    ['pending', 'requesting'].includes(status) && progressPct === 0 && logs.length === 0
+  );
   const isActive = ['processing', 'pending', 'requesting'].includes(status) || isQueued;
   const isCompleted = status === 'completed';
   const isFailed = status === 'failed' || status === 'dead';
@@ -742,32 +841,7 @@ export default function AIEditorMonitor({
               </div>
             </>
           ) : isQueued ? (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
-              <div className="relative">
-                <div className="w-16 h-16 rounded-full border-2 border-gray-700 border-t-amber-400 animate-spin" style={{ animationDuration: '3s' }} />
-                <span className="absolute inset-0 flex items-center justify-center text-2xl">⏳</span>
-              </div>
-              <span className="text-xs font-mono text-amber-400 animate-pulse">
-                Waiting in queue...
-              </span>
-              {queuePosition && (
-                <span className="text-[10px] font-mono text-amber-300">
-                  Position: #{queuePosition}
-                </span>
-              )}
-              {queueEstimatedSeconds && (
-                <span className="text-[10px] font-mono text-gray-400">
-                  {queueEstimatedSeconds >= 60
-                    ? `≈ ${Math.ceil(queueEstimatedSeconds / 60)} min wait`
-                    : `≈ ${queueEstimatedSeconds}s wait`}
-                </span>
-              )}
-              {!queuePosition && !queueEstimatedSeconds && (
-                <span className="text-[9px] font-mono text-gray-600">
-                  AI Editor will start soon
-                </span>
-              )}
-            </div>
+            <AIPreparingOverlay queuePosition={queuePosition} queueEstimatedSeconds={queueEstimatedSeconds} />
           ) : isActive ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
               {/* Animated editor workspace placeholder */}
@@ -844,7 +918,7 @@ export default function AIEditorMonitor({
         <div className="flex items-center justify-between px-3 py-1.5 bg-[#1a1a1a] border-t border-gray-800/80">
           <div className="flex items-center gap-2">
             <span className="text-[9px] font-mono text-gray-500">
-              {isQueued ? '⏳ Queued' : isActive ? `⚡ ${stepConfig.label}` : isCompleted ? '✅ Done' : isFailed ? '❌ Failed' : ''}
+              {isQueued ? '🤖 AI Preparing...' : isActive ? `⚡ ${stepConfig.label}` : isCompleted ? '✅ Done' : isFailed ? '❌ Failed' : ''}
             </span>
           </div>
           <div className="flex items-center gap-3">
