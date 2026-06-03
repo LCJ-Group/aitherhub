@@ -558,42 +558,101 @@ export default function AiVideoGeneratorPage() {
                 </div>
               ) : avatars.length === 0 ? (
                 <p className="text-gray-500 text-sm text-center py-4">
-                  利用可能なアバターがありません
+                  利用可能なライバーがありません
                 </p>
               ) : (
-                <div className="grid grid-cols-2 gap-3 max-h-80 overflow-y-auto pr-1">
-                  {avatars.map((avatar) => (
-                    <button
-                      key={avatar.avatar_id}
-                      onClick={() => setSelectedAvatarId(avatar.avatar_id)}
-                      className={`relative rounded-lg overflow-hidden border-2 transition-all ${
-                        selectedAvatarId === avatar.avatar_id
-                          ? "border-purple-500 ring-2 ring-purple-500/30"
-                          : "border-gray-700 hover:border-gray-600"
-                      }`}
-                    >
-                      {avatar.preview_image_url ? (
-                        <img
-                          src={avatar.preview_image_url}
-                          alt={avatar.name}
-                          className="w-full aspect-square object-cover"
-                        />
-                      ) : (
-                        <div className="w-full aspect-square bg-gray-800 flex items-center justify-center">
-                          <Mic className="w-8 h-8 text-gray-600" />
-                        </div>
-                      )}
-                      <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-2">
-                        <p className="text-xs font-medium truncate">{avatar.name}</p>
+                <>
+                  {/* AitherHub Livers Section */}
+                  {avatars.filter(a => a.source === 'aitherhub').length > 0 && (
+                    <div className="mb-3">
+                      <p className="text-xs text-emerald-400 font-medium mb-2 flex items-center gap-1">
+                        <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block"></span>
+                        AitherHub ライバー
+                      </p>
+                      <div className="grid grid-cols-2 gap-3 max-h-48 overflow-y-auto pr-1">
+                        {avatars.filter(a => a.source === 'aitherhub').map((avatar) => (
+                          <button
+                            key={avatar.avatar_id}
+                            onClick={() => setSelectedAvatarId(avatar.avatar_id)}
+                            className={`relative rounded-lg overflow-hidden border-2 transition-all ${
+                              selectedAvatarId === avatar.avatar_id
+                                ? "border-emerald-500 ring-2 ring-emerald-500/30"
+                                : "border-gray-700 hover:border-gray-600"
+                            }`}
+                          >
+                            {avatar.preview_image_url ? (
+                              <img
+                                src={avatar.preview_image_url}
+                                alt={avatar.name}
+                                className="w-full aspect-square object-cover"
+                              />
+                            ) : (
+                              <div className="w-full aspect-square bg-gray-800 flex items-center justify-center">
+                                <Mic className="w-8 h-8 text-gray-600" />
+                              </div>
+                            )}
+                            <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-2">
+                              <p className="text-xs font-medium truncate">{avatar.name}</p>
+                            </div>
+                            {selectedAvatarId === avatar.avatar_id && (
+                              <div className="absolute top-2 right-2 w-5 h-5 bg-emerald-500 rounded-full flex items-center justify-center">
+                                <CheckCircle className="w-3 h-3" />
+                              </div>
+                            )}
+                            <div className="absolute top-2 left-2">
+                              <span className="text-[10px] bg-emerald-600/80 text-white px-1.5 py-0.5 rounded-full">
+                                LIVE
+                              </span>
+                            </div>
+                          </button>
+                        ))}
                       </div>
-                      {selectedAvatarId === avatar.avatar_id && (
-                        <div className="absolute top-2 right-2 w-5 h-5 bg-purple-500 rounded-full flex items-center justify-center">
-                          <CheckCircle className="w-3 h-3" />
-                        </div>
-                      )}
-                    </button>
-                  ))}
-                </div>
+                    </div>
+                  )}
+
+                  {/* HeyGen Avatars Section */}
+                  {avatars.filter(a => a.source !== 'aitherhub').length > 0 && (
+                    <div className="mt-3">
+                      <p className="text-xs text-purple-400 font-medium mb-2 flex items-center gap-1">
+                        <span className="w-2 h-2 rounded-full bg-purple-400 inline-block"></span>
+                        HeyGen デジタルツイン
+                      </p>
+                      <div className="grid grid-cols-2 gap-3 max-h-48 overflow-y-auto pr-1">
+                        {avatars.filter(a => a.source !== 'aitherhub').map((avatar) => (
+                          <button
+                            key={avatar.avatar_id}
+                            onClick={() => setSelectedAvatarId(avatar.avatar_id)}
+                            className={`relative rounded-lg overflow-hidden border-2 transition-all ${
+                              selectedAvatarId === avatar.avatar_id
+                                ? "border-purple-500 ring-2 ring-purple-500/30"
+                                : "border-gray-700 hover:border-gray-600"
+                            }`}
+                          >
+                            {avatar.preview_image_url ? (
+                              <img
+                                src={avatar.preview_image_url}
+                                alt={avatar.name}
+                                className="w-full aspect-square object-cover"
+                              />
+                            ) : (
+                              <div className="w-full aspect-square bg-gray-800 flex items-center justify-center">
+                                <Mic className="w-8 h-8 text-gray-600" />
+                              </div>
+                            )}
+                            <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-2">
+                              <p className="text-xs font-medium truncate">{avatar.name}</p>
+                            </div>
+                            {selectedAvatarId === avatar.avatar_id && (
+                              <div className="absolute top-2 right-2 w-5 h-5 bg-purple-500 rounded-full flex items-center justify-center">
+                                <CheckCircle className="w-3 h-3" />
+                              </div>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
             </div>
 
