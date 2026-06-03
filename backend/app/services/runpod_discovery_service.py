@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 RUNPOD_API_KEY = os.getenv("RUNPOD_API_KEY", "")
 RUNPOD_GRAPHQL_URL = "https://api.runpod.io/graphql"
 RUNPOD_POD_NAME_PATTERN = os.getenv("RUNPOD_POD_NAME_PATTERN", "")
-RUNPOD_WORKER_PORT = int(os.getenv("RUNPOD_WORKER_PORT", "11434"))
+RUNPOD_WORKER_PORT = int(os.getenv("RUNPOD_WORKER_PORT", "8888"))
 RUNPOD_FALLBACK_POD_ID = os.getenv("RUNPOD_FALLBACK_POD_ID", "nvzjxjh7bito4i")
 
 # Cache TTL: how long to keep a discovered URL before re-checking (seconds)
