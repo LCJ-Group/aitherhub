@@ -34,7 +34,7 @@ RUNPOD_API_KEY = os.getenv("RUNPOD_API_KEY", "")
 RUNPOD_GRAPHQL_URL = "https://api.runpod.io/graphql"
 RUNPOD_POD_NAME_PATTERN = os.getenv("RUNPOD_POD_NAME_PATTERN", "")
 RUNPOD_WORKER_PORT = int(os.getenv("RUNPOD_WORKER_PORT", "11434"))
-RUNPOD_FALLBACK_POD_ID = os.getenv("RUNPOD_FALLBACK_POD_ID", "oduj2lzhknvsw6")
+RUNPOD_FALLBACK_POD_ID = os.getenv("RUNPOD_FALLBACK_POD_ID", "nvzjxjh7bito4i")
 
 # Cache TTL: how long to keep a discovered URL before re-checking (seconds)
 CACHE_TTL = int(os.getenv("RUNPOD_CACHE_TTL", "300"))  # 5 minutes
@@ -50,7 +50,7 @@ class RunPodDiscoveryService:
     Usage:
         discovery = RunPodDiscoveryService()
         url = await discovery.get_worker_url()
-        # Returns: "https://0b15dygj3kbr0i-11434.proxy.runpod.net"
+        # Returns: "https://nvzjxjh7bito4i-11434.proxy.runpod.net"
     """
 
     def __init__(self):
