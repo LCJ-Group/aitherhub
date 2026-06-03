@@ -2093,7 +2093,7 @@ export default function LiverClonePage() {
                 {!previewActive ? (
                   <button
                     onClick={startPreview}
-                    disabled={!isSourceUploaded || isStreaming}
+                    disabled={!sourceFacePreview || isStreaming}
                     className="flex-1 flex items-center justify-center gap-2 py-2 bg-cyan-600 hover:bg-cyan-700 disabled:bg-gray-700 disabled:text-gray-500 rounded-lg text-sm font-medium transition"
                   >
                     <Camera className="w-4 h-4" />
