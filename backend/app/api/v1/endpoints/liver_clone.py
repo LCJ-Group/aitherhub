@@ -362,94 +362,124 @@ async def get_preview_ws_url():
 async def preview_ws_proxy(websocket: WebSocket):
     """
     WebSocket proxy for real-time face swap preview.
-    Bridges the browser client to the GPU Worker's /api/preview-stream endpoint,
+    Uses HTTP POST /api/swap-frame to the GPU Worker for each frame,
     bypassing RunPod Proxy's Cloudflare 403 on WebSocket upgrades.
+
+    Protocol:
+      Client sends: binary JPEG frame
+      Server responds: binary JPEG processed frame (or text JSON error/status)
     """
-    import aiohttp
+    import httpx
+    import base64
     from app.services.liver_clone_service import get_liver_clone_service
 
     await websocket.accept()
-    logger.info("[Preview WS Proxy] Client connected")
+    logger.info("[Preview WS Proxy] Client connected (HTTP-bridge mode)")
 
-    # Get the GPU Worker's WebSocket URL
     service = get_liver_clone_service()
     try:
-        worker_ws_url = await service.face_swap.get_preview_ws_url()
+        worker_url = await service.face_swap._get_worker_url()
     except Exception as e:
-        logger.error(f"[Preview WS Proxy] Cannot get worker WS URL: {e}")
+        logger.error(f"[Preview WS Proxy] Cannot get worker URL: {e}")
         await websocket.close(code=1011, reason="GPU Worker unavailable")
         return
 
-    # Connect to GPU Worker WebSocket
-    session = aiohttp.ClientSession()
-    try:
-        async with session.ws_connect(
-            worker_ws_url,
-            timeout=aiohttp.ClientWSTimeout(ws_close=10),
-            ssl=False,
-        ) as worker_ws:
-            logger.info(f"[Preview WS Proxy] Connected to GPU Worker")
+    swap_url = f"{worker_url}/api/swap-frame"
+    headers = {"X-Api-Key": service.face_swap.api_key}
+    client_closed = False
 
-            async def client_to_worker():
-                """Forward messages from browser client to GPU Worker."""
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
+    ) as http_client:
+        try:
+            while True:
                 try:
-                    while True:
-                        msg = await websocket.receive()
-                        if msg["type"] == "websocket.receive":
-                            if "bytes" in msg and msg["bytes"]:
-                                await worker_ws.send_bytes(msg["bytes"])
-                            elif "text" in msg and msg["text"]:
-                                await worker_ws.send_str(msg["text"])
-                        elif msg["type"] == "websocket.disconnect":
-                            break
+                    msg = await websocket.receive()
                 except WebSocketDisconnect:
-                    pass
-                except Exception as e:
-                    logger.debug(f"[Preview WS Proxy] client_to_worker ended: {e}")
+                    break
 
-            async def worker_to_client():
-                """Forward messages from GPU Worker to browser client."""
+                if msg["type"] == "websocket.disconnect":
+                    break
+
+                if msg["type"] != "websocket.receive":
+                    continue
+
+                # Handle text messages (JSON commands like config updates)
+                if "text" in msg and msg["text"]:
+                    text_data = msg["text"]
+                    try:
+                        import json
+                        cmd = json.loads(text_data)
+                        # Forward config commands to GPU worker
+                        if cmd.get("type") == "config":
+                            config_url = f"{worker_url}/api/config"
+                            resp = await http_client.post(
+                                config_url,
+                                json=cmd.get("data", {}),
+                                headers=headers,
+                            )
+                            await websocket.send_text(json.dumps({
+                                "type": "config_ack",
+                                "status": resp.status_code
+                            }))
+                        continue
+                    except Exception:
+                        continue
+
+                # Handle binary frames
+                frame_bytes = msg.get("bytes")
+                if not frame_bytes:
+                    continue
+
+                # Send frame to GPU Worker via HTTP POST
                 try:
-                    async for msg in worker_ws:
-                        if msg.type == aiohttp.WSMsgType.BINARY:
-                            await websocket.send_bytes(msg.data)
-                        elif msg.type == aiohttp.WSMsgType.TEXT:
-                            await websocket.send_text(msg.data)
-                        elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
-                            break
-                except Exception as e:
-                    logger.debug(f"[Preview WS Proxy] worker_to_client ended: {e}")
+                    frame_b64 = base64.b64encode(frame_bytes).decode("ascii")
+                    resp = await http_client.post(
+                        swap_url,
+                        json={"image_base64": frame_b64},
+                        headers=headers,
+                    )
 
-            # Run both directions concurrently
-            tasks = [
-                asyncio.create_task(client_to_worker()),
-                asyncio.create_task(worker_to_client()),
-            ]
-            done, pending = await asyncio.wait(
-                tasks, return_when=asyncio.FIRST_COMPLETED
-            )
-            for task in pending:
-                task.cancel()
-                try:
-                    await task
-                except (asyncio.CancelledError, Exception):
-                    pass
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if "image_base64" in data:
+                            result_bytes = base64.b64decode(data["image_base64"])
+                            await websocket.send_bytes(result_bytes)
+                        elif "error" in data:
+                            await websocket.send_text(
+                                '{"type":"error","message":"' + data["error"] + '"}'
+                            )
+                    elif resp.status_code == 400:
+                        # Source face not set - inform client
+                        detail = resp.json().get("detail", "Bad request")
+                        await websocket.send_text(
+                            '{"type":"error","message":"' + str(detail) + '"}'
+                        )
+                    else:
+                        logger.warning(
+                            f"[Preview WS Proxy] swap-frame returned {resp.status_code}"
+                        )
+                except httpx.TimeoutException:
+                    # Skip this frame on timeout, don't break the loop
+                    logger.debug("[Preview WS Proxy] swap-frame timeout, skipping frame")
+                    continue
+                except httpx.ConnectError as e:
+                    logger.error(f"[Preview WS Proxy] GPU Worker connection lost: {e}")
+                    await websocket.send_text(
+                        '{"type":"error","message":"GPU Worker connection lost"}'
+                    )
+                    break
 
-    except aiohttp.WSServerHandshakeError as e:
-        logger.error(f"[Preview WS Proxy] GPU Worker WS handshake failed: {e}")
-        try:
-            await websocket.close(code=1011, reason="GPU Worker connection failed")
-        except Exception:
+        except WebSocketDisconnect:
             pass
-    except Exception as e:
-        logger.error(f"[Preview WS Proxy] Unexpected error: {e}")
-        try:
-            await websocket.close(code=1011, reason=str(e))
-        except Exception:
-            pass
-    finally:
-        await session.close()
-        logger.info("[Preview WS Proxy] Session closed")
+        except Exception as e:
+            logger.error(f"[Preview WS Proxy] Unexpected error: {e}")
+            try:
+                await websocket.close(code=1011, reason=str(e)[:120])
+            except Exception:
+                pass
+
+    logger.info("[Preview WS Proxy] Session closed")
 
 
 @router.post("/preview/set-source")
