@@ -360,12 +360,13 @@ async def _generate_video(audio_url: str, request: VideoGenerateRequest) -> tupl
             from app.core.db import AsyncSessionLocal
             async with AsyncSessionLocal() as db:
                 result = await db.execute(sa_text("""
-                    SELECT clip_url FROM video_clips
-                    WHERE clip_url IS NOT NULL
-                        AND clip_url != ''
-                        AND video_filename IS NOT NULL
-                        AND video_filename LIKE :pattern
-                    ORDER BY created_at DESC
+                    SELECT vc.clip_url FROM video_clips vc
+                    LEFT JOIN videos v ON v.id = vc.video_id
+                    WHERE vc.clip_url IS NOT NULL
+                        AND vc.clip_url != ''
+                        AND v.original_filename IS NOT NULL
+                        AND v.original_filename LIKE :pattern
+                    ORDER BY vc.created_at DESC
                     LIMIT 1
                 """), {"pattern": f"{liver_name}-%"})
                 row = result.fetchone()
@@ -566,24 +567,26 @@ async def list_avatars(
         liver_sql = text("""
             WITH liver_clips AS (
                 SELECT 
-                    REGEXP_REPLACE(vc.video_filename, '-[0-9]{8}-[0-9]{4}\\.mp4$', '') AS liver_name,
+                    REGEXP_REPLACE(v.original_filename, '-[0-9]{8}-[0-9]{4}\\.mp4$', '') AS liver_name,
                     vc.clip_url,
                     vc.created_at,
                     ROW_NUMBER() OVER (
-                        PARTITION BY REGEXP_REPLACE(vc.video_filename, '-[0-9]{8}-[0-9]{4}\\.mp4$', '')
+                        PARTITION BY REGEXP_REPLACE(v.original_filename, '-[0-9]{8}-[0-9]{4}\\.mp4$', '')
                         ORDER BY vc.created_at DESC
                     ) AS rn
                 FROM video_clips vc
+                LEFT JOIN videos v ON v.id = vc.video_id
                 WHERE vc.clip_url IS NOT NULL
                     AND vc.clip_url != ''
-                    AND vc.video_filename IS NOT NULL
-                    AND vc.video_filename != ''
-                    AND vc.video_filename ~ '^[^-]+-[0-9]{8}-[0-9]{4}\\.mp4$'
+                    AND v.original_filename IS NOT NULL
+                    AND v.original_filename != ''
+                    AND v.original_filename ~ '^[^-]+-[0-9]{8}-[0-9]{4}\\.mp4$'
             )
             SELECT liver_name, clip_url, 
                    (SELECT COUNT(*) FROM video_clips vc2 
+                    LEFT JOIN videos v2 ON v2.id = vc2.video_id
                     WHERE vc2.clip_url IS NOT NULL
-                    AND vc2.video_filename LIKE liver_clips.liver_name || '-%') AS clip_count
+                    AND v2.original_filename LIKE liver_clips.liver_name || '-%') AS clip_count
             FROM liver_clips
             WHERE rn = 1
             ORDER BY clip_count DESC
