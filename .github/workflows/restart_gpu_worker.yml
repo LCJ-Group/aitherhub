@@ -1,0 +1,79 @@
+name: Restart GPU Worker (RunPod Pod)
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform on the GPU Worker Pod'
+        required: true
+        default: 'restart'
+        type: choice
+        options:
+          - 'restart'
+          - 'stop'
+          - 'start'
+
+env:
+  POD_ID: nvzjxjh7bito4i
+
+jobs:
+  manage-pod:
+    runs-on: ubuntu-latest
+    steps:
+      - name: "${{ github.event.inputs.action }} GPU Worker Pod"
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+        run: |
+          echo "🔧 Action: ${{ github.event.inputs.action }} on Pod ${POD_ID}"
+          
+          if [ "${{ github.event.inputs.action }}" = "restart" ]; then
+            # Stop the pod
+            echo "⏹️ Stopping pod..."
+            STOP_RESP=$(curl -s --max-time 30 "https://api.runpod.io/graphql" \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer ${RUNPOD_API_KEY}" \
+              -d "{\"query\": \"mutation { podStop(input: {podId: \\\"${POD_ID}\\\"}) { id desiredStatus } }\"}")
+            echo "Stop response: ${STOP_RESP}"
+            
+            # Wait for pod to stop
+            echo "⏳ Waiting 15s for pod to stop..."
+            sleep 15
+            
+            # Start the pod
+            echo "▶️ Starting pod..."
+            START_RESP=$(curl -s --max-time 30 "https://api.runpod.io/graphql" \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer ${RUNPOD_API_KEY}" \
+              -d "{\"query\": \"mutation { podResume(input: {podId: \\\"${POD_ID}\\\", gpuCount: 1}) { id desiredStatus } }\"}")
+            echo "Start response: ${START_RESP}"
+            
+          elif [ "${{ github.event.inputs.action }}" = "stop" ]; then
+            RESP=$(curl -s --max-time 30 "https://api.runpod.io/graphql" \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer ${RUNPOD_API_KEY}" \
+              -d "{\"query\": \"mutation { podStop(input: {podId: \\\"${POD_ID}\\\"}) { id desiredStatus } }\"}")
+            echo "Response: ${RESP}"
+            
+          elif [ "${{ github.event.inputs.action }}" = "start" ]; then
+            RESP=$(curl -s --max-time 30 "https://api.runpod.io/graphql" \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer ${RUNPOD_API_KEY}" \
+              -d "{\"query\": \"mutation { podResume(input: {podId: \\\"${POD_ID}\\\", gpuCount: 1}) { id desiredStatus } }\"}")
+            echo "Response: ${RESP}"
+          fi
+          
+          # Wait and check health
+          echo ""
+          echo "⏳ Waiting 60s for pod to be ready..."
+          sleep 60
+          
+          echo "🔍 Health check..."
+          HEALTH=$(curl -s --max-time 15 "https://${POD_ID}-8888.proxy.runpod.net/api/health" \
+            -H "X-Api-Key: aitherhub" || echo "TIMEOUT")
+          echo "Health: ${HEALTH}"
+          
+          if echo "${HEALTH}" | grep -q "ok"; then
+            echo "✅ GPU Worker is healthy!"
+          else
+            echo "⚠️ GPU Worker may still be starting up. Check again in a few minutes."
+          fi

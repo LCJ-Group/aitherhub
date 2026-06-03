@@ -365,16 +365,24 @@ async def preview_ws_proxy(websocket: WebSocket):
     Uses HTTP POST /api/swap-frame to the GPU Worker for each frame,
     bypassing RunPod Proxy's Cloudflare 403 on WebSocket upgrades.
 
+    Architecture: async pipeline with latest-frame-only processing.
+    - Receiver task: drains client frames, keeps only the latest
+    - Processor task: picks up latest frame, sends to GPU Worker, returns result
+    - This ensures GPU Worker always processes the most recent frame
+      and slow processing doesn't cause frame queue buildup.
+
     Protocol:
-      Client sends: binary JPEG frame
+      Client sends: JSON text {type:"frame", data: base64} or {type:"config", data: {...}}
       Server responds: binary JPEG processed frame (or text JSON error/status)
     """
     import httpx
     import base64
+    import json
+    import asyncio
     from app.services.liver_clone_service import get_liver_clone_service
 
     await websocket.accept()
-    logger.info("[Preview WS Proxy] Client connected (HTTP-bridge mode)")
+    logger.info("[Preview WS Proxy] Client connected (async-pipeline mode)")
 
     service = get_liver_clone_service()
     try:
@@ -386,111 +394,193 @@ async def preview_ws_proxy(websocket: WebSocket):
 
     swap_url = f"{worker_url}/api/swap-frame"
     headers = {"X-Api-Key": service.face_swap.api_key}
-    client_closed = False
 
-    async with httpx.AsyncClient(
-        timeout=httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
-    ) as http_client:
+    # Shared state between receiver and processor
+    latest_frame: asyncio.Event = asyncio.Event()
+    latest_frame_data: list = [None]  # mutable container for latest base64 frame
+    client_disconnected = asyncio.Event()
+    consecutive_errors = 0
+    MAX_CONSECUTIVE_ERRORS = 5
+
+    async def receiver_task():
+        """Drain frames from client, keep only the latest."""
+        nonlocal consecutive_errors
         try:
-            while True:
+            while not client_disconnected.is_set():
                 try:
                     msg = await websocket.receive()
                 except WebSocketDisconnect:
-                    break
+                    client_disconnected.set()
+                    return
 
                 if msg["type"] == "websocket.disconnect":
-                    break
+                    client_disconnected.set()
+                    return
 
                 if msg["type"] != "websocket.receive":
                     continue
 
-                # Handle text messages (JSON commands, config, or base64 frames)
+                # Handle text messages
                 if "text" in msg and msg["text"]:
                     text_data = msg["text"]
                     try:
-                        import json
                         cmd = json.loads(text_data)
                         msg_type = cmd.get("type", "")
 
-                        # Forward config commands to GPU worker
+                        # Forward config commands directly (low latency)
                         if msg_type == "config":
-                            config_url = f"{worker_url}/api/config"
-                            resp = await http_client.post(
-                                config_url,
-                                json=cmd.get("data", {}),
-                                headers=headers,
-                            )
-                            await websocket.send_text(json.dumps({
-                                "type": "config_ack",
-                                "status": resp.status_code
-                            }))
-                            continue
-
-                        # Handle frame sent as base64 text
-                        if msg_type == "frame" and cmd.get("data"):
-                            frame_b64 = cmd["data"]
                             try:
-                                result = await service.face_swap.swap_frame(frame_b64)
-                                if isinstance(result, dict) and "image_base64" in result:
-                                    result_bytes = base64.b64decode(result["image_base64"])
-                                    await websocket.send_bytes(result_bytes)
-                                elif isinstance(result, dict) and "error" in result:
+                                async with httpx.AsyncClient(
+                                    timeout=httpx.Timeout(connect=3.0, read=10.0, write=5.0, pool=3.0)
+                                ) as cfg_client:
+                                    config_url = f"{worker_url}/api/config"
+                                    resp = await cfg_client.post(
+                                        config_url,
+                                        json=cmd.get("data", {}),
+                                        headers=headers,
+                                    )
                                     await websocket.send_text(json.dumps({
-                                        "type": "error",
-                                        "message": str(result["error"])
+                                        "type": "config_ack",
+                                        "status": resp.status_code
                                     }))
-                            except Exception as e:
-                                error_msg = str(e)[:200]
-                                logger.error(f"[Preview WS Proxy] swap-frame error: {error_msg}")
+                            except Exception as cfg_err:
+                                logger.warning(f"[Preview WS Proxy] config error: {cfg_err}")
                                 await websocket.send_text(json.dumps({
-                                    "type": "error",
-                                    "message": error_msg
+                                    "type": "config_ack",
+                                    "status": 500
                                 }))
                             continue
 
-                        continue
+                        # Store latest frame (overwrite previous)
+                        if msg_type == "frame" and cmd.get("data"):
+                            latest_frame_data[0] = cmd["data"]
+                            latest_frame.set()
+                            continue
+
                     except json.JSONDecodeError:
                         continue
                     except Exception:
                         continue
 
-                # Handle binary frames (fallback - may not work on Azure App Service)
+                # Handle binary frames (fallback)
                 frame_bytes = msg.get("bytes")
-                if not frame_bytes:
+                if frame_bytes:
+                    latest_frame_data[0] = base64.b64encode(frame_bytes).decode("ascii")
+                    latest_frame.set()
+
+        except Exception as e:
+            logger.error(f"[Preview WS Proxy] Receiver error: {e}")
+            client_disconnected.set()
+
+    async def processor_task():
+        """Process latest frame via GPU Worker."""
+        nonlocal consecutive_errors
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=3.0, read=8.0, write=5.0, pool=3.0)
+        ) as http_client:
+            while not client_disconnected.is_set():
+                # Wait for a new frame (with timeout to check disconnect)
+                try:
+                    await asyncio.wait_for(latest_frame.wait(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    continue
+
+                # Grab the latest frame and clear the event
+                frame_b64 = latest_frame_data[0]
+                latest_frame.clear()
+
+                if not frame_b64 or client_disconnected.is_set():
                     continue
 
                 try:
-                    frame_b64 = base64.b64encode(frame_bytes).decode("ascii")
-                    result = await service.face_swap.swap_frame(frame_b64)
-                    if isinstance(result, dict) and "image_base64" in result:
-                        result_bytes = base64.b64decode(result["image_base64"])
-                        await websocket.send_bytes(result_bytes)
-                    elif isinstance(result, dict) and "error" in result:
-                        import json as _json
-                        await websocket.send_text(_json.dumps({
-                            "type": "error",
-                            "message": str(result["error"])
-                        }))
+                    resp = await http_client.post(
+                        swap_url,
+                        json={"image_base64": frame_b64},
+                        headers=headers,
+                    )
+
+                    if resp.status_code == 200:
+                        result = resp.json()
+                        if "image_base64" in result:
+                            result_bytes = base64.b64decode(result["image_base64"])
+                            if not client_disconnected.is_set():
+                                await websocket.send_bytes(result_bytes)
+                            consecutive_errors = 0
+                        elif "error" in result:
+                            consecutive_errors += 1
+                            if consecutive_errors <= 3:
+                                await websocket.send_text(json.dumps({
+                                    "type": "error",
+                                    "message": str(result["error"])[:200]
+                                }))
+                    else:
+                        consecutive_errors += 1
+                        detail = resp.text[:200]
+                        try:
+                            detail = resp.json().get("detail", detail)
+                        except Exception:
+                            pass
+                        if consecutive_errors <= 3:
+                            logger.warning(
+                                f"[Preview WS Proxy] Worker returned {resp.status_code}: {detail}"
+                            )
+                            await websocket.send_text(json.dumps({
+                                "type": "error",
+                                "message": f"Worker error {resp.status_code}: {detail}"
+                            }))
+
                 except httpx.TimeoutException:
+                    consecutive_errors += 1
+                    if consecutive_errors <= 3:
+                        logger.warning("[Preview WS Proxy] swap-frame timeout")
+                    # Don't send error for timeouts - just skip frame
+                    continue
+                except httpx.ConnectError:
+                    consecutive_errors += 1
+                    if consecutive_errors == 1:
+                        logger.error("[Preview WS Proxy] Cannot connect to GPU Worker")
+                        await websocket.send_text(json.dumps({
+                            "type": "error",
+                            "message": "GPU Worker connection failed"
+                        }))
+                    # Wait before retry to avoid hammering
+                    await asyncio.sleep(2.0)
                     continue
                 except Exception as e:
+                    consecutive_errors += 1
                     error_msg = str(e)[:200]
                     logger.error(f"[Preview WS Proxy] swap-frame error: {error_msg}")
-                    import json as _json
-                    await websocket.send_text(_json.dumps({
+                    if consecutive_errors <= 3:
+                        await websocket.send_text(json.dumps({
+                            "type": "error",
+                            "message": error_msg
+                        }))
+
+                if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                    logger.error(
+                        f"[Preview WS Proxy] {MAX_CONSECUTIVE_ERRORS} consecutive errors, closing"
+                    )
+                    await websocket.send_text(json.dumps({
                         "type": "error",
-                        "message": error_msg
+                        "message": "GPU Worker not responding. Please try again later."
                     }))
+                    client_disconnected.set()
                     break
 
-        except WebSocketDisconnect:
+    # Run receiver and processor concurrently
+    try:
+        await asyncio.gather(
+            receiver_task(),
+            processor_task(),
+        )
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logger.error(f"[Preview WS Proxy] Unexpected error: {e}")
+        try:
+            await websocket.close(code=1011, reason=str(e)[:120])
+        except Exception:
             pass
-        except Exception as e:
-            logger.error(f"[Preview WS Proxy] Unexpected error: {e}")
-            try:
-                await websocket.close(code=1011, reason=str(e)[:120])
-            except Exception:
-                pass
 
     logger.info("[Preview WS Proxy] Session closed")
 
