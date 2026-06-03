@@ -310,6 +310,21 @@ const LC_TEXTS = {
     en: "Failed to upload source face",
     zh: "上传源人脸失败",
   },
+  errorCameraNotFound: {
+    ja: "📷 カメラが検出できません\n\n• ブラウザのカメラ許可を「許可」にしてください\n• カメラが接続されているか確認してください\n• 他のアプリがカメラを使用中の場合は閉じてください",
+    en: "📷 Camera not detected\n\n• Please allow camera access in your browser\n• Check that your camera is connected\n• Close other apps that may be using the camera",
+    zh: "📷 未检测到摄像头\n\n• 请在浏览器中允许摄像头访问\n• 确认摄像头已连接\n• 关闭可能正在使用摄像头的其他应用",
+  },
+  errorCameraPermission: {
+    ja: "📷 カメラのアクセスが拒否されました\n\nブラウザの設定でカメラの許可を「許可」に変更してから、ページを再読み込みしてください。",
+    en: "📷 Camera access denied\n\nPlease change camera permission to 'Allow' in your browser settings, then reload the page.",
+    zh: "📷 摄像头访问被拒绝\n\n请在浏览器设置中将摄像头权限改为"允许"，然后重新加载页面。",
+  },
+  errorCameraInUse: {
+    ja: "📷 カメラが他のアプリで使用中です\n\n他のアプリ（Zoom、Teams等）を閉じてから再試行してください。",
+    en: "📷 Camera is in use by another app\n\nPlease close other apps (Zoom, Teams, etc.) and try again.",
+    zh: "📷 摄像头正被其他应用使用\n\n请关闭其他应用（Zoom、Teams等）后重试。",
+  },
   // UI language label
   uiLanguage: {
     ja: "表示言語", en: "UI Language", zh: "显示语言",

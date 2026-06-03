@@ -671,7 +671,16 @@ export default function LiverClonePage() {
       };
     } catch (err) {
       console.error("[Preview] Start failed:", err);
-      setPreviewError(err.message || "Preview start failed");
+      // User-friendly camera error messages
+      if (err.name === "NotFoundError" || err.message?.includes("Requested device not found")) {
+        setPreviewError(lcText("errorCameraNotFound", uiLang));
+      } else if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+        setPreviewError(lcText("errorCameraPermission", uiLang));
+      } else if (err.name === "NotReadableError" || err.name === "AbortError") {
+        setPreviewError(lcText("errorCameraInUse", uiLang));
+      } else {
+        setPreviewError(err.message || "Preview start failed");
+      }
     }
   };
 
@@ -2132,9 +2141,9 @@ export default function LiverClonePage() {
               </div>
               {/* Preview error */}
               {previewError && (
-                <div className="p-2 bg-red-900/30 border-t border-red-800 text-xs text-red-300 flex items-center gap-1">
-                  <AlertCircle className="w-3 h-3" />
-                  {previewError}
+                <div className="p-3 bg-red-900/30 border-t border-red-800 text-xs text-red-300 flex items-start gap-2" style={{ whiteSpace: "pre-line" }}>
+                  <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                  <span>{previewError}</span>
                 </div>
               )}
             </div>
