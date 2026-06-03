@@ -567,7 +567,7 @@ export default function AiVideoGeneratorPage() {
                     <div className="mb-4">
                       <p className="text-xs text-emerald-400 font-medium mb-2 flex items-center gap-1">
                         <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block animate-pulse"></span>
-                        AitherHub ライバー
+                        AitherHub ライバー（ライブ配信）
                       </p>
                       <div className="grid grid-cols-3 gap-2.5 max-h-52 overflow-y-auto pr-1">
                         {avatars.filter(a => a.source === 'aitherhub').map((avatar) => (
@@ -581,13 +581,24 @@ export default function AiVideoGeneratorPage() {
                             }`}
                           >
                             {avatar.preview_image_url ? (
-                              <img
-                                src={avatar.preview_image_url}
-                                alt={avatar.name}
-                                className="w-full aspect-square object-cover"
-                              />
+                              avatar.preview_image_url.includes('.mp4') || avatar.preview_image_url.includes('/clips/') ? (
+                                <video
+                                  src={avatar.preview_image_url}
+                                  className="w-full aspect-[9/16] object-cover"
+                                  preload="metadata"
+                                  muted
+                                  onMouseEnter={(e) => { try { e.target.play(); } catch {} }}
+                                  onMouseLeave={(e) => { try { e.target.pause(); e.target.currentTime = 0; } catch {} }}
+                                />
+                              ) : (
+                                <img
+                                  src={avatar.preview_image_url}
+                                  alt={avatar.name}
+                                  className="w-full aspect-[9/16] object-cover"
+                                />
+                              )
                             ) : (
-                              <div className="w-full aspect-square bg-gray-800 flex items-center justify-center">
+                              <div className="w-full aspect-[9/16] bg-gray-800 flex items-center justify-center">
                                 <Mic className="w-6 h-6 text-gray-600" />
                               </div>
                             )}

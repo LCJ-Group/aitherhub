@@ -349,38 +349,39 @@ async def _generate_video(audio_url: str, request: VideoGenerateRequest) -> tupl
 
     # ─── Route by avatar source ───
     if request.avatar_id.startswith("aitherhub:"):
-        # AitherHub liver: use face image → talking photo → video
+        # AitherHub liver: extract frame from clip video → talking photo → video
         liver_name = request.avatar_id.replace("aitherhub:", "")
         logger.info(f"[AIVideoGen] Using AitherHub liver: {liver_name}")
 
-        # Get face image URL from DB
-        face_image_url = None
+        # Get latest clip_url for this liver from DB
+        clip_video_url = None
         try:
             from sqlalchemy import text as sa_text
             from app.core.db import AsyncSessionLocal
             async with AsyncSessionLocal() as db:
                 result = await db.execute(sa_text("""
-                    SELECT thumbnail_url FROM video_clips
-                    WHERE liver_name = :liver_name
-                        AND thumbnail_url IS NOT NULL
-                        AND thumbnail_url != ''
-                        AND status = 'completed'
+                    SELECT clip_url FROM video_clips
+                    WHERE status = 'completed'
+                        AND clip_url IS NOT NULL
+                        AND clip_url != ''
+                        AND video_filename IS NOT NULL
+                        AND video_filename LIKE :pattern
                     ORDER BY created_at DESC
                     LIMIT 1
-                """), {"liver_name": liver_name})
+                """), {"pattern": f"{liver_name}-%"})
                 row = result.fetchone()
                 if row:
-                    face_image_url = row.thumbnail_url
+                    clip_video_url = row.clip_url
         except Exception as db_err:
-            logger.warning(f"[AIVideoGen] DB lookup for liver face failed: {db_err}")
+            logger.warning(f"[AIVideoGen] DB lookup for liver clip failed: {db_err}")
 
-        if not face_image_url:
-            raise Exception(f"No face image found for liver: {liver_name}")
+        if not clip_video_url:
+            raise Exception(f"No clip video found for liver: {liver_name}")
 
-        logger.info(f"[AIVideoGen] Uploading face as talking photo: {face_image_url[:60]}...")
+        logger.info(f"[AIVideoGen] Extracting frame from clip: {clip_video_url[:80]}...")
 
-        # Upload face to HeyGen as talking photo
-        talking_photo_id = await heygen.upload_talking_photo(face_image_url)
+        # Extract frame from video and upload as talking photo
+        talking_photo_id = await heygen.upload_talking_photo_from_video(clip_video_url)
         logger.info(f"[AIVideoGen] Talking photo ID: {talking_photo_id}")
 
         # Generate video with talking photo
@@ -553,6 +554,7 @@ async def list_avatars(
     
     Priority:
       1. AitherHub DB livers — real faces from live streams (uses talking photo)
+         Identified by video_filename pattern: {tiktok_username}-{date}-{time}.mp4
       2. HeyGen Digital Twins — pre-registered avatars (direct generation)
     
     AitherHub livers are shown first as they represent real company livers.
@@ -560,44 +562,50 @@ async def list_avatars(
     result = []
 
     # ─── Source 1: AitherHub DB livers (PRIORITY) ───
+    # Extract unique livers from video_filename and get their latest clip_url as preview
     try:
         liver_sql = text("""
-            SELECT 
-                vc.liver_name,
-                vc.thumbnail_url,
-                COUNT(*) as clip_count
-            FROM video_clips vc
-            WHERE vc.status = 'completed' 
-                AND vc.clip_url IS NOT NULL
-                AND vc.liver_name IS NOT NULL 
-                AND vc.liver_name != ''
-                AND vc.thumbnail_url IS NOT NULL
-                AND vc.thumbnail_url != ''
-            GROUP BY vc.liver_name, vc.thumbnail_url
-            ORDER BY COUNT(*) DESC
+            WITH liver_clips AS (
+                SELECT 
+                    REGEXP_REPLACE(vc.video_filename, '-[0-9]{8}-[0-9]{4}\\.mp4$', '') AS liver_name,
+                    vc.clip_url,
+                    vc.created_at,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY REGEXP_REPLACE(vc.video_filename, '-[0-9]{8}-[0-9]{4}\\.mp4$', '')
+                        ORDER BY vc.created_at DESC
+                    ) AS rn
+                FROM video_clips vc
+                WHERE vc.status = 'completed' 
+                    AND vc.clip_url IS NOT NULL
+                    AND vc.clip_url != ''
+                    AND vc.video_filename IS NOT NULL
+                    AND vc.video_filename != ''
+                    AND vc.video_filename ~ '^[^-]+-[0-9]{8}-[0-9]{4}\\.mp4$'
+            )
+            SELECT liver_name, clip_url, 
+                   (SELECT COUNT(*) FROM video_clips vc2 
+                    WHERE vc2.status = 'completed' 
+                    AND vc2.clip_url IS NOT NULL
+                    AND vc2.video_filename LIKE liver_clips.liver_name || '-%') AS clip_count
+            FROM liver_clips
+            WHERE rn = 1
+            ORDER BY clip_count DESC
         """)
         liver_result = await db.execute(liver_sql)
         liver_rows = liver_result.fetchall()
 
-        # Group by liver_name, pick the thumbnail with most clips
-        seen_livers = {}
         for row in liver_rows:
-            name = row.liver_name.strip()
-            if name not in seen_livers:
-                seen_livers[name] = {
-                    "name": name,
-                    "thumbnail_url": row.thumbnail_url,
-                    "clip_count": row.clip_count,
-                }
-
-        for liver_name, info in seen_livers.items():
+            liver_name = row.liver_name.strip() if row.liver_name else ""
+            if not liver_name:
+                continue
             avatar_id = f"aitherhub:{liver_name}"
+            # Use clip_url as preview (frontend will render as <video>)
             result.append(AvatarInfo(
                 avatar_id=avatar_id,
                 name=liver_name,
-                preview_image_url=info["thumbnail_url"],
+                preview_image_url=row.clip_url,  # clip video URL for preview
                 avatar_type="talking_photo",
-                face_image_url=info["thumbnail_url"],
+                face_image_url=row.clip_url,  # will extract frame at generation time
                 source="aitherhub",
             ))
 
