@@ -594,18 +594,24 @@ async def list_avatars(
         liver_result = await db.execute(liver_sql)
         liver_rows = liver_result.fetchall()
 
+        # Generate SAS-signed URLs for clip previews
+        from app.services.storage_service import generate_read_sas_from_url
+
         for row in liver_rows:
             liver_name = row.liver_name.strip() if row.liver_name else ""
             if not liver_name:
                 continue
             avatar_id = f"aitherhub:{liver_name}"
-            # Use clip_url as preview (frontend will render as <video>)
+            # Sign the clip_url with SAS token for browser access
+            clip_url = row.clip_url
+            signed_url = generate_read_sas_from_url(clip_url, expires_hours=2) if clip_url else None
+            preview_url = signed_url or clip_url
             result.append(AvatarInfo(
                 avatar_id=avatar_id,
                 name=liver_name,
-                preview_image_url=row.clip_url,  # clip video URL for preview
+                preview_image_url=preview_url,
                 avatar_type="talking_photo",
-                face_image_url=row.clip_url,  # will extract frame at generation time
+                face_image_url=clip_url,  # raw URL for server-side frame extraction
                 source="aitherhub",
             ))
 
