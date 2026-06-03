@@ -360,6 +360,7 @@ export FASTER_LIVEPORTRAIT_DIR="${FASTER_LIVEPORTRAIT_DIR:-$WORKSPACE/FasterLive
 # ── Kill any existing workers ──────────────────────────────────────────────
 
 pkill -f "python3 worker_api.py" 2>/dev/null || true
+pkill -f "python3 face_swap_worker_api.py" 2>/dev/null || true
 pkill -f "python3 live_api.py" 2>/dev/null || true
 sleep 2
 
@@ -391,8 +392,15 @@ if [ -f "$WORKSPACE/live_api.py" ]; then
 fi
 
 # Start Worker API (background so this script can return to /start.sh)
-echo "  Starting Worker API on port ${WORKER_PORT}..."
-PYTHONPATH="$PIP_PKG_DIR:${PYTHONPATH:-}" nohup python3 worker_api.py > /var/log/worker_api.log 2>&1 &
+# Use face_swap_worker_api.py (Direct ONNX Pipeline v4.0 - ~34ms/frame)
+# Falls back to worker_api.py if face_swap_worker_api.py is not available
+if [ -f "$WORKSPACE/face_swap_worker_api.py" ]; then
+    echo "  Starting Face Swap Worker API (Direct ONNX) on port ${WORKER_PORT}..."
+    PYTHONPATH="$PIP_PKG_DIR:${PYTHONPATH:-}" nohup python3 face_swap_worker_api.py > /var/log/worker_api.log 2>&1 &
+else
+    echo "  Starting Worker API (CLI fallback) on port ${WORKER_PORT}..."
+    PYTHONPATH="$PIP_PKG_DIR:${PYTHONPATH:-}" nohup python3 worker_api.py > /var/log/worker_api.log 2>&1 &
+fi
 WORKER_PID=$!
 echo "  Worker API started (PID: $WORKER_PID)"
 
