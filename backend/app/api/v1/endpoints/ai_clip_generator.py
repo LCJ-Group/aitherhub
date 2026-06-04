@@ -1224,22 +1224,24 @@ def _build_silence_trim_segments(duration: float, silence_periods: list,
                 logger.info(f"[ai-clip] V15 leading trim: first_speech={first_speech_start:.1f}s, "
                             f"new_start={new_start:.1f}s, trimmed={new_start - old_start:.1f}s")
 
-    # V15: ジャンプカット防止 —— 隣接keep_segments間のカット区間が3秒未満の場合、
-    # カットをスキップしてセグメントをマージ（画面の急な切り替わりを防止）
+    # V15.1: ジャンプカット防止 —— 隣接keep_segments間のカット区間が3秒未満の場合、
+    # 後続セグメントを廃片として削除（マージではなく削除）
+    # 規範: AI自動裁切の相隣片段間隔≥3秒。間隔が3秒未満の片段は廃片として成片に含めない。
     MIN_CUT_GAP = 3.0  # 最小カット間隔（秒）
     if len(keep_segments) > 1:
-        merged_for_jumpcut = [keep_segments[0]]
+        filtered_segments = [keep_segments[0]]
         for i in range(1, len(keep_segments)):
-            gap = keep_segments[i][0] - merged_for_jumpcut[-1][1]
+            gap = keep_segments[i][0] - filtered_segments[-1][1]
             if gap < MIN_CUT_GAP:
-                # ギャップが3秒未満 → カットをスキップしてマージ（ギャップ部分も含めて保持）
-                merged_for_jumpcut[-1] = (merged_for_jumpcut[-1][0], keep_segments[i][1])
+                # ギャップが3秒未満 → この片段は廃片として削除（成片に含めない）
+                logger.info(f"[ai-clip] V15.1 discard short-gap segment: gap={gap:.1f}s < {MIN_CUT_GAP}s, "
+                            f"segment=({keep_segments[i][0]:.1f}, {keep_segments[i][1]:.1f})")
             else:
-                merged_for_jumpcut.append(keep_segments[i])
-        if len(merged_for_jumpcut) < len(keep_segments):
-            logger.info(f"[ai-clip] V15 jump-cut prevention: merged {len(keep_segments)} -> "
-                        f"{len(merged_for_jumpcut)} segments (min_gap={MIN_CUT_GAP}s)")
-            keep_segments = merged_for_jumpcut
+                filtered_segments.append(keep_segments[i])
+        if len(filtered_segments) < len(keep_segments):
+            logger.info(f"[ai-clip] V15.1 jump-cut prevention: discarded {len(keep_segments) - len(filtered_segments)} "
+                        f"segments (min_gap={MIN_CUT_GAP}s), {len(keep_segments)} -> {len(filtered_segments)}")
+            keep_segments = filtered_segments
 
     total_kept = sum(e - s for s, e in keep_segments)
     logger.info(f"[ai-clip] Smart trim V15: {len(cuttable)} cuts, "
