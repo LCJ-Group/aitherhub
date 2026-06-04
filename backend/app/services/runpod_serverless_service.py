@@ -36,8 +36,13 @@ logger = logging.getLogger(__name__)
 
 # ── Configuration ────────────────────────────────────────────────────────────
 
-RUNPOD_API_KEY = os.getenv("RUNPOD_API_KEY", "")
-RUNPOD_ENDPOINT_ID = os.getenv("RUNPOD_ENDPOINT_ID", "")
+# SAFETY: RunPod Serverless is DISABLED to prevent uncontrolled Flex Worker
+# spawning (kali-eu B200 $5.95/hr). Set RUNPOD_SERVERLESS_ENABLED=true to
+# explicitly re-enable. Without this flag, all Serverless calls will be rejected.
+RUNPOD_SERVERLESS_ENABLED = os.getenv("RUNPOD_SERVERLESS_ENABLED", "false").lower() in ("true", "1", "yes")
+
+RUNPOD_API_KEY = os.getenv("RUNPOD_API_KEY", "") if RUNPOD_SERVERLESS_ENABLED else ""
+RUNPOD_ENDPOINT_ID = os.getenv("RUNPOD_ENDPOINT_ID", "") if RUNPOD_SERVERLESS_ENABLED else ""
 RUNPOD_API_BASE = "https://api.runpod.ai/v2"
 RUNPOD_SERVERLESS_TIMEOUT = int(os.getenv("RUNPOD_SERVERLESS_TIMEOUT", "300"))
 

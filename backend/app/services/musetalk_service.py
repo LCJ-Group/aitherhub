@@ -49,9 +49,12 @@ MUSETALK_WORKER_API_KEY = os.getenv(
 WORKER_CONNECT_TIMEOUT = float(os.getenv("MUSETALK_CONNECT_TIMEOUT", "10"))
 WORKER_READ_TIMEOUT = float(os.getenv("MUSETALK_READ_TIMEOUT", "600"))
 
-# Serverless mode detection — use the resolved endpoint ID from runpod_serverless_service
-from app.services.runpod_serverless_service import RUNPOD_ENDPOINT_ID as _RESOLVED_ENDPOINT_ID
-USE_SERVERLESS = bool(_RESOLVED_ENDPOINT_ID)
+# Serverless mode detection — DISABLED
+# RunPod Serverless spawns expensive Flex Workers (e.g. kali-eu B200 $5.95/hr)
+# that auto-scale and cannot be controlled. All MuseTalk processing now goes
+# through the dedicated Pod (aitherhub-gpu-DO-NOT-DELETE, RTX 4090 $0.70/hr).
+# DO NOT re-enable without explicit approval.
+USE_SERVERLESS = False
 
 
 # ── Exceptions ───────────────────────────────────────────────────────────────

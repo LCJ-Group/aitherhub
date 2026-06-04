@@ -95,8 +95,9 @@ class RunPodProvider(GPUProvider):
     """RunPod Serverless GPU provider."""
 
     def __init__(self):
-        self.api_key = os.getenv("RUNPOD_API_KEY", "")
-        self.endpoint_id = os.getenv("RUNPOD_ENDPOINT_ID", "")
+        from app.services.runpod_serverless_service import RUNPOD_SERVERLESS_ENABLED
+        self.api_key = os.getenv("RUNPOD_API_KEY", "") if RUNPOD_SERVERLESS_ENABLED else ""
+        self.endpoint_id = os.getenv("RUNPOD_ENDPOINT_ID", "") if RUNPOD_SERVERLESS_ENABLED else ""
         self._base_url = f"https://api.runpod.ai/v2/{self.endpoint_id}"
 
     @property
