@@ -929,6 +929,7 @@ def _detect_filler_segments_local(captions: list) -> list:
         "um", "uh", "er", "ah", "like", "you know", "so",
     }
     # 弾幕互動パターン（視聴者への挨拶・感謝・コメント読み上げ）
+    # V15: パターン大幅強化 - 視聴者名呼び・挨拶返し・弾幕反応を網羅
     _DANMAKU_PATTERNS = [
         _re.compile(r'ありがとう.*さん'),  # ありがとうXXさん
         _re.compile(r'.*さんいらっしゃい'),  # XXさんいらっしゃい
@@ -938,6 +939,27 @@ def _detect_filler_segments_local(captions: list) -> list:
         _re.compile(r'ありがとうございます'),
         _re.compile(r'みんなありがとう'),
         _re.compile(r'コメントありがとう'),
+        # V15追加: 視聴者への挨拶返し・弾幕反応パターン
+        _re.compile(r'.*ちゃん.*おかえり'),  # XXちゃんおかえり
+        _re.compile(r'おかえり.*'),  # おかえりXX
+        _re.compile(r'.*おかえりなさい'),  # XXおかえりなさい
+        _re.compile(r'やっほー'),  # やっほー（視聴者への挨拶）
+        _re.compile(r'お疲れ様'),  # お疲れ様（視聴者への挨拶）
+        _re.compile(r'おつかれ'),  # おつかれ
+        _re.compile(r'.*さんお疲れ'),  # XXさんお疲れ
+        _re.compile(r'.*さんやっほー'),  # XXさんやっほー
+        _re.compile(r'.*さんおかえり'),  # XXさんおかえり
+        _re.compile(r'.*さんありがとう'),  # XXさんありがとう
+        _re.compile(r'.*さん来てくれて'),  # XXさん来てくれて
+        _re.compile(r'わかった.*やっほー'),  # わかったーやっほー
+        _re.compile(r'.*ちゃんこんにちは'),  # XXちゃんこんにちは
+        _re.compile(r'.*ちゃんこんばんは'),  # XXちゃんこんばんは
+        _re.compile(r'.*ちゃんありがとう'),  # XXちゃんありがとう
+        _re.compile(r'初見.*さん'),  # 初見さん
+        _re.compile(r'初めまして'),  # 初めまして（視聴者への挨拶）
+        _re.compile(r'いらっしゃいませ'),  # いらっしゃいませ
+        _re.compile(r'来てくれてありがとう'),  # 来てくれてありがとう
+        # 中国語パターン
         _re.compile(r'谢谢.*的'),  # 谢谢XX的关注
         _re.compile(r'欢迎.*来'),  # 欢迎XX来
         _re.compile(r'感谢.*关注'),  # 感谢XX的关注
@@ -945,6 +967,11 @@ def _detect_filler_segments_local(captions: list) -> list:
         _re.compile(r'欢迎来到'),  # 欢迎来到直播间
         _re.compile(r'大家好'),  # 大家好
         _re.compile(r'谢谢大家'),  # 谢谢大家
+        _re.compile(r'.*宝贝.*来了'),  # XX宝贝来了
+        _re.compile(r'欢迎新来的'),  # 欢迎新来的朋友
+        _re.compile(r'谢谢.*点赞'),  # 谢谢XX点赞
+        _re.compile(r'谢谢.*礼物'),  # 谢谢XX的礼物
+        _re.compile(r'感谢.*送的'),  # 感谢XX送的
     ]
 
     filler_segments = []
@@ -992,20 +1019,34 @@ def _build_silence_trim_segments(duration: float, silence_periods: list,
     Returns list of (start, end) tuples representing segments to KEEP.
     """
     if not silence_periods and not filler_cut_segments:
-        # V2.19: 無音リストがなくても、字幕データから末尾無音を検出してトリム
+        # V2.19: 無音リストがなくても、字幕データから冒頭・末尾無音を検出してトリム
         if captions and duration > 0:
+            # V15: 冒頭無音トリム —— 最初の字幕開始前の無音をカット
+            first_speech_start = duration
+            for cap in (captions or []):
+                cap_start = float(cap.get("start", 0) if isinstance(cap, dict) else 0)
+                if cap_start < first_speech_start and cap_start > 0:
+                    first_speech_start = cap_start
             last_speech_end = 0.0
             for cap in (captions or []):
                 cap_end = float(cap.get("end", 0) if isinstance(cap, dict) else 0)
                 if cap_end > last_speech_end:
                     last_speech_end = cap_end
+            trim_start = 0.0
+            # 冒頭に1秒以上の無音があればトリム（0.15秒の余裕を残す）
+            if first_speech_start > 1.0:
+                trim_start = max(0, first_speech_start - 0.15)
+                logger.info(f"[ai-clip] V15 leading silence trim: first_speech={first_speech_start:.1f}s, "
+                            f"trim_from={trim_start:.1f}s")
             # 最後の発話終了後に2秒以上の無音があればトリム（0.8秒余韻残し）
             trailing_silence = duration - last_speech_end
+            trim_end = duration
             if last_speech_end > 0 and trailing_silence > 2.0:
                 trim_end = last_speech_end + 0.8  # 余韻0.8秒
                 logger.info(f"[ai-clip] V2.19 trailing silence trim: last_speech={last_speech_end:.1f}s, "
                             f"trim_at={trim_end:.1f}s, removed={duration - trim_end:.1f}s")
-                return [(0, trim_end)]
+            if trim_start > 0 or trim_end < duration:
+                return [(trim_start, trim_end)]
         return [(0, duration)]
 
     # Build "protected" intervals from captions (don't cut these)
@@ -1166,8 +1207,42 @@ def _build_silence_trim_segments(duration: float, silence_periods: list,
                 logger.info(f"[ai-clip] V2.19 trailing trim: last_speech={last_speech_end:.1f}s, "
                             f"trim_at={trim_point:.1f}s, extra_cut={last_seg_end - trim_point:.1f}s")
 
+    # V15: 冒頭無音トリム —— 最初の字幕開始前の無音をカット
+    if captions and keep_segments:
+        first_speech_start = duration
+        for cap in (captions or []):
+            cap_start = float(cap.get("start", 0) if isinstance(cap, dict) else 0)
+            if cap_start < first_speech_start and cap_start > 0:
+                first_speech_start = cap_start
+        if first_speech_start > 1.0 and keep_segments[0][0] < first_speech_start - 0.15:
+            # 冒頭の無音部分をトリム
+            old_start = keep_segments[0][0]
+            new_start = max(0, first_speech_start - 0.15)
+            if new_start < keep_segments[0][1]:
+                keep_segments[0] = (new_start, keep_segments[0][1])
+                total_cut_time += (new_start - old_start)
+                logger.info(f"[ai-clip] V15 leading trim: first_speech={first_speech_start:.1f}s, "
+                            f"new_start={new_start:.1f}s, trimmed={new_start - old_start:.1f}s")
+
+    # V15: ジャンプカット防止 —— 隣接keep_segments間のカット区間が3秒未満の場合、
+    # カットをスキップしてセグメントをマージ（画面の急な切り替わりを防止）
+    MIN_CUT_GAP = 3.0  # 最小カット間隔（秒）
+    if len(keep_segments) > 1:
+        merged_for_jumpcut = [keep_segments[0]]
+        for i in range(1, len(keep_segments)):
+            gap = keep_segments[i][0] - merged_for_jumpcut[-1][1]
+            if gap < MIN_CUT_GAP:
+                # ギャップが3秒未満 → カットをスキップしてマージ（ギャップ部分も含めて保持）
+                merged_for_jumpcut[-1] = (merged_for_jumpcut[-1][0], keep_segments[i][1])
+            else:
+                merged_for_jumpcut.append(keep_segments[i])
+        if len(merged_for_jumpcut) < len(keep_segments):
+            logger.info(f"[ai-clip] V15 jump-cut prevention: merged {len(keep_segments)} -> "
+                        f"{len(merged_for_jumpcut)} segments (min_gap={MIN_CUT_GAP}s)")
+            keep_segments = merged_for_jumpcut
+
     total_kept = sum(e - s for s, e in keep_segments)
-    logger.info(f"[ai-clip] Smart trim V2.19: {len(cuttable)} cuts, "
+    logger.info(f"[ai-clip] Smart trim V15: {len(cuttable)} cuts, "
                 f"{total_cut_time:.1f}s removed ({total_cut_time/duration*100:.0f}%), "
                 f"{total_kept:.1f}s kept, {len(keep_segments)} segments")
     return keep_segments
