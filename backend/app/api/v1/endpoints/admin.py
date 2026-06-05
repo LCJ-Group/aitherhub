@@ -6397,3 +6397,32 @@ async def admin_delete_video(
         await db.rollback()
         logger.exception(f"[admin/delete-video] Failed: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to delete video: {str(e)}")
+
+
+@router.post("/restart-gpu-worker")
+async def restart_gpu_worker(
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """Restart the GPU Worker pod via RunPod API (stop → resume).
+    Use when GPU Worker is unresponsive or showing as offline."""
+    expected_key = f"{ADMIN_ID}:{ADMIN_PASS}"
+    if x_admin_key != expected_key:
+        raise HTTPException(status_code=403, detail="Invalid admin credentials")
+
+    from app.services.runpod_discovery_service import get_runpod_discovery
+
+    discovery = get_runpod_discovery()
+    result = await discovery.restart_pod()
+
+    if not result.get("success"):
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to restart GPU Worker: {result.get('error', 'unknown')}"
+        )
+
+    return {
+        "success": True,
+        "message": "GPU Worker pod restart initiated. It may take 60-90 seconds to become available.",
+        "pod_id": result.get("pod_id"),
+        "details": result,
+    }

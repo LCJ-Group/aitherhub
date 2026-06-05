@@ -310,6 +310,80 @@ class RunPodDiscoveryService:
 
         return None
 
+    async def restart_pod(self) -> dict:
+        """
+        Restart the GPU Worker pod via RunPod API (stop → resume).
+        Returns status dict with success/error info.
+        """
+        if not self.api_key:
+            return {"success": False, "error": "RUNPOD_API_KEY not configured"}
+
+        pod_id = self._cached_pod_id
+        if not pod_id:
+            await self.get_worker_url()
+            pod_id = self._cached_pod_id
+        if not pod_id:
+            # Use fallback pod ID
+            pod_id = os.getenv("RUNPOD_FALLBACK_POD_ID", "nvzjxjh7bito4i")
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                # Step 1: Stop the pod
+                stop_query = """
+                mutation stopPod($podId: String!) {
+                    podStop(input: { podId: $podId }) {
+                        id
+                        desiredStatus
+                    }
+                }
+                """
+                logger.info(f"Stopping pod {pod_id}...")
+                stop_resp = await client.post(
+                    f"{RUNPOD_GRAPHQL_URL}?api_key={self.api_key}",
+                    json={"query": stop_query, "variables": {"podId": pod_id}},
+                    headers={"Content-Type": "application/json"},
+                )
+                stop_data = stop_resp.json()
+                logger.info(f"Stop response: {stop_data}")
+
+                # Step 2: Wait for pod to stop
+                import asyncio
+                await asyncio.sleep(10)
+
+                # Step 3: Resume the pod
+                resume_query = """
+                mutation resumePod($podId: String!, $gpuCount: Int!) {
+                    podResume(input: { podId: $podId, gpuCount: $gpuCount }) {
+                        id
+                        desiredStatus
+                    }
+                }
+                """
+                logger.info(f"Resuming pod {pod_id}...")
+                resume_resp = await client.post(
+                    f"{RUNPOD_GRAPHQL_URL}?api_key={self.api_key}",
+                    json={"query": resume_query, "variables": {"podId": pod_id, "gpuCount": 1}},
+                    headers={"Content-Type": "application/json"},
+                )
+                resume_data = resume_resp.json()
+                logger.info(f"Resume response: {resume_data}")
+
+                # Clear cache so next health check re-discovers
+                self._cached_url = None
+                self._cached_pod_id = None
+                self._cache_time = 0
+
+                return {
+                    "success": True,
+                    "pod_id": pod_id,
+                    "stop_response": stop_data,
+                    "resume_response": resume_data,
+                }
+
+        except Exception as e:
+            logger.error(f"Failed to restart pod: {e}")
+            return {"success": False, "error": str(e)}
+
 
 # Singleton instance
 _discovery_instance: Optional[RunPodDiscoveryService] = None
