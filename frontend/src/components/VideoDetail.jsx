@@ -1194,7 +1194,7 @@ export default function VideoDetail({ videoData, editorParams }) {
           reloadTimeoutRef.current = setTimeout(() => {
             reloadHistory();
             reloadTimeoutRef.current = null;
-          }, 500);
+          }, 1500);
         },
         onError: (err) => {
           console.error("Chat stream error:", err);
@@ -1239,19 +1239,19 @@ export default function VideoDetail({ videoData, editorParams }) {
     };
   }, []);
 
+  // Load chat history only when video ID changes (not on every videoData object reference change)
+  // This prevents the bug where background refresh of videoData causes chatMessages to reset
+  const videoIdForChat = videoData?.id;
   useEffect(() => {
-    console.log("Loading chat history for video:", videoData);
     let cancelled = false;
-    const vid = videoData?.id;
-    if (!vid) {
+    if (!videoIdForChat) {
       setChatMessages([]);
       return;
     }
 
     (async () => {
       try {
-        setChatMessages([]);
-        const hist = await VideoService.getChatHistory(vid);
+        const hist = await VideoService.getChatHistory(videoIdForChat);
         if (!cancelled) {
           if (Array.isArray(hist)) {
             setChatMessages(hist);
@@ -1272,7 +1272,7 @@ export default function VideoDetail({ videoData, editorParams }) {
     return () => {
       cancelled = true;
     };
-  }, [videoData]);
+  }, [videoIdForChat]);
 
   useEffect(() => {
     if (chatEndRef.current) {

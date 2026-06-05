@@ -107,6 +107,12 @@ class VideoService extends BaseApiService {
     const signal = controller.signal;
 
     (async () => {
+      let doneCalled = false;
+      const callDoneOnce = () => {
+        if (doneCalled) return;
+        doneCalled = true;
+        try { onDone(); } catch (e) {}
+      };
       try {
         const headers = {
           Accept: "text/event-stream",
@@ -157,7 +163,7 @@ class VideoService extends BaseApiService {
                 }
                 const isDone = payload === "[DONE]" || payload === "DONE";
                 if (isDone) {
-                  try { onDone(); } catch (e) {}
+                  callDoneOnce();
                 } else if (payload.startsWith("[ERROR]")) {
                   try { onError(new Error(payload)); } catch (e) {}
                 } else {
@@ -179,14 +185,15 @@ class VideoService extends BaseApiService {
                 payload = payload.slice(1, -1);
               }
               const isDone = payload === "[DONE]" || payload === "DONE";
-              if (isDone) onDone();
+              if (isDone) callDoneOnce();
               else if (payload.startsWith("[ERROR]")) onError(new Error(payload));
               else onMessage(payload);
             }
           }
         }
 
-        try { onDone(); } catch (e) {}
+        // Ensure onDone is called exactly once even if server didn't send [DONE]
+        callDoneOnce();
       } catch (err) {
         if (err.name === 'AbortError') {
           return;
