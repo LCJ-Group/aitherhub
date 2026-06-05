@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 # ║  This is the ONLY GPU Worker pod. Never stop, delete, or replace it.       ║
 # ║  To update: change this value manually after creating a new pod.           ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
-HARDCODED_POD_ID = os.getenv("RUNPOD_FALLBACK_POD_ID", "nvzjxjh7bito4i")
+HARDCODED_POD_ID = os.getenv("RUNPOD_FALLBACK_POD_ID", "1qfcanzq3epk49")
 
 RUNPOD_WORKER_PORT = int(os.getenv("RUNPOD_WORKER_PORT", "8888"))
 

@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 env:
-  POD_ID: nvzjxjh7bito4i
+  POD_ID: 1qfcanzq3epk49
 
 jobs:
   health-check:
