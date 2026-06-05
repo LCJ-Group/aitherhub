@@ -1112,15 +1112,29 @@ export default function VideoDetail({ videoData, editorParams }) {
   const reloadHistory = async () => {
     const vid = videoData?.id;
     if (!vid) return;
+    // Do not reload while streaming is active - it would overwrite local messages
+    if (streamCancelRef.current) return;
     try {
       const hist = await VideoService.getChatHistory(vid);
+      let serverMessages = [];
       if (Array.isArray(hist)) {
-        setChatMessages(hist);
+        serverMessages = hist;
       } else if (hist && Array.isArray(hist.data)) {
-        setChatMessages(hist.data);
-      } else {
-        setChatMessages([]);
+        serverMessages = hist.data;
       }
+      // Merge: keep local messages (id starts with 'local-') that are not yet in server response
+      setChatMessages((prev) => {
+        const localMsgs = prev.filter((m) => m.id && String(m.id).startsWith('local-'));
+        if (serverMessages.length === 0 && localMsgs.length > 0) {
+          // Server hasn't saved yet, keep current state
+          return prev;
+        }
+        // If server has the latest messages, use server data
+        // But also keep any local messages that are newer (not yet persisted)
+        const serverIds = new Set(serverMessages.map((m) => m.id));
+        const unseenLocal = localMsgs.filter((m) => !serverIds.has(m.id));
+        return [...serverMessages, ...unseenLocal];
+      });
     } catch (err) {
       console.error("Failed to reload chat history:", err);
     }
@@ -1194,7 +1208,7 @@ export default function VideoDetail({ videoData, editorParams }) {
           reloadTimeoutRef.current = setTimeout(() => {
             reloadHistory();
             reloadTimeoutRef.current = null;
-          }, 1500);
+          }, 3000);
         },
         onError: (err) => {
           console.error("Chat stream error:", err);
@@ -1251,18 +1265,30 @@ export default function VideoDetail({ videoData, editorParams }) {
 
     (async () => {
       try {
+        // Skip if streaming is active - don't overwrite local messages
+        if (streamCancelRef.current) return;
         const hist = await VideoService.getChatHistory(videoIdForChat);
-        if (!cancelled) {
+        if (!cancelled && !streamCancelRef.current) {
+          let serverMessages = [];
           if (Array.isArray(hist)) {
-            setChatMessages(hist);
-            setTimeout(() => scrollToBottom(false), 30);
+            serverMessages = hist;
           } else if (hist && Array.isArray(hist.data)) {
-            setChatMessages(hist.data);
-            setTimeout(() => scrollToBottom(false), 30);
-          } else {
-            setChatMessages([]);
-            setTimeout(() => scrollToBottom(false), 30);
+            serverMessages = hist.data;
           }
+          setChatMessages((prev) => {
+            // If there are local messages being streamed, preserve them
+            const localMsgs = prev.filter((m) => m.id && String(m.id).startsWith('local-'));
+            if (localMsgs.length > 0 && serverMessages.length === 0) {
+              return prev; // Keep current state if server has nothing but we have local
+            }
+            if (localMsgs.length > 0) {
+              const serverIds = new Set(serverMessages.map((m) => m.id));
+              const unseenLocal = localMsgs.filter((m) => !serverIds.has(m.id));
+              return [...serverMessages, ...unseenLocal];
+            }
+            return serverMessages;
+          });
+          setTimeout(() => scrollToBottom(false), 30);
         }
       } catch (err) {
         if (!cancelled) console.error("Failed to load chat history:", err);
