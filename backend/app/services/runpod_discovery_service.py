@@ -310,21 +310,20 @@ class RunPodDiscoveryService:
 
         return None
 
-    async def restart_pod(self) -> dict:
+    async def restart_pod(self, target_pod_id: Optional[str] = None) -> dict:
         """
         Restart the GPU Worker pod via RunPod API (stop → resume).
+        Always uses RUNPOD_FALLBACK_POD_ID to avoid restarting wrong pods.
+        Optionally accepts a specific target_pod_id.
         Returns status dict with success/error info.
         """
         if not self.api_key:
             return {"success": False, "error": "RUNPOD_API_KEY not configured"}
 
-        pod_id = self._cached_pod_id
+        # ALWAYS use the explicit fallback Pod ID to avoid restarting wrong pods
+        pod_id = target_pod_id or RUNPOD_FALLBACK_POD_ID
         if not pod_id:
-            await self.get_worker_url()
-            pod_id = self._cached_pod_id
-        if not pod_id:
-            # Use fallback pod ID
-            pod_id = os.getenv("RUNPOD_FALLBACK_POD_ID", "nvzjxjh7bito4i")
+            return {"success": False, "error": "No pod ID configured (RUNPOD_FALLBACK_POD_ID not set)"}
 
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
