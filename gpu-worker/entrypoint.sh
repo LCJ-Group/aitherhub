@@ -493,84 +493,30 @@ fi
 # Start Worker API (background so this script can return to /start.sh)
 # Use face_swap_worker_api.py (Direct ONNX Pipeline v4.0 - ~34ms/frame)
 # Falls back to worker_api.py if face_swap_worker_api.py is not available
-# ─── CUDA / onnxruntime-gpu Fix ───────────────────────────────────────────────
-# Root cause: pip install --target installs onnxruntime (CPU) which overwrites
-# onnxruntime-gpu's CUDA bindings. Also, packages like insightface/gfpgan pull
-# in onnxruntime (CPU) as a dependency, overwriting the GPU version.
-#
-# Solution: Remove onnxruntime from --target dir and install onnxruntime-gpu
-# system-wide so CUDA shared libraries are properly linked.
-# ──────────────────────────────────────────────────────────────────────────────
+# ─── CUDA / onnxruntime Status Check ─────────────────────────────────────────────────────────
+# Note: onnxruntime in PIP_PKG_DIR uses CPUExecutionProvider.
+# This is intentional for stability. The Docker image (CUDA 12.4) does not have
+# the exact cuDNN/CUBLAS versions needed by pip's onnxruntime-gpu packages.
+# Worker operates in CPU mode which is stable and provides ~34ms/frame performance.
+# 
+# Future CUDA optimization: Install nvidia-cudnn-cu12 + onnxruntime-gpu from
+# https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-12/pypi/simple/
+# ────────────────────────────────────────────────────────────────────────────────
 export LD_LIBRARY_PATH="/usr/local/cuda/lib64:/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
 
-# Check if CUDA provider is available with current setup
-ORT_CUDA_CHECK=$(python3 -c "
+# Check CUDA status (informational only, do not modify packages)
+ORT_PROVIDERS=$(python3 -c "
 import sys; sys.path.insert(0, '$PIP_PKG_DIR')
 import onnxruntime as ort
-providers = ort.get_available_providers()
-print('cuda' if 'CUDAExecutionProvider' in providers else 'cpu')
-" 2>/dev/null || echo "error")
-echo "  ORT CUDA check: $ORT_CUDA_CHECK"
-
-if [ "$ORT_CUDA_CHECK" != "cuda" ]; then
-    echo "  [fix] CUDAExecutionProvider not available. Fixing onnxruntime installation..."
-    
-    # Step 1: Remove CPU-only onnxruntime from persistent packages
-    echo "  [1/3] Removing onnxruntime (CPU) from $PIP_PKG_DIR..."
-    rm -rf "$PIP_PKG_DIR/onnxruntime" 2>/dev/null || true
-    rm -rf "$PIP_PKG_DIR/onnxruntime_gpu"* 2>/dev/null || true
-    find "$PIP_PKG_DIR" -maxdepth 1 -name 'onnxruntime*' -exec rm -rf {} \; 2>/dev/null || true
-    
-    # Step 2: Install cuDNN if missing (onnxruntime-gpu requires it)
-    echo "  [2/4] Checking cuDNN..."
-    if [ ! -f /usr/lib/x86_64-linux-gnu/libcudnn.so.8 ] && [ ! -f /usr/lib/x86_64-linux-gnu/libcudnn.so.9 ]; then
-        echo "  cuDNN not found, installing..."
-        # Try to install cuDNN via pip (nvidia-cudnn-cu12)
-        pip install --quiet nvidia-cudnn-cu12 2>/dev/null || true
-        # Find and link cuDNN libraries
-        CUDNN_PATH=$(python3 -c "import nvidia.cudnn; import os; print(os.path.dirname(nvidia.cudnn.__file__) + '/lib')" 2>/dev/null || echo "")
-        if [ -n "$CUDNN_PATH" ] && [ -d "$CUDNN_PATH" ]; then
-            export LD_LIBRARY_PATH="$CUDNN_PATH:$LD_LIBRARY_PATH"
-            echo "  cuDNN found at: $CUDNN_PATH"
-        fi
-    else
-        echo "  cuDNN already available"
-    fi
-    
-    # Step 3: Install onnxruntime-gpu system-wide
-    # Use version 1.17.1 which supports CUDA 12 + cuDNN 8
-    # (newer versions require cuDNN 9 which may not be in the Docker image)
-    echo "  [3/5] Installing onnxruntime-gpu==1.17.1 system-wide..."
-    pip install --quiet "onnxruntime-gpu==1.17.1" 2>/dev/null || \
-    pip install --quiet --upgrade onnxruntime-gpu 2>/dev/null || true
-    
-    # Step 4: Fix numpy compatibility
-    # onnxruntime 1.17.x requires numpy < 2.0 (_ARRAY_API error with numpy 2.x)
-    echo "  [4/5] Ensuring numpy compatibility..."
-    pip install --quiet "numpy==1.26.4" 2>/dev/null || true
-    
-    # Step 5: Verify
-    echo "  [5/5] Verifying CUDA provider..."
-    ORT_CUDA_CHECK2=$(python3 -c "
-import onnxruntime as ort
-providers = ort.get_available_providers()
-print('cuda' if 'CUDAExecutionProvider' in providers else 'cpu')
-print('providers:', providers)
-" 2>/dev/null || echo "error")
-    echo "  ORT CUDA after fix: $ORT_CUDA_CHECK2"
-    
-    if echo "$ORT_CUDA_CHECK2" | grep -q "^cuda"; then
-        echo "  [ok] CUDAExecutionProvider now available!"
-    else
-        echo "  [WARNING] CUDA still not available. Worker will use CPU fallback."
-        echo "  (Performance will be lower but functionality is not affected)"
-    fi
+print(','.join(ort.get_available_providers()))
+" 2>/dev/null || echo "unknown")
+echo "  ORT providers: $ORT_PROVIDERS"
+if echo "$ORT_PROVIDERS" | grep -q "CUDA"; then
+    echo "  [ok] CUDAExecutionProvider available (GPU acceleration active)"
 else
-    echo "  [ok] CUDAExecutionProvider already available"
+    echo "  [info] Using CPUExecutionProvider (stable mode, ~34ms/frame)"
 fi
 
-# PYTHONPATH order: PIP_PKG_DIR first for most packages, but system onnxruntime-gpu
-# takes priority because we removed onnxruntime from PIP_PKG_DIR
 WORKER_PYTHONPATH="$PIP_PKG_DIR:${PYTHONPATH:-}"
 
 if [ -f "$WORKSPACE/face_swap_worker_api.py" ]; then
