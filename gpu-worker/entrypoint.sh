@@ -178,6 +178,11 @@ else
     pip_install_persistent "scipy"
     pip_install_persistent "tyro"
 
+    # InsightFace (required for face detection in Direct ONNX Pipeline)
+    echo "  [4.5/7] Installing InsightFace..."
+    pip_install_persistent "cython"
+    pip_install_persistent "insightface"
+
     # GFPGAN / basicsr dependencies
     echo "  [5/7] Installing GFPGAN/basicsr..."
     pip_install_persistent "gfpgan"
