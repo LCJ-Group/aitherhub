@@ -1148,6 +1148,31 @@ async def health_check(auth: bool = Depends(verify_api_key)):
     }
 
 
+@app.post("/api/reinit-engine")
+async def reinit_engine(auth: bool = Depends(verify_api_key)):
+    """
+    Re-initialize the ONNX engine. Useful after model download completes.
+    Returns detailed error information if initialization fails.
+    """
+    import traceback
+    import io as _io
+    try:
+        result = init_direct_onnx_engine()
+        return {
+            "success": result,
+            "onnx_engine_ready": onnx_engine_ready,
+            "gfpgan_ready": gfpgan_session is not None,
+            "insightface_loaded": insightface_app is not None,
+        }
+    except Exception as e:
+        tb = traceback.format_exc()
+        return {
+            "success": False,
+            "error": str(e),
+            "traceback": tb,
+        }
+
+
 @app.post("/api/set-source")
 async def set_source(
     auth: bool = Depends(verify_api_key),
