@@ -1148,6 +1148,18 @@ async def health_check(auth: bool = Depends(verify_api_key)):
     }
 
 
+@app.get("/api/logs")
+async def get_logs(auth: bool = Depends(verify_api_key), lines: int = 100):
+    """Return last N lines of worker_api.log for debugging."""
+    log_path = "/var/log/worker_api.log"
+    try:
+        with open(log_path, 'r') as f:
+            all_lines = f.readlines()
+            return {"lines": all_lines[-lines:], "total": len(all_lines)}
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @app.post("/api/reinit-engine")
 async def reinit_engine(auth: bool = Depends(verify_api_key)):
     """
@@ -1158,11 +1170,19 @@ async def reinit_engine(auth: bool = Depends(verify_api_key)):
     import io as _io
     try:
         result = init_direct_onnx_engine()
+        # Also read last 20 lines of log for context
+        log_lines = []
+        try:
+            with open('/var/log/worker_api.log', 'r') as f:
+                log_lines = f.readlines()[-20:]
+        except:
+            pass
         return {
             "success": result,
             "onnx_engine_ready": onnx_engine_ready,
             "gfpgan_ready": gfpgan_session is not None,
             "insightface_loaded": insightface_app is not None,
+            "recent_logs": log_lines,
         }
     except Exception as e:
         tb = traceback.format_exc()
