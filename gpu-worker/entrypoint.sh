@@ -493,19 +493,58 @@ fi
 # Start Worker API (background so this script can return to /start.sh)
 # Use face_swap_worker_api.py (Direct ONNX Pipeline v4.0 - ~34ms/frame)
 # Falls back to worker_api.py if face_swap_worker_api.py is not available
-# Ensure CUDA libraries are discoverable for onnxruntime-gpu
+# ─── CUDA / onnxruntime-gpu Fix ───────────────────────────────────────────────
+# Root cause: pip install --target installs onnxruntime (CPU) which overwrites
+# onnxruntime-gpu's CUDA bindings. Also, packages like insightface/gfpgan pull
+# in onnxruntime (CPU) as a dependency, overwriting the GPU version.
+#
+# Solution: Remove onnxruntime from --target dir and install onnxruntime-gpu
+# system-wide so CUDA shared libraries are properly linked.
+# ──────────────────────────────────────────────────────────────────────────────
 export LD_LIBRARY_PATH="/usr/local/cuda/lib64:/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
 
-# Also install onnxruntime-gpu system-wide if CUDA provider is missing
-ORT_CUDA_CHECK=$(python3 -c "import sys; sys.path.insert(0, '$PIP_PKG_DIR'); import onnxruntime as ort; print('cuda' if 'CUDAExecutionProvider' in ort.get_available_providers() else 'cpu')" 2>/dev/null || echo "error")
+# Check if CUDA provider is available with current setup
+ORT_CUDA_CHECK=$(python3 -c "
+import sys; sys.path.insert(0, '$PIP_PKG_DIR')
+import onnxruntime as ort
+providers = ort.get_available_providers()
+print('cuda' if 'CUDAExecutionProvider' in providers else 'cpu')
+" 2>/dev/null || echo "error")
+echo "  ORT CUDA check: $ORT_CUDA_CHECK"
+
 if [ "$ORT_CUDA_CHECK" != "cuda" ]; then
-    echo "  [hotfix] CUDAExecutionProvider not available, reinstalling onnxruntime-gpu system-wide..."
-    pip install --quiet --upgrade onnxruntime-gpu 2>/dev/null || true
-    # Verify
-    ORT_CUDA_CHECK2=$(python3 -c "import onnxruntime as ort; print('cuda' if 'CUDAExecutionProvider' in ort.get_available_providers() else 'cpu')" 2>/dev/null || echo "error")
-    echo "  ORT CUDA status after fix: $ORT_CUDA_CHECK2"
+    echo "  [fix] CUDAExecutionProvider not available. Fixing onnxruntime installation..."
+    
+    # Step 1: Remove CPU-only onnxruntime from persistent packages
+    echo "  [1/3] Removing onnxruntime (CPU) from $PIP_PKG_DIR..."
+    rm -rf "$PIP_PKG_DIR/onnxruntime" 2>/dev/null || true
+    rm -rf "$PIP_PKG_DIR/onnxruntime_gpu"* 2>/dev/null || true
+    find "$PIP_PKG_DIR" -maxdepth 1 -name 'onnxruntime*' -exec rm -rf {} \; 2>/dev/null || true
+    
+    # Step 2: Install onnxruntime-gpu system-wide (not --target)
+    echo "  [2/3] Installing onnxruntime-gpu system-wide..."
+    pip install --quiet --upgrade onnxruntime-gpu 2>/dev/null || \
+    pip install --quiet onnxruntime-gpu==1.18.1 2>/dev/null || true
+    
+    # Step 3: Verify
+    echo "  [3/3] Verifying CUDA provider..."
+    ORT_CUDA_CHECK2=$(python3 -c "
+import onnxruntime as ort
+providers = ort.get_available_providers()
+print('cuda' if 'CUDAExecutionProvider' in providers else 'cpu')
+print('providers:', providers)
+" 2>/dev/null || echo "error")
+    echo "  ORT CUDA after fix: $ORT_CUDA_CHECK2"
+    
+    if echo "$ORT_CUDA_CHECK2" | grep -q "^cuda"; then
+        echo "  [ok] CUDAExecutionProvider now available!"
+    else
+        echo "  [WARNING] CUDA still not available. Will use CPU fallback."
+        echo "  Trying onnxruntime-gpu with specific CUDA 12 version..."
+        pip install --quiet "onnxruntime-gpu==1.17.1" 2>/dev/null || true
+    fi
 else
-    echo "  [ok] CUDAExecutionProvider available"
+    echo "  [ok] CUDAExecutionProvider already available"
 fi
 
 if [ -f "$WORKSPACE/face_swap_worker_api.py" ]; then
