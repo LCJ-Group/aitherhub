@@ -540,12 +540,17 @@ if [ "$ORT_CUDA_CHECK" != "cuda" ]; then
     # Step 3: Install onnxruntime-gpu system-wide
     # Use version 1.17.1 which supports CUDA 12 + cuDNN 8
     # (newer versions require cuDNN 9 which may not be in the Docker image)
-    echo "  [3/4] Installing onnxruntime-gpu==1.17.1 system-wide..."
+    echo "  [3/5] Installing onnxruntime-gpu==1.17.1 system-wide..."
     pip install --quiet "onnxruntime-gpu==1.17.1" 2>/dev/null || \
     pip install --quiet --upgrade onnxruntime-gpu 2>/dev/null || true
     
-    # Step 4: Verify
-    echo "  [4/4] Verifying CUDA provider..."
+    # Step 4: Fix numpy compatibility
+    # onnxruntime 1.17.x requires numpy < 2.0 (_ARRAY_API error with numpy 2.x)
+    echo "  [4/5] Ensuring numpy compatibility..."
+    pip install --quiet "numpy==1.26.4" 2>/dev/null || true
+    
+    # Step 5: Verify
+    echo "  [5/5] Verifying CUDA provider..."
     ORT_CUDA_CHECK2=$(python3 -c "
 import onnxruntime as ort
 providers = ort.get_available_providers()
@@ -564,14 +569,18 @@ else
     echo "  [ok] CUDAExecutionProvider already available"
 fi
 
+# PYTHONPATH order: PIP_PKG_DIR first for most packages, but system onnxruntime-gpu
+# takes priority because we removed onnxruntime from PIP_PKG_DIR
+WORKER_PYTHONPATH="$PIP_PKG_DIR:${PYTHONPATH:-}"
+
 if [ -f "$WORKSPACE/face_swap_worker_api.py" ]; then
     echo "  Starting Face Swap Worker API (Direct ONNX) on port ${WORKER_PORT}..."
     LD_LIBRARY_PATH="/usr/local/cuda/lib64:/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}" \
-    PYTHONPATH="$PIP_PKG_DIR:${PYTHONPATH:-}" nohup python3 face_swap_worker_api.py > /var/log/worker_api.log 2>&1 &
+    PYTHONPATH="$WORKER_PYTHONPATH" nohup python3 face_swap_worker_api.py > /var/log/worker_api.log 2>&1 &
 else
     echo "  Starting Worker API (CLI fallback) on port ${WORKER_PORT}..."
     LD_LIBRARY_PATH="/usr/local/cuda/lib64:/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}" \
-    PYTHONPATH="$PIP_PKG_DIR:${PYTHONPATH:-}" nohup python3 worker_api.py > /var/log/worker_api.log 2>&1 &
+    PYTHONPATH="$WORKER_PYTHONPATH" nohup python3 worker_api.py > /var/log/worker_api.log 2>&1 &
 fi
 WORKER_PID=$!
 echo "  Worker API started (PID: $WORKER_PID)"
