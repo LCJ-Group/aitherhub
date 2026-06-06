@@ -335,8 +335,9 @@ if [ ! -d "$BUFFALO_DIR" ] || [ -z "$(ls -A $BUFFALO_DIR 2>/dev/null)" ]; then
     }
     if [ -f "$BUFFALO_ZIP" ]; then
         mkdir -p "$BUFFALO_DIR"
-        unzip -q -o "$BUFFALO_ZIP" -d "$INSIGHTFACE_DIR/models/" 2>/dev/null || \
-            unzip -q -o "$BUFFALO_ZIP" -d "$BUFFALO_DIR" 2>/dev/null || true
+        # buffalo_l.zip contains flat .onnx files (no subdirectory)
+        # Must extract directly into buffalo_l/ directory
+        unzip -q -o "$BUFFALO_ZIP" -d "$BUFFALO_DIR" 2>/dev/null || true
         rm -f "$BUFFALO_ZIP"
         # Verify extraction
         if [ -n "$(ls -A $BUFFALO_DIR 2>/dev/null)" ]; then
