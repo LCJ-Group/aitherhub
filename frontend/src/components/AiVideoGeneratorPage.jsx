@@ -940,9 +940,23 @@ export default function AiVideoGeneratorPage() {
                               }`}>
                               {avatar.preview_image_url ? (
                                 avatar.preview_image_url.includes('.mp4') || avatar.preview_image_url.includes('/clips/') ? (
-                                  <video src={avatar.preview_image_url} className="w-full aspect-[9/16] object-cover" preload="metadata" muted
-                                    onMouseEnter={(e) => { try { e.target.play(); } catch {} }}
-                                    onMouseLeave={(e) => { try { e.target.pause(); e.target.currentTime = 0; } catch {} }} />
+                                  <>
+                                    <video 
+                                      src={`${avatar.preview_image_url}#t=0.5`}
+                                      className="w-full aspect-[9/16] object-cover bg-gray-800" 
+                                      preload="auto"
+                                      muted
+                                      playsInline
+  
+                                      onLoadedData={(e) => { try { e.target.currentTime = 0.5; } catch {} }}
+                                      onMouseEnter={(e) => { try { e.target.play(); } catch {} }}
+                                      onMouseLeave={(e) => { try { e.target.pause(); e.target.currentTime = 0.5; } catch {} }}
+                                      onError={(e) => { e.target.style.display = 'none'; if(e.target.nextSibling) e.target.nextSibling.style.display = 'flex'; }}
+                                    />
+                                    <div className="w-full aspect-[9/16] bg-gray-800 items-center justify-center hidden">
+                                      <Mic className="w-6 h-6 text-gray-600" />
+                                    </div>
+                                  </>  
                                 ) : (
                                   <img src={avatar.preview_image_url} alt={avatar.name} className="w-full aspect-[9/16] object-cover" />
                                 )
