@@ -16,6 +16,7 @@ import AuthPage from './pages/authPages/AuthPage'
 import AutoLogin from './pages/authPages/AutoLogin'
 import BrandPortal from './components/brand/BrandPortal'
 import ShareVideoPage from './components/ShareVideoPage'
+import LiverGuidePage from './components/LiverGuidePage'
 import LandingPage from './pages/landing/LandingPage'
 import { Toaster } from "./components/ui/toaster";
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
@@ -76,6 +77,7 @@ function App() {
             <Route path="/auto-login" element={<AutoLogin />} />
             <Route path="/brand" element={<BrandPortal />} />
             <Route path="/v/:clipId" element={<ShareVideoPage />} />
+            <Route path="/liver-guide" element={<LiverGuidePage />} />
           </Routes>
         </SectionErrorBoundary>
         <Toaster />
