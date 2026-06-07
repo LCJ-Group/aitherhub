@@ -887,9 +887,24 @@ export default function AiVideoGeneratorPage() {
                   )}
 
                   {jobStatus.status === "failed" && (
-                    <div className="mt-4 bg-red-500/10 border border-red-500/30 rounded-lg p-3">
+                    <div className="mt-4 bg-red-500/10 border border-red-500/30 rounded-lg p-4">
                       <p className="text-red-300 text-sm">エラー: {jobStatus.error || "不明なエラー"}</p>
                       <p className="text-red-400/60 text-xs mt-1">ステップ: {jobStatus.error_step}</p>
+                      {(jobStatus.error || "").toLowerCase().includes("insufficient credit") && (
+                        <div className="mt-3 bg-amber-500/10 border border-amber-500/30 rounded-lg p-3">
+                          <p className="text-amber-300 text-sm font-medium">💡 動画生成にはHeyGenのAPIクレジットが必要です</p>
+                          <p className="text-amber-200/70 text-xs mt-1">現在クレジットが不足しています。以下からクレジットを追加してください。</p>
+                          <a 
+                            href="https://app.heygen.com/settings/billing" 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1.5 mt-2 px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 rounded-md text-amber-200 text-xs font-medium transition-colors"
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
+                            HeyGen クレジットを追加する
+                          </a>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -931,39 +946,49 @@ export default function AiVideoGeneratorPage() {
                           AitherHub ライバー
                         </p>
                         <div className="grid grid-cols-3 gap-2.5 max-h-52 overflow-y-auto pr-1">
-                          {avatars.filter(a => a.source === 'aitherhub').map((avatar) => (
+                          {avatars.filter(a => a.source === 'aitherhub').map((avatar) => {
+                            // Generate stable gradient from avatar name
+                            const gradients = [
+                              'from-emerald-600 to-teal-700',
+                              'from-violet-600 to-purple-700',
+                              'from-rose-600 to-pink-700',
+                              'from-sky-600 to-blue-700',
+                              'from-amber-600 to-orange-700',
+                              'from-indigo-600 to-blue-800',
+                              'from-fuchsia-600 to-pink-800',
+                              'from-cyan-600 to-teal-800',
+                            ];
+                            const nameHash = (avatar.name || '').split('').reduce((acc, c) => acc + c.charCodeAt(0), 0);
+                            const gradient = gradients[nameHash % gradients.length];
+                            const initials = (avatar.name || '?').slice(0, 2);
+                            return (
                             <button key={avatar.avatar_id} onClick={() => setSelectedAvatarId(avatar.avatar_id)}
-                              className={`relative rounded-lg overflow-hidden border-2 transition-all ${
+                              className={`group relative rounded-lg overflow-hidden border-2 transition-all ${
                                 selectedAvatarId === avatar.avatar_id
                                   ? "border-emerald-500 ring-2 ring-emerald-500/30 scale-[1.02]"
                                   : "border-gray-700 hover:border-gray-600 hover:scale-[1.01]"
                               }`}>
-                              {avatar.preview_image_url ? (
-                                avatar.preview_image_url.includes('.mp4') || avatar.preview_image_url.includes('/clips/') ? (
-                                  <>
-                                    <video 
-                                      src={`${avatar.preview_image_url}#t=0.5`}
-                                      className="w-full aspect-[9/16] object-cover bg-gray-800" 
-                                      preload="auto"
-                                      muted
-                                      playsInline
-  
-                                      onLoadedData={(e) => { try { e.target.currentTime = 0.5; } catch {} }}
-                                      onMouseEnter={(e) => { try { e.target.play(); } catch {} }}
-                                      onMouseLeave={(e) => { try { e.target.pause(); e.target.currentTime = 0.5; } catch {} }}
-                                      onError={(e) => { e.target.style.display = 'none'; if(e.target.nextSibling) e.target.nextSibling.style.display = 'flex'; }}
-                                    />
-                                    <div className="w-full aspect-[9/16] bg-gray-800 items-center justify-center hidden">
-                                      <Mic className="w-6 h-6 text-gray-600" />
-                                    </div>
-                                  </>  
-                                ) : (
-                                  <img src={avatar.preview_image_url} alt={avatar.name} className="w-full aspect-[9/16] object-cover" />
-                                )
-                              ) : (
-                                <div className="w-full aspect-[9/16] bg-gray-800 flex items-center justify-center">
-                                  <Mic className="w-6 h-6 text-gray-600" />
-                                </div>
+                              {/* Default: Initials + Gradient (always visible, no black squares) */}
+                              <div className={`w-full aspect-[9/16] bg-gradient-to-br ${gradient} flex items-center justify-center`}>
+                                <span className="text-white/90 text-lg font-bold select-none drop-shadow-md">{initials}</span>
+                              </div>
+                              {/* On hover/focus: load and play video overlay */}
+                              {avatar.preview_image_url && (avatar.preview_image_url.includes('.mp4') || avatar.preview_image_url.includes('/clips/')) && (
+                                <video 
+                                  src={avatar.preview_image_url}
+                                  className="absolute inset-0 w-full h-full object-cover opacity-0 group-hover:opacity-100 transition-opacity duration-300" 
+                                  preload="none"
+                                  muted
+                                  playsInline
+                                  loop
+                                  onMouseEnter={(e) => { e.target.preload = 'auto'; e.target.play().catch(() => {}); }}
+                                  onMouseLeave={(e) => { e.target.pause(); e.target.currentTime = 0; }}
+                                  onTouchStart={(e) => { e.target.preload = 'auto'; e.target.play().catch(() => {}); }}
+                                />
+                              )}
+                              {/* Non-mp4 images: show as overlay too */}
+                              {avatar.preview_image_url && !avatar.preview_image_url.includes('.mp4') && !avatar.preview_image_url.includes('/clips/') && (
+                                <img src={avatar.preview_image_url} alt={avatar.name} className="absolute inset-0 w-full h-full object-cover" />
                               )}
                               <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-1.5">
                                 <p className="text-[10px] font-medium truncate">{avatar.name}</p>
@@ -974,7 +999,8 @@ export default function AiVideoGeneratorPage() {
                                 </div>
                               )}
                             </button>
-                          ))}
+                            );
+                          })}
                         </div>
                       </div>
                     )}
