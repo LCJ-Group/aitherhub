@@ -953,7 +953,7 @@ async def generate_thumbnails(
         ACCOUNT_NAME,
         CONTAINER_NAME,
     )
-    from azure.storage.blob import BlobServiceClient
+    from azure.storage.blob import BlobServiceClient, ContentSettings
 
     # Get all liver clips
     liver_sql = text("""
@@ -1056,7 +1056,7 @@ async def generate_thumbnails(
                     with open(tmp_thumb_path, 'rb') as f:
                         thumb_blob_client.upload_blob(
                             f, overwrite=True,
-                            content_settings={"content_type": "image/jpeg"}
+                            content_settings=ContentSettings(content_type="image/jpeg")
                         )
                     generated.append(liver_name)
                     _os.unlink(tmp_thumb_path)
