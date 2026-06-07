@@ -132,6 +132,7 @@ class AvatarInfo(BaseModel):
     avatar_id: str
     name: str
     preview_image_url: Optional[str] = None
+    thumbnail_image_url: Optional[str] = None  # Static JPG thumbnail (first frame)
     avatar_type: str = "full"  # full, half, talking_photo
     face_image_url: Optional[str] = None  # For DB livers: face thumbnail URL
     source: str = "aitherhub"  # aitherhub (DB liver) or heygen (Digital Twin)
@@ -826,7 +827,7 @@ async def list_avatars(
 
     # Run DB query and HeyGen API in parallel
     async def _fetch_aitherhub_livers():
-        """Fetch AitherHub livers from DB with SAS-signed preview URLs."""
+        """Fetch AitherHub livers from DB with SAS-signed preview URLs + thumbnail generation."""
         livers = []
         try:
             liver_sql = text("""
@@ -869,10 +870,19 @@ async def list_avatars(
                 clip_url = row.clip_url
                 signed_url = generate_read_sas_from_url(clip_url, expires_hours=2) if clip_url else None
                 preview_url = signed_url or clip_url
+                
+                # Generate thumbnail URL: replace .mp4 extension with _thumb.jpg in blob path
+                thumb_url = None
+                if clip_url:
+                    thumb_blob_url = clip_url.rsplit('.', 1)[0] + '_thumb.jpg' if '.' in clip_url else None
+                    if thumb_blob_url:
+                        thumb_url = generate_read_sas_from_url(thumb_blob_url, expires_hours=2)
+                
                 livers.append(AvatarInfo(
                     avatar_id=avatar_id,
                     name=liver_name,
                     preview_image_url=preview_url,
+                    thumbnail_image_url=thumb_url,
                     avatar_type="talking_photo",
                     face_image_url=clip_url,
                     source="aitherhub",
@@ -917,6 +927,159 @@ async def list_avatars(
     logger.info(f"[AIVideoGen] Cached {len(result)} avatars (TTL={_AVATARS_CACHE_TTL}s)")
 
     return response
+
+
+# ──────────────────────────────────────────────
+# POST /ai-video-generator/generate-thumbnails
+# ──────────────────────────────────────────────
+
+@router.post("/generate-thumbnails")
+async def generate_thumbnails(
+    background_tasks: BackgroundTasks,
+    _key: str = Depends(verify_admin_key),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Generate JPG thumbnail images from liver video clips.
+    Uses ffmpeg to extract the first frame, uploads to Azure Blob as {clip_name}_thumb.jpg.
+    Only generates thumbnails that don't already exist.
+    """
+    import subprocess
+    import tempfile
+    import httpx
+    from app.services.storage_service import (
+        generate_read_sas_from_url,
+        CONNECTION_STRING,
+        ACCOUNT_NAME,
+        CONTAINER_NAME,
+    )
+    from azure.storage.blob import BlobServiceClient
+
+    # Get all liver clips
+    liver_sql = text("""
+        WITH liver_clips AS (
+            SELECT 
+                REGEXP_REPLACE(v.original_filename, '-[0-9]{8}-[0-9]{4}\\.mp4$', '') AS liver_name,
+                vc.clip_url,
+                ROW_NUMBER() OVER (
+                    PARTITION BY REGEXP_REPLACE(v.original_filename, '-[0-9]{8}-[0-9]{4}\\.mp4$', '')
+                    ORDER BY vc.created_at DESC
+                ) AS rn
+            FROM video_clips vc
+            LEFT JOIN videos v ON v.id = vc.video_id
+            WHERE vc.clip_url IS NOT NULL
+                AND vc.clip_url != ''
+                AND v.original_filename IS NOT NULL
+                AND v.original_filename != ''
+                AND v.original_filename ~ '^[^-]+-[0-9]{8}-[0-9]{4}\\.mp4$'
+        )
+        SELECT liver_name, clip_url FROM liver_clips WHERE rn = 1
+    """)
+    result = await db.execute(liver_sql)
+    rows = result.fetchall()
+
+    generated = []
+    skipped = []
+    errors = []
+
+    blob_service = BlobServiceClient.from_connection_string(CONNECTION_STRING)
+    container_client = blob_service.get_container_client(CONTAINER_NAME)
+
+    for row in rows:
+        liver_name = row.liver_name.strip() if row.liver_name else ""
+        clip_url = row.clip_url
+        if not clip_url or not liver_name:
+            continue
+
+        # Determine thumbnail blob name
+        try:
+            parts = clip_url.split("/")
+            container_idx = parts.index(CONTAINER_NAME) if CONTAINER_NAME in parts else -1
+            if container_idx < 0:
+                continue
+            blob_name = "/".join(parts[container_idx + 1:])
+            if "?" in blob_name:
+                blob_name = blob_name.split("?", 1)[0]
+            from urllib.parse import unquote
+            blob_name = unquote(blob_name)
+            thumb_blob_name = blob_name.rsplit('.', 1)[0] + '_thumb.jpg'
+
+            # Check if thumbnail already exists
+            thumb_blob_client = container_client.get_blob_client(thumb_blob_name)
+            try:
+                thumb_blob_client.get_blob_properties()
+                skipped.append(liver_name)
+                continue  # Already exists
+            except Exception:
+                pass  # Doesn't exist, generate it
+
+            # Download video to temp file, extract first frame with ffmpeg
+            signed_url = generate_read_sas_from_url(clip_url, expires_hours=1)
+            if not signed_url:
+                errors.append(f"{liver_name}: no SAS URL")
+                continue
+
+            with tempfile.NamedTemporaryFile(suffix='.mp4', delete=True) as tmp_video:
+                with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp_thumb:
+                    tmp_thumb_path = tmp_thumb.name
+
+                # Download video (first 5MB is enough for first frame)
+                async with httpx.AsyncClient(timeout=30) as client:
+                    async with client.stream("GET", signed_url) as resp:
+                        if resp.status_code != 200:
+                            errors.append(f"{liver_name}: download failed ({resp.status_code})")
+                            continue
+                        downloaded = 0
+                        with open(tmp_video.name, 'wb') as f:
+                            async for chunk in resp.aiter_bytes(chunk_size=65536):
+                                f.write(chunk)
+                                downloaded += len(chunk)
+                                if downloaded > 5 * 1024 * 1024:  # 5MB limit
+                                    break
+
+                # Extract first frame with ffmpeg
+                proc = subprocess.run(
+                    ["ffmpeg", "-y", "-i", tmp_video.name, "-vframes", "1",
+                     "-q:v", "2", "-vf", "scale=320:-1", tmp_thumb_path],
+                    capture_output=True, timeout=15
+                )
+                if proc.returncode != 0:
+                    errors.append(f"{liver_name}: ffmpeg failed")
+                    import os as _os
+                    if _os.path.exists(tmp_thumb_path):
+                        _os.unlink(tmp_thumb_path)
+                    continue
+
+                # Upload thumbnail to blob
+                import os as _os
+                if _os.path.exists(tmp_thumb_path) and _os.path.getsize(tmp_thumb_path) > 0:
+                    with open(tmp_thumb_path, 'rb') as f:
+                        thumb_blob_client.upload_blob(
+                            f, overwrite=True,
+                            content_settings={"content_type": "image/jpeg"}
+                        )
+                    generated.append(liver_name)
+                    _os.unlink(tmp_thumb_path)
+                else:
+                    errors.append(f"{liver_name}: empty thumbnail")
+                    if _os.path.exists(tmp_thumb_path):
+                        _os.unlink(tmp_thumb_path)
+
+        except Exception as e:
+            errors.append(f"{liver_name}: {str(e)[:100]}")
+
+    # Invalidate avatar cache so next request picks up thumbnails
+    global _avatars_cache, _avatars_cache_time
+    _avatars_cache = None
+    _avatars_cache_time = 0
+
+    return {
+        "status": "ok",
+        "generated": generated,
+        "skipped": skipped,
+        "errors": errors,
+        "total_processed": len(rows),
+    }
 
 
 # ──────────────────────────────────────────────
