@@ -2182,6 +2182,7 @@ def _build_advanced_ffmpeg_command(video_path: str, ass_path: str, output_path: 
     cta_text: str = None,
     position_y: float = 75,
     overlay_images: list = None,
+    video_fps: int = 30,
 ) -> list:
     """V2.10: Pillow overlay方式の高度なffmpegフィルタチェーンを構築する。
 
@@ -2220,15 +2221,47 @@ def _build_advanced_ffmpeg_command(video_path: str, ass_path: str, output_path: 
     use_silence_trim = len(keep_segments) > 1 and len(keep_segments) <= 20
     af_chain = None
     if use_silence_trim:
-        select_parts = [f"between(t,{s:.3f},{e:.3f})" for s, e in keep_segments]
+        # V2.22: 帧回溯/坏帧残留問題の根本修正
+        # 問題: select+between(t,s,e)は包含境界（>=s AND <=e）のため、
+        #   VFR入力や浮動小数点精度の問題で境界フレームが重複選択される可能性がある。
+        #   また、入力がVFR（可変フレームレート）の場合、FRAME_RATE変数が不正確で
+        #   setpts=N/FRAME_RATE/TBが正しいPTSを生成しない。
+        # 修正:
+        #   1. select前にfps=30で強制CFR化（VFR入力のPTS不連続を解消）
+        #   2. select表達式で半開区間を使用（最初のsegmentのstartのみ>=、endは<次のsegmentのstart）
+        #      これにより境界フレームの重複選択を完全に防止
+        #   3. setpts=N/FRAME_RATE/TBでCFR出力を保証（fps=30後なのでFRAME_RATE=30で正確）
+        
+        # Step 1: 強制CFR化（VFR→実際の帧率で固定）
+        # video_fpsはffprobeから取得した実際の帧率（デフォルト30）
+        vf_parts.append(f"fps={video_fps}")
+        
+        # Step 2: 半開区間selectで境界フレーム重複を防止
+        # 最初のsegment: between(t, start, end-epsilon)
+        # 中間/最後: gte(t, start) * lt(t, end) ただし最後のsegmentのendは<=
+        select_parts = []
+        for i, (s, e) in enumerate(keep_segments):
+            if i == len(keep_segments) - 1:
+                # 最後のsegment: endを含む（動画の最後まで）
+                select_parts.append(f"between(t,{s:.3f},{e:.3f})")
+            else:
+                # 中間segment: endを含まない（次のsegmentのstartとの重複を防止）
+                # gte(t,s)*lt(t,e) = t>=s AND t<e
+                select_parts.append(f"gte(t\\,{s:.3f})*lt(t\\,{e:.3f})")
         select_expr = "+".join(select_parts)
         vf_parts.append(f"select='{select_expr}'")
         # V2.21: 回退setpts統合 - 音視頻同期問題の根本修正
-        # 原因: setpts=N/(FRAME_RATE*speed)/TBと-vsync dropの組み合わせで
-        #   フレームタイムスタンプが破壊され音視頻不同期が発生
-        # 修正: V2.19方式に戻す（select+setpts=N/FRAME_RATE/TB、速度は1bで別途適用）
         vf_parts.append("setpts=N/FRAME_RATE/TB")
-        af_chain = f"aselect='{select_expr}',asetpts=N/SR/TB"
+        
+        # 音声も同様に半開区間で選択
+        aselect_parts = []
+        for i, (s, e) in enumerate(keep_segments):
+            if i == len(keep_segments) - 1:
+                aselect_parts.append(f"between(t,{s:.3f},{e:.3f})")
+            else:
+                aselect_parts.append(f"gte(t\\,{s:.3f})*lt(t\\,{e:.3f})")
+        aselect_expr = "+".join(aselect_parts)
+        af_chain = f"aselect='{aselect_expr}',asetpts=N/SR/TB"
         # V14.2: セグメント境界フェードを完全に無効化
         # 【根本原因】ffmpegのfadeフィルタをチェーンで使うと全フレームが黒になる:
         #   fade=t=out:st=S:d=D → S+D以降は完全に黒
@@ -4983,6 +5016,7 @@ async def _process_single_clip_v2(job_id: str, clip: dict, req: GenerateRequest,
 
         video_width = 1080
         video_height = 1920
+        video_fps = 30  # V2.22: default, will be overridden by ffprobe
         duration = clip.get("duration_sec") or 30.0
         for stream in probe_data.get("streams", []):
             if stream.get("codec_type") == "video":
@@ -4990,6 +5024,15 @@ async def _process_single_clip_v2(job_id: str, clip: dict, req: GenerateRequest,
                 video_height = int(stream.get("height", 1920))
                 if "duration" in stream:
                     duration = float(stream["duration"])
+                # V2.22: 帧率を取得（VFR対応のためfps過滤器に使用）
+                r_frame_rate = stream.get("r_frame_rate", "30/1")
+                try:
+                    num, den = r_frame_rate.split("/")
+                    video_fps = round(int(num) / int(den))
+                except (ValueError, ZeroDivisionError):
+                    video_fps = 30
+                # 帧率を30-60の範囲にクランプ
+                video_fps = max(24, min(60, video_fps))
                 break
         if "format" in probe_data and "duration" in probe_data["format"]:
             duration = float(probe_data["format"]["duration"])
@@ -5211,6 +5254,7 @@ async def _process_single_clip_v2(job_id: str, clip: dict, req: GenerateRequest,
             cta_text=cta_text,
             position_y=req.position_y,
             overlay_images=overlay_images,
+            video_fps=video_fps,
         )
 
         ffmpeg_cmd_str = ' '.join(ffmpeg_cmd)
