@@ -936,14 +936,14 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
                         <div className="flex items-center gap-2 w-full px-1 pt-2 pb-1 shrink-0">
                           <Video className="w-3.5 h-3.5 text-gray-400" />
                           <span className="text-xs font-semibold text-gray-500">{window.__t('analysisHistory')}</span>
-                          {bgUploadTasks.length > 0 && (
-                            <span className="text-[10px] text-blue-400 bg-blue-50 px-1.5 py-0.5 rounded-full font-medium">
-                              {bgUploadTasks.length} {window.__t('sidebar_uploading') || 'アップロード中'}
-                            </span>
-                          )}
+
                         </div>
-                        {/* Upload tasks shown at top of history */}
-                        {bgUploadTasks.map((task) => (
+                        {/* Upload tasks: only show orphans (no matching video in regularVideos) */}
+                        {bgUploadTasks.filter(task => {
+                          if (task.videoId && regularVideos.some(v => v.id === task.videoId)) return false;
+                          if (task.fileName && regularVideos.some(v => v.original_filename === task.fileName)) return false;
+                          return true;
+                        }).map((task) => (
                           <div key={task.id} className={`w-full px-2.5 py-2.5 rounded-lg mb-1 ${
                             task.status === 'pending_resume'
                               ? 'border border-amber-200 bg-amber-50/50'
@@ -1077,6 +1077,57 @@ export default function Sidebar({ isOpen, onClose, user, onVideoSelect, onNewAna
                                   <span className="text-[13px] font-medium text-gray-700 leading-snug truncate" title={video.original_filename}>
                                     {video.original_filename || `${window.__t('videoTitleFallback')} ${video.id}`}
                                   </span>
+                                  {/* Upload progress bar (if this video has an active upload task) */}
+                                  {(() => {
+                                    const uploadTask = bgUploadTasks.find(t => 
+                                      (t.videoId && t.videoId === video.id) || 
+                                      (t.fileName && t.fileName === video.original_filename)
+                                    );
+                                    if (!uploadTask || uploadTask.status === 'done') return null;
+                                    return (
+                                      <div className="mb-1">
+                                        {uploadTask.status === 'uploading' && (
+                                          <div>
+                                            <div className="w-full h-1.5 bg-blue-100 rounded-full overflow-hidden">
+                                              <div className="h-full bg-gradient-to-r from-blue-400 to-blue-600 rounded-full transition-all duration-300 ease-out" style={{ width: `${uploadTask.progress}%` }} />
+                                            </div>
+                                            <div className="flex justify-between items-center mt-0.5">
+                                              <span className="text-[10px] text-blue-500 font-medium">{window.__t('sidebar_uploading') || 'アップロード中'} {Math.round(uploadTask.progress)}%</span>
+                                              <span className="text-[10px] text-gray-400">{uploadTask.fileSize ? (uploadTask.fileSize / (1024*1024) >= 1024 ? `${(uploadTask.fileSize / (1024*1024*1024)).toFixed(1)}GB` : `${(uploadTask.fileSize / (1024*1024)).toFixed(0)}MB`) : ''}</span>
+                                            </div>
+                                          </div>
+                                        )}
+                                        {uploadTask.status === 'pending_resume' && (
+                                          <div>
+                                            <div className="w-full h-1.5 bg-amber-100 rounded-full overflow-hidden">
+                                              <div className="h-full bg-gradient-to-r from-amber-300 to-amber-500 rounded-full" style={{ width: `${uploadTask.progress}%` }} />
+                                            </div>
+                                            <div className="flex justify-between items-center mt-0.5">
+                                              <span className="text-[10px] text-amber-600 font-medium">{window.__t('sidebar_interrupted') || '中断'} ({Math.round(uploadTask.progress)}%)</span>
+                                              <span className="text-[10px] text-gray-400">{uploadTask.fileSize ? (uploadTask.fileSize / (1024*1024) >= 1024 ? `${(uploadTask.fileSize / (1024*1024*1024)).toFixed(1)}GB` : `${(uploadTask.fileSize / (1024*1024)).toFixed(0)}MB`) : ''}</span>
+                                            </div>
+                                            <div className="mt-1 flex items-center gap-1.5">
+                                              <button className="text-[10px] px-2 py-0.5 rounded bg-amber-500 text-white hover:bg-amber-600 transition-colors flex items-center gap-1" onClick={(e) => { e.stopPropagation(); handleResumeFileClick(uploadTask.id); }}>
+                                                <RotateCcw className="w-3 h-3" /> {window.__t('sidebar_resume') || '再開'}
+                                              </button>
+                                              <button className="text-[10px] px-2 py-0.5 rounded bg-gray-200 text-gray-600 hover:bg-gray-300 transition-colors" onClick={(e) => { e.stopPropagation(); handleDismissPendingTask(uploadTask.id); }}>
+                                                {window.__t('sidebar_dismiss') || '破棄'}
+                                              </button>
+                                            </div>
+                                          </div>
+                                        )}
+                                        {uploadTask.status === 'retrying' && (
+                                          <span className="text-[10px] text-amber-600">{window.__t('sidebar_retrying') || 'リトライ中...'}</span>
+                                        )}
+                                        {uploadTask.status === 'error' && (
+                                          <div className="flex items-center gap-1.5">
+                                            <span className="text-[10px] text-red-500 truncate flex-1" title={uploadTask.error}>{uploadTask.error || 'エラー'}</span>
+                                            <button className="text-[9px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-600 hover:bg-blue-200 transition-colors flex-shrink-0" onClick={(e) => { e.stopPropagation(); backgroundUploadManager.retryTask(uploadTask.id); }}>↻</button>
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })()}
                                   {/* Status badge for non-DONE videos */}
                                   {video.status && video.status !== 'DONE' && (
                                     <div className="flex items-center gap-1.5">
