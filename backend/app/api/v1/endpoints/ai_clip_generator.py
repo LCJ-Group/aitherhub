@@ -2256,17 +2256,17 @@ def _build_advanced_ffmpeg_command(video_path: str, ass_path: str, output_path: 
     overlay_images = overlay_images or []
     # Build video filter chain parts (effects only, no text rendering)
     vf_parts = []
-    # ── 0. V2.22: 画面安定化（防抖 + 去闪烁） ──
-    # deshake: 手ぶれ補正（動き検出→逆補正でフレームを安定化）
-    # deflicker: フリッカー（輝度の急激な変化）を平滑化
-    # 適用条件: req.enable_stabilization=True（デフォルトON）
+    # ── 0. V2.23: 画面安定化（去闪烁のみ） ──
+    # V2.23改訂: deshakeを削除。
+    # 理由: deshakeはカメラの物理的手ぶれを補正するが、silence cutのjump cutには無効。
+    #   さらに、deshakeがフレーム間の動きを「補正」しようとして画面が微妙にズレる副作用がある。
+    #   jump cutの解決は切点zoom burst（下記）で対応。
+    # deflicker: 輝度の急激な変化を平滑化（照明フリッカー対策）
     enable_stab = getattr(req, 'enable_stabilization', True)
     if enable_stab:
-        # deshake: rx/ry=16は検索範囲（ピクセル）、edge=1は端をミラーで埋める
-        vf_parts.append("deshake=rx=16:ry=16:edge=1")
-        # deflicker: size=5は前後5フレームの平均で輝度を平滑化
+        # deflickerのみ: size=5は前後5フレームの平均で輝度を平滑化
         vf_parts.append("deflicker=size=5:mode=am")
-        logger.info(f"[ai-clip] V2.22: Stabilization enabled (deshake+deflicker)")
+        logger.info(f"[ai-clip] V2.23: Stabilization enabled (deflicker only, deshake removed)")
     # ── 1. Silence trimming (select filter) ──
     # V13: keep_segments > 20 の場合、隣接セグメントをマージして20以下にする
     if len(keep_segments) > 20:
@@ -2349,6 +2349,28 @@ def _build_advanced_ffmpeg_command(video_path: str, ass_path: str, output_path: 
         # V2.21: overlay/zoomのタイミング縮小は1bのsetptsで自動的に適用される
         # （speed_factorのsetpts=0.9524*PTSがoverlay後のPTSを縮小するため）
         duration = sum(e - s for s, e in keep_segments)
+        # V2.23: 切点zoom burst — silence cut境界でのjump cutを遮蔽
+        # 問題: silence cutで無音区間を除去すると、前後の映像が硬切で繋がり
+        #   人物の位置が突然ジャンプする（jump cut）。視聴者には「抖動」に見える。
+        # 解決: 各切点の出力時間軸上の位置に短いzoom burst（0.15秒、1.05x）を注入。
+        #   画面が一瞬拡大→戻ることで、jump cutが意図的な「強調」に見える。
+        # 注意: 既存のzoom_keyframesと2秒以上離れている切点のみに適用。
+        if len(keep_segments) >= 2:
+            cut_boundary_times = []
+            output_t = 0.0
+            for i, (seg_start, seg_end) in enumerate(keep_segments):
+                if i > 0:
+                    # この切点は出力時間軸上でoutput_tの位置にある
+                    cut_boundary_times.append(output_t)
+                output_t += (seg_end - seg_start)
+            # 既存zoom_keyframesと重複しない切点のみにzoom burstを追加
+            for ct in cut_boundary_times:
+                too_close = any(abs(ct - t) < 0.8 for t, _ in zoom_keyframes)
+                if not too_close and ct > 0.2 and ct < duration - 0.3:
+                    zoom_keyframes.append((ct - 0.05, 1.05))  # 切点の少し前から開始
+            zoom_keyframes.sort(key=lambda x: x[0])
+            logger.info(f"[ai-clip] V2.23: Injected zoom bursts at {len(cut_boundary_times)} cut boundaries "
+                        f"(total zoom_keyframes now: {len(zoom_keyframes)})")
         logger.info(f"[ai-clip] V2.21 remap: {len(overlay_images)} overlays, "
                     f"{len(zoom_keyframes)} zoom keyframes remapped to trimmed timeline "
                     f"(output_duration={duration:.1f}s)")
@@ -2367,12 +2389,15 @@ def _build_advanced_ffmpeg_command(video_path: str, ass_path: str, output_path: 
             af_chain = f"atempo={speed_factor:.4f}"
 
     # ── 2. Zoom Pulse via crop+scale ──
+    # V2.23: 切点zoom burstは短い持続時間(0.2秒)、通常zoomは0.4秒
     if zoom_keyframes:
         parts = []
         for t, zf in zoom_keyframes:
-            freq = math.pi / 0.4
+            # 切点burst (1.05x) は0.2秒、通常zoomは0.4秒
+            pulse_dur = 0.2 if abs(zf - 1.05) < 0.001 else 0.4
+            freq = math.pi / pulse_dur
             parts.append(
-                f"if(between(t,{t:.2f},{t+0.4:.2f}),"
+                f"if(between(t,{t:.2f},{t+pulse_dur:.2f}),"
                 f"{zf:.3f}*sin((t-{t:.2f})*{freq:.4f})+"
                 f"(1-sin((t-{t:.2f})*{freq:.4f})),"
             )
