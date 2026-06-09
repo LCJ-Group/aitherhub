@@ -2349,32 +2349,35 @@ def _build_advanced_ffmpeg_command(video_path: str, ass_path: str, output_path: 
         # V2.21: overlay/zoomのタイミング縮小は1bのsetptsで自動的に適用される
         # （speed_factorのsetpts=0.9524*PTSがoverlay後のPTSを縮小するため）
         duration = sum(e - s for s, e in keep_segments)
-        # V2.23: 切点zoom burst — silence cut境界でのjump cutを遮蔽
-        # 問題: silence cutで無音区間を除去すると、前後の映像が硬切で繋がり
-        #   人物の位置が突然ジャンプする（jump cut）。視聴者には「抖動」に見える。
-        # 解決: 各切点の出力時間軸上の位置に短いzoom burst（0.15秒、1.05x）を注入。
-        #   画面が一瞬拡大→戻ることで、jump cutが意図的な「強調」に見える。
-        # 注意: 既存のzoom_keyframesと2秒以上離れている切点のみに適用。
+        # V2.24: 切点遮蔽強化 — zoom burst + 輝度フラッシュでjump cutを完全に隠す
+        # V2.23のzoom burst(1.05x)だけでは不十分だったため、以下を追加:
+        #   1. zoom burstを強化: 1.05x → 1.12x（より明確なズームで位置ジャンプを隠す）
+        #   2. 切点での輝度フラッシュ: eq brightnessで切点前後0.05秒に白フラッシュ
+        #      → 視聴者の目が一瞬眩しくなり、jump cutに気付かない
         if len(keep_segments) >= 2:
             cut_boundary_times = []
             output_t = 0.0
             for i, (seg_start, seg_end) in enumerate(keep_segments):
                 if i > 0:
-                    # この切点は出力時間軸上でoutput_tの位置にある
                     cut_boundary_times.append(output_t)
                 output_t += (seg_end - seg_start)
-            # 既存zoom_keyframesと重複しない切点のみにzoom burstを追加
+            # 全ての切点にzoom burstを追加（既存zoomと近くても強制適用）
             for ct in cut_boundary_times:
-                too_close = any(abs(ct - t) < 0.8 for t, _ in zoom_keyframes)
-                if not too_close and ct > 0.2 and ct < duration - 0.3:
-                    zoom_keyframes.append((ct - 0.05, 1.05))  # 切点の少し前から開始
+                if ct > 0.1 and ct < duration - 0.2:
+                    zoom_keyframes.append((ct - 0.03, 1.12))  # 切点の直前から強めのzoom
             zoom_keyframes.sort(key=lambda x: x[0])
-            logger.info(f"[ai-clip] V2.23: Injected zoom bursts at {len(cut_boundary_times)} cut boundaries "
+            # 切点輝度フラッシュをvf_partsに追加するための情報を保存
+            # （後でzoom pulseの後に追加）
+            self_cut_boundaries = cut_boundary_times  # 後で参照
+            logger.info(f"[ai-clip] V2.24: Injected zoom bursts (1.12x) at {len(cut_boundary_times)} cut boundaries "
                         f"(total zoom_keyframes now: {len(zoom_keyframes)})")
+        else:
+            self_cut_boundaries = []
         logger.info(f"[ai-clip] V2.21 remap: {len(overlay_images)} overlays, "
-                    f"{len(zoom_keyframes)} zoom keyframes remapped to trimmed timeline "
+                                        f"{len(zoom_keyframes)} zoom keyframes remapped to trimmed timeline "
                     f"(output_duration={duration:.1f}s)")
-
+    else:
+        self_cut_boundaries = []
     # ── 1b. Speed factor (V13: TikTok風テンポアップ) ──
     speed_factor = getattr(req, 'speed_factor', 1.05)
     if speed_factor > 1.0:
@@ -2389,17 +2392,22 @@ def _build_advanced_ffmpeg_command(video_path: str, ass_path: str, output_path: 
             af_chain = f"atempo={speed_factor:.4f}"
 
     # ── 2. Zoom Pulse via crop+scale ──
-    # V2.23: 切点zoom burstは短い持続時間(0.2秒)、通常zoomは0.4秒
+    # V2.24: 切点zoom burstは短い持続時間(0.15秒, 1.12x)、通常zoomは0.4秒
+    # 重要: crop filter中のtはsetpts=0.9524*PTS後のPTSなので、
+    # zoom_keyframesの時間をspeed_factorで割る必要がある
+    effective_speed = speed_factor if speed_factor > 1.0 else 1.0
     if zoom_keyframes:
         parts = []
-        for t, zf in zoom_keyframes:
-            # 切点burst (1.05x) は0.2秒、通常zoomは0.4秒
-            pulse_dur = 0.2 if abs(zf - 1.05) < 0.001 else 0.4
+        for t_orig, zf in zoom_keyframes:
+            # speed_factor適用後の実際のPTS時刻に変換
+            t = t_orig / effective_speed
+            # 切点burst (1.12x) は0.15秒、通常zoomは0.4秒
+            pulse_dur = (0.15 if abs(zf - 1.12) < 0.01 else 0.4) / effective_speed
             freq = math.pi / pulse_dur
             parts.append(
-                f"if(between(t,{t:.2f},{t+pulse_dur:.2f}),"
-                f"{zf:.3f}*sin((t-{t:.2f})*{freq:.4f})+"
-                f"(1-sin((t-{t:.2f})*{freq:.4f})),"
+                f"if(between(t,{t:.3f},{t+pulse_dur:.3f}),"
+                f"{zf:.3f}*sin((t-{t:.3f})*{freq:.4f})+"
+                f"(1-sin((t-{t:.3f})*{freq:.4f})),"
             )
         zoom_expr = "1.0"
         for part in reversed(parts):
@@ -2413,7 +2421,27 @@ def _build_advanced_ffmpeg_command(video_path: str, ass_path: str, output_path: 
         )
         vf_parts.append(crop_f)
         vf_parts.append(f"scale={video_width}:{video_height}")
-
+    # ── 2b. V2.24: 切点輝度フラッシュ (jump cut遮蔽補助) ──
+    # zoom burstだけでは人物の位置ジャンプが見える場合があるため、
+    # 切点前後0.05秒に短い白フラッシュを追加して視聴者の目を眩ませる。
+    # eq=brightnessで実装。各切点で+0.25の輝度ブーストを三角波形で適用。
+    if self_cut_boundaries:
+        # effective_speedは上で定義済み
+        flash_parts = []
+        for ct in self_cut_boundaries:
+            # speed_factor適用後の時刻に変換
+            adjusted_ct = ct / effective_speed
+            # 三角波形: 切点の前後0.08秒で輝度が0→0.3→0に変化
+            # (強めのフラッシュでjump cutを確実に隠す)
+            half_dur = 0.08 / effective_speed
+            flash_parts.append(
+                f"if(between(t,{adjusted_ct-half_dur:.3f},{adjusted_ct+half_dur:.3f}),"
+                f"0.3*(1-abs(t-{adjusted_ct:.3f})/{half_dur:.3f}),0)"
+            )
+        # 全切点のフラッシュを加算（同時に複数の切点が活性化することはない）
+        brightness_expr = "+".join(flash_parts)
+        vf_parts.append(f"eq=brightness='{brightness_expr}':eval=frame")
+        logger.info(f"[ai-clip] V2.24: Added brightness flash at {len(self_cut_boundaries)} cut points")
     # ── 3. Flash intro (multiple variations, softer than before) ──
     if enable_flash_intro:
         flash_variant = random.choice(["soft_flash", "warm_glow", "contrast_pop", "fade_in", "cool_flash"])
