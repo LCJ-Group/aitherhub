@@ -3252,7 +3252,7 @@ function AiClipGenerationModal({ clip, onClose, onGenerate, generating, jobStatu
         <div className="sticky top-0 z-10 bg-white rounded-t-2xl border-b border-gray-100 px-5 py-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Zap className="w-5 h-5 text-emerald-500" />
-            <h3 className="text-base font-bold text-gray-800">AIクリップ生成 <span className="text-xs bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full ml-1">V2.17</span></h3>
+            <h3 className="text-base font-bold text-gray-800">AIクリップ生成 <span className="text-xs bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full ml-1">V2.22</span></h3>
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition">
             <X className="w-5 h-5" />

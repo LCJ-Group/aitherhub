@@ -415,7 +415,7 @@ export default function AutoAIClipPanel({ adminKey }) {
                 ・最大カット率: 60%→70%（よりテンポ良く）<br/>
                 ・ズームパルスもカット後時間軸に自動調整<br/>
                 <br/>
-                <b className="text-purple-300">V2.17 字幕品質改善:</b><br/>
+                <b className="text-purple-300">V2.22 字幕品質改善:</b><br/>
                 ・字幕重畳防止（0.1秒ギャップ制御）<br/>
                 ・長文自動フォント縮小＋自然改行<br/>
                 ・キーワード強調（商品名=金色, CTA=緑, 数字=橙）<br/>
