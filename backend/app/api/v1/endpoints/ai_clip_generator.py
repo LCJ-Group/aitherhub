@@ -1132,52 +1132,37 @@ def _build_silence_trim_segments(duration: float, silence_periods: list,
         return False
 
     # Determine which silence periods to actually cut
-    # Sort by length (longest first) to prioritize removing the most impactful silences
+    # V2.27: 気口/停顿を「彻底削除」— 部分カットではなく完全除去し前後を直接拼接
+    # 以前の問題: 部分カット（50%〜70%のみ除去）だと無効留白が残り、硬切痕跡が見える
     cuttable = []
     total_cut_time = 0.0
-    max_cut_ratio = 0.70  # V2.18: 60%→70% さらに積極的にカット（無音区間をより確実に除去）
+    max_cut_ratio = 0.70  # 最大カット量は元の動画の70%まで
     max_cut_time = duration * max_cut_ratio
 
-    # --- Phase 1: Silence cuts ---
-    for s_start, s_end in sorted(silence_periods or [], key=lambda x: x[1]-x[0], reverse=True):
+    # --- Phase 1: Silence cuts (V2.27: 完全削除方式) ---
+    # ソート: 時間順（前から順に処理して正確な切点管理）
+    sorted_silences = sorted(silence_periods or [], key=lambda x: x[0])
+    
+    for s_start, s_end in sorted_silences:
         silence_len = s_end - s_start
-        # Don't cut first 0.2s or last 0.2s of video
-        if s_start < 0.2 or s_end > duration - 0.2:
+        # Don't cut first 0.15s or last 0.15s of video
+        if s_start < 0.15 or s_end > duration - 0.15:
             continue
         # Don't cut if overlaps with meaningful caption
         if _is_protected(s_start, s_end):
             continue
-        # V2.18: Lower threshold - cut silences from 0.2s（より短い無音もカット）
-        if silence_len < 0.2:
+        # V2.27: 0.3秒以上の無音は全て完全削除対象（0.2s未満は自然な間として残す）
+        if silence_len < 0.3:
             continue
         # Check max cut limit
         if total_cut_time >= max_cut_time:
             break
 
-        if silence_len >= 1.0:
-            # Long silence: aggressive cut, keep only 0.15s natural pause
-            cut_start = s_start + 0.08
-            cut_end = s_end - 0.08
-        elif silence_len >= 0.5:
-            # Medium silence: aggressive cut (remove 70% from center)
-            mid = (s_start + s_end) / 2
-            half_cut = silence_len * 0.7 / 2
-            cut_start = mid - half_cut
-            cut_end = mid + half_cut
-        elif silence_len >= 0.3:
-            # V12: Short silence: partial cut (remove 50% from center)
-            mid = (s_start + s_end) / 2
-            half_cut = silence_len * 0.5 / 2
-            cut_start = mid - half_cut
-            cut_end = mid + half_cut
-        elif silence_len >= 0.2:
-            # V2.18: Very short silence: light cut (remove 30% from center)
-            mid = (s_start + s_end) / 2
-            half_cut = silence_len * 0.3 / 2
-            cut_start = mid - half_cut
-            cut_end = mid + half_cut
-        else:
-            continue
+        # V2.27: 完全削除 — 前後に極小マージン(0.05s)だけ残して全区間カット
+        # これにより「無効留白」が一切残らず、前後の有効素材が直接拼接される
+        margin = 0.05  # 音声の自然な繋がりのための極小マージン
+        cut_start = s_start + margin
+        cut_end = s_end - margin
 
         if cut_end > cut_start:
             actual_cut = cut_end - cut_start
@@ -1295,27 +1280,90 @@ def _build_silence_trim_segments(duration: float, silence_periods: list,
                 logger.info(f"[ai-clip] V15 leading trim: first_speech={first_speech_start:.1f}s, "
                             f"new_start={new_start:.1f}s, trimmed={new_start - old_start:.1f}s")
 
-    # V15.1: ジャンプカット防止 —— 隣接keep_segments間のカット区間が3秒未満の場合、
-    # 後続セグメントを廃片として削除（マージではなく削除）
-    # 規範: AI自動裁切の相隣片段間隔≥3秒。間隔が3秒未満の片段は廃片として成片に含めない。
-    MIN_CUT_GAP = 3.0  # 最小カット間隔（秒）
-    if len(keep_segments) > 1:
-        filtered_segments = [keep_segments[0]]
-        for i in range(1, len(keep_segments)):
-            gap = keep_segments[i][0] - filtered_segments[-1][1]
-            if gap < MIN_CUT_GAP:
-                # ギャップが3秒未満 → この片段は廃片として削除（成片に含めない）
-                logger.info(f"[ai-clip] V15.1 discard short-gap segment: gap={gap:.1f}s < {MIN_CUT_GAP}s, "
-                            f"segment=({keep_segments[i][0]:.1f}, {keep_segments[i][1]:.1f})")
+    # V2.27: 高頻度停顿ゾーン検出 — 5秒以内に≥2回かつⅥ1sの停顿がある窓を検出し、
+    # その窓全体を舎棄する（頻繁な硬切による画面フラッシュ/ジャンプカットを回避）
+    # ロジック: keep_segmentsの中で、短いセグメントが密集しているゾーンを検出し、
+    # そのゾーン内のセグメントをまとめて削除する
+    DENSE_CUT_WINDOW = 5.0   # 検出窓（秒）
+    DENSE_CUT_MIN_COUNT = 2  # 窓内の最小カット数
+    DENSE_CUT_MIN_PAUSE = 1.0  # 各カットの最小停顿時長
+    
+    if len(keep_segments) > 2:
+        # 各セグメント間のギャップ（カットされた区間）を取得
+        gaps = []
+        for i in range(len(keep_segments) - 1):
+            gap_start = keep_segments[i][1]
+            gap_end = keep_segments[i + 1][0]
+            gap_len = gap_end - gap_start
+            gaps.append((i, gap_start, gap_end, gap_len))
+        
+        # スライディングウィンドウで高頻度停顿ゾーンを検出
+        dense_zones = []  # (start_seg_idx, end_seg_idx) — 舎棄するセグメント範囲
+        i = 0
+        while i < len(gaps):
+            # このギャップから始まる5秒窓をチェック
+            window_start_time = gaps[i][1]  # gap_start
+            long_pauses_in_window = []
+            j = i
+            while j < len(gaps) and gaps[j][1] < window_start_time + DENSE_CUT_WINDOW:
+                if gaps[j][3] >= DENSE_CUT_MIN_PAUSE:  # gap_len >= 1.0s
+                    long_pauses_in_window.append(j)
+                j += 1
+            
+            if len(long_pauses_in_window) >= DENSE_CUT_MIN_COUNT:
+                # 高頻度停顿ゾーン検出！
+                # このゾーン内のセグメントを舎棄対象としてマーク
+                zone_first_gap = long_pauses_in_window[0]
+                zone_last_gap = long_pauses_in_window[-1]
+                # 舎棄範囲: 最初の長い停顿の後のセグメントから最後の長い停顿の後のセグメントまで
+                discard_start_idx = gaps[zone_first_gap][0] + 1  # 最初の長いgapの後のセグメント
+                discard_end_idx = gaps[zone_last_gap][0] + 1    # 最後の長いgapの後のセグメント
+                dense_zones.append((discard_start_idx, discard_end_idx))
+                logger.info(f"[ai-clip] V2.27 dense-pause zone detected: "
+                            f"window={window_start_time:.1f}-{window_start_time+DENSE_CUT_WINDOW:.1f}s, "
+                            f"long_pauses={len(long_pauses_in_window)}, "
+                            f"discard segments [{discard_start_idx}..{discard_end_idx}]")
+                # ゾーンの最後のギャップの次から続行
+                i = zone_last_gap + 1
             else:
-                filtered_segments.append(keep_segments[i])
-        if len(filtered_segments) < len(keep_segments):
-            logger.info(f"[ai-clip] V15.1 jump-cut prevention: discarded {len(keep_segments) - len(filtered_segments)} "
-                        f"segments (min_gap={MIN_CUT_GAP}s), {len(keep_segments)} -> {len(filtered_segments)}")
-            keep_segments = filtered_segments
+                i += 1
+        
+        # 舎棄ゾーン内のセグメントを除外
+        if dense_zones:
+            discard_indices = set()
+            for dz_start, dz_end in dense_zones:
+                for idx in range(dz_start, dz_end + 1):
+                    discard_indices.add(idx)
+            
+            filtered_segments = []
+            for idx, seg in enumerate(keep_segments):
+                if idx not in discard_indices:
+                    filtered_segments.append(seg)
+                else:
+                    logger.info(f"[ai-clip] V2.27 discarding segment {idx}: "
+                                f"({seg[0]:.1f}, {seg[1]:.1f}) - in dense-pause zone")
+            
+            if filtered_segments:
+                logger.info(f"[ai-clip] V2.27 dense-pause discard: {len(keep_segments)} -> {len(filtered_segments)} segments "
+                            f"(discarded {len(keep_segments) - len(filtered_segments)} segments in dense-pause zones)")
+                keep_segments = filtered_segments
+    
+    # V2.27: 隣接セグメントのマージ（ギャップが極小の場合は結合してジャンプカットを減らす）
+    if len(keep_segments) > 1:
+        merged_keep = [keep_segments[0]]
+        for i in range(1, len(keep_segments)):
+            gap = keep_segments[i][0] - merged_keep[-1][1]
+            # ギャップが0.15秒未満ならマージ（カットする意味がない）
+            if gap < 0.15:
+                merged_keep[-1] = (merged_keep[-1][0], keep_segments[i][1])
+            else:
+                merged_keep.append(keep_segments[i])
+        if len(merged_keep) < len(keep_segments):
+            logger.info(f"[ai-clip] V2.27 merged tiny-gap segments: {len(keep_segments)} -> {len(merged_keep)}")
+            keep_segments = merged_keep
 
     total_kept = sum(e - s for s, e in keep_segments)
-    logger.info(f"[ai-clip] Smart trim V15: {len(cuttable)} cuts, "
+    logger.info(f"[ai-clip] V2.27 Smart trim: {len(cuttable)} cuts, "
                 f"{total_cut_time:.1f}s removed ({total_cut_time/duration*100:.0f}%), "
                 f"{total_kept:.1f}s kept, {len(keep_segments)} segments")
     return keep_segments
@@ -5241,7 +5289,7 @@ async def _process_single_clip_v2(job_id: str, clip: dict, req: GenerateRequest,
         if req.enable_silence_cut:
             await _update_job(job_id, progress_pct=18, current_step=f"クリップ {idx+1}/{total}: 無音区間検出中...")
             silence_periods = _detect_silence_periods(
-                video_path, noise_db=req.silence_threshold_db, min_duration=0.2  # V2.18: 0.3→0.2 より短い無音もカット
+                video_path, noise_db=req.silence_threshold_db, min_duration=0.25  # V2.27: 0.25s以上の無音を検出（0.3s以上を完全削除）
             )
             await _update_job(job_id, progress_pct=20, current_step=f"クリップ {idx+1}/{total}: 無音{len(silence_periods)}区間検出")
 
