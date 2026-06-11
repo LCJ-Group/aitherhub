@@ -2249,6 +2249,125 @@ async def _apply_sound_effects(video_path: str, output_path: str, duration: floa
         return False
 
 
+# ─── V2.29: Pre-splice segments (concat-based silence trim) ─────────────────────────
+async def _pre_splice_segments(
+    video_path: str, keep_segments: list, tmp_dir: str, video_fps: int = 30
+) -> tuple:
+    """V2.29: select filterの代わりにconcat demuxerで無音カットを実行する。
+    
+    問題: select+setptsによる無音カットでは、ffmpegのデコーダ内部状態やVFR入力の
+    浮動小数点精度問題により、切点で1フレーム回溯（重複）が発生する。
+    
+    解決: 各keep_segmentを独立した一時ファイルとして抽出し、concat demuxerで
+    結合することで、切点を完全にクリーンなファイル境界にする。
+    
+    Args:
+        video_path: 入力動画パス
+        keep_segments: [(start, end), ...] 保持するセグメント
+        tmp_dir: 一時ファイル保存先
+        video_fps: 動画のフレームレート
+    
+    Returns:
+        (spliced_path, new_duration) - 結合済み動画パスと新しいduration
+        失敗時は (None, 0) を返す
+    """
+    if len(keep_segments) <= 1:
+        return (None, 0)
+    
+    splice_dir = os.path.join(tmp_dir, "splice_segments")
+    os.makedirs(splice_dir, exist_ok=True)
+    
+    segment_paths = []
+    for i, (seg_start, seg_end) in enumerate(keep_segments):
+        seg_path = os.path.join(splice_dir, f"seg_{i:03d}.mp4")
+        # Re-encode each segment to ensure clean frame boundaries
+        # Using -ss before -i for fast seek, then -t for duration
+        seg_duration = seg_end - seg_start
+        extract_cmd = [
+            "ffmpeg", "-y", "-hide_banner",
+            "-ss", f"{seg_start:.4f}",
+            "-i", video_path,
+            "-t", f"{seg_duration:.4f}",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18",
+            "-r", str(video_fps),  # Force CFR output
+            "-c:a", "aac", "-b:a", "128k",
+            "-avoid_negative_ts", "make_zero",
+            "-video_track_timescale", str(video_fps * 1000),
+            seg_path
+        ]
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *extract_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+            if proc.returncode != 0 or not os.path.exists(seg_path):
+                logger.warning(f"[ai-clip] V2.29: Segment {i} extraction failed: {stderr.decode(errors='replace')[-200:]}")
+                return (None, 0)
+            # Verify segment has content
+            if os.path.getsize(seg_path) < 500:
+                logger.warning(f"[ai-clip] V2.29: Segment {i} too small ({os.path.getsize(seg_path)} bytes)")
+                return (None, 0)
+            segment_paths.append(seg_path)
+        except (asyncio.TimeoutError, Exception) as e:
+            logger.warning(f"[ai-clip] V2.29: Segment {i} extraction error: {e}")
+            return (None, 0)
+    
+    # Write concat list
+    concat_list_path = os.path.join(splice_dir, "concat_list.txt")
+    with open(concat_list_path, 'w') as f:
+        for p in segment_paths:
+            f.write(f"file '{p}'\n")
+    
+    # Concat all segments
+    spliced_path = os.path.join(tmp_dir, "spliced_nosil.mp4")
+    concat_cmd = [
+        "ffmpeg", "-y", "-hide_banner",
+        "-f", "concat", "-safe", "0",
+        "-i", concat_list_path,
+        "-c", "copy",
+        "-movflags", "+faststart",
+        spliced_path
+    ]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *concat_cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+        if proc.returncode != 0 or not os.path.exists(spliced_path):
+            logger.warning(f"[ai-clip] V2.29: Concat failed: {stderr.decode(errors='replace')[-200:]}")
+            return (None, 0)
+    except (asyncio.TimeoutError, Exception) as e:
+        logger.warning(f"[ai-clip] V2.29: Concat error: {e}")
+        return (None, 0)
+    
+    # Get actual duration of spliced file
+    probe_cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", spliced_path]
+    probe_result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=15)
+    new_duration = sum(e - s for s, e in keep_segments)  # fallback
+    try:
+        probe_data = json.loads(probe_result.stdout)
+        if "format" in probe_data and "duration" in probe_data["format"]:
+            new_duration = float(probe_data["format"]["duration"])
+    except Exception:
+        pass
+    
+    logger.info(f"[ai-clip] V2.29: Pre-splice complete: {len(segment_paths)} segments -> "
+                f"{os.path.getsize(spliced_path)//1024}KB, duration={new_duration:.2f}s")
+    
+    # Cleanup individual segment files to save disk space
+    for p in segment_paths:
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+    
+    return (spliced_path, new_duration)
+
+
 # ─── V2: Build Advanced ffmpeg Filter Chain ──────────────────────────────────────────
 def _remap_time_for_silence_trim(original_time: float, keep_segments: list) -> float:
     """V2.18: 元の動画の時間を、無音カット後の出力時間軸にリマッピングする。
@@ -5516,6 +5635,28 @@ async def _process_single_clip_v2(job_id: str, clip: dict, req: GenerateRequest,
                 logger.warning(f"[ai-clip {job_id}] PiP generation failed for all inputs (images={len(product_imgs)}, videos={len(product_videos)})")
 
         await _update_job(job_id, progress_pct=58, current_step=f"クリップ {idx+1}/{total}: エンコード準備中...")
+
+        # ── V2.29: Pre-splice silence trim (concat-based, eliminates frame regression) ──
+        # Instead of using select filter inside ffmpeg (which causes 1-frame regression at cut points),
+        # pre-splice the keep_segments into a clean intermediate file using concat demuxer.
+        if len(keep_segments) > 1:
+            await _update_job(job_id, progress_pct=58, current_step=f"クリップ {idx+1}/{total}: 無音カット結合中 (V2.29)...")
+            spliced_path, spliced_duration = await _pre_splice_segments(
+                video_path, keep_segments, tmp_dir, video_fps
+            )
+            if spliced_path and os.path.exists(spliced_path):
+                # Remap overlay_images and zoom_keyframes to the new timeline BEFORE replacing
+                overlay_images = _remap_overlay_images_for_silence_trim(overlay_images, keep_segments)
+                zoom_keyframes = _remap_zoom_keyframes_for_silence_trim(zoom_keyframes, keep_segments)
+                # Replace video_path with spliced file and reset keep_segments
+                video_path = spliced_path
+                duration = spliced_duration
+                keep_segments = [(0, spliced_duration)]  # Single segment = no select filter needed
+                logger.info(f"[ai-clip {job_id}] V2.29: Using pre-spliced file "
+                            f"(duration={spliced_duration:.2f}s, no select filter needed)")
+            else:
+                logger.warning(f"[ai-clip {job_id}] V2.29: Pre-splice failed, falling back to select filter")
+
         ffmpeg_cmd = _build_advanced_ffmpeg_command(
             video_path, ass_path, output_path,
             video_width, video_height, duration, req,
@@ -9601,13 +9742,31 @@ async def _v3_process_product_clip(
 
     v3_compat_req = _V3ReqCompat(req)
 
+    # ── V2.29: Pre-splice silence trim for V3 (same concat-based approach) ──
+    v3_video_path = segment_path
+    v3_duration = seg_duration
+    if len(keep_segments) > 1:
+        spliced_path, spliced_duration = await _pre_splice_segments(
+            segment_path, keep_segments, clip_tmp_dir, video_fps
+        )
+        if spliced_path and os.path.exists(spliced_path):
+            # Remap overlays to new timeline
+            all_overlays = _remap_overlay_images_for_silence_trim(all_overlays, keep_segments)
+            v3_video_path = spliced_path
+            v3_duration = spliced_duration
+            keep_segments = [(0, spliced_duration)]
+            logger.info(f"[ai-clip-v3 {job_id}] V2.29: Pre-spliced '{product_name}' "
+                        f"(duration={spliced_duration:.2f}s)")
+        else:
+            logger.warning(f"[ai-clip-v3 {job_id}] V2.29: Pre-splice failed, using select filter fallback")
+
     ffmpeg_cmd = _build_advanced_ffmpeg_command(
-        video_path=segment_path,
+        video_path=v3_video_path,
         ass_path="",
         output_path=output_path,
         video_width=video_width,
         video_height=video_height,
-        duration=seg_duration,
+        duration=v3_duration,
         req=v3_compat_req,
         zoom_keyframes=[],
         keep_segments=keep_segments,
