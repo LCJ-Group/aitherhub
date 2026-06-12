@@ -31,7 +31,7 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 
 WORKSPACE="/workspace"
 WORKER_API_KEY="${WORKER_API_KEY:-change-me-in-production}"
-WORKER_PORT="${WORKER_PORT:-8000}"
+WORKER_PORT="${WORKER_PORT:-8888}"
 
 # Persistent package directory
 PIP_PKG_DIR="$WORKSPACE/pip-packages"
