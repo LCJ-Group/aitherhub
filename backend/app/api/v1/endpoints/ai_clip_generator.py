@@ -1818,6 +1818,64 @@ def _render_text_overlay_image_v2(
     return img
 
 
+def _render_selling_point_image(
+    text: str,
+    video_width: int,
+    video_height: int,
+    font_path: str,
+    font_size: int = 80,
+    y_position: int = 0,
+) -> 'Image':
+    """V2.33: 卖点キーワード専用のオーバーレイ画像を生成。
+
+    デザイン原則:
+    - 絶対に背景色ブロックを付けない
+    - 太字・高コントラスト色（オレンジまたは亮黄色）
+    - 強制単行表示
+    - 基礎字幕の上方に固定位置
+    """
+    from PIL import Image, ImageDraw, ImageFont
+
+    text = _strip_emoji(text).strip()
+    if not text:
+        return Image.new('RGBA', (video_width, video_height), (0, 0, 0, 0))
+
+    img = Image.new('RGBA', (video_width, video_height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+
+    # フォント読み込み（Bold優先）
+    try:
+        font = ImageFont.truetype(font_path, font_size)
+    except Exception:
+        font = ImageFont.load_default()
+
+    # テキストサイズ計算
+    bbox = draw.textbbox((0, 0), text, font=font)
+    text_w = bbox[2] - bbox[0]
+    text_h = bbox[3] - bbox[1]
+
+    # 中央揃え、指定のY位置に配置
+    x = (video_width - text_w) // 2
+    y = y_position - text_h // 2  # 指定位置を中心に
+
+    # 色定義: オレンジ系（高視認性、広告感）
+    # メインカラー: 明るいオレンジ (255, 165, 0)
+    # アウトライン: 濃い赤褐色（コントラスト確保）
+    text_color = (255, 170, 0, 255)  # オレンジ（視認性最大）
+    outline_color = (80, 30, 0, 255)  # 濃い褐色アウトライン
+    outline_width = max(4, int(font_size * 0.07))  # フォントサイズ比例のアウトライン
+
+    # 描画: アウトライン付き太字（背景なし）
+    draw.text(
+        (x, y), text, font=font,
+        fill=text_color,
+        stroke_width=outline_width,
+        stroke_fill=outline_color,
+    )
+
+    return img
+
+
 def _generate_overlay_images(
     styled_captions: list,
     hook_text: Optional[str],
@@ -1830,8 +1888,9 @@ def _generate_overlay_images(
     position_y: float = 75.0,
     clip_duration: float = 0,
     product_name: str = "",
+    selling_points: list = None,
 ) -> list:
-    """Pillowで全overlay画像（フック・字幕・CTA）を生成する。
+    """Pillowで全overlay画像（フック・字幕・CTA・卖点）を生成する。
     
     clip_duration: 実際の出力クリップの長さ（秒）。0の場合はdurationを使用。
     字幕のタイムスタンプがclip_durationを超える場合、自動的にオフセット補正を行う。
@@ -2065,6 +2124,48 @@ def _generate_overlay_images(
         sub_img.save(sub_path, 'PNG')
         overlays.append((sub_path, cap_start, cap_end))
     
+    # ── V2.33: 卖点キーワードオーバーレイ（基礎字幕の上方・中部に表示）──
+    # ルール: 無背景、太字、オレンジ/亮黄色、強制単行、基礎字幕と空間的に完全解偶
+    if selling_points:
+        # 卖点フォントサイズ: 基礎字幕より大きく、視覚的に目立つ
+        sp_fontsize = max(52, int(80 * scale))
+        # 卖点表示位置: 画面中部（基礎字幕の上方）
+        # 基礎字幕はposition_y（デフォルト75%）にあるので、卖点はその上方に配置
+        # 卖点Y位置 = 基礎字幕Y位置 - 15%（十分な間隔を確保）
+        sp_position_y_pct = max(30.0, position_y - 18.0)  # 最低30%（画面上部すぎない）
+        sp_y_pixel = int(video_height * sp_position_y_pct / 100)
+
+        for sp_idx, sp_item in enumerate(selling_points):
+            if isinstance(sp_item, dict):
+                sp_text = sp_item.get("text", "")
+                sp_start = float(sp_item.get("start", 0))
+                sp_end = float(sp_item.get("end", 0))
+            else:
+                continue
+
+            if not sp_text or sp_end <= sp_start:
+                continue
+
+            # 強制単行: 改行を禁止（スペースに置換）
+            sp_text = sp_text.replace("\n", " ").replace("\\N", " ").strip()[:15]
+
+            # 卖点オーバーレイ画像を生成
+            # ルール: 無背景、太字、オレンジ色、高コントラスト
+            sp_img = _render_selling_point_image(
+                text=sp_text,
+                video_width=video_width,
+                video_height=video_height,
+                font_path=font_path,
+                font_size=sp_fontsize,
+                y_position=sp_y_pixel,
+            )
+            sp_path = os.path.join(tmp_dir, f"overlay_sp_{sp_idx:02d}.png")
+            sp_img.save(sp_path, 'PNG')
+            overlays.append((sp_path, sp_start, sp_end))
+
+        logger.info(f"[ai-clip] V2.33 Generated {len(selling_points)} selling point overlays "
+                    f"(y_pos={sp_position_y_pct:.0f}%, fontsize={sp_fontsize})")
+
     # ── CTA text (last 3.5 seconds) ──
     if cta_text and effective_duration > 5:
         cta_fontsize = max(50, int(80 * scale))
@@ -3132,6 +3233,184 @@ CTAテキストのみ出力（説明不要）:"""
         "左下リンクから即購入",
     ]
     return random.choice(ctas)
+
+
+# ─── V2.33: 卖点关键词动态覆盖系统 ────────────────────────────────────────────
+
+async def _generate_selling_points(captions: list, product_name: str,
+                                    product_keywords: list = None) -> list:
+    """V2.33: GPTで商品の核心卖点フレーズを生成する。
+
+    产品展示段落に同期して画面上方に表示する卖点キーワードを生成。
+    各卖点は強制単行・15文字以内。
+
+    Returns:
+        list of {"text": str, "start": float, "end": float} — 卖点とその表示タイミング
+    """
+    import openai
+
+    if not captions or not product_name:
+        return []
+
+    azure_key = os.getenv("AZURE_OPENAI_KEY", "")
+    azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
+    azure_model = os.getenv("GPT5_MODEL") or os.getenv("GPT5_DEPLOYMENT") or "gpt-4.1-mini"
+
+    if not azure_key or not azure_endpoint:
+        # GPT使えない場合はフォールバック卖点を生成
+        return _fallback_selling_points(captions, product_name, product_keywords)
+
+    from urllib.parse import urlparse as _urlparse
+    _parsed = _urlparse(azure_endpoint)
+    clean_endpoint = f"{_parsed.scheme}://{_parsed.netloc}/"
+
+    client = openai.AsyncAzureOpenAI(
+        api_key=azure_key,
+        azure_endpoint=clean_endpoint,
+        api_version=os.getenv("GPT5_API_VERSION", "2025-04-01-preview"),
+    )
+
+    # 字幕テキストを要約
+    transcript = " ".join(c.get("text", "") for c in captions)[:500]
+    keywords_str = "、".join(product_keywords[:10]) if product_keywords else "なし"
+
+    prompt = f"""以下はライブコマース動画の字幕テキストです。商品の核心卖点を抽出してください。
+
+商品名: {product_name}
+商品キーワード: {keywords_str}
+字幕内容: {transcript}
+
+【タスク】
+この商品の核心的な卖点・訴求ポイントを3〜5個生成してください。
+
+【ルール】
+- 各卖点は15文字以内（厳守）
+- 単行表示（改行禁止）
+- 商品の特徴・効果・成分・差別化ポイントを端的に表現
+- 広告コピーのように簡潔でインパクトのある表現
+- 絵文字禁止
+- 日本語で出力
+
+【出力形式】
+JSON配列で出力。各要素は卖点テキストのみ。
+例: ["超低刺激処方", "サロン級の仕上がり", "48時間持続保湿"]
+
+卖点のみ出力（説明不要）:"""
+
+    try:
+        response = await client.chat.completions.create(
+            model=azure_model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=200,
+            temperature=0.3,
+        )
+
+        result_text = response.choices[0].message.content.strip()
+        if result_text.startswith("```"):
+            result_text = result_text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+
+        selling_points = json.loads(result_text)
+        if not isinstance(selling_points, list):
+            selling_points = []
+
+        # 15文字制限を強制
+        selling_points = [sp.strip()[:15] for sp in selling_points if sp and sp.strip()]
+        # 最大5個
+        selling_points = selling_points[:5]
+
+        if selling_points:
+            logger.info(f"[ai-clip] V2.33 Generated {len(selling_points)} selling points: {selling_points}")
+
+        return selling_points
+
+    except Exception as e:
+        logger.warning(f"[ai-clip] V2.33 Selling point generation failed: {e}")
+        return _fallback_selling_points(captions, product_name, product_keywords)
+
+
+def _fallback_selling_points(captions: list, product_name: str,
+                              product_keywords: list = None) -> list:
+    """V2.33: GPT使用不可時のフォールバック卖点生成。
+    product_keywordsまたは字幕内容からキーワードを抽出。
+    """
+    points = []
+
+    # product_keywordsがあればそれを使用
+    if product_keywords:
+        for kw in product_keywords[:5]:
+            if kw and len(kw) <= 15:
+                points.append(kw)
+
+    # 足りなければ字幕から特徴的なフレーズを抽出
+    if len(points) < 3 and captions:
+        import re
+        feature_patterns = [
+            r'(\S{2,8}(?:配合|処方|成分|効果|仕上がり|ケア|対応|設計|構造))',
+            r'((?:超|高|低|無)\S{2,6})',
+            r'(サロン級\S{0,6})',
+            r'(プロ(?:仕様|級|用)\S{0,6})',
+        ]
+        full_text = " ".join(c.get("text", "") for c in captions)
+        for pattern in feature_patterns:
+            for m in re.finditer(pattern, full_text):
+                candidate = m.group(1).strip()[:15]
+                if candidate and candidate not in points and len(candidate) >= 3:
+                    points.append(candidate)
+                    if len(points) >= 5:
+                        break
+            if len(points) >= 5:
+                break
+
+    return points[:5]
+
+
+def _assign_selling_point_timings(selling_points: list, captions: list,
+                                   duration: float) -> list:
+    """V2.33: 卖点フレーズに表示タイミングを割り当てる。
+
+    ロジック:
+    - 動画全体を均等に分割し、各卖点を順番に表示
+    - 各卖点の表示時間: 3〜5秒
+    - フック(最初3秒)とCTA(最後3.5秒)の区間は避ける
+
+    Returns:
+        list of {"text": str, "start": float, "end": float}
+    """
+    if not selling_points or duration <= 0:
+        return []
+
+    # 卖点表示可能区間: フック後〜CTA前
+    sp_start_time = 3.5  # フック終了後
+    sp_end_time = max(sp_start_time + 3, duration - 4.0)  # CTA開始前
+    available_duration = sp_end_time - sp_start_time
+
+    if available_duration < 3.0:
+        return []  # 表示区間が短すぎる
+
+    n = len(selling_points)
+    # 各卖点の表示時間を計算（均等分割、最大5秒、最小3秒）
+    per_sp_duration = min(5.0, max(3.0, available_duration / n))
+    # 卖点間のギャップ
+    total_needed = per_sp_duration * n
+    gap = max(0.5, (available_duration - total_needed) / max(1, n))
+
+    timed_points = []
+    current_time = sp_start_time
+
+    for sp_text in selling_points:
+        if current_time + per_sp_duration > sp_end_time + 1.0:
+            break  # 時間切れ
+        sp_end = min(current_time + per_sp_duration, sp_end_time)
+        timed_points.append({
+            "text": sp_text,
+            "start": current_time,
+            "end": sp_end,
+        })
+        current_time = sp_end + gap
+
+    logger.info(f"[ai-clip] V2.33 Assigned timings to {len(timed_points)} selling points "
+                f"(range: {sp_start_time:.1f}s - {sp_end_time:.1f}s)")
+    return timed_points
 
 
 def _generate_enhanced_ass(styled_captions: list, hook_text: Optional[str],
@@ -4572,6 +4851,16 @@ async def _run_regeneration(
         await _update_job(job_id, progress_pct=40, current_step="字幕画像生成中 (Pillow)...")
         styled_captions = _assign_scene_styles(captions, duration, subtitle_style)
         font_path = _find_cjk_font()
+        # V2.33: 卖点キーワード生成（regenパス）
+        regen_sp_product = source_clip.get('product_name', '') if source_clip else ''
+        regen_sp_timed = []
+        if regen_sp_product and captions:
+            try:
+                sp_raw = await _generate_selling_points(captions, regen_sp_product)
+                if sp_raw:
+                    regen_sp_timed = _assign_selling_point_timings(sp_raw, captions, duration)
+            except Exception:
+                pass
         overlay_images = _generate_overlay_images(
             styled_captions=styled_captions,
             hook_text=hook_text,
@@ -4583,9 +4872,11 @@ async def _run_regeneration(
             tmp_dir=tmp_dir,
             position_y=position_y,
             clip_duration=duration,  # For regen, clip_duration = actual video duration
-            product_name=source_clip.get('product_name', '') if source_clip else '',
+            product_name=regen_sp_product,
+            selling_points=regen_sp_timed,
         )
-        logger.info(f"[ai-clip regen] Generated {len(overlay_images)} overlay images")
+        logger.info(f"[ai-clip regen] Generated {len(overlay_images)} overlay images "
+                    f"(selling_points={len(regen_sp_timed)})")
         # Build ffmpeg command for re-encoding with Pillow overlay
         await _update_job(job_id, progress_pct=50, current_step="再エンコード中 (Pillow overlay)...")
         output_path = os.path.join(tmp_dir, "output.mp4")
@@ -5726,6 +6017,40 @@ async def _process_single_clip_v2(job_id: str, clip: dict, req: GenerateRequest,
             await _update_job(job_id, progress_pct=44, current_step=f"クリップ {idx+1}/{total}: CTAテキスト生成中...")
             cta_text = _generate_cta_text(captions, clip)
 
+        # ── 7b. V2.33: 卖点キーワード生成 ── (45%)
+        selling_points_timed = []
+        if product_name and captions:
+            await _update_job(job_id, progress_pct=45, current_step=f"クリップ {idx+1}/{total}: 卖点キーワード生成中 (GPT)...")
+            try:
+                # product_masterからキーワードを取得試行
+                pm_keywords = []
+                try:
+                    async with get_session() as session:
+                        pm_result = await session.execute(text("""
+                            SELECT keywords FROM product_master
+                            WHERE is_active = TRUE
+                              AND (LOWER(product_name) LIKE '%' || LOWER(:name) || '%'
+                                   OR LOWER(:name) LIKE '%' || LOWER(product_name) || '%')
+                            LIMIT 1
+                        """), {"name": product_name.strip()})
+                        pm_row = pm_result.fetchone()
+                        if pm_row and pm_row.keywords:
+                            pm_keywords = pm_row.keywords
+                except Exception:
+                    pass  # product_masterがなくても続行
+
+                selling_points_raw = await _generate_selling_points(
+                    captions, product_name, pm_keywords
+                )
+                if selling_points_raw:
+                    selling_points_timed = _assign_selling_point_timings(
+                        selling_points_raw, captions, clip_duration if clip_duration > 0 else duration
+                    )
+                    logger.info(f"[ai-clip {job_id}] V2.33: {len(selling_points_timed)} selling points ready")
+            except Exception as sp_err:
+                logger.warning(f"[ai-clip {job_id}] V2.33 Selling point generation failed (non-fatal): {sp_err}")
+                selling_points_timed = []
+
         # ── 8. Scene classification & style assignment ── (46%)
         await _update_job(job_id, progress_pct=46, current_step=f"クリップ {idx+1}/{total}: シーン分析中...")
         styled_captions = _assign_scene_styles(captions, duration, req.subtitle_style)
@@ -5747,9 +6072,10 @@ async def _process_single_clip_v2(job_id: str, clip: dict, req: GenerateRequest,
             position_y=req.position_y,
             clip_duration=clip_duration,
             product_name=product_name,
+            selling_points=selling_points_timed,
         )
         logger.info(f"[ai-clip {job_id}] Generated {len(overlay_images)} overlay images "
-                    f"(clip_duration={clip_duration:.1f}s)")
+                    f"(clip_duration={clip_duration:.1f}s, selling_points={len(selling_points_timed)})")
 
         # Also generate ASS file as backup metadata (not used for rendering)
         ass_path = os.path.join(tmp_dir, "subtitles.ass")
@@ -8168,6 +8494,18 @@ async def _run_regeneration_from_source_inner(job_id: str, clip_row, req: RegenF
     subtitle_style = req.subtitle_style or "auto"
     styled_captions = _assign_scene_styles(captions, actual_duration, subtitle_style)
     font_path = _find_cjk_font()
+    regen_product_name = (clip_row["product_name"] if isinstance(clip_row, dict) else clip_row.product_name) or ""
+
+    # V2.33: 卖点キーワード生成（regenパス）
+    regen_selling_points = []
+    if regen_product_name and captions:
+        try:
+            sp_raw = await _generate_selling_points(captions, regen_product_name)
+            if sp_raw:
+                regen_selling_points = _assign_selling_point_timings(sp_raw, captions, actual_duration)
+        except Exception as sp_err:
+            logger.warning(f"[v10-regen {job_id}] V2.33 selling points failed: {sp_err}")
+
     overlay_images = _generate_overlay_images(
         styled_captions=styled_captions,
         hook_text=hook_text,
@@ -8179,9 +8517,11 @@ async def _run_regeneration_from_source_inner(job_id: str, clip_row, req: RegenF
         tmp_dir=tmp_dir,
         position_y=req.position_y,
         clip_duration=actual_duration,
-        product_name=(clip_row["product_name"] if isinstance(clip_row, dict) else clip_row.product_name) or "",
+        product_name=regen_product_name,
+        selling_points=regen_selling_points,
     )
-    logger.info(f"[v10-regen {job_id}] Generated {len(overlay_images)} overlay images")
+    logger.info(f"[v10-regen {job_id}] Generated {len(overlay_images)} overlay images "
+                f"(selling_points={len(regen_selling_points)})")
     # ── Step 9: Build ffmpeg command and encode ──
     await _update_job(job_id, progress_pct=70, current_step="動画エンコード中...")
     output_path = os.path.join(tmp_dir, "output.mp4")
