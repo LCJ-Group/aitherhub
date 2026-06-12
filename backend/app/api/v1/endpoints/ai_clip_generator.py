@@ -5663,8 +5663,9 @@ async def _process_single_clip_v2(job_id: str, clip: dict, req: GenerateRequest,
                 captions = []
         if not captions:
             captions = []
-        # Always split long segments to ensure one-line-per-subtitle
+        # Always merge short segments first (V2.32), then split long ones
         if captions:
+            captions = _merge_short_segments(captions)
             captions = _split_long_segments(captions)
 
         # ── 4b. GPT content relevance analysis (V11: 商品無関係区間の検出) ──
@@ -6032,6 +6033,102 @@ async def _process_single_clip_v2(job_id: str, clip: dict, req: GenerateRequest,
 # ─── Whisper Transcription (unchanged from V1, proven working) ───────────────
 
 
+def _merge_short_segments(segments: list, max_chars: int = 18, max_gap: float = 0.15) -> list:
+    """V2.32: 短いWhisperセグメントを結合して単語切断を防止する。
+
+    Whisperは時々、連続した発話を非常に短いセグメントに分割する。
+    例: 「クーポン」→「クーポ」(seg1) +「ンによって」(seg2)
+    これにより字幕が不自然に切断される。
+
+    2パス結合:
+    Pass 1 (forward): 極短フラグメント(<6文字)を次のセグメントに前方結合
+    Pass 2 (backward): 残りの短セグメントを前のセグメントに後方結合
+    """
+    if not segments or len(segments) < 2:
+        return segments
+
+    _SENTENCE_END = set('。！？!?…')
+    FRAGMENT_THRESHOLD = 6  # Characters below this = word fragment
+
+    # ── Pass 1: Forward merge fragments ──
+    # Very short segments (<6 chars) are likely word fragments.
+    # Merge them FORWARD into the next segment (not backward into prev).
+    forward_merged = []
+    pending_fragment = None  # Fragment waiting to be prepended to next segment
+
+    for seg in segments:
+        seg = dict(seg)  # shallow copy
+        text = seg.get('text', '').strip()
+
+        if pending_fragment is not None:
+            # Prepend the pending fragment to this segment
+            frag_text = pending_fragment.get('text', '').strip()
+            frag_start = float(pending_fragment.get('start', 0))
+            seg_end = float(seg.get('end', 0))
+            gap = float(seg.get('start', 0)) - float(pending_fragment.get('end', 0))
+            combined = frag_text + text
+
+            if gap <= max_gap and len(combined) <= max_chars and (seg_end - frag_start) <= 4.0:
+                # Merge fragment into this segment
+                seg['text'] = combined
+                seg['start'] = pending_fragment['start']
+                forward_merged.append(seg)
+            else:
+                # Can't merge - keep both separately
+                forward_merged.append(pending_fragment)
+                forward_merged.append(seg)
+            pending_fragment = None
+        elif len(text) < FRAGMENT_THRESHOLD and not any(text.endswith(c) for c in _SENTENCE_END):
+            # This is a fragment - hold it for forward merge
+            pending_fragment = seg
+        else:
+            forward_merged.append(seg)
+
+    # If last segment was a fragment, just append it
+    if pending_fragment is not None:
+        forward_merged.append(pending_fragment)
+
+    # ── Pass 2: Backward merge remaining short segments ──
+    # Merge short segments (<max_chars) backward into previous if:
+    # - gap is small, combined fits, and previous doesn't end with sentence-end
+    if len(forward_merged) < 2:
+        result = forward_merged
+    else:
+        result = [dict(forward_merged[0])]
+        for i in range(1, len(forward_merged)):
+            prev = result[-1]
+            curr = forward_merged[i]
+
+            prev_text = prev.get('text', '').strip()
+            curr_text = curr.get('text', '').strip()
+            prev_end = float(prev.get('end', 0))
+            curr_start = float(curr.get('start', 0))
+            curr_end = float(curr.get('end', 0))
+
+            gap = curr_start - prev_end
+            combined_text = prev_text + curr_text
+            combined_duration = curr_end - float(prev.get('start', 0))
+
+            should_merge = (
+                gap <= max_gap
+                and len(curr_text) < FRAGMENT_THRESHOLD  # Only merge fragments backward
+                and len(combined_text) <= max_chars
+                and combined_duration <= 4.0
+                and not any(prev_text.endswith(c) for c in _SENTENCE_END)
+            )
+
+            if should_merge:
+                result[-1]['text'] = combined_text
+                result[-1]['end'] = curr_end
+            else:
+                result.append(dict(curr))
+
+    if len(result) != len(segments):
+        logger.info(f"[ai-clip] V2.32 merged short segments: {len(segments)} -> {len(result)}")
+
+    return result
+
+
 def _split_long_segments(segments: list, max_chars: int = 18, max_duration: float = 3.5) -> list:
     """Whisperセグメントを一文ずつに分割する（字幕多行表示問題の根本修正）。
     
@@ -6375,7 +6472,8 @@ async def _transcribe_clip(video_path: str, target_language: str = "auto") -> li
             segments.append({"start": 0, "end": est_dur, "text": response.text.strip()})
 
         logger.info(f"[ai-clip] Transcribed: {len(segments)} segments (raw)")
-        # Split long segments into sentence-level captions (fixes multi-line subtitle issue)
+        # V2.32: Merge short segments first, then split long ones
+        segments = _merge_short_segments(segments)
         segments = _split_long_segments(segments)
         return segments
 
@@ -7997,8 +8095,9 @@ async def _run_regeneration_from_source_inner(job_id: str, clip_row, req: RegenF
                     captions = []
             elif isinstance(orig_captions, list):
                 captions = orig_captions
-    # Always split long segments to ensure one-line-per-subtitle
+    # V2.32: Merge short segments first, then split long ones
     if captions:
+        captions = _merge_short_segments(captions)
         captions = _split_long_segments(captions)
     # ── V11 Quality Gate: 拡張後のトランスクリプト品質チェック ──
     transcript_text = " ".join(c.get("text", "") for c in captions if c.get("text"))
@@ -9308,7 +9407,8 @@ async def _run_product_segmentation_inner(job_id: str, req: GenerateByProductReq
         shutil.rmtree(tmp_dir, ignore_errors=True)
         return
 
-    # Split long segments
+    # V2.32: Merge short segments first, then split long ones
+    full_captions = _merge_short_segments(full_captions)
     full_captions = _split_long_segments(full_captions)
     logger.info(f"[ai-clip-v3 {job_id}] Transcription: {len(full_captions)} segments, "
                 f"total text: {sum(len(c.get('text','')) for c in full_captions)} chars")
