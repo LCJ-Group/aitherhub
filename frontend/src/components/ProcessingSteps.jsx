@@ -12,6 +12,8 @@ const normalizeProcessingStatus = (status) => {
     // Show as first analysis step (解析準備中) instead of misleading "圧縮中".
     return 'STEP_COMPRESS_1080P';
   }
+  // Terminal rejection state - pass through as-is
+  if (status === 'REJECTED_NOT_COMMERCE') return status;
   return status;
 };
 
@@ -67,6 +69,8 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
 
   // ── Processing logs state ──
   const [processingLogs, setProcessingLogs] = useState([]);
+  // ── SSE-provided video preview URL (from compressed_blob_url) ──
+  const [ssePreviewUrl, setSsePreviewUrl] = useState(null);
 
   // ── Stall detection state ──
   const [isStalled, setIsStalled] = useState(false);
@@ -158,10 +162,10 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
       STEP_14_SPLIT_VIDEO: 99,
       DONE: 100,
       ERROR: -1,
+      REJECTED_NOT_COMMERCE: 90,
     };
     return statusMap[status] || 0;
   }, []);
-
   const calculateProgressCeilingFromStatus = useCallback((status) => {
     const ceilingMap = {
       NEW: 0,
@@ -186,6 +190,7 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
       STEP_14_SPLIT_VIDEO: 99,
       DONE: 100,
       ERROR: -1,
+      REJECTED_NOT_COMMERCE: 90,
     };
     return ceilingMap[status] ?? 99;
   }, []);
@@ -282,7 +287,7 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
   // ── Elapsed time ticker (updates every second) ──
   useEffect(() => {
     elapsedTimerRef.current = setInterval(() => {
-      if (processingStartMsRef.current && currentStatus !== 'DONE' && currentStatus !== 'ERROR') {
+      if (processingStartMsRef.current && currentStatus !== 'DONE' && currentStatus !== 'ERROR' && currentStatus !== 'REJECTED_NOT_COMMERCE') {
         const elapsed = Date.now() - processingStartMsRef.current;
         setElapsedMs(elapsed);
 
@@ -397,7 +402,7 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
   // ── Stall detection: track progress changes ──
   useEffect(() => {
     const isProcessing = currentStatus !== 'NEW' && currentStatus !== 'UPLOADING'
-      && currentStatus !== 'DONE' && currentStatus !== 'ERROR';
+      && currentStatus !== 'DONE' && currentStatus !== 'ERROR' && currentStatus !== 'REJECTED_NOT_COMMERCE';
 
     if (!isProcessing) {
       // Not processing → clear stall state
@@ -483,7 +488,7 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
             video_id: videoId,
           });
 
-          if (newStatus === 'DONE' || newStatus === 'ERROR') {
+          if (newStatus === 'DONE' || newStatus === 'ERROR' || newStatus === 'REJECTED_NOT_COMMERCE') {
             if (pollingIntervalRef.current) {
               clearInterval(pollingIntervalRef.current);
               pollingIntervalRef.current = null;
@@ -579,6 +584,8 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
         if (data.enqueue_status !== undefined) setEnqueueStatus(data.enqueue_status);
         if (data.worker_claimed_at !== undefined) setWorkerClaimedAt(data.worker_claimed_at);
         if (data.enqueue_error !== undefined) setEnqueueError(data.enqueue_error);
+        // Capture video preview URL from SSE (available after compression step)
+        if (data.compressed_blob_url && !ssePreviewUrl) setSsePreviewUrl(data.compressed_blob_url);
 
         const serverStepProgress = typeof data.step_progress === 'number' ? data.step_progress : 0;
         setStepProgress(serverStepProgress);
@@ -607,12 +614,36 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
         // ── Processing logs update ──
         if (data.processing_logs && Array.isArray(data.processing_logs)) {
           setProcessingLogs(data.processing_logs);
+          // ── Detect completion from processing_logs even if status field hasn't updated yet ──
+          // Handles race condition: worker writes processing_logs before status=DONE
+          const hasDoneLog = data.processing_logs.some(log => log.step === 'done' || (log.msg && log.msg.includes('解析完了')));
+          if (hasDoneLog && nextStatus !== 'DONE' && nextStatus !== 'ERROR' && nextStatus !== 'REJECTED_NOT_COMMERCE') {
+            console.log('🔍 Processing logs indicate completion but status is still:', nextStatus, '→ triggering immediate check');
+            setTimeout(async () => {
+              try {
+                const response = await VideoService.getVideoById(videoId);
+                if (response?.status === 'DONE') {
+                  console.log('✅ Confirmed DONE via API after processing_logs detection');
+                  if (statusStreamRef.current) { statusStreamRef.current.close(); statusStreamRef.current = null; }
+                  if (pollingIntervalRef.current) { clearInterval(pollingIntervalRef.current); pollingIntervalRef.current = null; }
+                  if (watchdogIntervalRef.current) { clearInterval(watchdogIntervalRef.current); watchdogIntervalRef.current = null; }
+                  setCurrentStatus('DONE');
+                  maxProgressRef.current = 100;
+                  setSmoothProgress(100);
+                  setEstimatedRemainingMs(0);
+                  if (handleProcessingComplete) { handleProcessingComplete(); }
+                }
+              } catch (err) {
+                console.warn('Processing logs completion check failed:', err);
+              }
+            }, 3000); // Wait 3s for status field to be updated in DB
+          }
         }
 
         // ── Timing update ──
         handleTimingUpdate(data);
 
-        if (nextStatus === 'DONE' || nextStatus === 'ERROR') {
+        if (nextStatus === 'DONE' || nextStatus === 'ERROR' || nextStatus === 'REJECTED_NOT_COMMERCE') {
           console.log(`✅ Stream auto-closing due to status: ${nextStatus}`);
           if (statusStreamRef.current) {
             statusStreamRef.current.close();
@@ -644,6 +675,10 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
               if (res?.error_logs) setErrorLogs(res.error_logs);
             }).catch(() => {});
           }
+          if (nextStatus === 'REJECTED_NOT_COMMERCE') {
+            setEstimatedRemainingMs(null);
+            // Keep progress at 90% to show it got far but was rejected
+          }
         }
       },
 
@@ -655,7 +690,7 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
           const response = await VideoService.getVideoById(videoId);
           const actualStatus = response?.status;
           console.log(`✅ Verified video status: ${actualStatus}`);
-          if (actualStatus === 'DONE') {
+          if (actualStatus === 'DONE' || actualStatus === 'REJECTED_NOT_COMMERCE') {
             setCurrentStatus('DONE');
             maxProgressRef.current = 100;
             setSmoothProgress(100);
@@ -731,7 +766,7 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
       if (document.hidden) return; // Only act when tab becomes visible
 
       // Skip if already DONE or ERROR
-      if (currentStatus === 'DONE' || currentStatus === 'ERROR') return;
+      if (currentStatus === 'DONE' || currentStatus === 'ERROR' || currentStatus === 'REJECTED_NOT_COMMERCE') return;
 
       console.log('👁️ Tab became visible, refreshing video status');
       try {
@@ -790,6 +825,15 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
             VideoService.getErrorLogs(videoId).then(res => {
               if (res?.error_logs) setErrorLogs(res.error_logs);
             }).catch(() => {});
+          } else if (newStatus === 'REJECTED_NOT_COMMERCE') {
+            if (statusStreamRef.current) {
+              statusStreamRef.current.close();
+              statusStreamRef.current = null;
+            }
+            if (pollingIntervalRef.current) {
+              clearInterval(pollingIntervalRef.current);
+              pollingIntervalRef.current = null;
+            }
           } else {
             // Still processing: ensure SSE or polling is active
             if (!statusStreamRef.current && !pollingIntervalRef.current) {
@@ -842,7 +886,7 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
   useEffect(() => {
     if (!videoId) return;
     // Don't run watchdog if already DONE or ERROR
-    if (currentStatus === 'DONE' || currentStatus === 'ERROR') {
+    if (currentStatus === 'DONE' || currentStatus === 'ERROR' || currentStatus === 'REJECTED_NOT_COMMERCE') {
       if (watchdogIntervalRef.current) {
         clearInterval(watchdogIntervalRef.current);
         watchdogIntervalRef.current = null;
@@ -858,7 +902,7 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
         const actualStatus = response.status;
         console.log(`🐕 Watchdog check: actual status = ${actualStatus}, current UI status = ${currentStatus}`);
 
-        if (actualStatus === 'DONE') {
+        if (actualStatus === 'DONE' || actualStatus === 'REJECTED_NOT_COMMERCE') {
           console.log('🐕 Watchdog detected DONE! Triggering completion...');
           // Clean up SSE and polling
           if (statusStreamRef.current) {
@@ -913,10 +957,10 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
       }
     };
 
-    // Start watchdog with 45-second interval
-    watchdogIntervalRef.current = setInterval(watchdogCheck, 45000);
-    // Also run an initial check after 30 seconds (catch early failures)
-    const initialTimeout = setTimeout(watchdogCheck, 30000);
+    // Start watchdog with 20-second interval (reduced from 45s for faster DONE detection)
+    watchdogIntervalRef.current = setInterval(watchdogCheck, 20000);
+    // Also run an initial check after 10 seconds (catch early failures)
+    const initialTimeout = setTimeout(watchdogCheck, 10000);
 
     return () => {
       if (watchdogIntervalRef.current) {
@@ -1075,6 +1119,7 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
 
   const isError = currentStatus === 'ERROR';
   const isDone = currentStatus === 'DONE';
+  const isRejected = currentStatus === 'REJECTED_NOT_COMMERCE';
   const uploadStepStatus = getUploadStepStatus();
   const currentAnalysisLabel = visibleAnalysisSteps.find(
     (step) => getAnalysisStepStatus(step.key) === 'current',
@@ -1143,15 +1188,17 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
       {/* Video title */}
       {videoTitleNode}
 
-      {/* v14: Video thumbnail preview - real screen feel */}
-      {(videoThumbnailUrl || videoPreviewUrl) && (
-        <div className="mb-4 flex justify-center">
-          <div className="relative w-full max-w-[280px] rounded-xl overflow-hidden shadow-lg border border-gray-200 bg-black">
-            {videoPreviewUrl ? (
+      {/* v15: Rich video preview with AI processing visualization */}
+      {(videoThumbnailUrl || videoPreviewUrl || ssePreviewUrl) && (
+        <div className="mb-5 flex justify-center">
+          <div className="relative w-full max-w-[320px] rounded-2xl overflow-hidden shadow-xl border border-indigo-100 bg-black">
+            {(videoPreviewUrl || ssePreviewUrl) ? (
               <video
-                src={videoPreviewUrl}
-                className="w-full h-auto max-h-[180px] object-contain"
+                src={videoPreviewUrl || ssePreviewUrl}
+                className="w-full h-auto max-h-[220px] object-contain"
                 muted
+                autoPlay
+                loop
                 playsInline
                 preload="metadata"
               />
@@ -1159,17 +1206,34 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
               <img
                 src={videoThumbnailUrl}
                 alt="Video preview"
-                className="w-full h-auto max-h-[180px] object-contain"
+                className="w-full h-auto max-h-[220px] object-contain"
               />
             )}
-            {/* Overlay processing indicator */}
+            {/* Overlay processing indicator - enhanced with scan line effect */}
             {!isDone && !isError && (
-              <div className="absolute inset-0 bg-black/20 flex items-center justify-center">
-                <div className="flex items-center gap-2 px-3 py-1.5 bg-black/60 rounded-full">
+              <>
+                <div className="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-black/30" />
+                {/* Scanning line animation */}
+                <div className="absolute inset-0 overflow-hidden pointer-events-none">
+                  <div className="absolute left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-indigo-400 to-transparent" style={{ animation: 'scanline 3s linear infinite' }} />
+                </div>
+                {/* Status badge */}
+                <div className="absolute top-3 left-3 flex items-center gap-2 px-3 py-1.5 bg-black/70 backdrop-blur-sm rounded-full border border-indigo-400/30">
                   <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
                   <span className="text-xs text-white font-medium">
                     {currentStatus === 'UPLOADING' ? 'アップロード中...' : 'AI解析中...'}
                   </span>
+                </div>
+                {/* Progress badge bottom-right */}
+                <div className="absolute bottom-3 right-3 px-2.5 py-1 bg-indigo-600/80 backdrop-blur-sm rounded-full">
+                  <span className="text-xs text-white font-bold">{Math.round(smoothProgress)}%</span>
+                </div>
+              </>
+            )}
+            {isDone && (
+              <div className="absolute inset-0 bg-black/30 flex items-center justify-center">
+                <div className="flex items-center gap-2 px-4 py-2 bg-green-600/90 backdrop-blur-sm rounded-full">
+                  <span className="text-sm text-white font-bold">✨ 解析完了！</span>
                 </div>
               </div>
             )}
@@ -1195,7 +1259,7 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
         </div>
 
         {/* Queue / Worker status step (between upload and analysis) */}
-        {uploadStepStatus === 'completed' && currentStatus !== 'DONE' && currentStatus !== 'ERROR' && (
+        {uploadStepStatus === 'completed' && currentStatus !== 'DONE' && currentStatus !== 'ERROR' && currentStatus !== 'REJECTED_NOT_COMMERCE' && (
           <div className="flex items-center gap-3 transition-all duration-500 ease-out">
             {workerClaimedAt ? (
               renderStepIcon('completed')
@@ -1293,7 +1357,7 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
       </div>
 
       {/* Progress bar */}
-      {!isError && smoothProgress >= 0 && (
+      {!isError && !isRejected && smoothProgress >= 0 && (
         <>
           <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
             <div
@@ -1504,8 +1568,37 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
         </div>
       )}
 
+      {/* Rejected: Not Commerce Video */}
+      {isRejected && (
+        <div className="mt-2">
+          <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg text-center">
+            <div className="text-2xl mb-2">⛔</div>
+            <p className="text-sm text-amber-700 font-medium mb-2">
+              {window.__currentLang === 'en'
+                ? 'This video is not a live commerce / product introduction video and cannot be analyzed.'
+                : window.__currentLang === 'zh-TW'
+                  ? '此影片不是直播電商/商品介紹影片，無法進行分析。'
+                  : 'この動画はライブコマース/商品紹介動画ではないため、\n解析対象外です。'}
+            </p>
+            <p className="text-xs text-amber-600 mt-1">
+              {window.__currentLang === 'en'
+                ? 'Aitherhub specializes in live commerce video analysis. Please upload a video that includes product sales or introductions.'
+                : window.__currentLang === 'zh-TW'
+                  ? 'Aitherhub專門分析直播電商影片。請上傳包含商品銷售或介紹的影片。'
+                  : 'Aitherhubはライブコマース動画分析に特化しています。\n商品販売・紹介を含む動画をアップロードしてください。'}
+            </p>
+            <button
+              onClick={onUploadNew}
+              className="mt-3 px-4 py-1.5 text-sm font-medium text-white bg-amber-500 hover:bg-amber-600 rounded-md transition-colors"
+            >
+              {window.__currentLang === 'en' ? 'Upload Another Video' : window.__currentLang === 'zh-TW' ? '上傳其他影片' : '別の動画をアップロード'}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Error log history - shown even during re-analysis if previous errors exist */}
-      {!isError && errorLogs.length > 0 && (
+      {!isError && !isRejected && errorLogs.length > 0 && (
         <div className="mt-3">
           <button
             onClick={() => {

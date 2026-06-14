@@ -364,6 +364,8 @@ async def stream_video_status(
                             "dequeue_count": getattr(video, 'dequeue_count', None),
                             # Processing logs for live display
                             "processing_logs": _processing_logs,
+                            # Video preview URL for rich UI during processing
+                            "compressed_blob_url": _replace_blob_url_to_cdn(getattr(video, 'compressed_blob_url', None)),
                         }
 
                         yield f"data: {json.dumps(payload)}\n\n"
@@ -387,8 +389,8 @@ async def stream_video_status(
                         yield f"data: {json.dumps(heartbeat_payload)}\n\n"
                         logger.debug(f"SSE: Heartbeat sent for video {video_id} (poll {poll_count})")
 
-                    # Stop streaming if processing complete or error
-                    if current_status in ["DONE", "ERROR"]:
+                    # Stop streaming if processing complete, error, or rejected
+                    if current_status in ["DONE", "ERROR", "REJECTED_NOT_COMMERCE"]:
                         # On ERROR, fetch latest error log to include in final SSE event
                         if current_status == "ERROR":
                             try:
@@ -2271,6 +2273,7 @@ async def get_video_status_public(
             "processing_logs": _processing_logs,
             "is_done": current_status == "DONE",
             "is_error": current_status == "ERROR",
+            "is_rejected": current_status == "REJECTED_NOT_COMMERCE",
             "updated_at": row.updated_at.isoformat() if row.updated_at else None,
         }
     except HTTPException:

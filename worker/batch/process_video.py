@@ -1600,6 +1600,53 @@ def main():
             logger.info("[SKIP] STEP 6.5")
 
         # =========================
+        # STEP 6.9 – COMMERCE VIDEO VALIDATION
+        # Reject non-commerce videos to protect AI data quality
+        # =========================
+        if start_step <= 6 and phase_units:
+            logger.info("=== STEP 6.9 – COMMERCE VALIDATION ===")
+            _has_commerce_signal = False
+            _total_cta_score = 0
+            _commerce_keywords = [
+                '商品', '製品', 'プロダクト', '購入', '買', 'セール', '割引', 'クーポン',
+                '円', '税込', '送料', '注文', 'カート', 'リンク', '概要欄',
+                '限定', 'キャンペーン', 'お得', 'コスパ', '使い方', '効果',
+                '成分', 'おすすめ', 'レビュー', '口コミ', '比較',
+                'product', 'buy', 'price', 'discount', 'sale', 'order', 'shop',
+            ]
+            for p in phase_units:
+                speech = (p.get('speech_text') or '').lower()
+                desc = (p.get('phase_description') or '').lower()
+                combined = speech + ' ' + desc
+                cta = p.get('cta_score') or 0
+                _total_cta_score += cta
+                if any(kw in combined for kw in _commerce_keywords):
+                    _has_commerce_signal = True
+                    break
+                if cta >= 3:
+                    _has_commerce_signal = True
+                    break
+            # Also check if product data was provided (Excel upload or product_master)
+            if excel_data and excel_data.get('products'):
+                _has_commerce_signal = True
+            if not _has_commerce_signal:
+                avg_cta = _total_cta_score / len(phase_units) if phase_units else 0
+                if avg_cta >= 2.0:
+                    _has_commerce_signal = True
+            if not _has_commerce_signal:
+                logger.warning("[COMMERCE-FILTER] Video %s rejected: no commerce signals detected", video_id)
+                update_video_processing_log_sync(
+                    video_id,
+                    "\u26d4 \u3053\u306e\u52d5\u753b\u306f\u30e9\u30a4\u30d6\u30b3\u30de\u30fc\u30b9/\u5546\u54c1\u7d39\u4ecb\u52d5\u753b\u3067\u306f\u306a\u3044\u305f\u3081\u3001\u89e3\u6790\u5bfe\u8c61\u5916\u3067\u3059",
+                    "commerce_filter", 90
+                )
+                update_video_status_sync(video_id, VideoStatus.REJECTED_NOT_COMMERCE)
+                logger.info("[COMMERCE-FILTER] Pipeline terminated for video %s", video_id)
+                return  # Stop pipeline - do not proceed to STEP 7+
+            else:
+                logger.info("[COMMERCE-FILTER] Video %s passed commerce validation", video_id)
+
+        # =========================
         # STEP 7 – GLOBAL GROUPING
         # =========================
         if start_step <= 7:

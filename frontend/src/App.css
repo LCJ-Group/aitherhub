@@ -41,3 +41,11 @@
 .read-the-docs {
   color: #888;
 }
+
+/* AI Processing scan line animation for video preview */
+@keyframes scanline {
+  0% { top: 0%; opacity: 0; }
+  10% { opacity: 0.6; }
+  90% { opacity: 0.6; }
+  100% { top: 100%; opacity: 0; }
+}

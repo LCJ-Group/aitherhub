@@ -200,6 +200,20 @@ export default function VideoUploadCTA() {
         const backendProgress = data.progress || 0;
         setAnalysisProgress(prev => Math.max(prev, backendProgress));
 
+        // Check if rejected (not commerce video)
+        if (data.is_rejected) {
+          setAnalysisProgress(90);
+          setStep('error');
+          setErrorMsg(
+            window.__currentLang === 'en'
+              ? 'This video is not a live commerce / product introduction video and cannot be analyzed.'
+              : window.__currentLang === 'zh-TW'
+                ? '\u6b64\u5f71\u7247\u4e0d\u662f\u76f4\u64ad\u96fb\u5546/\u5546\u54c1\u4ecb\u7d39\u5f71\u7247\uff0c\u7121\u6cd5\u9032\u884c\u5206\u6790\u3002'
+                : '\u3053\u306e\u52d5\u753b\u306f\u30e9\u30a4\u30d6\u30b3\u30de\u30fc\u30b9/\u5546\u54c1\u7d39\u4ecb\u52d5\u753b\u3067\u306f\u306a\u3044\u305f\u3081\u3001\u89e3\u6790\u5bfe\u8c61\u5916\u3067\u3059\u3002'
+          );
+          if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+          return;
+        }
         // P3: Check if done
         if (data.is_done) {
           setAnalysisProgress(100);

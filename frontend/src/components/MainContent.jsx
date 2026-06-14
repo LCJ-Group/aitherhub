@@ -1559,7 +1559,7 @@ export default function MainContent({
                       uploadStartTime={uploading ? uploadStartTime : null}
                       videoDurationSec={videoDurationSec}
                       videoThumbnailUrl={videoThumbnailUrl}
-                      videoPreviewUrl={videoData?.preview_url}
+                      videoPreviewUrl={videoData?.preview_url || videoData?.compressed_blob_url}
                     />
                   </div>
                   {/* Allow uploading another video or starting live analysis while current one is processing */}

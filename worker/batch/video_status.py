@@ -44,7 +44,8 @@ class VideoStatus:
     STEP_14_FINALIZE = "STEP_14_FINALIZE"
 
     # =========================
-    # DONE / ERROR
+    # DONE / ERROR / REJECTED
     # =========================
     DONE = "DONE"
     ERROR = "ERROR"
+    REJECTED_NOT_COMMERCE = "REJECTED_NOT_COMMERCE"
