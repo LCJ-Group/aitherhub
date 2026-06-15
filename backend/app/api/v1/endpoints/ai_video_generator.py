@@ -41,6 +41,31 @@ from app.core.dependencies import get_current_user
 
 logger = logging.getLogger(__name__)
 
+
+def _get_openai_client():
+    """Create OpenAI client using Azure OpenAI credentials (same as ai_clip_generator)."""
+    import openai
+    from urllib.parse import urlparse as _urlparse
+    azure_key = os.getenv("AZURE_OPENAI_KEY", "")
+    azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
+    if azure_key and azure_endpoint:
+        _parsed = _urlparse(azure_endpoint)
+        clean_endpoint = f"{_parsed.scheme}://{_parsed.netloc}/"
+        return openai.AsyncAzureOpenAI(
+            api_key=azure_key,
+            azure_endpoint=clean_endpoint,
+            api_version=os.getenv("GPT5_API_VERSION", "2025-04-01-preview"),
+        )
+    # Fallback to standard OpenAI (requires OPENAI_API_KEY)
+    from openai import AsyncOpenAI
+    return AsyncOpenAI()
+
+
+def _get_openai_model() -> str:
+    """Get the model/deployment name to use."""
+    return os.getenv("GPT5_MODEL") or os.getenv("GPT5_DEPLOYMENT") or "gpt-4.1-mini"
+
+
 router = APIRouter(prefix="/ai-video-generator", tags=["AI Video Generator"])
 
 # ──────────────────────────────────────────────
@@ -327,10 +352,9 @@ async def _analyze_product(request: VideoGenerateRequest) -> Optional[Dict[str, 
     Analyze product from image URL or page URL using GPT-4 Vision.
     Returns dict with: name, description, price, brand, notes
     """
-    from openai import AsyncOpenAI
     import httpx
 
-    client = AsyncOpenAI()
+    client = _get_openai_client()
 
     # If product_page_url is provided, try to scrape basic info
     page_context = ""
@@ -375,15 +399,29 @@ async def _analyze_product(request: VideoGenerateRequest) -> Optional[Dict[str, 
     if page_context:
         user_text += page_context
     user_content.append({"type": "text", "text": user_text})
-
     if request.product_image_url:
+        # V2.34.6: Download image and convert to base64 (OpenAI can't always download external URLs)
+        image_data_url = None
+        try:
+            async with httpx.AsyncClient(timeout=20, follow_redirects=True) as http:
+                img_resp = await http.get(request.product_image_url, headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                })
+                if img_resp.status_code == 200 and len(img_resp.content) <= 20 * 1024 * 1024:
+                    ct = img_resp.headers.get("content-type", "image/jpeg").split(";")[0].strip()
+                    if ct not in ("image/jpeg", "image/png", "image/webp", "image/gif"):
+                        ct = "image/jpeg"
+                    b64_img = base64.b64encode(img_resp.content).decode("utf-8")
+                    image_data_url = f"data:{ct};base64,{b64_img}"
+        except Exception as e:
+            logger.warning(f"[AIVideoGen] Image download failed in pipeline: {e}")
         user_content.append({
             "type": "image_url",
-            "image_url": {"url": request.product_image_url, "detail": "high"},
+            "image_url": {"url": image_data_url or request.product_image_url, "detail": "high"},
         })
 
     response = await client.chat.completions.create(
-        model="gpt-4.1-mini",
+        model=_get_openai_model(),
         messages=[
             {"role": "system", "content": system_msg},
             {"role": "user", "content": user_content},
@@ -413,9 +451,7 @@ async def _analyze_product(request: VideoGenerateRequest) -> Optional[Dict[str, 
 
 async def _generate_script(request: VideoGenerateRequest) -> str:
     """Generate a selling script using GPT-4 with winning patterns."""
-    from openai import AsyncOpenAI
-
-    client = AsyncOpenAI()
+    client = _get_openai_client()
 
     # Calculate target word count based on duration
     # Japanese speech: ~300 characters per minute
@@ -486,7 +522,7 @@ async def _generate_script(request: VideoGenerateRequest) -> str:
         messages.append({"role": "user", "content": user_prompt})
 
     response = await client.chat.completions.create(
-        model="gpt-4.1-mini",
+        model=_get_openai_model(),
         messages=messages,
         max_tokens=2000,
         temperature=0.8,
@@ -1103,9 +1139,7 @@ async def analyze_product_endpoint(
     
     Returns: { success, product: { name, description, price, brand, notes } }
     """
-    from openai import AsyncOpenAI
     import httpx
-
     # Determine the image source
     actual_image_url = image_url
     page_context = ""
@@ -1149,6 +1183,30 @@ async def analyze_product_endpoint(
             content_type = "image/jpeg"
         b64_image = base64.b64encode(content).decode("utf-8")
         data_url = f"data:{content_type};base64,{b64_image}"
+    elif actual_image_url:
+        # V2.34.6: Download image and convert to base64
+        # OpenAI often can't download external URLs (returns invalid_image_url error)
+        try:
+            async with httpx.AsyncClient(timeout=20, follow_redirects=True) as http:
+                img_resp = await http.get(actual_image_url, headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                })
+                if img_resp.status_code == 200:
+                    img_content = img_resp.content
+                    if len(img_content) > 20 * 1024 * 1024:
+                        raise HTTPException(status_code=400, detail="Image too large. Max 20MB.")
+                    ct = img_resp.headers.get("content-type", "image/jpeg").split(";")[0].strip()
+                    if ct not in ("image/jpeg", "image/png", "image/webp", "image/gif"):
+                        ct = "image/jpeg"
+                    b64_image = base64.b64encode(img_content).decode("utf-8")
+                    data_url = f"data:{ct};base64,{b64_image}"
+                    logger.info(f"[AIVideoGen] Downloaded image from URL, size={len(img_content)} bytes")
+                else:
+                    logger.warning(f"[AIVideoGen] Failed to download image: HTTP {img_resp.status_code}")
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning(f"[AIVideoGen] Image download failed: {e}, will try URL directly")
 
     if not data_url and not actual_image_url and not page_context:
         raise HTTPException(
@@ -1157,7 +1215,7 @@ async def analyze_product_endpoint(
         )
 
     # Call GPT-4 Vision
-    client = AsyncOpenAI()
+    client = _get_openai_client()
 
     system_msg = (
         "You are a product information extraction assistant for live commerce. "
@@ -1192,7 +1250,7 @@ async def analyze_product_endpoint(
 
     try:
         response = await client.chat.completions.create(
-            model="gpt-4.1-mini",
+            model=_get_openai_model(),
             messages=[
                 {"role": "system", "content": system_msg},
                 {"role": "user", "content": user_content},
@@ -1358,12 +1416,9 @@ async def analyze_person_photo(
     
     Returns: { success, analysis: { appearance, expression, style, suggestions } }
     """
-    from openai import AsyncOpenAI
     import httpx
-
     actual_image_url = image_url
     data_url = None
-
     # Handle file upload
     if image and image.filename:
         content = await image.read()
@@ -1372,23 +1427,11 @@ async def analyze_person_photo(
         mime = f"image/{ext}" if ext != "jpg" else "image/jpeg"
         data_url = f"data:{mime};base64,{b64mod.b64encode(content).decode()}"
         actual_image_url = data_url
-
     if not actual_image_url:
         raise HTTPException(status_code=400, detail="画像URLまたはファイルが必要です")
-
     try:
-        # Use Azure OpenAI for GPT-4V analysis
-        azure_key = os.getenv("AZURE_OPENAI_API_KEY_GPT5", os.getenv("AZURE_OPENAI_API_KEY", ""))
-        azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT_GPT5", os.getenv("AZURE_OPENAI_ENDPOINT", ""))
-        azure_deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT_GPT5", "gpt-4o")
-        azure_api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview")
-
-        client = AsyncOpenAI(
-            api_key=azure_key,
-            base_url=f"{azure_endpoint}/openai/deployments/{azure_deployment}",
-            default_headers={"api-key": azure_key},
-            default_query={"api-version": azure_api_version},
-        )
+        # V2.34.6: Use shared Azure OpenAI client (same credentials as ai_clip_generator)
+        client = _get_openai_client()
 
         messages = [
             {
@@ -1414,7 +1457,7 @@ async def analyze_person_photo(
         ]
 
         response = await client.chat.completions.create(
-            model=azure_deployment,
+            model=_get_openai_model(),
             messages=messages,
             max_tokens=1000,
             temperature=0.3,
