@@ -133,18 +133,22 @@ class FaceSwapService:
     async def _get_worker_url(self) -> str:
         """
         Resolve the current worker URL.
-        Uses static URL if set, otherwise auto-discovers from RunPod.
+        Always prefers RunPod discovery (HARDCODED_POD_ID) over static URL
+        to prevent stale env var issues.
         """
+        # Always try discovery first (uses HARDCODED_POD_ID)
+        url = await self._discovery.get_worker_url()
+        if url:
+            return url
+
+        # Fallback to static URL
         if self._static_worker_url:
             return self._static_worker_url
 
-        url = await self._discovery.get_worker_url()
-        if not url:
-            raise WorkerConnectionError(
-                "GPU Worker URL not available. "
-                "Set FACE_SWAP_WORKER_URL or RUNPOD_API_KEY."
-            )
-        return url
+        raise WorkerConnectionError(
+            "GPU Worker URL not available. "
+            "Set FACE_SWAP_WORKER_URL or RUNPOD_FALLBACK_POD_ID."
+        )
 
     def _headers(self) -> Dict[str, str]:
         return {"X-Api-Key": self.api_key}

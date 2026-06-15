@@ -81,13 +81,7 @@ class RunPodDiscoveryService:
 
         NO GraphQL discovery. NO automatic pod selection.
         """
-        # Priority 1: Manual override URL
-        if FACE_SWAP_WORKER_URL:
-            self._cached_url = FACE_SWAP_WORKER_URL
-            self._cache_time = time.time()
-            return FACE_SWAP_WORKER_URL
-
-        # Priority 2: Fixed Pod ID URL
+        # Priority 1: Fixed Pod ID URL (ALWAYS preferred — env var may be stale)
         if HARDCODED_POD_ID:
             url = (
                 f"https://{HARDCODED_POD_ID}-{RUNPOD_WORKER_PORT}"
@@ -102,6 +96,12 @@ class RunPodDiscoveryService:
             self._cached_pod_id = HARDCODED_POD_ID
             self._cache_time = time.time()
             return url
+
+        # Priority 2: Manual override URL (fallback only)
+        if FACE_SWAP_WORKER_URL:
+            self._cached_url = FACE_SWAP_WORKER_URL
+            self._cache_time = time.time()
+            return FACE_SWAP_WORKER_URL
 
         logger.error(
             "NO GPU Worker configured! "
