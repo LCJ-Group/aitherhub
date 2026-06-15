@@ -567,11 +567,13 @@ async def _generate_audio(script_text: str, request: VideoGenerateRequest) -> st
 async def _generate_video(audio_url: str, request: VideoGenerateRequest) -> tuple:
     """Generate lip-sync video using HeyGen and return (video_url, duration_sec).
     
-    Supports two modes:
-      - AitherHub liver (avatar_id starts with 'aitherhub:'): 
-        Upload face image as talking photo → generate video with talking photo
-      - HeyGen Digital Twin (regular avatar_id):
-        Use pre-registered avatar directly
+    Supports three modes (checked in priority order):
+      1. Custom person image (person_image_url set):
+         Upload person image as talking photo → generate video
+      2. AitherHub liver (avatar_id starts with 'aitherhub:'): 
+         Upload face image as talking photo → generate video with talking photo
+      3. HeyGen Digital Twin (regular avatar_id):
+         Use pre-registered avatar directly
     """
     from app.services.heygen_service import HeyGenService, get_heygen_service
     from app.api.v1.endpoints.digital_human import _upload_video_to_blob, _ensure_sas_url
@@ -583,8 +585,20 @@ async def _generate_video(audio_url: str, request: VideoGenerateRequest) -> tupl
     dimension = {"width": request.dimension_width, "height": request.dimension_height}
     title = f"AIVideoGen-{request.product_name[:30]}-{uuid.uuid4().hex[:6]}"
 
-    # ─── Route by avatar source ───
-    if request.avatar_id.startswith("aitherhub:"):
+    # ─── Route by avatar source (priority order) ───
+    # Mode 1: Custom person image upload (highest priority)
+    if request.person_image_url:
+        logger.info(f"[AIVideoGen] Using custom person image: {request.person_image_url[:80]}...")
+        talking_photo_id = await heygen.upload_talking_photo(request.person_image_url)
+        logger.info(f"[AIVideoGen] Custom person talking photo ID: {talking_photo_id}")
+        video_id = await heygen.generate_video(
+            talking_photo_id=talking_photo_id,
+            audio_url=audio_url,
+            dimension=dimension,
+            title=title,
+        )
+    # Mode 2: AitherHub liver
+    elif request.avatar_id.startswith("aitherhub:"):
         # AitherHub liver: extract frame from clip video → talking photo → video
         liver_name = request.avatar_id.replace("aitherhub:", "")
         logger.info(f"[AIVideoGen] Using AitherHub liver: {liver_name}")

@@ -86,6 +86,11 @@ export default function AiVideoGeneratorPage() {
   const [personAnalysis, setPersonAnalysis] = useState(null);
   const [isAnalyzingPerson, setIsAnalyzingPerson] = useState(false);
 
+  // ── Custom Person Upload for ライバー選択 (NEW) ──
+  const [customPersonPreview, setCustomPersonPreview] = useState(null); // preview URL for display
+  const [customPersonUploading, setCustomPersonUploading] = useState(false);
+  const customPersonInputRef = useRef(null);
+
   // ── Job State ──
   const [isGenerating, setIsGenerating] = useState(false);
   const [currentJobId, setCurrentJobId] = useState(null);
@@ -319,6 +324,50 @@ export default function AiVideoGeneratorPage() {
       setError(err.response?.data?.detail || "商品解析に失敗しました");
     } finally {
       setIsAnalyzing(false);
+    }
+  };
+
+  // ── Custom Person Upload for ライバー選択 ──
+  const handleCustomPersonUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    // Show preview immediately
+    const previewUrl = URL.createObjectURL(file);
+    setCustomPersonPreview(previewUrl);
+    setCustomPersonUploading(true);
+    setSelectedAvatarId("custom_person");
+    try {
+      const formData = new FormData();
+      formData.append("image", file);
+      const res = await axios.post(
+        `${API_BASE}/api/v1/ai-video-generator/upload-person-photo`,
+        formData,
+        { headers: { "X-Admin-Key": ADMIN_KEY, "Content-Type": "multipart/form-data" } }
+      );
+      if (res.data.success) {
+        setPersonImageUrl(res.data.url);
+      } else {
+        setError("人物写真のアップロードに失敗しました");
+        setCustomPersonPreview(null);
+        setSelectedAvatarId("");
+      }
+    } catch (err) {
+      setError(err.response?.data?.detail || "人物写真のアップロードに失敗しました");
+      setCustomPersonPreview(null);
+      setSelectedAvatarId("");
+    } finally {
+      setCustomPersonUploading(false);
+    }
+  };
+
+  const handleRemoveCustomPerson = () => {
+    setCustomPersonPreview(null);
+    setPersonImageUrl("");
+    if (selectedAvatarId === "custom_person") {
+      setSelectedAvatarId("");
+    }
+    if (customPersonInputRef.current) {
+      customPersonInputRef.current.value = "";
     }
   };
 
@@ -820,9 +869,9 @@ export default function AiVideoGeneratorPage() {
               {/* Generate Button */}
               <button
                 onClick={handleGenerate}
-                disabled={isGenerating || (!productName.trim() && !analyzedProduct) || !selectedAvatarId}
+                disabled={isGenerating || (!productName.trim() && !analyzedProduct) || !selectedAvatarId || customPersonUploading}
                 className={`w-full py-4 rounded-xl font-bold text-lg flex items-center justify-center gap-3 transition-all ${
-                  isGenerating || (!productName.trim() && !analyzedProduct) || !selectedAvatarId
+                  isGenerating || (!productName.trim() && !analyzedProduct) || !selectedAvatarId || customPersonUploading
                     ? "bg-gray-700 text-gray-400 cursor-not-allowed"
                     : "bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white shadow-lg shadow-emerald-500/25 hover:shadow-emerald-500/40"
                 }`}
@@ -948,7 +997,7 @@ export default function AiVideoGeneratorPage() {
                         </p>
                         <div className="grid grid-cols-3 gap-2.5 max-h-52 overflow-y-auto pr-1">
                           {avatars.filter(a => a.source === 'aitherhub').map((avatar) => (
-                            <button key={avatar.avatar_id} onClick={() => setSelectedAvatarId(avatar.avatar_id)}
+                            <button key={avatar.avatar_id} onClick={() => { setSelectedAvatarId(avatar.avatar_id); setPersonImageUrl(""); }}
                               className={`relative rounded-lg overflow-hidden border-2 transition-all ${
                                 selectedAvatarId === avatar.avatar_id
                                   ? "border-emerald-500 ring-2 ring-emerald-500/30 scale-[1.02]"
@@ -1011,7 +1060,7 @@ export default function AiVideoGeneratorPage() {
                         </p>
                         <div className="grid grid-cols-3 gap-2.5 max-h-40 overflow-y-auto pr-1">
                           {avatars.filter(a => a.source !== 'aitherhub').map((avatar) => (
-                            <button key={avatar.avatar_id} onClick={() => setSelectedAvatarId(avatar.avatar_id)}
+                            <button key={avatar.avatar_id} onClick={() => { setSelectedAvatarId(avatar.avatar_id); setPersonImageUrl(""); }}
                               className={`relative rounded-lg overflow-hidden border-2 transition-all ${
                                 selectedAvatarId === avatar.avatar_id
                                   ? "border-emerald-500 ring-2 ring-emerald-500/30 scale-[1.02]"
@@ -1037,6 +1086,66 @@ export default function AiVideoGeneratorPage() {
                         </div>
                       </div>
                     )}
+
+                    {/* Custom Person Upload */}
+                    <div className="mt-4 pt-4 border-t border-gray-700">
+                      <p className="text-xs text-cyan-400 font-medium mb-2 flex items-center gap-1">
+                        <Upload className="w-3 h-3" />
+                        カスタム人物アップロード
+                      </p>
+                      <input
+                        ref={customPersonInputRef}
+                        type="file"
+                        accept="image/*"
+                        onChange={handleCustomPersonUpload}
+                        className="hidden"
+                      />
+                      {customPersonPreview ? (
+                        <div className="relative">
+                          <div className={`relative rounded-lg overflow-hidden border-2 transition-all ${
+                            selectedAvatarId === "custom_person"
+                              ? "border-cyan-500 ring-2 ring-cyan-500/30"
+                              : "border-gray-700"
+                          }`}>
+                            <img
+                              src={customPersonPreview}
+                              alt="カスタム人物"
+                              className="w-full aspect-[9/16] object-cover bg-gray-800 max-w-[120px]"
+                              onClick={() => setSelectedAvatarId("custom_person")}
+                            />
+                            {customPersonUploading && (
+                              <div className="absolute inset-0 bg-black/60 flex items-center justify-center">
+                                <Loader2 className="w-6 h-6 animate-spin text-cyan-400" />
+                              </div>
+                            )}
+                            {selectedAvatarId === "custom_person" && !customPersonUploading && (
+                              <div className="absolute top-1.5 right-1.5 w-4 h-4 bg-cyan-500 rounded-full flex items-center justify-center">
+                                <CheckCircle className="w-2.5 h-2.5" />
+                              </div>
+                            )}
+                            <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-1.5">
+                              <p className="text-[10px] font-medium truncate">カスタム</p>
+                            </div>
+                          </div>
+                          <button
+                            onClick={handleRemoveCustomPerson}
+                            className="absolute -top-2 -right-2 w-5 h-5 bg-red-600 rounded-full flex items-center justify-center hover:bg-red-500 transition-colors"
+                            title="削除"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => customPersonInputRef.current?.click()}
+                          className="w-full py-3 px-4 rounded-lg border-2 border-dashed border-gray-600 hover:border-cyan-500/50 bg-gray-800/50 hover:bg-gray-800 transition-all flex items-center justify-center gap-2 text-gray-400 hover:text-cyan-400"
+                        >
+                          <Upload className="w-4 h-4" />
+                          <span className="text-xs">人物写真をアップロード</span>
+                        </button>
+                      )}
+                      <p className="text-[10px] text-gray-500 mt-1.5">※ 任意の人物写真をアップロードしてAI動画に使用できます</p>
+                    </div>
                   </>
                 )}
               </div>
