@@ -1453,3 +1453,31 @@ async def delete_sample(
         logger.warning(f"[editing-style] Re-aggregation after delete failed: {e}")
 
     return {"success": True, "deleted_id": sample_id, "profile_id": profile_id}
+
+
+# ─── Admin: Reset stuck samples ──────────────────────────────────────────────
+
+@router.post("/reset-stuck")
+async def reset_stuck_samples(
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """Reset samples stuck in 'analyzing' status back to 'pending' for retry.
+    This handles cases where server restart killed background tasks."""
+    verify_admin(x_admin_key)
+    await _ensure_tables()
+    async with get_session() as session:
+        result = await session.execute(text("""
+            UPDATE editing_style_samples
+            SET analysis_status = 'pending', error_message = 'リセット（サーバー再起動による中断）'
+            WHERE analysis_status = 'analyzing'
+            RETURNING id, filename
+        """))
+        reset_rows = result.fetchall()
+        await session.commit()
+    reset_count = len(reset_rows)
+    logger.info(f"[editing-style] Reset {reset_count} stuck samples back to pending")
+    return {
+        "success": True,
+        "reset_count": reset_count,
+        "reset_samples": [{"id": r.id, "filename": r.filename} for r in reset_rows]
+    }
