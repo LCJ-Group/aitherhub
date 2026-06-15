@@ -427,7 +427,6 @@ async def _analyze_product(request: VideoGenerateRequest) -> Optional[Dict[str, 
             {"role": "user", "content": user_content},
         ],
         max_completion_tokens=1000,
-        temperature=0.2,
     )
 
     raw_text = response.choices[0].message.content.strip()
@@ -525,7 +524,6 @@ async def _generate_script(request: VideoGenerateRequest) -> str:
         model=_get_openai_model(),
         messages=messages,
         max_completion_tokens=2000,
-        temperature=0.8,
     )
 
     script = response.choices[0].message.content.strip()
@@ -1256,7 +1254,6 @@ async def analyze_product_endpoint(
                 {"role": "user", "content": user_content},
             ],
             max_completion_tokens=1000,
-            temperature=0.2,
         )
 
         raw_text = response.choices[0].message.content.strip()
@@ -1460,7 +1457,6 @@ async def analyze_person_photo(
             model=_get_openai_model(),
             messages=messages,
             max_completion_tokens=1000,
-            temperature=0.3,
         )
 
         analysis_text = response.choices[0].message.content.strip()
