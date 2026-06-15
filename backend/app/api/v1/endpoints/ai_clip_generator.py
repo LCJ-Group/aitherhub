@@ -2725,7 +2725,7 @@ def _build_advanced_ffmpeg_command(video_path: str, ass_path: str, output_path: 
     # V2.23改訂: deshakeを削除。
     # 理由: deshakeはカメラの物理的手ぶれを補正するが、silence cutのjump cutには無効。
     #   さらに、deshakeがフレーム間の動きを「補正」しようとして画面が微妙にズレる副作用がある。
-    #   jump cutの解決は切点zoom burst（下記）で対応。
+    #   V2.34.5: 切点zoom burstも廃止。切点は直接拼接する。
     # V2.34.4: deflickerフィルタを完全に削除
     # 理由: deflicker=size=5:mode=am はフレーム間の輝度平滑化を行うが、
     #   silence cut後のセグメント結合時に逆に輝度ジッターを引き起こす。
@@ -2848,65 +2848,15 @@ def _build_advanced_ffmpeg_command(video_path: str, ass_path: str, output_path: 
         # V2.21: overlay/zoomのタイミング縮小は1bのsetptsで自動的に適用される
         # （speed_factorのsetpts=0.9524*PTSがoverlay後のPTSを縮小するため）
         duration = sum(e - s for s, e in keep_segments)
-        # V2.34.3: 切点遮蔽 — zoom burst + 輝度フラッシュでjump cutを隠す
-        # V2.34.3改訂: 切点密度に応じてzoom burst強度と頻度を動的調整
-        # 問題: 切点が多い場合（高cut_ratio）、全切点にzoom burstを適用すると
-        #   常時ズームが発生し「画面の揺れ（抖动）」として知覚される。
-        if len(keep_segments) >= 2:
-            cut_boundary_times = []
-            output_t = 0.0
-            for i, (seg_start, seg_end) in enumerate(keep_segments):
-                if i > 0:
-                    cut_boundary_times.append(output_t)
-                output_t += (seg_end - seg_start)
-            # V2.34.4: 切点密度に基づくzoom burst制限（画面安定性優先）
-            cut_density = len(cut_boundary_times) / max(duration, 1.0)
-            if cut_density > 0.2:
-                # 高密度（5秒に1回以上の切点）: zoom burstを完全に無効化
-                max_zoom_bursts = 0
-                zoom_intensity = 1.0
-                logger.info(f"[ai-clip] V2.34.4: High cut density ({cut_density:.2f}/s, {len(cut_boundary_times)} cuts) "
-                            f"→ zoom bursts DISABLED")
-            elif cut_density > 0.1:
-                # 中密度（10秒に1回以上）: 最大4個に制限、強度を大幅に下げる
-                max_zoom_bursts = 4
-                zoom_intensity = 1.04  # V2.34.4: 1.08→1.04 (ほぼ気付かないレベル)
-                logger.info(f"[ai-clip] V2.34.4: Medium cut density ({cut_density:.2f}/s, {len(cut_boundary_times)} cuts) "
-                            f"→ limited to {max_zoom_bursts} zoom bursts at {zoom_intensity}x")
-            else:
-                # 低密度（10秒に1回未満）: 全切点にzoom burst、だが強度は控えめ
-                max_zoom_bursts = len(cut_boundary_times)
-                zoom_intensity = 1.06  # V2.34.4: 1.12→1.06 (大幅削減)
-                logger.info(f"[ai-clip] V2.34.4: Low cut density ({cut_density:.2f}/s, {len(cut_boundary_times)} cuts) "
-                            f"→ all cuts get zoom burst at {zoom_intensity}x")
-            # 切点にzoom burstを追加（制限付き）
-            valid_cuts = [ct for ct in cut_boundary_times if ct > 0.1 and ct < duration - 0.2]
-            if max_zoom_bursts > 0 and valid_cuts:
-                if len(valid_cuts) > max_zoom_bursts:
-                    # 間隔が最も大きい切点を優先選択（大きなジャンプほど目立つため）
-                    intervals = []
-                    for i, ct in enumerate(valid_cuts):
-                        prev = valid_cuts[i-1] if i > 0 else 0.0
-                        intervals.append((ct - prev, ct))
-                    intervals.sort(key=lambda x: x[0], reverse=True)
-                    selected_cuts = sorted([x[1] for x in intervals[:max_zoom_bursts]])
-                else:
-                    selected_cuts = valid_cuts
-                for ct in selected_cuts:
-                    zoom_keyframes.append((ct - 0.03, zoom_intensity))
-            zoom_keyframes.sort(key=lambda x: x[0])
-            # 切点輝度フラッシュをvf_partsに追加するための情報を保存
-            self_cut_boundaries = cut_boundary_times  # 後で参照
-            logger.info(f"[ai-clip] V2.34.3: Final zoom_keyframes: {len(zoom_keyframes)} "
-                        f"(cut_boundaries: {len(cut_boundary_times)}, applied_bursts: {min(max_zoom_bursts, len(valid_cuts))})")
-        else:
-            self_cut_boundaries = []
+        # V2.34.5: 切点zoom burst完全廃止 — 切点は直接拼接（画面安定性最優先）
+        # zoom burstもフラッシュも不要。切点はそのまま自然に繋げる。
+        self_cut_boundaries = []
         logger.info(f"[ai-clip] V2.21 remap: {len(overlay_images)} overlays, "
                                         f"{len(zoom_keyframes)} zoom keyframes remapped to trimmed timeline "
                     f"(output_duration={duration:.1f}s)")
     else:
-        # V2.25: silence cutがなくても、scene change検出結果があればflash適用
-        self_cut_boundaries = scene_change_times or []
+        # V2.34.5: 切点エフェクト廃止
+        self_cut_boundaries = []
     # ── 1b. Speed factor (V13: TikTok風テンポアップ) ──
     speed_factor = getattr(req, 'speed_factor', 1.05)
     if speed_factor > 1.0:
@@ -2951,38 +2901,7 @@ def _build_advanced_ffmpeg_command(video_path: str, ass_path: str, output_path: 
         )
         vf_parts.append(crop_f)
         vf_parts.append(f"scale={video_width}:{video_height}")
-    # ── 2b. V2.34.3: 切点輝度フラッシュ (jump cut遮蔽補助) ──
-    # 切点密度に応じてフラッシュ強度を動的調整
-    if self_cut_boundaries:
-        # effective_speedは上で定義済み
-        flash_density = len(self_cut_boundaries) / max(duration, 1.0)
-        if flash_density > 0.5:
-            # 非常に高密度: フラッシュも無効化（切点が多すぎて意味がない）
-            logger.info(f"[ai-clip] V2.34.3: Flash DISABLED (density {flash_density:.2f}/s too high)")
-        else:
-            # フラッシュ強度を密度に応じて調整
-            if flash_density > 0.3:
-                flash_brightness = 0.15  # 控えめ
-                flash_half_dur = 0.06  # 短い
-            elif flash_density > 0.15:
-                flash_brightness = 0.25  # 中程度
-                flash_half_dur = 0.08
-            else:
-                flash_brightness = 0.30  # V2.34.3: 0.35→0.30 (少し控えめに)
-                flash_half_dur = 0.10  # V2.34.3: 0.12→0.10
-            flash_parts = []
-            for ct in self_cut_boundaries:
-                adjusted_ct = ct / effective_speed
-                half_dur = flash_half_dur / effective_speed
-                flash_parts.append(
-                    f"if(between(t,{adjusted_ct-half_dur:.3f},{adjusted_ct+half_dur:.3f}),"
-                    f"{flash_brightness:.2f}*(1-abs(t-{adjusted_ct:.3f})/{half_dur:.3f}),0)"
-                )
-            # 全切点のフラッシュを加算（同時に複数の切点が活性化することはない）
-            brightness_expr = "+".join(flash_parts)
-            vf_parts.append(f"eq=brightness='{brightness_expr}':eval=frame")
-            logger.info(f"[ai-clip] V2.34.3: Added brightness flash ({flash_brightness}/{flash_half_dur}s) "
-                        f"at {len(self_cut_boundaries)} cut points (density: {flash_density:.2f}/s)")
+    # V2.34.5: 切点輝度フラッシュ廃止 — 切点は直接拼接、エフェクト不要
     # ── 3. Flash intro (multiple variations, softer than before) ──
     if enable_flash_intro:
         flash_variant = random.choice(["soft_flash", "warm_glow", "contrast_pop", "fade_in", "cool_flash"])
@@ -6032,23 +5951,8 @@ async def _process_single_clip_v2(job_id: str, clip: dict, req: GenerateRequest,
                 duration, volume_peaks, captions, max_zoom=req.zoom_intensity
             )
 
-        # ── 5b. V2.25: Scene change detection for jump cut concealment ──
-        # 原始素材中の既存jump cutを検出し、zoom burstで遮蔽する
-        # silence cutがない場合でも、元のクリップにジャンプカットがある可能性がある
+        # V2.34.5: Scene change zoom burst廃止 — 切点は直接拼接
         scene_change_times = []
-        try:
-            scene_change_times = await _detect_scene_changes(video_path, duration)
-            if scene_change_times:
-                logger.info(f"[ai-clip {job_id}] V2.25: Detected {len(scene_change_times)} scene changes in source clip")
-                # 各scene change点にzoom burst (1.12x)を追加
-                for sc_time in scene_change_times:
-                    # 既存のzoom_keyframesと重複しないようにチェック
-                    if not any(abs(sc_time - t) < 0.5 for t, _ in zoom_keyframes):
-                        zoom_keyframes.append((sc_time, 1.12))
-                zoom_keyframes.sort(key=lambda x: x[0])
-                logger.info(f"[ai-clip {job_id}] V2.25: zoom_keyframes updated to {len(zoom_keyframes)} (with scene change bursts)")
-        except Exception as sc_err:
-            logger.warning(f"[ai-clip {job_id}] V2.25: Scene change detection failed (non-fatal): {sc_err}")
 
         # ── 6. Hook generation ── (38%)
         hook_text = None
