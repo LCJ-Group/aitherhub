@@ -1425,35 +1425,36 @@ def _generate_zoom_keyframes(duration: float, volume_peaks: list,
                               captions: list, max_zoom: float = 1.08) -> list:
     """音量ピークとキャプションの強調ポイントでズームキーフレームを生成。
     Returns list of (time, zoom_factor) tuples.
+    V2.34.4: 画面安定性を優先するため、zoom強度を大幅に削減。
+    - max_zoomを上限 1.04 にキャップ（従来は1.08で揺れが目立った）
+    - キーフレーム数を最大4個に制限（従来は8個）
+    - デデュプリケーション窓を3秒に拡大（従来は2秒）
     """
+    # V2.34.4: 画面安定性のためzoom強度をキャップ
+    effective_max_zoom = min(max_zoom, 1.04)
     keyframes = []
-
     # Add zoom at volume peaks (sudden loud moments)
     for peak_time in volume_peaks:
         if 0.5 < peak_time < duration - 1.0:
-            keyframes.append((peak_time, max_zoom))
-
+            keyframes.append((peak_time, effective_max_zoom))
     # Add zoom at emphasis keywords in captions
     for cap in (captions or []):
         cap_text = cap.get("text", "").lower()
         cap_start = float(cap.get("start", 0))
         if any(kw in cap_text for kw in _EMPHASIS_KEYWORDS):
             if 0.5 < cap_start < duration - 1.0:
-                keyframes.append((cap_start, max_zoom * 0.95))
-
-    # Deduplicate (keep only one zoom per 2-second window)
+                keyframes.append((cap_start, effective_max_zoom * 0.95))
+    # Deduplicate (keep only one zoom per 3-second window) V2.34.4: 2s→3s
     keyframes.sort(key=lambda x: x[0])
     filtered = []
     for kf in keyframes:
-        if not filtered or kf[0] - filtered[-1][0] > 2.0:
+        if not filtered or kf[0] - filtered[-1][0] > 3.0:
             filtered.append(kf)
-
-    # Limit to max 8 zooms per clip (too many = distracting)
-    if len(filtered) > 8:
-        filtered = sorted(filtered, key=lambda x: x[1], reverse=True)[:8]
+    # V2.34.4: Limit to max 4 zooms per clip (8 was too many, caused constant movement)
+    if len(filtered) > 4:
+        filtered = sorted(filtered, key=lambda x: x[1], reverse=True)[:4]
         filtered.sort(key=lambda x: x[0])
-
-    logger.info(f"[ai-clip] Generated {len(filtered)} zoom keyframes")
+    logger.info(f"[ai-clip] V2.34.4: Generated {len(filtered)} zoom keyframes (max_zoom capped at {effective_max_zoom:.3f})")
     return filtered
 
 
@@ -2725,12 +2726,13 @@ def _build_advanced_ffmpeg_command(video_path: str, ass_path: str, output_path: 
     # 理由: deshakeはカメラの物理的手ぶれを補正するが、silence cutのjump cutには無効。
     #   さらに、deshakeがフレーム間の動きを「補正」しようとして画面が微妙にズレる副作用がある。
     #   jump cutの解決は切点zoom burst（下記）で対応。
-    # deflicker: 輝度の急激な変化を平滑化（照明フリッカー対策）
-    enable_stab = getattr(req, 'enable_stabilization', True)
-    if enable_stab:
-        # deflickerのみ: size=5は前後5フレームの平均で輝度を平滑化
-        vf_parts.append("deflicker=size=5:mode=am")
-        logger.info(f"[ai-clip] V2.23: Stabilization enabled (deflicker only, deshake removed)")
+    # V2.34.4: deflickerフィルタを完全に削除
+    # 理由: deflicker=size=5:mode=am はフレーム間の輝度平滑化を行うが、
+    #   silence cut後のセグメント結合時に逆に輝度ジッターを引き起こす。
+    #   また、zoom pulseのcrop+scaleと組み合わさるとフレーム間の微妙な明暗差が
+    #   「画面の揺れ」として知覚される原因となっていた。
+    #   安定した画面を優先するため、完全に無効化する。
+    logger.info(f"[ai-clip] V2.34.4: Stabilization/deflicker DISABLED (causes visual jitter)")
     # ── 1. Silence trimming (select filter) ──
     # V2.28: 帧境界量子化 — keep_segmentsの全境界を正確なフレーム時刻にスナップ
     # 問題: silence検出の境界（例: 5.317s）がフレーム時刻（5.300s, 5.333s）と一致しない場合、
@@ -2857,25 +2859,25 @@ def _build_advanced_ffmpeg_command(video_path: str, ass_path: str, output_path: 
                 if i > 0:
                     cut_boundary_times.append(output_t)
                 output_t += (seg_end - seg_start)
-            # V2.34.3: 切点密度に基づくzoom burst制限
+            # V2.34.4: 切点密度に基づくzoom burst制限（画面安定性優先）
             cut_density = len(cut_boundary_times) / max(duration, 1.0)
-            if cut_density > 0.3:
-                # 高密度（3秒に1回以上の切点）: zoom burstを完全に無効化
+            if cut_density > 0.2:
+                # 高密度（5秒に1回以上の切点）: zoom burstを完全に無効化
                 max_zoom_bursts = 0
                 zoom_intensity = 1.0
-                logger.info(f"[ai-clip] V2.34.3: High cut density ({cut_density:.2f}/s, {len(cut_boundary_times)} cuts) "
-                            f"→ zoom bursts DISABLED (flash only)")
-            elif cut_density > 0.15:
-                # 中密度（6秒に1回以上）: 最大6個に制限、強度を下げる
-                max_zoom_bursts = 6
-                zoom_intensity = 1.08
-                logger.info(f"[ai-clip] V2.34.3: Medium cut density ({cut_density:.2f}/s, {len(cut_boundary_times)} cuts) "
+                logger.info(f"[ai-clip] V2.34.4: High cut density ({cut_density:.2f}/s, {len(cut_boundary_times)} cuts) "
+                            f"→ zoom bursts DISABLED")
+            elif cut_density > 0.1:
+                # 中密度（10秒に1回以上）: 最大4個に制限、強度を大幅に下げる
+                max_zoom_bursts = 4
+                zoom_intensity = 1.04  # V2.34.4: 1.08→1.04 (ほぼ気付かないレベル)
+                logger.info(f"[ai-clip] V2.34.4: Medium cut density ({cut_density:.2f}/s, {len(cut_boundary_times)} cuts) "
                             f"→ limited to {max_zoom_bursts} zoom bursts at {zoom_intensity}x")
             else:
-                # 低密度（6秒に1回未満）: 従来通り全切点にzoom burst
+                # 低密度（10秒に1回未満）: 全切点にzoom burst、だが強度は控えめ
                 max_zoom_bursts = len(cut_boundary_times)
-                zoom_intensity = 1.12  # V2.34.3: 1.15→1.12 (slightly reduced)
-                logger.info(f"[ai-clip] V2.34.3: Low cut density ({cut_density:.2f}/s, {len(cut_boundary_times)} cuts) "
+                zoom_intensity = 1.06  # V2.34.4: 1.12→1.06 (大幅削減)
+                logger.info(f"[ai-clip] V2.34.4: Low cut density ({cut_density:.2f}/s, {len(cut_boundary_times)} cuts) "
                             f"→ all cuts get zoom burst at {zoom_intensity}x")
             # 切点にzoom burstを追加（制限付き）
             valid_cuts = [ct for ct in cut_boundary_times if ct > 0.1 and ct < duration - 0.2]
@@ -2928,10 +2930,9 @@ def _build_advanced_ffmpeg_command(video_path: str, ass_path: str, output_path: 
         for t_orig, zf in zoom_keyframes:
             # speed_factor適用後の実際のPTS時刻に変換
             t = t_orig / effective_speed
-            # V2.34.3: 切点burst (1.08-1.12x) は0.15秒、通常zoom (1.05-1.08x from audio peaks)は0.4秒
-            # 切点burstの判定: zf > 1.09 (audio peak max_zoomは1.08)
-            is_cut_burst = zf > 1.09
-            pulse_dur = (0.15 if is_cut_burst else 0.4) / effective_speed
+            # V2.34.4: 全zoomを短いパルスに統一（0.25秒）
+            # 強度が1.04-1.06と非常に微細なので、長いパルスは不要
+            pulse_dur = 0.25 / effective_speed
             freq = math.pi / pulse_dur
             parts.append(
                 f"if(between(t,{t:.3f},{t+pulse_dur:.3f}),"
