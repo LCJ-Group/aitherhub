@@ -1423,39 +1423,11 @@ def _build_silence_trim_segments(duration: float, silence_periods: list,
 # ─── V2: Zoom Pulse Keyframes ────────────────────────────────────────────────
 def _generate_zoom_keyframes(duration: float, volume_peaks: list,
                               captions: list, max_zoom: float = 1.08) -> list:
-    """音量ピークとキャプションの強調ポイントでズームキーフレームを生成。
-    Returns list of (time, zoom_factor) tuples.
-    V2.34.4: 画面安定性を優先するため、zoom強度を大幅に削減。
-    - max_zoomを上限 1.04 にキャップ（従来は1.08で揺れが目立った）
-    - キーフレーム数を最大4個に制限（従来は8個）
-    - デデュプリケーション窓を3秒に拡大（従来は2秒）
+    """V2.34.5: zoom pulse完全廃止。画面安定性を最優先とし、一切のzoomを行わない。
+    Returns empty list always.
     """
-    # V2.34.4: 画面安定性のためzoom強度をキャップ
-    effective_max_zoom = min(max_zoom, 1.04)
-    keyframes = []
-    # Add zoom at volume peaks (sudden loud moments)
-    for peak_time in volume_peaks:
-        if 0.5 < peak_time < duration - 1.0:
-            keyframes.append((peak_time, effective_max_zoom))
-    # Add zoom at emphasis keywords in captions
-    for cap in (captions or []):
-        cap_text = cap.get("text", "").lower()
-        cap_start = float(cap.get("start", 0))
-        if any(kw in cap_text for kw in _EMPHASIS_KEYWORDS):
-            if 0.5 < cap_start < duration - 1.0:
-                keyframes.append((cap_start, effective_max_zoom * 0.95))
-    # Deduplicate (keep only one zoom per 3-second window) V2.34.4: 2s→3s
-    keyframes.sort(key=lambda x: x[0])
-    filtered = []
-    for kf in keyframes:
-        if not filtered or kf[0] - filtered[-1][0] > 3.0:
-            filtered.append(kf)
-    # V2.34.4: Limit to max 4 zooms per clip (8 was too many, caused constant movement)
-    if len(filtered) > 4:
-        filtered = sorted(filtered, key=lambda x: x[1], reverse=True)[:4]
-        filtered.sort(key=lambda x: x[0])
-    logger.info(f"[ai-clip] V2.34.4: Generated {len(filtered)} zoom keyframes (max_zoom capped at {effective_max_zoom:.3f})")
-    return filtered
+    logger.info(f"[ai-clip] V2.34.5: Zoom pulse DISABLED (visual stability priority)")
+    return []
 
 
 # ─── V2: drawtext-based subtitle rendering (replaces ASS for CJK compat) ──────
