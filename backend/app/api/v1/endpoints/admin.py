@@ -6435,3 +6435,28 @@ async def gpu_worker_status(
         "pod_info": pod_info,
         "message": "Pod management (restart/stop/delete) is disabled in code. Use RunPod Console.",
     }
+
+
+@router.post("/videos/{video_id}/force-status")
+async def force_video_status(
+    video_id: str,
+    body: dict,
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Force-set a video's status. Use with caution.
+    Body: {"status": "DONE"} or any valid status string.
+    """
+    expected_key = f"{ADMIN_ID}:{ADMIN_PASS}"
+    if x_admin_key != expected_key:
+        raise HTTPException(status_code=403, detail="Invalid admin credentials")
+    new_status = body.get("status", "DONE")
+    result = await db.execute(
+        text("UPDATE videos SET status = :status, updated_at = NOW() WHERE id = :vid RETURNING id"),
+        {"vid": video_id, "status": new_status},
+    )
+    row = result.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Video not found")
+    await db.commit()
+    return {"status": "ok", "video_id": video_id, "new_status": new_status}
