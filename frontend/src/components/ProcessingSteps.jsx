@@ -1588,7 +1588,7 @@ function ProcessingSteps({ videoId, initialStatus, videoTitle, onProcessingCompl
                   : 'Aitherhubはライブコマース動画分析に特化しています。\n商品販売・紹介を含む動画をアップロードしてください。'}
             </p>
             <button
-              onClick={onUploadNew}
+              onClick={() => window.location.reload()}
               className="mt-3 px-4 py-1.5 text-sm font-medium text-white bg-amber-500 hover:bg-amber-600 rounded-md transition-colors"
             >
               {window.__currentLang === 'en' ? 'Upload Another Video' : window.__currentLang === 'zh-TW' ? '上傳其他影片' : '別の動画をアップロード'}
