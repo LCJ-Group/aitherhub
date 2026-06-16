@@ -881,6 +881,25 @@ async def run_all_ddl_migrations():
         except Exception as e:
             logger.warning(f"[DDL] user_profiles: {e}")
 
+        # ── custom_persons (AI Video Generator - saved person avatars) ──
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(_text("""
+                    CREATE TABLE IF NOT EXISTS custom_persons (
+                        id VARCHAR(50) PRIMARY KEY,
+                        name VARCHAR(200) NOT NULL,
+                        image_url TEXT NOT NULL,
+                        blob_url TEXT,
+                        thumbnail_url TEXT,
+                        analysis JSONB,
+                        created_at TIMESTAMPTZ DEFAULT NOW(),
+                        updated_at TIMESTAMPTZ DEFAULT NOW()
+                    )
+                """))
+                logger.info("[DDL] custom_persons \u2713")
+        except Exception as e:
+            logger.warning(f"[DDL] custom_persons: {e}")
+
         elapsed = time.time() - ddl_start
         logger.info(f"[DDL] All migrations completed in {elapsed:.1f}s")
 

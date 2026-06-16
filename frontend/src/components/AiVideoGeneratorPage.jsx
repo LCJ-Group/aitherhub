@@ -28,6 +28,7 @@ import {
   Volume2,
   Eye,
   Package,
+  UserPlus,
 } from "lucide-react";
 import axios from "axios";
 
@@ -91,6 +92,12 @@ export default function AiVideoGeneratorPage() {
   const [customPersonUploading, setCustomPersonUploading] = useState(false);
   const customPersonInputRef = useRef(null);
 
+  // ── My Persons (我の人物) - Saved persons list ──
+  const [myPersons, setMyPersons] = useState([]);
+  const [loadingMyPersons, setLoadingMyPersons] = useState(false);
+  const [showSavePersonDialog, setShowSavePersonDialog] = useState(false);
+  const [savePersonName, setSavePersonName] = useState("");
+
   // ── Job State ──
   const [isGenerating, setIsGenerating] = useState(false);
   const [currentJobId, setCurrentJobId] = useState(null);
@@ -114,6 +121,7 @@ export default function AiVideoGeneratorPage() {
     loadVoices();
     loadLanguages();
     loadJobHistory();
+    loadMyPersons();
   }, []);
 
   useEffect(() => {
@@ -192,6 +200,61 @@ export default function AiVideoGeneratorPage() {
     } finally {
       setHistoryLoading(false);
     }
+  };
+
+  // ── My Persons (load/save/delete) ──
+  const loadMyPersons = async () => {
+    try {
+      setLoadingMyPersons(true);
+      const res = await axios.get(`${API_BASE}/api/v1/ai-video-generator/custom-persons`, {
+        headers: { "X-Admin-Key": ADMIN_KEY },
+      });
+      setMyPersons(res.data.persons || []);
+    } catch (err) {
+      console.error("Failed to load my persons:", err);
+    } finally {
+      setLoadingMyPersons(false);
+    }
+  };
+
+  const handleSavePerson = async (name, imageUrl, analysis) => {
+    try {
+      const params = new URLSearchParams({ name, image_url: imageUrl });
+      if (analysis) params.append("analysis", JSON.stringify(analysis));
+      const res = await axios.post(
+        `${API_BASE}/api/v1/ai-video-generator/custom-persons?${params.toString()}`,
+        null,
+        { headers: { "X-Admin-Key": ADMIN_KEY } }
+      );
+      if (res.data.success) {
+        await loadMyPersons();
+        setShowSavePersonDialog(false);
+        setSavePersonName("");
+      }
+    } catch (err) {
+      setError(err.response?.data?.detail || "人物の保存に失敗しました");
+    }
+  };
+
+  const handleDeletePerson = async (personId) => {
+    try {
+      await axios.delete(`${API_BASE}/api/v1/ai-video-generator/custom-persons/${personId}`, {
+        headers: { "X-Admin-Key": ADMIN_KEY },
+      });
+      await loadMyPersons();
+      if (selectedAvatarId === `myperson:${personId}`) {
+        setSelectedAvatarId("");
+        setPersonImageUrl("");
+      }
+    } catch (err) {
+      setError("人物の削除に失敗しました");
+    }
+  };
+
+  const handleSelectMyPerson = (person) => {
+    setSelectedAvatarId(`myperson:${person.id}`);
+    setPersonImageUrl(person.image_url);
+    setCustomPersonPreview(person.image_url);
   };
 
   // ── Image Upload Handler ──
@@ -290,6 +353,9 @@ export default function AiVideoGeneratorPage() {
             setPersonImageUrl(uploadRes.data.url);
             setCustomPersonPreview(personImageFile?.preview || personImageUrl);
             setSelectedAvatarId("custom_person");
+            // Show save dialog to let user save to My Persons
+            setShowSavePersonDialog(true);
+            setSavePersonName("");
           }
         } catch (uploadErr) {
           console.warn("Auto-upload person image failed (non-fatal):", uploadErr);
@@ -428,7 +494,7 @@ export default function AiVideoGeneratorPage() {
         product_price: productPrice.trim() || analyzedProduct?.price || undefined,
         benefits: benefits.trim() || analyzedProduct?.notes || undefined,
         target_audience: targetAudience.trim() || undefined,
-        avatar_id: selectedAvatarId,
+        avatar_id: selectedAvatarId.startsWith("myperson:") ? "custom_person" : selectedAvatarId,
         voice_id: selectedVoiceId || undefined,
         tone,
         language,
@@ -1024,6 +1090,52 @@ export default function AiVideoGeneratorPage() {
                   <p className="text-gray-500 text-sm text-center py-4">利用可能なライバーがありません</p>
                 ) : (
                   <>
+                    {/* My Persons (我の人物) */}
+                    {myPersons.length > 0 && (
+                      <div className="mb-4">
+                        <p className="text-xs text-cyan-400 font-medium mb-2 flex items-center gap-1">
+                          <span className="w-2 h-2 rounded-full bg-cyan-400 inline-block"></span>
+                          我の人物
+                        </p>
+                        <div className="grid grid-cols-3 gap-2.5 max-h-52 overflow-y-auto pr-1">
+                          {myPersons.map((person) => (
+                            <div key={person.id} className="relative group">
+                              <button
+                                onClick={() => handleSelectMyPerson(person)}
+                                className={`relative rounded-lg overflow-hidden border-2 transition-all w-full ${
+                                  selectedAvatarId === `myperson:${person.id}`
+                                    ? "border-cyan-500 ring-2 ring-cyan-500/30 scale-[1.02]"
+                                    : "border-gray-700 hover:border-gray-600 hover:scale-[1.01]"
+                                }`}
+                              >
+                                <img
+                                  src={person.image_url}
+                                  alt={person.name}
+                                  className="w-full aspect-[9/16] object-cover bg-gray-800"
+                                  onError={(e) => { e.target.src = ''; e.target.className = 'w-full aspect-[9/16] bg-gray-800 flex items-center justify-center'; }}
+                                />
+                                <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-1.5">
+                                  <p className="text-[10px] font-medium truncate">{person.name}</p>
+                                </div>
+                                {selectedAvatarId === `myperson:${person.id}` && (
+                                  <div className="absolute top-1.5 right-1.5 w-4 h-4 bg-cyan-500 rounded-full flex items-center justify-center">
+                                    <CheckCircle className="w-2.5 h-2.5" />
+                                  </div>
+                                )}
+                              </button>
+                              <button
+                                onClick={() => handleDeletePerson(person.id)}
+                                className="absolute -top-1.5 -right-1.5 w-4 h-4 bg-red-600 rounded-full items-center justify-center hover:bg-red-500 transition-colors hidden group-hover:flex z-10"
+                                title="削除"
+                              >
+                                <Trash2 className="w-2.5 h-2.5" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
                     {/* AitherHub Livers */}
                     {avatars.filter(a => a.source === 'aitherhub').length > 0 && (
                       <div className="mb-4">
@@ -1429,6 +1541,46 @@ export default function AiVideoGeneratorPage() {
           </div>
         )}
       </main>
+
+      {/* Save Person Dialog */}
+      {showSavePersonDialog && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+          <div className="bg-gray-900 border border-gray-700 rounded-xl p-6 max-w-sm w-full shadow-2xl">
+            <h3 className="text-lg font-semibold text-white mb-2 flex items-center gap-2">
+              <UserPlus className="w-5 h-5 text-cyan-400" />
+              人物を保存
+            </h3>
+            <p className="text-sm text-gray-400 mb-4">この人物を「我の人物」に保存して、次回から簡単に選択できます。</p>
+            {customPersonPreview && (
+              <div className="mb-4 flex justify-center">
+                <img src={customPersonPreview} alt="人物" className="w-20 h-20 object-cover rounded-lg border border-gray-600" />
+              </div>
+            )}
+            <input
+              type="text"
+              value={savePersonName}
+              onChange={(e) => setSavePersonName(e.target.value)}
+              placeholder="人物の名前を入力（例：田中さん）"
+              className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:border-cyan-500 mb-4"
+              autoFocus
+            />
+            <div className="flex gap-3">
+              <button
+                onClick={() => { setShowSavePersonDialog(false); setSavePersonName(""); }}
+                className="flex-1 py-2 px-4 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 text-sm transition-colors"
+              >
+                スキップ
+              </button>
+              <button
+                onClick={() => handleSavePerson(savePersonName || "カスタム人物", personImageUrl, personAnalysis)}
+                className="flex-1 py-2 px-4 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-medium transition-colors"
+              >
+                保存する
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

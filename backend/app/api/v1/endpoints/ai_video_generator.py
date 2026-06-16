@@ -1781,3 +1781,125 @@ async def delete_job(
         logger.warning(f"[AIVideoGen] DB delete failed: {e}")
 
     return {"success": True, "message": f"Job {job_id} deleted"}
+
+
+# ──────────────────────────────────────────────
+# Custom Persons (我的人物) - Save/List/Delete
+# ──────────────────────────────────────────────
+
+@router.get(
+    "/custom-persons",
+    summary="List all saved custom persons",
+)
+async def list_custom_persons(
+    _: bool = Depends(verify_admin_key),
+):
+    """Return all saved custom persons ordered by creation date (newest first)."""
+    try:
+        from app.core.db import AsyncSessionLocal
+        from sqlalchemy import text as _text
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                _text("SELECT id, name, image_url, blob_url, thumbnail_url, analysis, created_at FROM custom_persons ORDER BY created_at DESC")
+            )
+            rows = result.fetchall()
+            persons = []
+            for row in rows:
+                persons.append({
+                    "id": row[0],
+                    "name": row[1],
+                    "image_url": row[2],
+                    "blob_url": row[3],
+                    "thumbnail_url": row[4],
+                    "analysis": row[5],
+                    "created_at": row[6].isoformat() if row[6] else None,
+                })
+            return {"success": True, "persons": persons}
+    except Exception as e:
+        logger.error(f"[AIVideoGen] List custom persons failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/custom-persons",
+    summary="Save a custom person",
+)
+async def save_custom_person(
+    name: str = Query(..., description="人物の名前"),
+    image_url: str = Query(..., description="人物画像URL (SAS付き)"),
+    blob_url: str = Query(None, description="Blob URL (SASなし)"),
+    analysis: str = Query(None, description="分析結果JSON文字列"),
+    _: bool = Depends(verify_admin_key),
+):
+    """Save a custom person to the database for reuse in video generation."""
+    try:
+        import json as _json
+        person_id = f"person-{uuid.uuid4().hex[:12]}"
+        analysis_json = None
+        if analysis:
+            try:
+                analysis_json = _json.loads(analysis)
+            except (ValueError, TypeError):
+                analysis_json = {"raw": analysis}
+
+        from app.core.db import AsyncSessionLocal
+        from sqlalchemy import text as _text
+        async with AsyncSessionLocal() as db:
+            await db.execute(
+                _text("""
+                    INSERT INTO custom_persons (id, name, image_url, blob_url, analysis, created_at, updated_at)
+                    VALUES (:id, :name, :image_url, :blob_url, :analysis, NOW(), NOW())
+                    ON CONFLICT (id) DO UPDATE SET
+                        name = EXCLUDED.name,
+                        image_url = EXCLUDED.image_url,
+                        blob_url = EXCLUDED.blob_url,
+                        analysis = EXCLUDED.analysis,
+                        updated_at = NOW()
+                """),
+                {
+                    "id": person_id,
+                    "name": name,
+                    "image_url": image_url,
+                    "blob_url": blob_url or "",
+                    "analysis": _json.dumps(analysis_json) if analysis_json else None,
+                },
+            )
+            await db.commit()
+
+        return {
+            "success": True,
+            "person": {
+                "id": person_id,
+                "name": name,
+                "image_url": image_url,
+                "blob_url": blob_url,
+                "analysis": analysis_json,
+            },
+        }
+    except Exception as e:
+        logger.error(f"[AIVideoGen] Save custom person failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete(
+    "/custom-persons/{person_id}",
+    summary="Delete a custom person",
+)
+async def delete_custom_person(
+    person_id: str,
+    _: bool = Depends(verify_admin_key),
+):
+    """Delete a saved custom person."""
+    try:
+        from app.core.db import AsyncSessionLocal
+        from sqlalchemy import text as _text
+        async with AsyncSessionLocal() as db:
+            await db.execute(
+                _text("DELETE FROM custom_persons WHERE id = :id"),
+                {"id": person_id},
+            )
+            await db.commit()
+        return {"success": True, "message": f"Person {person_id} deleted"}
+    except Exception as e:
+        logger.error(f"[AIVideoGen] Delete custom person failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
