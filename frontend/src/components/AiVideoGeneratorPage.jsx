@@ -261,6 +261,40 @@ export default function AiVideoGeneratorPage() {
 
       if (res.data.success && res.data.analysis) {
         setPersonAnalysis(res.data.analysis);
+
+        // Auto-upload person image to blob for use in video generation
+        try {
+          let uploadRes;
+          if (personImageFile) {
+            const uploadForm = new FormData();
+            uploadForm.append("image", personImageFile.file);
+            uploadRes = await axios.post(
+              `${API_BASE}/api/v1/ai-video-generator/upload-person-photo`,
+              uploadForm,
+              { headers: { "X-Admin-Key": ADMIN_KEY, "Content-Type": "multipart/form-data" } }
+            );
+          } else if (personImageUrl) {
+            // For URL-based analysis, fetch the image and upload it
+            const imgResp = await fetch(personImageUrl);
+            const blob = await imgResp.blob();
+            const uploadForm = new FormData();
+            uploadForm.append("image", new File([blob], "person.jpg", { type: blob.type || "image/jpeg" }));
+            uploadRes = await axios.post(
+              `${API_BASE}/api/v1/ai-video-generator/upload-person-photo`,
+              uploadForm,
+              { headers: { "X-Admin-Key": ADMIN_KEY, "Content-Type": "multipart/form-data" } }
+            );
+          }
+          if (uploadRes?.data?.success) {
+            // Set as custom person for video generation
+            setPersonImageUrl(uploadRes.data.url);
+            setCustomPersonPreview(personImageFile?.preview || personImageUrl);
+            setSelectedAvatarId("custom_person");
+          }
+        } catch (uploadErr) {
+          console.warn("Auto-upload person image failed (non-fatal):", uploadErr);
+          // Non-fatal: analysis still succeeded, user can manually upload in ライバー選択
+        }
       } else {
         setError("人物分析に失敗しました");
       }
@@ -1289,6 +1323,21 @@ export default function AiVideoGeneratorPage() {
                       </div>
                     )}
                   </div>
+                  {/* Auto-linked to video generation notice */}
+                  {selectedAvatarId === "custom_person" && personImageUrl && (
+                    <div className="mt-4 bg-emerald-500/10 border border-emerald-500/30 rounded-lg p-3 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <CheckCircle className="w-4 h-4 text-emerald-400" />
+                        <span className="text-sm text-emerald-300">この人物が動画生成のライバーとして設定されました</span>
+                      </div>
+                      <button
+                        onClick={() => setActiveTab("generate")}
+                        className="text-xs bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1 rounded-md transition-colors"
+                      >
+                        動画生成へ →
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
