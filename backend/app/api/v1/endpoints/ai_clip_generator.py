@@ -7058,15 +7058,20 @@ Input:
 {numbered_texts}"""
 
     try:
-        gpt_response = await client.chat.completions.create(
-            model=azure_model,
-            messages=[
+        # gpt-5.x models require max_completion_tokens instead of max_tokens
+        gpt_params = {
+            "model": azure_model,
+            "messages": [
                 {"role": "system", "content": "You are a subtitle translator for live commerce content. Output only numbered translated lines."},
                 {"role": "user", "content": translation_prompt},
             ],
-            temperature=0.3,
-            max_tokens=4000,
-        )
+            "temperature": 0.3,
+        }
+        if "gpt-5" in azure_model or "o1" in azure_model or "o3" in azure_model or "o4" in azure_model:
+            gpt_params["max_completion_tokens"] = 4000
+        else:
+            gpt_params["max_tokens"] = 4000
+        gpt_response = await client.chat.completions.create(**gpt_params)
         result_text = gpt_response.choices[0].message.content.strip()
 
         # Parse numbered lines back
@@ -7191,15 +7196,20 @@ Original transcript:
 {transcript_text}"""
 
     try:
-        gpt_response = await client.chat.completions.create(
-            model=azure_model,
-            messages=[
+        # gpt-5.x models require max_completion_tokens instead of max_tokens
+        lipsync_gpt_params = {
+            "model": azure_model,
+            "messages": [
                 {"role": "system", "content": "You are a professional translator for live commerce content."},
                 {"role": "user", "content": translation_prompt},
             ],
-            temperature=0.3,
-            max_tokens=2000,
-        )
+            "temperature": 0.3,
+        }
+        if "gpt-5" in azure_model or "o1" in azure_model or "o3" in azure_model or "o4" in azure_model:
+            lipsync_gpt_params["max_completion_tokens"] = 2000
+        else:
+            lipsync_gpt_params["max_tokens"] = 2000
+        gpt_response = await client.chat.completions.create(**lipsync_gpt_params)
         translated_text = gpt_response.choices[0].message.content.strip()
         logger.info(f"[ai-clip {job_id}] Translation result ({len(translated_text)} chars): {translated_text[:100]}...")
     except Exception as gpt_err:
@@ -11015,7 +11025,11 @@ Input:
                 {"role": "user", "content": prompt},
             ],
             temperature=0.3,
-            max_tokens=200,
+            **({
+                "max_completion_tokens": 200
+            } if "gpt-5" in azure_model or "o1" in azure_model or "o3" in azure_model or "o4" in azure_model else {
+                "max_tokens": 200
+            }),
         )
         raw_text = gpt_resp.choices[0].message.content.strip()
         # Parse
