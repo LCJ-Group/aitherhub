@@ -754,7 +754,7 @@ async def _generate_video(audio_url: str, request: VideoGenerateRequest) -> tupl
             error_msg = status_data.get("error", "Unknown error")
             raise Exception(f"HeyGen video generation failed: {error_msg}")
 
-        raise Exception(f"HeyGen video generation timed out after {max_wait}s")
+    raise Exception(f"HeyGen video generation timed out after {max_wait}s")
 
 
 async def _generate_showcase_image(
