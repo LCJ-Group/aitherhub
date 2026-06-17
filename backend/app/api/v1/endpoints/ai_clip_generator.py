@@ -10978,17 +10978,59 @@ async def debug_test_translation(
         "SYNC_API_KEY": bool(sync_api_key),
     }
     
-    # Test 2: Try translating a simple caption
-    test_captions = [
-        {"start": 0.0, "end": 2.0, "text": "カラーケアシャンプー"},
-        {"start": 2.0, "end": 4.0, "text": "ね、やっぱそうだね"},
-    ]
+    # Test 2: Direct GPT translation test (bypass _translate_captions_text to see raw response)
+    import openai as _openai
+    import re as _re
+    azure_model = os.getenv("GPT5_MODEL") or os.getenv("GPT5_DEPLOYMENT") or "gpt-4.1-mini"
+    results["model_info"] = {
+        "GPT5_MODEL": os.getenv("GPT5_MODEL", "NOT SET"),
+        "GPT5_DEPLOYMENT": os.getenv("GPT5_DEPLOYMENT", "NOT SET"),
+        "effective_model": azure_model,
+    }
     try:
-        translated = await _translate_captions_text(test_captions, "zh", "debug-test")
+        from urllib.parse import urlparse as _up
+        _p = _up(azure_endpoint)
+        clean_ep = f"{_p.scheme}://{_p.netloc}/"
+        _client = _openai.AsyncAzureOpenAI(
+            api_key=azure_key,
+            azure_endpoint=clean_ep,
+            api_version=os.getenv("GPT5_API_VERSION", "2025-04-01-preview"),
+        )
+        prompt = """Translate the following numbered lines from Japanese to natural, spoken 中文（简体）.
+These are live stream subtitles from a beauty product presenter.
+RULES:
+- Output ONLY the translated lines, one per line, with the same numbering
+- Keep the same number of lines as input
+- Maintain conversational tone and enthusiasm
+- Preserve product names (KYOGOKU, 京極) as-is
+- Keep similar character length per line (for subtitle timing)
+- Do NOT add explanations or formatting
+Input:
+1. カラーケアシャンプー
+2. ね、やっぱそうだね"""
+        gpt_resp = await _client.chat.completions.create(
+            model=azure_model,
+            messages=[
+                {"role": "system", "content": "You are a subtitle translator for live commerce content. Output only numbered translated lines."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.3,
+            max_tokens=200,
+        )
+        raw_text = gpt_resp.choices[0].message.content.strip()
+        # Parse
+        parsed_lines = []
+        for line in raw_text.split("\n"):
+            line = line.strip()
+            if line:
+                cleaned = _re.sub(r'^\d+\.\s*', '', line)
+                if cleaned:
+                    parsed_lines.append(cleaned)
         results["caption_translation"] = {
             "status": "success",
-            "original": ["カラーケアシャンプー", "ね、やっぱそうだね"],
-            "translated": [c.get("text", "") for c in translated],
+            "raw_gpt_response": raw_text,
+            "parsed_lines": parsed_lines,
+            "model_used": azure_model,
         }
     except Exception as e:
         results["caption_translation"] = {
