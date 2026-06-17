@@ -3231,6 +3231,8 @@ function AiClipGenerationModal({ clip, onClose, onGenerate, generating, jobStatu
     zoom_intensity: 1.08,
     target_language: "auto",
     editing_profile_id: "",
+    output_language: "original",
+    voice_id: "",
   });
   const [editingProfiles, setEditingProfiles] = useState([]);
   useEffect(() => {
@@ -3252,7 +3254,7 @@ function AiClipGenerationModal({ clip, onClose, onGenerate, generating, jobStatu
         <div className="sticky top-0 z-10 bg-white rounded-t-2xl border-b border-gray-100 px-5 py-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Zap className="w-5 h-5 text-emerald-500" />
-            <h3 className="text-base font-bold text-gray-800">AIクリップ生成 <span className="text-xs bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full ml-1">V2.22</span></h3>
+            <h3 className="text-base font-bold text-gray-800">AIクリップ生成 <span className="text-xs bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full ml-1">V2.35</span></h3>
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition">
             <X className="w-5 h-5" />
@@ -3383,11 +3385,47 @@ function AiClipGenerationModal({ clip, onClose, onGenerate, generating, jobStatu
                 </div>
               )}
 
+              {/* V2.35: Output Language Translation + Lip Sync */}
+              <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-xl space-y-2">
+                <h4 className="text-xs font-semibold text-blue-700">🌐 言語翻訳+リップシンク <span className="text-[10px] font-normal text-blue-500 ml-1">V2.35 NEW</span></h4>
+                <div className="flex items-center justify-between">
+                  <label className="text-xs text-gray-600">出力言語</label>
+                  <select
+                    value={options.output_language}
+                    onChange={(e) => setOptions({ ...options, output_language: e.target.value })}
+                    className="text-xs border border-blue-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="original">原語のまま</option>
+                    <option value="zh">🇨🇳 中国語（簡体）</option>
+                    <option value="zh-tw">🇹🇼 中国語（繁体）</option>
+                    <option value="en">🇺🇸 英語</option>
+                    <option value="ko">🇰🇷 韓国語</option>
+                  </select>
+                </div>
+                {options.output_language !== 'original' && (
+                  <>
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs text-gray-600">音声ID（省略可）</label>
+                      <input
+                        type="text"
+                        value={options.voice_id}
+                        onChange={(e) => setOptions({ ...options, voice_id: e.target.value })}
+                        placeholder="ElevenLabs Voice ID"
+                        className="text-xs border border-blue-200 rounded-lg px-2 py-1 w-36 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+                    <p className="text-[10px] text-blue-600">💡 字幕+音声+唇形を全て翻訳言語に変換します</p>
+                  </>
+                )}
+              </div>
+
               {/* Generate button */}
               <button
                 onClick={() => {
                   const opts = { ...options };
                   if (!opts.editing_profile_id) delete opts.editing_profile_id;
+                  if (!opts.voice_id) delete opts.voice_id;
+                  if (opts.output_language === 'original') delete opts.output_language;
                   onGenerate(opts);
                 }}
                 className="w-full py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-semibold text-sm transition-colors flex items-center justify-center gap-2"

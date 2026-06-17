@@ -4361,6 +4361,8 @@ async def generate_ai_clip_from_clip(
         enable_subtitle_animation=req.enable_subtitle_animation,
         zoom_intensity=req.zoom_intensity,
         silence_threshold_db=req.silence_threshold_db,
+        output_language=req.output_language,
+        voice_id=req.voice_id,
     )
 
     job_id = str(uuid.uuid4())
