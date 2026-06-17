@@ -3774,6 +3774,9 @@ class GenerateRequest(BaseModel):
     editing_profile_id: Optional[str] = Field(None, description="編集プロファイルID（スタイル学習済みプロファイルを適用）")
     # V2.22: 画面安定化（防抖・去闪烁）
     enable_stabilization: bool = Field(True, description="画面安定化（防抖+去闪烁）を有効にするか")
+    # V2.35: 言語翻訳+リップシンク（主播の声で他言語に翻訳）
+    output_language: str = Field("original", description="出力言語: original=元のまま, zh=中国語簡体, zh-tw=中国語繁体, en=英語, ko=韓国語")
+    voice_id: Optional[str] = Field(None, description="ElevenLabs音声ID（翻訳時に使用、省略時はデフォルト音声）")
 
 
 class GenerateFromClipRequest(BaseModel):
@@ -3810,7 +3813,9 @@ class GenerateFromClipRequest(BaseModel):
     editing_profile_id: Optional[str] = Field(None, description="編集プロファイルID（スタイル学習済みプロファイルを適用）")
     # V2.22: 画面安定化（防抖・去闪烁）
     enable_stabilization: bool = Field(True, description="画面安定化（防抖+去闪烁）を有効にするか")
-
+    # V2.35: 言語翻訳+リップシンク
+    output_language: str = Field("original", description="出力言語: original=元のまま, zh=中国語簡体, zh-tw=中国語繁体, en=英語, ko=韓国語")
+    voice_id: Optional[str] = Field(None, description="ElevenLabs音声ID（翻訳時に使用、省略時はデフォルト音声）")
 
 class JobStatusResponse(BaseModel):
     job_id: str
@@ -6272,6 +6277,31 @@ async def _process_single_clip_v2(job_id: str, clip: dict, req: GenerateRequest,
                 logger.info(f"[ai-clip {job_id}] SE skipped (not available or failed)")
 
         await _update_job(job_id, progress_pct=75, current_step=f"クリップ {idx+1}/{total}: エンコード完了 ({output_size//1024}KB)")
+
+        # ── 10.8. Language Translation + Lip Sync (V2.35) ──
+        if getattr(req, 'output_language', 'original') != 'original':
+            await _update_job(job_id, progress_pct=76, current_step=f"クリップ {idx+1}/{total}: 言語翻訳+リップシンク中 ({req.output_language})...")
+            try:
+                translated_path = await _translate_and_lipsync_clip(
+                    video_path=output_path,
+                    captions=captions,
+                    target_lang=req.output_language,
+                    voice_id=getattr(req, 'voice_id', None),
+                    tmp_dir=tmp_dir,
+                    job_id=job_id,
+                    clip_id=clip_id,
+                )
+                if translated_path and os.path.exists(translated_path):
+                    os.replace(translated_path, output_path)
+                    output_size = os.path.getsize(output_path)
+                    logger.info(f"[ai-clip {job_id}] Translation + lip sync applied: {req.output_language}, {output_size} bytes")
+                    await _update_job(job_id, progress_pct=79, current_step=f"クリップ {idx+1}/{total}: 翻訳+リップシンク完了")
+                else:
+                    logger.warning(f"[ai-clip {job_id}] Translation returned no output, keeping original")
+            except Exception as translate_err:
+                logger.error(f"[ai-clip {job_id}] Translation + lip sync failed (non-fatal): {translate_err}", exc_info=True)
+                # Non-fatal: keep original video if translation fails
+
         # ── 11. Enhanced thumbnail (V2) ── (80%)
         thumbnail_url = None
         if req.enable_thumbnail:
@@ -6950,6 +6980,236 @@ def _assign_scene_styles(captions: list, total_duration: float, base_style: str)
             style = 'box'
         styled.append({**cap, "style": style})
     return styled
+
+
+# ─── V2.35: Translation + Lip Sync Pipeline ───────────────────────────────────
+
+async def _translate_and_lipsync_clip(
+    video_path: str,
+    captions: list,
+    target_lang: str,
+    voice_id: Optional[str],
+    tmp_dir: str,
+    job_id: str,
+    clip_id: str,
+) -> Optional[str]:
+    """
+    V2.35: Translate clip audio to target language with voice cloning + lip sync.
+    Pipeline:
+      1. Extract transcript from captions (or re-transcribe)
+      2. Translate text via GPT-4.1-mini
+      3. Generate translated audio via ElevenLabs TTS (cloned voice)
+      4. Upload video + audio to blob for Sync.so
+      5. Apply lip sync via Sync.so
+      6. Download result
+    Returns path to the translated+lip-synced video, or None on failure.
+    """
+    import httpx
+    import openai
+    from app.services.elevenlabs_tts_service import ElevenLabsTTSService
+    from app.services.sync_lip_sync_service import SyncLipSyncService
+    from app.services.storage_service import (
+        generate_upload_sas, generate_read_sas_from_url,
+        CONNECTION_STRING, ACCOUNT_NAME, CONTAINER_NAME,
+    )
+
+    logger.info(f"[ai-clip {job_id}] V2.35 Translation pipeline: {target_lang}")
+
+    # ── Step 1: Extract transcript text from captions ──
+    if captions and isinstance(captions, list) and len(captions) > 0:
+        transcript_text = " ".join(
+            (c.get("text") or "").strip() for c in captions if c.get("text")
+        )
+    else:
+        logger.warning(f"[ai-clip {job_id}] No captions available for translation")
+        return None
+
+    if not transcript_text or len(transcript_text.strip()) < 5:
+        logger.warning(f"[ai-clip {job_id}] Transcript too short for translation: '{transcript_text}'")
+        return None
+
+    logger.info(f"[ai-clip {job_id}] Transcript ({len(transcript_text)} chars): {transcript_text[:100]}...")
+
+    # ── Step 2: Translate via GPT-4.1-mini ──
+    azure_key = os.getenv("AZURE_OPENAI_KEY", "")
+    azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
+    azure_model = os.getenv("GPT5_MODEL") or os.getenv("GPT5_DEPLOYMENT") or "gpt-4.1-mini"
+
+    if not azure_key or not azure_endpoint:
+        logger.error(f"[ai-clip {job_id}] Azure OpenAI not configured for translation")
+        return None
+
+    from urllib.parse import urlparse as _urlparse
+    _parsed = _urlparse(azure_endpoint)
+    clean_endpoint = f"{_parsed.scheme}://{_parsed.netloc}/"
+
+    client = openai.AsyncAzureOpenAI(
+        api_key=azure_key,
+        azure_endpoint=clean_endpoint,
+        api_version=os.getenv("GPT5_API_VERSION", "2025-04-01-preview"),
+    )
+
+    lang_names = {
+        "zh": "中文（简体）",
+        "zh-tw": "中文（繁體）",
+        "en": "English",
+        "ko": "한국어",
+    }
+    target_lang_name = lang_names.get(target_lang, target_lang)
+
+    translation_prompt = f"""You are a professional translator specializing in live commerce and beauty product content.
+Translate the following Japanese live stream transcript into natural, spoken {target_lang_name}.
+
+IMPORTANT RULES:
+- Maintain the speaker's tone, enthusiasm, and personality
+- Keep it natural and conversational (this will be spoken aloud)
+- Preserve product names (KYOGOKU, 京極) as-is or use the most common localized form
+- Do NOT add any explanations, notes, or formatting
+- Output ONLY the translated text, nothing else
+- Keep similar length/timing to the original (for lip sync purposes)
+- If the text contains filler words or hesitations, translate them naturally
+
+Original transcript:
+{transcript_text}"""
+
+    try:
+        gpt_response = await client.chat.completions.create(
+            model=azure_model,
+            messages=[
+                {"role": "system", "content": "You are a professional translator for live commerce content."},
+                {"role": "user", "content": translation_prompt},
+            ],
+            temperature=0.3,
+            max_tokens=2000,
+        )
+        translated_text = gpt_response.choices[0].message.content.strip()
+        logger.info(f"[ai-clip {job_id}] Translation result ({len(translated_text)} chars): {translated_text[:100]}...")
+    except Exception as gpt_err:
+        logger.error(f"[ai-clip {job_id}] GPT translation failed: {gpt_err}")
+        return None
+
+    if not translated_text or len(translated_text) < 3:
+        logger.warning(f"[ai-clip {job_id}] Translation result too short")
+        return None
+
+    # ── Step 3: Generate translated audio via ElevenLabs TTS ──
+    tts = ElevenLabsTTSService()
+    effective_voice_id = voice_id or os.getenv("ELEVENLABS_VOICE_ID", "")
+    if not effective_voice_id:
+        logger.error(f"[ai-clip {job_id}] No voice_id available for TTS")
+        return None
+
+    # Map target_lang to ElevenLabs language code
+    elevenlabs_lang_map = {
+        "zh": "zh",
+        "zh-tw": "zh",
+        "en": "en",
+        "ko": "ko",
+    }
+    tts_lang = elevenlabs_lang_map.get(target_lang, "zh")
+
+    try:
+        tts_audio_bytes = await tts.text_to_speech(
+            text=translated_text,
+            voice_id=effective_voice_id,
+            language_code=tts_lang,
+            output_format="mp3_44100_128",
+        )
+        logger.info(f"[ai-clip {job_id}] TTS audio generated: {len(tts_audio_bytes)} bytes")
+    except Exception as tts_err:
+        logger.error(f"[ai-clip {job_id}] ElevenLabs TTS failed: {tts_err}")
+        return None
+
+    if not tts_audio_bytes or len(tts_audio_bytes) < 1000:
+        logger.warning(f"[ai-clip {job_id}] TTS audio too small")
+        return None
+
+    # Save TTS audio locally
+    tts_audio_path = os.path.join(tmp_dir, f"{clip_id}-translated-tts.mp3")
+    with open(tts_audio_path, "wb") as f:
+        f.write(tts_audio_bytes)
+
+    # ── Step 4: Upload video and audio to Azure Blob for Sync.so ──
+    # Upload TTS audio
+    _, tts_upload_url, tts_blob_url, _ = await generate_upload_sas(
+        email="ai-clip-translate@aitherhub.com",
+        video_id=f"{clip_id}-translate-tts",
+        filename=f"{clip_id}-translate-tts.mp3",
+    )
+    async with httpx.AsyncClient(timeout=120) as upload_client:
+        resp = await upload_client.put(
+            tts_upload_url,
+            content=tts_audio_bytes,
+            headers={
+                "x-ms-blob-type": "BlockBlob",
+                "Content-Type": "audio/mpeg",
+            },
+        )
+        resp.raise_for_status()
+    tts_sas_url = generate_read_sas_from_url(tts_blob_url)
+    if not tts_sas_url:
+        logger.error(f"[ai-clip {job_id}] Failed to generate SAS URL for TTS audio")
+        return None
+
+    # Upload the video to blob for Sync.so to access
+    video_bytes = None
+    with open(video_path, "rb") as f:
+        video_bytes = f.read()
+    _, video_upload_url, video_blob_url, _ = await generate_upload_sas(
+        email="ai-clip-translate@aitherhub.com",
+        video_id=f"{clip_id}-translate-video",
+        filename=f"{clip_id}-translate-video.mp4",
+    )
+    async with httpx.AsyncClient(timeout=120) as upload_client:
+        resp = await upload_client.put(
+            video_upload_url,
+            content=video_bytes,
+            headers={
+                "x-ms-blob-type": "BlockBlob",
+                "Content-Type": "video/mp4",
+            },
+        )
+        resp.raise_for_status()
+    video_sas_url = generate_read_sas_from_url(video_blob_url)
+    if not video_sas_url:
+        logger.error(f"[ai-clip {job_id}] Failed to generate SAS URL for video")
+        return None
+
+    logger.info(f"[ai-clip {job_id}] Uploaded video + TTS audio to blob for Sync.so")
+
+    # ── Step 5: Apply lip sync via Sync.so ──
+    sync_service = SyncLipSyncService()
+    try:
+        sync_result = await sync_service.lip_sync(
+            video_url=video_sas_url,
+            audio_url=tts_sas_url,
+            model="lipsync-2",
+            sync_mode="cut_off",
+            max_wait_sec=600,
+            poll_interval=5,
+        )
+        output_url = sync_result.get("output_url")
+        if not output_url:
+            logger.error(f"[ai-clip {job_id}] Sync.so returned no output URL")
+            return None
+        logger.info(f"[ai-clip {job_id}] Sync.so lip sync completed: {output_url[:80]}...")
+    except Exception as sync_err:
+        logger.error(f"[ai-clip {job_id}] Sync.so lip sync failed: {sync_err}")
+        return None
+
+    # ── Step 6: Download the lip-synced result ──
+    translated_output_path = os.path.join(tmp_dir, f"{clip_id}-translated-lipsync.mp4")
+    try:
+        await sync_service.download_result(output_url, translated_output_path)
+        if os.path.exists(translated_output_path) and os.path.getsize(translated_output_path) > 1000:
+            logger.info(f"[ai-clip {job_id}] Translation + lip sync output: {os.path.getsize(translated_output_path)} bytes")
+            return translated_output_path
+        else:
+            logger.error(f"[ai-clip {job_id}] Downloaded file too small or missing")
+            return None
+    except Exception as dl_err:
+        logger.error(f"[ai-clip {job_id}] Failed to download lip-synced video: {dl_err}")
+        return None
 
 
 # ─── Upload & DB Save (unchanged from V1) ────────────────────────────────────

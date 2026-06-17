@@ -72,6 +72,9 @@ export default function AutoAIClipPanel({ adminKey }) {
     enable_subtitle_animation: true,
     zoom_intensity: 1.08,
     silence_threshold_db: -22,  // V2.18: より積極的な無音検出
+    // V2.35: 言語翻訳+リップシンク
+    output_language: "original",
+    voice_id: "",
   });
 
   // ── Polling for active job ──
@@ -234,6 +237,8 @@ export default function AutoAIClipPanel({ adminKey }) {
       const payload = { ...config };
       if (!payload.brand_id) delete payload.brand_id;
       if (!payload.hook_text) delete payload.hook_text;
+      if (!payload.voice_id) delete payload.voice_id;
+      if (payload.output_language === 'original') delete payload.output_language;
       const res = await axios.post(`${API_BASE}/api/v1/ai-clip/generate`, payload, { headers });
       setActiveJobId(res.data.job_id);
       setActiveJob({ job_id: res.data.job_id, status: "queued", progress_pct: 0 });
@@ -616,6 +621,45 @@ export default function AutoAIClipPanel({ adminKey }) {
                   <div className="text-xs text-gray-400 text-center">{config.position_y}%</div>
                 </div>
               </div>
+            </section>
+
+            {/* V2.35: 言語翻訳+リップシンク */}
+            <section className="bg-white rounded-lg border p-4 border-blue-200">
+              <h3 className="font-semibold text-gray-700 mb-3">🌐 言語翻訳+リップシンク <span className="text-xs font-normal text-blue-500 ml-2">V2.35 NEW</span></h3>
+              <p className="text-xs text-gray-400 mb-4">主播の声をクローンし、他言語に翻訳して唇形も同期します。日本語→中国語等の自然な翻訳動画を生成。</p>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-600 mb-1">出力言語（翻訳）</label>
+                  <select
+                    value={config.output_language}
+                    onChange={e => setConfig(prev => ({ ...prev, output_language: e.target.value }))}
+                    className="w-full border rounded-md px-3 py-2 text-sm"
+                  >
+                    <option value="original">原語のまま（翻訳なし）</option>
+                    <option value="zh">🇨🇳 中国語（簡体）</option>
+                    <option value="zh-tw">🇹🇼 中国語（繁体）</option>
+                    <option value="en">🇺🇸 英語</option>
+                    <option value="ko">🇰🇷 韓国語</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-600 mb-1">音声ID（クローン声）</label>
+                  <input
+                    type="text"
+                    value={config.voice_id}
+                    onChange={e => setConfig(prev => ({ ...prev, voice_id: e.target.value }))}
+                    placeholder="空欄=デフォルト音声"
+                    className="w-full border rounded-md px-3 py-2 text-sm"
+                    disabled={config.output_language === 'original'}
+                  />
+                  <p className="text-xs text-gray-400 mt-1">空の場合はElevenLabsデフォルトクローン声を使用</p>
+                </div>
+              </div>
+              {config.output_language !== 'original' && (
+                <div className="mt-3 p-2 bg-blue-50 rounded text-xs text-blue-700">
+                  ℹ️ 翻訳パイプライン: Whisper転写 → GPT翻訳 → ElevenLabs TTS（クローン声） → Sync.soリップシンク
+                </div>
+              )}
             </section>
 
             {/* V2: Advanced Effects */}
