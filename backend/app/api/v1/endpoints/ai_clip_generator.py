@@ -6029,6 +6029,16 @@ async def _process_single_clip_v2(job_id: str, clip: dict, req: GenerateRequest,
                 logger.warning(f"[ai-clip {job_id}] V2.33 Selling point generation failed (non-fatal): {sp_err}")
                 selling_points_timed = []
 
+        # ── 7c. V2.35: Translate captions text (before subtitle rendering) ──
+        if getattr(req, 'output_language', 'original') != 'original' and captions:
+            await _update_job(job_id, progress_pct=45, current_step=f"クリップ {idx+1}/{total}: 字幕テキスト翻訳中 ({req.output_language})...")
+            try:
+                captions = await _translate_captions_text(captions, req.output_language, job_id)
+                logger.info(f"[ai-clip {job_id}] Captions translated to {req.output_language}")
+            except Exception as cap_translate_err:
+                logger.warning(f"[ai-clip {job_id}] Caption translation failed (non-fatal): {cap_translate_err}")
+                # Keep original captions if translation fails
+
         # ── 8. Scene classification & style assignment ── (46%)
         await _update_job(job_id, progress_pct=46, current_step=f"クリップ {idx+1}/{total}: シーン分析中...")
         styled_captions = _assign_scene_styles(captions, duration, req.subtitle_style)
@@ -6980,6 +6990,112 @@ def _assign_scene_styles(captions: list, total_duration: float, base_style: str)
             style = 'box'
         styled.append({**cap, "style": style})
     return styled
+
+
+
+# ─── V2.35: Caption Text Translation ───────────────────────────────────────────
+
+async def _translate_captions_text(
+    captions: list,
+    target_lang: str,
+    job_id: str,
+) -> list:
+    """
+    V2.35: Translate all caption text entries to the target language.
+    Preserves timing (start, end) and other metadata, only translates the 'text' field.
+    Uses GPT-4.1-mini for high-quality contextual translation.
+    """
+    import openai
+    import re
+
+    if not captions:
+        return captions
+
+    azure_key = os.getenv("AZURE_OPENAI_KEY", "")
+    azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
+    azure_model = os.getenv("GPT5_MODEL") or os.getenv("GPT5_DEPLOYMENT") or "gpt-4.1-mini"
+
+    if not azure_key or not azure_endpoint:
+        logger.error(f"[ai-clip {job_id}] Azure OpenAI not configured for caption translation")
+        return captions
+
+    from urllib.parse import urlparse as _urlparse
+    _parsed = _urlparse(azure_endpoint)
+    clean_endpoint = f"{_parsed.scheme}://{_parsed.netloc}/"
+
+    client = openai.AsyncAzureOpenAI(
+        api_key=azure_key,
+        azure_endpoint=clean_endpoint,
+        api_version=os.getenv("GPT5_API_VERSION", "2025-04-01-preview"),
+    )
+
+    lang_names = {
+        "zh": "中文（简体）",
+        "zh-tw": "中文（繁體）",
+        "en": "English",
+        "ko": "한국어",
+    }
+    target_lang_name = lang_names.get(target_lang, target_lang)
+
+    # Build the text list for batch translation
+    texts = [c.get("text", "") for c in captions]
+    numbered_texts = "\n".join(f"{i+1}. {t}" for i, t in enumerate(texts))
+
+    translation_prompt = f"""Translate the following numbered lines from Japanese to natural, spoken {target_lang_name}.
+These are live stream subtitles from a beauty product presenter.
+
+RULES:
+- Output ONLY the translated lines, one per line, with the same numbering
+- Keep the same number of lines as input
+- Maintain conversational tone and enthusiasm
+- Preserve product names (KYOGOKU, 京極) as-is
+- Keep similar character length per line (for subtitle timing)
+- Do NOT add explanations or formatting
+
+Input:
+{numbered_texts}"""
+
+    try:
+        gpt_response = await client.chat.completions.create(
+            model=azure_model,
+            messages=[
+                {"role": "system", "content": "You are a subtitle translator for live commerce content. Output only numbered translated lines."},
+                {"role": "user", "content": translation_prompt},
+            ],
+            temperature=0.3,
+            max_tokens=4000,
+        )
+        result_text = gpt_response.choices[0].message.content.strip()
+
+        # Parse numbered lines back
+        translated_lines = []
+        for line in result_text.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            # Remove numbering prefix like "1. " or "1."
+            cleaned = re.sub(r'^\d+\.\s*', '', line)
+            if cleaned:
+                translated_lines.append(cleaned)
+
+        # Apply translations back to captions
+        if len(translated_lines) >= len(captions):
+            for i, cap in enumerate(captions):
+                cap["text"] = translated_lines[i]
+            logger.info(f"[ai-clip {job_id}] All {len(captions)} captions translated to {target_lang}")
+        elif len(translated_lines) > 0:
+            # Partial match - apply what we can
+            for i in range(min(len(translated_lines), len(captions))):
+                captions[i]["text"] = translated_lines[i]
+            logger.warning(f"[ai-clip {job_id}] Partial caption translation: {len(translated_lines)}/{len(captions)} lines")
+        else:
+            logger.warning(f"[ai-clip {job_id}] Caption translation returned no parseable lines")
+
+    except Exception as e:
+        logger.error(f"[ai-clip {job_id}] Caption text translation failed: {e}")
+        # Return original captions on failure
+
+    return captions
 
 
 # ─── V2.35: Translation + Lip Sync Pipeline ───────────────────────────────────
