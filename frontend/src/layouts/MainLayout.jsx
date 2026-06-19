@@ -26,8 +26,15 @@ export default function MainLayout() {
   // Extract editor params from URL (for feedback card → editor navigation)
   const editorParams = useMemo(() => {
     if (searchParams.get('open_editor') === '1') {
+      const rawPhase = searchParams.get('phase');
+      // phase can be numeric ("5") or string ("moment_strong_5") — preserve as-is if non-numeric
+      let phaseIndex = null;
+      if (rawPhase) {
+        const num = Number(rawPhase);
+        phaseIndex = isNaN(num) ? rawPhase : num;
+      }
       return {
-        phase_index: searchParams.get('phase') ? Number(searchParams.get('phase')) : null,
+        phase_index: phaseIndex,
         time_start: searchParams.get('t_start') ? Number(searchParams.get('t_start')) : null,
         time_end: searchParams.get('t_end') ? Number(searchParams.get('t_end')) : null,
       };
