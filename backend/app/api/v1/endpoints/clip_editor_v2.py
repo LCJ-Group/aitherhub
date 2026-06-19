@@ -16,7 +16,7 @@ import os
 import logging
 import tempfile
 import asyncio
-from typing import Optional
+from typing import Optional, Union
 from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -63,7 +63,7 @@ class TranscribeRequest(BaseModel):
     clip_url: str = Field(..., description="URL of the clip video to transcribe")
     time_start: float = Field(..., description="Clip start time in seconds (absolute)")
     time_end: float = Field(..., description="Clip end time in seconds (absolute)")
-    phase_index: Optional[int] = Field(None, description="Phase index of the clip")
+    phase_index: Optional[Union[int, str]] = Field(None, description="Phase index of the clip (numeric or string like 'moment_strong_5')")
     target_language: Optional[str] = Field("auto", description="Target language for transcription: 'auto' (Whisper auto-detect, default), 'ja' (Japanese), 'zh-TW' (Traditional Chinese), 'zh' (Simplified Chinese)")
 
 
