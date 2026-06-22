@@ -2149,3 +2149,75 @@ async def delete_custom_person(
     except Exception as e:
         logger.error(f"[AIVideoGen] Delete custom person failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ──────────────────────────────────────────────
+# DEBUG: Showcase Pipeline Test
+# ──────────────────────────────────────────────
+@router.get("/debug/showcase-status", summary="Check showcase pipeline status for recent jobs")
+async def debug_showcase_status(
+    _auth: bool = Depends(verify_admin_key),
+):
+    """Check if showcase_mode was set and whether the composite image was generated for recent jobs."""
+    try:
+        from app.core.db import AsyncSessionLocal
+        from sqlalchemy import text as _text
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(_text("""
+                SELECT job_id, status, avatar_id, showcase_mode, person_image_url, 
+                       product_image_url, error, error_step, created_at
+                FROM ai_video_gen_jobs 
+                ORDER BY created_at DESC 
+                LIMIT 10
+            """))
+            rows = result.fetchall()
+        jobs_info = []
+        for row in rows:
+            jobs_info.append({
+                "job_id": row.job_id,
+                "status": row.status,
+                "avatar_id": row.avatar_id,
+                "showcase_mode": row.showcase_mode,
+                "has_person_image": bool(row.person_image_url),
+                "person_image_url_preview": (row.person_image_url or "")[:80],
+                "has_product_image": bool(row.product_image_url),
+                "product_image_url_preview": (row.product_image_url or "")[:80],
+                "error": row.error,
+                "created_at": str(row.created_at)[:19],
+            })
+        return {
+            "success": True,
+            "openai_api_key_set": bool(os.getenv("OPENAI_API_KEY")),
+            "recent_jobs": jobs_info,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@router.post("/debug/test-showcase-image", summary="Test GPT-image-1 showcase composite generation")
+async def debug_test_showcase_image(
+    person_image_url: str = Query(..., description="Person image URL"),
+    product_image_url: str = Query(..., description="Product image URL"),
+    showcase_mode: str = Query("fullscreen", description="Showcase mode"),
+    _auth: bool = Depends(verify_admin_key),
+):
+    """Test the showcase image generation pipeline directly."""
+    try:
+        result_url = await _generate_showcase_image(
+            person_image_url=person_image_url,
+            product_image_url=product_image_url,
+            showcase_description="人物が商品を手に持って笑顔で紹介している",
+            showcase_mode=showcase_mode,
+        )
+        return {
+            "success": True,
+            "composite_image_url": result_url,
+            "message": "Showcase image generated successfully",
+        }
+    except Exception as e:
+        import traceback
+        return {
+            "success": False,
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+        }
