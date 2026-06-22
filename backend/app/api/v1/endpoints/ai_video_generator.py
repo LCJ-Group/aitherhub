@@ -1628,6 +1628,7 @@ async def analyze_product_endpoint(
 
     # Build the image content for GPT-4 Vision
     data_url = None
+    _uploaded_product_blob_url = None  # Will be set if we upload to blob
     if image and image.filename:
         # Direct upload
         content = await image.read()
@@ -1638,6 +1639,23 @@ async def analyze_product_endpoint(
             content_type = "image/jpeg"
         b64_image = base64.b64encode(content).decode("utf-8")
         data_url = f"data:{content_type};base64,{b64_image}"
+        # Upload product image to blob so it can be used by showcase pipeline
+        try:
+            from azure.storage.blob import BlobServiceClient, ContentSettings
+            from app.services.storage_service import CONNECTION_STRING, CONTAINER_NAME, generate_read_sas_from_url
+            if CONNECTION_STRING:
+                ext = image.filename.rsplit(".", 1)[-1].lower() if image.filename and "." in image.filename else "jpg"
+                blob_name = f"ai-video-gen/products/{uuid.uuid4().hex}.{ext}"
+                blob_service = BlobServiceClient.from_connection_string(CONNECTION_STRING)
+                blob_client = blob_service.get_blob_client(container=CONTAINER_NAME, blob=blob_name)
+                blob_client.upload_blob(
+                    content, overwrite=True,
+                    content_settings=ContentSettings(content_type=content_type),
+                )
+                _uploaded_product_blob_url = generate_read_sas_from_url(blob_client.url, expires_hours=24)
+                logger.info(f"[AIVideoGen] Product image uploaded to blob: {_uploaded_product_blob_url[:60]}...")
+        except Exception as upload_err:
+            logger.warning(f"[AIVideoGen] Product image blob upload failed (non-fatal): {upload_err}")
     elif actual_image_url:
         # V2.34.6: Download image and convert to base64
         # OpenAI often can't download external URLs (returns invalid_image_url error)
@@ -1741,7 +1759,7 @@ async def analyze_product_endpoint(
                 "brand": product_data.get("brand", ""),
                 "notes": product_data.get("notes", ""),
             },
-            "image_url": actual_image_url or (data_url[:50] + "..." if data_url else None),
+            "image_url": actual_image_url or _uploaded_product_blob_url or None,
         }
 
     except HTTPException:
@@ -1944,9 +1962,55 @@ async def analyze_person_photo(
 
 
 # ──────────────────────────────────────────────
+# POST /ai-video-generator/upload-product-photo — Upload product photo to blob
+# ──────────────────────────────────────────────
+@router.post(
+    "/upload-product-photo",
+    summary="Upload product photo to blob for showcase pipeline",
+)
+async def upload_product_photo(
+    image: UploadFile = File(..., description="商品写真"),
+    _: bool = Depends(verify_admin_key),
+):
+    """
+    商品写真をAzure Blobにアップロードし、URLを返す。
+    このURLはgenerate APIのproduct_image_urlフィールドに使用可能。
+    """
+    try:
+        content = await image.read()
+        if len(content) > 20 * 1024 * 1024:  # 20MB limit
+            raise HTTPException(status_code=400, detail="ファイルサイズは20MB以下にしてください")
+        ext = image.filename.rsplit(".", 1)[-1].lower() if image.filename and "." in image.filename else "jpg"
+        blob_name = f"ai-video-gen/products/{uuid.uuid4().hex}.{ext}"
+        from azure.storage.blob import BlobServiceClient, ContentSettings
+        from app.services.storage_service import CONNECTION_STRING, CONTAINER_NAME
+        if not CONNECTION_STRING:
+            raise HTTPException(status_code=500, detail="Storage not configured")
+        blob_service = BlobServiceClient.from_connection_string(CONNECTION_STRING)
+        blob_client = blob_service.get_blob_client(container=CONTAINER_NAME, blob=blob_name)
+        content_type = image.content_type or f"image/{ext}"
+        blob_client.upload_blob(
+            content, overwrite=True,
+            content_settings=ContentSettings(content_type=content_type),
+        )
+        blob_url = blob_client.url
+        from app.services.storage_service import generate_read_sas_from_url
+        signed_url = generate_read_sas_from_url(blob_url, expires_hours=24)
+        return {
+            "success": True,
+            "url": signed_url,
+            "blob_url": blob_url,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[AIVideoGen] Product photo upload failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"アップロードに失敗しました: {str(e)}")
+
+
+# ──────────────────────────────────────────────
 # POST /ai-video-generator/upload-person-photo — Upload person photo to blob
 # ──────────────────────────────────────────────
-
 @router.post(
     "/upload-person-photo",
     summary="Upload person photo for avatar creation",

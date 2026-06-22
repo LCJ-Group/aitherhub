@@ -487,10 +487,32 @@ export default function AiVideoGeneratorPage() {
     setJobStatus(null);
 
     try {
+      // Auto-upload product image to blob if not already uploaded (needed for showcase)
+      let finalProductImageUrl = productImageUrl.trim();
+      if (!finalProductImageUrl && imageFile) {
+        try {
+          const uploadForm = new FormData();
+          uploadForm.append("image", imageFile.file);
+          const uploadRes = await axios.post(
+            `${API_BASE}/api/v1/ai-video-generator/upload-product-photo`,
+            uploadForm,
+            { headers: { "X-Admin-Key": ADMIN_KEY, "Content-Type": "multipart/form-data" } }
+          );
+          if (uploadRes.data.success && uploadRes.data.url) {
+            finalProductImageUrl = uploadRes.data.url;
+            setProductImageUrl(finalProductImageUrl);
+          }
+        } catch (uploadErr) {
+          console.warn("Product image auto-upload failed:", uploadErr);
+        }
+      } else if (!finalProductImageUrl && imageUrl.trim()) {
+        finalProductImageUrl = imageUrl.trim();
+      }
+
       const payload = {
         product_name: productName.trim() || analyzedProduct?.name || "商品",
         product_description: productDescription.trim() || analyzedProduct?.description || undefined,
-        product_image_url: productImageUrl.trim() || undefined,
+        product_image_url: finalProductImageUrl || undefined,
         product_price: productPrice.trim() || analyzedProduct?.price || undefined,
         benefits: benefits.trim() || analyzedProduct?.notes || undefined,
         target_audience: targetAudience.trim() || undefined,
