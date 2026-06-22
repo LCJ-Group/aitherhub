@@ -249,6 +249,67 @@ async def _run_pipeline(job_id: str, request: VideoGenerateRequest, db_url: str)
         job["updated_at"] = datetime.now(timezone.utc).isoformat()
 
         # ═══════════════════════════════════════════
+        # STEP 2.4: Auto-extract person image from liver clips (if needed)
+        # When showcase_mode is set but no person_image_url, extract a frame
+        # from the liver's clip video to use as the person reference image.
+        # ═══════════════════════════════════════════
+        if request.showcase_mode and request.product_image_url and not request.person_image_url:
+            if request.avatar_id and request.avatar_id.startswith("aitherhub:"):
+                liver_name = request.avatar_id.replace("aitherhub:", "")
+                logger.info(f"[AIVideoGen:{job_id}] Showcase mode with AitherHub liver '{liver_name}' - extracting person frame...")
+                try:
+                    from sqlalchemy import text as sa_text
+                    from app.core.db import AsyncSessionLocal
+                    async with AsyncSessionLocal() as db:
+                        result = await db.execute(sa_text("""
+                            SELECT vc.clip_url FROM video_clips vc
+                            LEFT JOIN videos v ON v.id = vc.video_id
+                            WHERE vc.clip_url IS NOT NULL
+                                AND vc.clip_url != ''
+                                AND v.original_filename IS NOT NULL
+                                AND v.original_filename LIKE :pattern
+                            ORDER BY vc.created_at DESC
+                            LIMIT 1
+                        """), {"pattern": f"{liver_name}-%"})
+                        row = result.fetchone()
+                    if row and row.clip_url:
+                        clip_url = _ensure_sas_url(row.clip_url)
+                        # Extract a frame from the clip video
+                        import httpx, tempfile, subprocess
+                        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as dl_client:
+                            resp = await dl_client.get(clip_url)
+                            resp.raise_for_status()
+                        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp_vid:
+                            tmp_vid.write(resp.content)
+                            tmp_vid_path = tmp_vid.name
+                        frame_path = tmp_vid_path.replace(".mp4", "_frame.jpg")
+                        # Extract frame at 1 second (usually a good pose)
+                        subprocess.run(
+                            ["ffmpeg", "-y", "-ss", "1", "-i", tmp_vid_path,
+                             "-vframes", "1", "-q:v", "2", frame_path],
+                            capture_output=True, timeout=30
+                        )
+                        if os.path.exists(frame_path) and os.path.getsize(frame_path) > 0:
+                            # Upload frame to blob
+                            with open(frame_path, "rb") as f:
+                                frame_bytes = f.read()
+                            blob_service = BlobServiceClient.from_connection_string(CONNECTION_STRING)
+                            blob_name = f"ai-video-gen/person-frames/{uuid.uuid4().hex}.jpg"
+                            blob_client = blob_service.get_blob_client(container=CONTAINER_NAME, blob=blob_name)
+                            blob_client.upload_blob(
+                                frame_bytes, overwrite=True,
+                                content_settings=ContentSettings(content_type="image/jpeg")
+                            )
+                            request.person_image_url = generate_read_sas_from_url(blob_client.url, expires_hours=24)
+                            logger.info(f"[AIVideoGen:{job_id}] Person frame extracted and uploaded: {request.person_image_url[:60]}...")
+                        # Cleanup
+                        for p in [tmp_vid_path, frame_path]:
+                            if os.path.exists(p):
+                                os.unlink(p)
+                except Exception as extract_err:
+                    logger.warning(f"[AIVideoGen:{job_id}] Failed to extract person frame from liver clips: {extract_err}")
+
+        # ═══════════════════════════════════════════
         # STEP 2.5: AI Showcase Image Generation (if enabled)
         # Generate composite image of person + product using AI
         # This becomes the talking photo for HeyGen video generation
