@@ -878,48 +878,80 @@ async def _generate_showcase_image(
             product_ext = "jpg"
 
     # Build the prompt for image generation
+    # Following OpenAI's official prompting guide for identity preservation:
+    # - Structure: background/scene → subject → key details → constraints
+    # - Lock identity: explicitly state what must NOT change
+    # - Specify pose, gaze, object interactions clearly
+    # - Use "photorealistic" for realistic mode
     mode_instructions = {
-        "overlay": "商品を画面の右上隅に小さく配置し、人物がメインで表示されるようにしてください。",
-        "split": "画面を左右に分割し、左側に人物、右側に商品を配置してください。",
-        "fullscreen": "人物が商品を手に持って紹介しているシーンを生成してください。商品が画面の中心的な要素になるようにしてください。",
+        "overlay": (
+            "Create a photorealistic portrait-style image. "
+            "The person from image 1 is the main subject, shown from waist up, facing the camera with a natural smile. "
+            "The product from image 2 is placed as a small overlay element in the upper-right corner of the frame, "
+            "clearly visible but not dominating the composition."
+        ),
+        "split": (
+            "Create a photorealistic split-screen composition. "
+            "Left half: the person from image 1, shown from waist up, facing slightly right toward the product, with a natural confident expression. "
+            "Right half: the product from image 2, displayed prominently on a clean surface with soft studio lighting. "
+            "Both halves share consistent lighting direction."
+        ),
+        "fullscreen": (
+            "Create a photorealistic product presentation image. "
+            "The person from image 1 is holding the product from image 2 in their hands, presenting it toward the camera. "
+            "The person's hands are naturally gripping or cradling the product at chest height. "
+            "The person has a natural, confident smile and is looking at the camera. "
+            "The product is clearly visible and recognizable, occupying a prominent area of the frame."
+        ),
     }
     base_instruction = mode_instructions.get(showcase_mode, mode_instructions["fullscreen"])
 
-    # User's custom description takes priority
+    # User's custom description takes priority but we still add identity lock
+    identity_lock = (
+        "\n\nIDENTITY LOCK (CRITICAL - DO NOT VIOLATE):\n"
+        "- The person's face MUST exactly match image 1: same facial structure, eyes, nose, lips, skin tone, hair style, and proportions.\n"
+        "- Do NOT alter, idealize, or change any facial features. Preserve real texture and imperfections.\n"
+        "- The product MUST exactly match image 2: same shape, color, label, packaging, and proportions.\n"
+        "- Do NOT add text, watermarks, or logos that are not in the original images.\n"
+    )
+    style_instruction = (
+        "\nSTYLE:\n"
+        "- Photorealistic, natural lighting (soft diffuse studio light or natural daylight).\n"
+        "- Clean, simple background (solid light gray or soft gradient).\n"
+        "- Professional product photography aesthetic.\n"
+        "- Vertical 9:16 aspect ratio framing.\n"
+        "- No cinematic grading, no dramatic filters, no stylization.\n"
+    )
+
     if showcase_description and showcase_description.strip():
         composition_prompt = (
-            f"以下の2枚の画像を参考に、合成画像を生成してください。\n"
-            f"1枚目は人物の写真です。2枚目は商品の写真です。\n\n"
-            f"ユーザーの指示: {showcase_description}\n\n"
-            f"重要な要件:\n"
-            f"- 人物の顔と外見を1枚目の写真から忠実に再現してください\n"
-            f"- 商品の外観を2枚目の写真から忠実に再現してください\n"
-            f"- 自然な照明とプロフェッショナルな構図にしてください\n"
-            f"- 縦型（9:16）のアスペクト比で生成してください\n"
-            f"- 背景はシンプルで清潔感のあるものにしてください"
+            f"Using the two reference images provided:\n"
+            f"- Image 1: reference person (use their exact face and appearance)\n"
+            f"- Image 2: reference product (use its exact appearance)\n\n"
+            f"ACTION: {showcase_description}\n\n"
+            f"POSE & INTERACTION: {base_instruction}"
+            f"{identity_lock}"
+            f"{style_instruction}"
         )
     else:
         composition_prompt = (
-            f"以下の2枚の画像を参考に、合成画像を生成してください。\n"
-            f"1枚目は人物の写真です。2枚目は商品の写真です。\n\n"
-            f"{base_instruction}\n\n"
-            f"重要な要件:\n"
-            f"- 人物の顔と外見を1枚目の写真から忠実に再現してください\n"
-            f"- 商品の外観を2枚目の写真から忠実に再現してください\n"
-            f"- 自然な照明とプロフェッショナルな構図にしてください\n"
-            f"- 縦型（9:16）のアスペクト比で生成してください\n"
-            f"- 背景はシンプルで清潔感のあるものにしてください"
+            f"Using the two reference images provided:\n"
+            f"- Image 1: reference person (use their exact face and appearance)\n"
+            f"- Image 2: reference product (use its exact appearance)\n\n"
+            f"POSE & INTERACTION: {base_instruction}"
+            f"{identity_lock}"
+            f"{style_instruction}"
         )
 
-    # Use standard OpenAI API for image editing (gpt-image-1 supports multiple reference images)
+    # Use OpenAI API for image editing
+    # gpt-image-2 is recommended for identity-sensitive edits and compositing
     openai_key = os.getenv("OPENAI_API_KEY", "")
     if not openai_key:
         raise Exception("OPENAI_API_KEY not configured for image generation")
-
     from openai import OpenAI as SyncOpenAI
     import io
-
-    logger.info(f"[AIVideoGen:Showcase] Calling OpenAI images.edit with reference images...")
+    logger.info(f"[AIVideoGen:Showcase] Calling OpenAI images.edit (gpt-image-2) with reference images...")
+    logger.info(f"[AIVideoGen:Showcase] Prompt: {composition_prompt[:200]}...")
 
     def _call_openai_image_edit():
         """Sync call wrapped for asyncio.to_thread to avoid blocking event loop."""
@@ -929,14 +961,29 @@ async def _generate_showcase_image(
         person_file.name = f"person.{person_ext}"
         product_file = io.BytesIO(product_bytes)
         product_file.name = f"product.{product_ext}"
-
-        return client.images.edit(
-            model="gpt-image-1",
-            image=[person_file, product_file],
-            prompt=composition_prompt,
-            n=1,
-            size="1024x1536",  # Vertical (close to 9:16)
-        )
+        # Try gpt-image-2 first (best for identity preservation)
+        # Fall back to gpt-image-1 if gpt-image-2 is not available
+        try:
+            return client.images.edit(
+                model="gpt-image-2",
+                image=[person_file, product_file],
+                prompt=composition_prompt,
+                quality="high",
+                n=1,
+                size="1024x1536",  # Vertical (close to 9:16)
+            )
+        except Exception as e2:
+            logger.warning(f"[AIVideoGen:Showcase] gpt-image-2 failed ({e2}), falling back to gpt-image-1")
+            # Reset file positions for retry
+            person_file.seek(0)
+            product_file.seek(0)
+            return client.images.edit(
+                model="gpt-image-1",
+                image=[person_file, product_file],
+                prompt=composition_prompt,
+                n=1,
+                size="1024x1536",
+            )
 
     # Run sync OpenAI call in thread pool to avoid blocking
     response = await asyncio.to_thread(_call_openai_image_edit)
