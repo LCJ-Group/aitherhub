@@ -119,6 +119,9 @@ class VideoGenerateRequest(BaseModel):
 
     # Person photo analysis (NEW)
     person_image_url: Optional[str] = Field(None, description="人物写真URL（アップロード後のURL）")
+    # Digital Twin motion control (NEW)
+    motion_prompt: Optional[str] = Field(None, max_length=2000, description="Digital Twin動作指示（自然言語で手の動き・体の動きを指定）")
+    use_digital_twin_v3: Optional[bool] = Field(False, description="Digital Twin v3 APIを使用（motion_prompt対応）")
 
 
 class VideoGenerateResponse(BaseModel):
@@ -706,8 +709,42 @@ async def _generate_video(audio_url: str, request: VideoGenerateRequest) -> tupl
     title = f"AIVideoGen-{request.product_name[:30]}-{uuid.uuid4().hex[:6]}"
 
     # ─── Route by avatar source (priority order) ───
-    # Mode 1: Custom person image upload (highest priority)
-    if request.person_image_url:
+    # Mode 0: Digital Twin v3 API (highest priority when explicitly enabled)
+    # This mode requires a pre-created Digital Twin avatar_id
+    if request.use_digital_twin_v3 or request.motion_prompt:
+        dt_avatar_id = request.avatar_id
+        if not dt_avatar_id or dt_avatar_id == "custom_person":
+            raise Exception(
+                "Digital Twin v3にはDigital Twin avatar_idが必要です。"
+                "先にDigital Twinを作成してから、それをアバターとして選択してください。"
+            )
+        motion = request.motion_prompt or ""
+        # Auto-generate motion_prompt from showcase context if not provided
+        if not motion and request.showcase_mode and request.product_name:
+            motion = (
+                f"Hold the product ({request.product_name}) in both hands at chest height, "
+                f"presenting it to the camera with natural gestures. "
+                f"Occasionally look at the product then back at the camera."
+            )
+        # Map dimension to aspect_ratio
+        aspect = "9:16"
+        if request.dimension_width > request.dimension_height:
+            aspect = "16:9"
+        elif request.dimension_width == request.dimension_height:
+            aspect = "1:1"
+        logger.info(f"[AIVideoGen] Using v3 Digital Twin API: avatar={dt_avatar_id}, motion={motion[:80]}")
+        video_id = await heygen.generate_video_v3(
+            avatar_id=dt_avatar_id,
+            script=request.custom_script or request.product_description or f"{request.product_name}の紹介",
+            audio_url=audio_url,
+            motion_prompt=motion,
+            resolution="1080p",
+            aspect_ratio=aspect,
+            engine_type="avatar_iv",
+            title=title,
+        )
+    # Mode 1: Custom person image upload
+    elif request.person_image_url:
         logger.info(f"[AIVideoGen] Using custom person image: {request.person_image_url[:80]}...")
         talking_photo_id = await heygen.upload_talking_photo(request.person_image_url)
         logger.info(f"[AIVideoGen] Custom person talking photo ID: {talking_photo_id}")
@@ -764,8 +801,8 @@ async def _generate_video(audio_url: str, request: VideoGenerateRequest) -> tupl
             title=title,
         )
     else:
-        # HeyGen Digital Twin: use pre-registered avatar directly
-        logger.info(f"[AIVideoGen] Using HeyGen Digital Twin: {request.avatar_id}")
+        # HeyGen Digital Twin: use pre-registered avatar directly (v2 API, no motion_prompt)
+        logger.info(f"[AIVideoGen] Using HeyGen Digital Twin (v2): {request.avatar_id}")
         video_id = await heygen.generate_video_with_avatar(
             avatar_id=request.avatar_id,
             audio_url=audio_url,
@@ -774,6 +811,8 @@ async def _generate_video(audio_url: str, request: VideoGenerateRequest) -> tupl
         )
 
     logger.info(f"[AIVideoGen] HeyGen video started: {video_id}")
+    # Determine which polling method to use (v3 vs v1)
+    use_v3_polling = bool(request.use_digital_twin_v3 or request.motion_prompt)
 
     # Poll for completion (max 5 minutes)
     max_wait = 300
@@ -784,7 +823,10 @@ async def _generate_video(audio_url: str, request: VideoGenerateRequest) -> tupl
         await asyncio.sleep(poll_interval)
         elapsed += poll_interval
 
-        status_data = await heygen.get_video_status(video_id)
+        if use_v3_polling:
+            status_data = await heygen.get_video_status_v3(video_id)
+        else:
+            status_data = await heygen.get_video_status(video_id)
         current_status = status_data.get("status", "unknown")
 
         logger.info(f"[AIVideoGen] Video {video_id}: status={current_status}, elapsed={elapsed}s")
@@ -2332,3 +2374,136 @@ async def debug_test_showcase_image(
             "error": str(e),
             "traceback": traceback.format_exc(),
         }
+
+
+# ──────────────────────────────────────────────
+# Digital Twin Management Endpoints
+# ──────────────────────────────────────────────
+
+class DigitalTwinCreateRequest(BaseModel):
+    """Request to create a Digital Twin from training video."""
+    name: str = Field(..., max_length=100, description="Digital Twin名前")
+    video_url: str = Field(..., description="トレーニング動画URL（2-5分、正面、良い照明）")
+
+
+class DigitalTwinCreateResponse(BaseModel):
+    """Response from Digital Twin creation."""
+    success: bool
+    look_id: Optional[str] = None
+    group_id: Optional[str] = None
+    name: Optional[str] = None
+    consent_url: Optional[str] = None
+    message: Optional[str] = None
+    error: Optional[str] = None
+
+
+@router.post(
+    "/digital-twin/create",
+    response_model=DigitalTwinCreateResponse,
+    summary="Create a Digital Twin from training video",
+)
+async def create_digital_twin(
+    request: DigitalTwinCreateRequest,
+    _auth: bool = Depends(verify_admin_key),
+):
+    """
+    Create a Digital Twin avatar from a training video.
+    
+    Requirements for training video:
+    - 2-5 minutes of the person speaking to camera
+    - Good lighting, simple background
+    - Clear face visibility (no hats/sunglasses)
+    - 1080p or higher resolution
+    - MP4 format
+    
+    After creation, a consent URL will be returned that the person must visit.
+    """
+    try:
+        from app.services.heygen_service import get_heygen_service
+        heygen = get_heygen_service()
+        
+        # Step 1: Create the Digital Twin
+        result = await heygen.create_digital_twin(
+            name=request.name,
+            video_url=request.video_url,
+        )
+        
+        avatar_item = result.get("avatar_item", {})
+        avatar_group = result.get("avatar_group", {})
+        look_id = avatar_item.get("id", "")
+        group_id = avatar_group.get("id", "")
+        
+        # Step 2: Submit consent
+        consent_url = None
+        if group_id:
+            try:
+                consent_result = await heygen.submit_consent(group_id)
+                consent_url = consent_result.get("url")
+            except Exception as consent_err:
+                logger.warning(f"[DigitalTwin] Consent submission failed: {consent_err}")
+        
+        return DigitalTwinCreateResponse(
+            success=True,
+            look_id=look_id,
+            group_id=group_id,
+            name=request.name,
+            consent_url=consent_url,
+            message=f"Digital Twin '{request.name}' created. "
+                    f"{'Please complete consent at the URL.' if consent_url else 'Consent may be required.'}",
+        )
+    except Exception as e:
+        logger.error(f"[DigitalTwin] Creation failed: {e}", exc_info=True)
+        return DigitalTwinCreateResponse(
+            success=False,
+            error=str(e),
+            message="Digital Twin creation failed",
+        )
+
+
+@router.get(
+    "/digital-twin/list",
+    summary="List all Digital Twin avatars",
+)
+async def list_digital_twins(
+    _auth: bool = Depends(verify_admin_key),
+):
+    """List all available Digital Twin looks."""
+    try:
+        from app.services.heygen_service import get_heygen_service
+        heygen = get_heygen_service()
+        looks = await heygen.list_digital_twins()
+        return {
+            "success": True,
+            "count": len(looks),
+            "digital_twins": looks,
+        }
+    except Exception as e:
+        logger.error(f"[DigitalTwin] List failed: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "digital_twins": [],
+        }
+
+
+@router.post(
+    "/digital-twin/consent/{group_id}",
+    summary="Submit consent for a Digital Twin",
+)
+async def submit_digital_twin_consent(
+    group_id: str,
+    _auth: bool = Depends(verify_admin_key),
+):
+    """Submit consent for a Digital Twin avatar group. Returns consent URL."""
+    try:
+        from app.services.heygen_service import get_heygen_service
+        heygen = get_heygen_service()
+        result = await heygen.submit_consent(group_id)
+        return {
+            "success": True,
+            "consent_url": result.get("url"),
+            "consent_status": result.get("avatar_group", {}).get("consent_status"),
+        }
+    except Exception as e:
+        logger.error(f"[DigitalTwin] Consent failed: {e}")
+        return {"success": False, "error": str(e)}

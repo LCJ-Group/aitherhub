@@ -735,6 +735,170 @@ class HeyGenService:
             logger.error(f"[HeyGen Streaming] Error interrupting: {e}")
             raise HeyGenError(str(e))
 
+    # ──────────────────────────────────────────
+    # Digital Twin v3 API
+    # ──────────────────────────────────────────
+    async def create_digital_twin(
+        self,
+        name: str,
+        video_url: str,
+    ) -> Dict[str, Any]:
+        """
+        Create a Digital Twin from a training video.
+        Uses POST /v3/avatars with type: "digital_twin".
+        Returns avatar creation result including look ID and group ID.
+        """
+        if not self.api_key:
+            raise HeyGenError("HEYGEN_API_KEY not set")
+        payload = {
+            "type": "digital_twin",
+            "name": name,
+            "file": {"type": "url", "url": video_url},
+        }
+        logger.info(f"[HeyGen] Creating Digital Twin: name={name}, video={video_url[:80]}...")
+        async with httpx.AsyncClient(timeout=300) as client:
+            resp = await client.post(
+                f"{self.base_url}/v3/avatars",
+                headers=self._headers,
+                json=payload,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        result = data.get("data", {})
+        avatar_item = result.get("avatar_item", {})
+        avatar_group = result.get("avatar_group", {})
+        logger.info(
+            f"[HeyGen] Digital Twin created: look_id={avatar_item.get('id')}, "
+            f"group_id={avatar_group.get('id')}, name={avatar_item.get('name')}"
+        )
+        return result
+
+    async def submit_consent(
+        self,
+        group_id: str,
+        reroute_url: str = "https://www.aitherhub.com/consent-done",
+    ) -> Dict[str, Any]:
+        """
+        Submit consent for a Digital Twin avatar group.
+        Returns consent URL that the subject must visit.
+        """
+        if not self.api_key:
+            raise HeyGenError("HEYGEN_API_KEY not set")
+        payload = {"reroute_url": reroute_url}
+        logger.info(f"[HeyGen] Submitting consent for group: {group_id}")
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                f"{self.base_url}/v3/avatars/{group_id}/consent",
+                headers=self._headers,
+                json=payload,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        result = data.get("data", {})
+        logger.info(f"[HeyGen] Consent URL: {result.get('url', 'N/A')[:80]}")
+        return result
+
+    async def list_digital_twins(self) -> list:
+        """
+        List all Digital Twin looks using v3 API.
+        GET /v3/avatars/looks?avatar_type=digital_twin&ownership=private
+        """
+        if not self.api_key:
+            raise HeyGenError("HEYGEN_API_KEY not set")
+        async with httpx.AsyncClient(timeout=120) as client:
+            resp = await client.get(
+                f"{self.base_url}/v3/avatars/looks",
+                headers=self._headers,
+                params={"avatar_type": "digital_twin", "ownership": "private"},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        looks = data.get("data", {}).get("looks", [])
+        logger.info(f"[HeyGen] Found {len(looks)} Digital Twin looks")
+        return looks
+
+    async def generate_video_v3(
+        self,
+        avatar_id: str,
+        script: str,
+        voice_id: str = "",
+        audio_url: str = "",
+        motion_prompt: str = "",
+        resolution: str = "1080p",
+        aspect_ratio: str = "9:16",
+        engine_type: str = "avatar_iv",
+        title: str = "AitherHub Video",
+    ) -> str:
+        """
+        Generate a video using HeyGen v3 API with Digital Twin.
+        Supports motion_prompt for body movement control.
+        Can use either voice_id (TTS) or audio_url (pre-recorded audio).
+        """
+        if not self.api_key:
+            raise HeyGenError("HEYGEN_API_KEY not set")
+        payload = {
+            "type": "avatar",
+            "avatar_id": avatar_id,
+            "title": title,
+            "resolution": resolution,
+            "aspect_ratio": aspect_ratio,
+        }
+        # Voice: either audio_url (lip-sync) or voice_id+script (TTS)
+        # audio_url is mutually exclusive with script+voice_id in v3 API
+        if audio_url:
+            payload["audio_url"] = audio_url
+            # Do NOT include script or voice_id when using audio_url
+        elif voice_id:
+            payload["voice_id"] = voice_id
+            payload["script"] = script
+        else:
+            # Use avatar's default voice with script
+            payload["script"] = script
+        # Engine selection
+        if engine_type == "avatar_v":
+            payload["engine"] = {"type": "avatar_v"}
+        # Motion prompt for body movement control
+        if motion_prompt:
+            payload["motion_prompt"] = motion_prompt
+            logger.info(f"[HeyGen] motion_prompt: {motion_prompt[:100]}")
+        logger.info(
+            f"[HeyGen v3] Generating video: avatar={avatar_id}, "
+            f"engine={engine_type}, motion_prompt={'yes' if motion_prompt else 'no'}"
+        )
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                f"{self.base_url}/v3/videos",
+                headers=self._headers,
+                json=payload,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        video_id = data.get("data", {}).get("video_id", "")
+        if not video_id:
+            raise HeyGenError(f"No video_id in v3 response: {data}")
+        logger.info(f"[HeyGen v3] Video generation started: {video_id}")
+        return video_id
+
+    async def get_video_status_v3(self, video_id: str) -> Dict[str, Any]:
+        """
+        Check video status using v3 API.
+        GET /v3/videos/{video_id}
+        """
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                f"{self.base_url}/v3/videos/{video_id}",
+                headers=self._headers,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        video_data = data.get("data", {})
+        return {
+            "status": video_data.get("status", "unknown"),
+            "video_url": video_data.get("video_url"),
+            "duration": video_data.get("duration"),
+            "error": video_data.get("failure_message"),
+        }
+
     async def prefetch_avatars(self) -> None:
         """Pre-fetch avatar list on startup to warm the cache.
         

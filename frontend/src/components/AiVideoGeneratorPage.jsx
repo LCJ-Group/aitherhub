@@ -81,6 +81,10 @@ export default function AiVideoGeneratorPage() {
   const [showcaseMode, setShowcaseMode] = useState("");
   const [showcaseDescription, setShowcaseDescription] = useState("");
 
+  // ── Digital Twin Motion Control (NEW) ──
+  const [motionPrompt, setMotionPrompt] = useState("");
+  const [useDigitalTwinV3, setUseDigitalTwinV3] = useState(false);
+
   // ── Person Photo Analysis (NEW) ──
   const [personImageFile, setPersonImageFile] = useState(null);
   const [personImageUrl, setPersonImageUrl] = useState("");
@@ -527,6 +531,9 @@ export default function AiVideoGeneratorPage() {
         showcase_description: showcaseDescription.trim() || undefined,
         // NEW: Person photo
         person_image_url: personImageUrl || undefined,
+        // NEW: Digital Twin motion control
+        motion_prompt: motionPrompt.trim() || undefined,
+        use_digital_twin_v3: useDigitalTwinV3 || undefined,
       };
 
       const res = await axios.post(
@@ -915,6 +922,56 @@ export default function AiVideoGeneratorPage() {
                         className="w-full px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-lg text-sm text-white placeholder-gray-500 focus:border-orange-500 outline-none resize-none"
                       />
                       <p className="text-xs text-gray-500 mt-1">カメラ角度、回転、ズーム、表示位置などを自由に記述できます</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Digital Twin Motion Control */}
+              <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
+                <h2 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                  <Sparkles className="w-5 h-5 text-purple-400" />
+                  Digital Twin 動作制御
+                </h2>
+                <div className="space-y-4">
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="checkbox"
+                      id="useDigitalTwinV3"
+                      checked={useDigitalTwinV3}
+                      onChange={(e) => setUseDigitalTwinV3(e.target.checked)}
+                      className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-purple-500 focus:ring-purple-500"
+                    />
+                    <label htmlFor="useDigitalTwinV3" className="text-sm text-gray-300">
+                      Digital Twin v3を使用（動作制御対応）
+                    </label>
+                  </div>
+                  <p className="text-xs text-gray-500">
+                    ※ Digital Twinが作成済みの場合のみ使用可能。自然言語で体の動き・手のジェスチャーを指示できます。
+                  </p>
+                  {useDigitalTwinV3 && (
+                    <div className="space-y-3">
+                      <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3">
+                        <p className="text-amber-300 text-xs font-medium">⚠️ Digital Twin v3を使用するには：</p>
+                        <ol className="text-amber-200/70 text-xs mt-1 list-decimal list-inside space-y-0.5">
+                          <li>HeyGenでDigital Twinを作成済みであること（トレーニング動画が必要）</li>
+                          <li>上のアバター選択で「Digital Twin」を選択すること</li>
+                          <li>「自分の写真をアップロード」ではv3は使用できません</li>
+                        </ol>
+                      </div>
+                      <div>
+                      <label className="block text-xs text-gray-400 mb-1.5">動作指示（Motion Prompt）</label>
+                      <textarea
+                        value={motionPrompt}
+                        onChange={(e) => setMotionPrompt(e.target.value)}
+                        placeholder="例: 両手で商品を胸の高さに持ち、カメラに向かって笑顔で紹介する。時々商品を見てからカメラに戻る。"
+                        rows={3}
+                        className="w-full px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-lg text-sm text-white placeholder-gray-500 focus:border-purple-500 outline-none resize-none"
+                      />
+                      <p className="text-xs text-gray-500 mt-1">
+                        英語推奨。例: "Hold product at chest height, smile at camera, gesture with right hand"
+                      </p>
+                      </div>
                     </div>
                   )}
                 </div>
