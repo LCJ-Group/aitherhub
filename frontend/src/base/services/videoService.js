@@ -1683,5 +1683,44 @@ class VideoService extends BaseApiService {
       throw error;
     }
   }
+
+  /**
+   * V3.0: Generate clips by product segmentation
+   * @param {string} videoId
+   * @param {Object} options
+   * @returns {Promise<Object>} { job_id, status, message }
+   */
+  async generateByProduct(videoId, options = {}) {
+    try {
+      const response = await this.post(`/api/v1/videos/${videoId}/generate-by-product`, {
+        brand_id: options.brand_id || null,
+        subtitle_style: options.subtitle_style || 'auto',
+        enable_silence_cut: options.enable_silence_cut !== false,
+        target_language: options.target_language || 'auto',
+        speed_factor: options.speed_factor || 1.05,
+        min_silence_duration: options.min_silence_duration || 1.5,
+      });
+      return response;
+    } catch (error) {
+      console.error('Failed to generate by product:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get status of V3 product-based clip generation job
+   * @param {string} videoId
+   * @param {string} jobId
+   * @returns {Promise<Object>}
+   */
+  async getProductClipStatus(videoId, jobId) {
+    try {
+      const response = await this.get(`/api/v1/videos/${videoId}/product-clip-status/${jobId}`);
+      return response;
+    } catch (error) {
+      console.error('Failed to get product clip status:', error);
+      throw error;
+    }
+  }
 }
 export default new VideoService();

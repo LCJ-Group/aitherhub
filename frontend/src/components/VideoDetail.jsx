@@ -154,6 +154,14 @@ export default function VideoDetail({ videoData, editorParams }) {
   const [videoBrandList, setVideoBrandList] = useState([]);
   const [brandSaving, setBrandSaving] = useState(false);
 
+  // Product-based clip generation (V3)
+  const [productClipJobId, setProductClipJobId] = useState(null);
+  const [productClipStatus, setProductClipStatus] = useState(null); // null | 'generating' | 'done' | 'error'
+  const [productClipProgress, setProductClipProgress] = useState({ pct: 0, step: '', clips_completed: 0, clips_total: 0 });
+  const [productClipResults, setProductClipResults] = useState([]);
+  const [productClipError, setProductClipError] = useState(null);
+  const productClipPollRef = useRef(null);
+
   // Load brands for video detail brand selector
   useEffect(() => {
     const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
@@ -914,6 +922,74 @@ export default function VideoDetail({ videoData, editorParams }) {
     }
   };
 
+  // ===== Product-based clip generation handler (V3) =====
+  const handleGenerateByProduct = async () => {
+    if (!videoData?.id) return;
+    if (productClipStatus === 'generating') return; // prevent double-click
+    setProductClipStatus('generating');
+    setProductClipProgress({ pct: 0, step: '開始中...', clips_completed: 0, clips_total: 0 });
+    setProductClipResults([]);
+    setProductClipError(null);
+    try {
+      const res = await VideoService.generateByProduct(videoData.id, {
+        brand_id: videoBrandId || null,
+        enable_silence_cut: true,
+        target_language: (localStorage.getItem('aitherhub_language') || 'ja'),
+        speed_factor: 1.05,
+        min_silence_duration: 1.5,
+      });
+      if (res?.job_id) {
+        setProductClipJobId(res.job_id);
+      } else {
+        setProductClipStatus('error');
+        setProductClipError(res?.message || 'ジョブの作成に失敗しました');
+      }
+    } catch (err) {
+      console.error('[ProductClip] Failed to start:', err);
+      setProductClipStatus('error');
+      setProductClipError(err.message || 'リクエストに失敗しました');
+    }
+  };
+
+  // Poll product clip job status
+  useEffect(() => {
+    if (!productClipJobId || !videoData?.id) return;
+    if (productClipPollRef.current) clearInterval(productClipPollRef.current);
+    productClipPollRef.current = setInterval(async () => {
+      try {
+        const status = await VideoService.getProductClipStatus(videoData.id, productClipJobId);
+        if (status.status === 'done') {
+          clearInterval(productClipPollRef.current);
+          productClipPollRef.current = null;
+          setProductClipStatus('done');
+          setProductClipProgress({ pct: 100, step: '完了', clips_completed: status.clips_completed || 0, clips_total: status.clips_total || 0 });
+          setProductClipResults(status.results || []);
+        } else if (status.status === 'failed') {
+          clearInterval(productClipPollRef.current);
+          productClipPollRef.current = null;
+          setProductClipStatus('error');
+          setProductClipError(status.error || '処理中にエラーが発生しました');
+        } else {
+          // processing / queued
+          setProductClipProgress({
+            pct: status.progress_pct || 0,
+            step: status.current_step || '処理中...',
+            clips_completed: status.clips_completed || 0,
+            clips_total: status.clips_total || 0,
+          });
+        }
+      } catch (err) {
+        console.warn('[ProductClip] Poll error:', err);
+      }
+    }, 4000);
+    return () => {
+      if (productClipPollRef.current) {
+        clearInterval(productClipPollRef.current);
+        productClipPollRef.current = null;
+      }
+    };
+  }, [productClipJobId, videoData?.id]);
+
   const scrollToBottom = (smooth = true) => {
     if (chatEndRef.current) {
       try {
@@ -1469,6 +1545,104 @@ export default function VideoDetail({ videoData, editorParams }) {
               }}
             />
           )}
+
+          {/* Product-Based Clip Generation (V3) */}
+          <div className="mb-6 p-4 bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200 rounded-xl">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <span className="text-lg">🎁</span>
+                <h3 className="text-base font-bold text-purple-900">商品別クリップ生成</h3>
+                <span className="text-xs text-purple-600 bg-purple-100 px-2 py-0.5 rounded-full">V3</span>
+              </div>
+              <button
+                onClick={handleGenerateByProduct}
+                disabled={productClipStatus === 'generating'}
+                className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
+                  productClipStatus === 'generating'
+                    ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                    : 'bg-purple-600 text-white hover:bg-purple-700 shadow-sm hover:shadow-md'
+                }`}
+              >
+                {productClipStatus === 'generating' ? '生成中...' : '商品別に生成'}
+              </button>
+            </div>
+            <p className="text-xs text-purple-700 mb-3">商品紹介ごとにクリップを自動分割します（GPT検出 + 商品マスター照合）</p>
+
+            {/* Progress bar */}
+            {productClipStatus === 'generating' && (
+              <div className="mb-3">
+                <div className="flex items-center justify-between text-xs text-purple-700 mb-1">
+                  <span>{productClipProgress.step}</span>
+                  <span>{productClipProgress.clips_completed}/{productClipProgress.clips_total || '?'} クリップ</span>
+                </div>
+                <div className="w-full bg-purple-100 rounded-full h-2">
+                  <div
+                    className="bg-purple-600 h-2 rounded-full transition-all duration-500"
+                    style={{ width: `${Math.min(productClipProgress.pct, 100)}%` }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Error */}
+            {productClipStatus === 'error' && (
+              <div className="mb-3 p-2 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700">
+                ⚠️ {productClipError}
+                <button
+                  onClick={handleGenerateByProduct}
+                  className="ml-2 text-red-600 underline hover:text-red-800"
+                >
+                  再試行
+                </button>
+              </div>
+            )}
+
+            {/* Results */}
+            {productClipStatus === 'done' && productClipResults.length > 0 && (
+              <div className="space-y-2">
+                <div className="text-xs text-green-700 font-semibold mb-2">
+                  ✅ {productClipResults.filter(r => r.status === 'done').length}件のクリップが生成されました
+                </div>
+                {productClipResults.map((result, idx) => (
+                  <div key={idx} className={`flex items-center justify-between p-2 rounded-lg border ${
+                    result.status === 'done' ? 'bg-white border-green-200' : 'bg-red-50 border-red-200'
+                  }`}>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium truncate">{result.product_name || `商品 ${idx + 1}`}</span>
+                        {result.brand_name && (
+                          <span className="text-xs text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">{result.brand_name}</span>
+                        )}
+                      </div>
+                      {result.time_range && (
+                        <span className="text-xs text-gray-500">
+                          {formatTime(result.time_range[0])} - {formatTime(result.time_range[1])}
+                          {result.duration_sec && ` (${Math.round(result.duration_sec)}秒)`}
+                        </span>
+                      )}
+                      {result.status === 'failed' && (
+                        <span className="text-xs text-red-600">❌ {result.error || '生成失敗'}</span>
+                      )}
+                    </div>
+                    {result.status === 'done' && result.download_url && (
+                      <a
+                        href={result.download_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="ml-2 px-3 py-1 bg-purple-100 text-purple-700 rounded-lg text-xs font-medium hover:bg-purple-200 transition-colors"
+                      >
+                        ダウンロード
+                      </a>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {productClipStatus === 'done' && productClipResults.length === 0 && (
+              <div className="text-xs text-gray-500 italic">商品セグメントが検出されませんでした</div>
+            )}
+          </div>
 
           {/* Clip Section - show generated clips at the top */}
           <SectionErrorBoundary sectionName={window.__t('clipVideos')}>

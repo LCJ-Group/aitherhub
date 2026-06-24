@@ -1154,3 +1154,111 @@ async def get_video_error_logs(
         logger.exception(f"Failed to get error logs for video {video_id}: {exc}")
         raise HTTPException(status_code=500, detail=f"Failed to get error logs: {exc}")
 
+
+
+# =========================
+# V3.0: Product-based clip generation (user-facing)
+# =========================
+@router.post("/{video_id}/generate-by-product")
+async def user_generate_by_product(
+    video_id: str,
+    request_body: dict,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """
+    User-facing V3.0 product-based clip generation.
+    Calls the same pipeline as admin generate-by-product but with JWT auth.
+    """
+    try:
+        user_id = user.get("user_id") or user.get("id")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+        # Verify video exists
+        video_sql = text("SELECT id, user_id FROM videos WHERE id = :video_id")
+        vres = await db.execute(video_sql, {"video_id": video_id})
+        video_row = vres.fetchone()
+        if not video_row:
+            raise HTTPException(status_code=404, detail="Video not found")
+
+        # Import and call the V3 pipeline
+        from app.api.v1.endpoints.ai_clip_generator import (
+            _save_job, _run_product_segmentation, GenerateByProductRequest
+        )
+
+        # Build the request object
+        req_data = {
+            "video_id": video_id,
+            "brand_id": request_body.get("brand_id"),
+            "subtitle_style": request_body.get("subtitle_style", "auto"),
+            "enable_silence_cut": request_body.get("enable_silence_cut", True),
+            "target_language": request_body.get("target_language", "auto"),
+            "speed_factor": request_body.get("speed_factor", 1.05),
+            "min_silence_duration": request_body.get("min_silence_duration", 1.5),
+        }
+        # Remove None values
+        req_data = {k: v for k, v in req_data.items() if v is not None}
+        req = GenerateByProductRequest(**req_data)
+
+        # Create job
+        import uuid
+        job_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+        job_data = {
+            "job_id": job_id,
+            "status": "queued",
+            "progress_pct": 0,
+            "current_step": "V3.0 按产品分段モード: 準備中...",
+            "clips_completed": 0,
+            "clips_total": 0,
+            "results": [],
+            "error": None,
+            "created_at": now,
+            "updated_at": now,
+            "config": {**req.dict(), "mode": "by_product_v3", "user_id": user_id},
+        }
+        await _save_job(job_id, job_data)
+        background_tasks.add_task(_run_product_segmentation, job_id, req)
+
+        return {
+            "job_id": job_id,
+            "status": "queued",
+            "message": "Product-based clip generation started",
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(f"Failed to start product-based clip generation for video {video_id}: {exc}")
+        raise HTTPException(status_code=500, detail=f"Failed to start: {exc}")
+
+
+@router.get("/{video_id}/product-clip-status/{job_id}")
+async def get_product_clip_status(
+    video_id: str,
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Get status of a V3 product-based clip generation job."""
+    try:
+        from app.api.v1.endpoints.ai_clip_generator import _load_job
+        job = await _load_job(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        return {
+            "job_id": job_id,
+            "status": job.get("status", "unknown"),
+            "progress_pct": job.get("progress_pct", 0),
+            "current_step": job.get("current_step", ""),
+            "clips_completed": job.get("clips_completed", 0),
+            "clips_total": job.get("clips_total", 0),
+            "results": job.get("results", []),
+            "error": job.get("error"),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(f"Failed to get product clip status: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
