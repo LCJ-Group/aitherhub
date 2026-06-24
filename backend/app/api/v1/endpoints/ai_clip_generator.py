@@ -1108,7 +1108,7 @@ def _detect_filler_segments_local(captions: list) -> list:
 
     merged = [filler_segments[0]]
     for s, e in filler_segments[1:]:
-        if s <= merged[-1][1] + 0.3:  # 0.3秒以内のギャップはマージ
+        if s <= merged[-1][1] + 1.5:  # V2.40: 1.5秒以内のギャップはマージ（0.3s→1.5s、近接フィラーを統合して切点を減らす）
             merged[-1] = (merged[-1][0], e)
         else:
             merged.append((s, e))
@@ -1120,13 +1120,15 @@ def _detect_filler_segments_local(captions: list) -> list:
 def _build_silence_trim_segments(duration: float, silence_periods: list,
                                   captions: list, keep_margin: float = 0.12,
                                   filler_cut_segments: list = None) -> list:
-    """V2.19改善版: 無音区間 + フィラー区間 + 商品無関係区間をカット。
-    - 無音区間: 1.0秒以上は積極的にカット（0.2秒の自然なポーズ残す）
-    - 0.5〜1.0秒の無音は部分カット（50%除去）
-    - フィラー区間（「えーっと」「あの」等）: 字幕があってもカット対象
-    - 商品無関係区間（GPT判定）: カット対象
-    - V2.19: 末尾無音トリム——最後の発話終了後0.8秒だけ余韻を残して残りをカット
-    - 最大カット量は元の動画の70%まで（短動画向けに積極カット）
+    """V2.40改善版: 無音区間 + フィラー区間 + 商品無関係区間をカット。
+    V2.40変更点（流暢さ優先）:
+    - 無音区間: 0.8秒以上のみカット（0.8s未満は自然なポーズとして保持）
+    - フィラー区間: 1.5秒以上のまとまった不要区間のみカット
+    - マージン: 0.15s（切点前後の自然な繋がりを確保）
+    - 最大カット量: 50%（過剰カット防止）
+    - セグメントマージ: ギャップ1.0s未満で統合
+    - 最大セグメント数: 10（切点を減らして流暢さ確保）
+    - crossfade: 0.25s（切点を滑らかに）
     Returns list of (start, end) tuples representing segments to KEEP.
     """
     if not silence_periods and not filler_cut_segments:
@@ -1202,7 +1204,7 @@ def _build_silence_trim_segments(duration: float, silence_periods: list,
     # 以前の問題: 部分カット（50%〜70%のみ除去）だと無効留白が残り、硬切痕跡が見える
     cuttable = []
     total_cut_time = 0.0
-    max_cut_ratio = 0.70  # 最大カット量は元の動画の70%まで
+    max_cut_ratio = 0.50  # V2.40: 最大カット量は元の動画の50%まで（70%→50%に削減、過剰カット防止）
     max_cut_time = duration * max_cut_ratio
 
     # --- Phase 1: Silence cuts (V2.27: 完全削除方式) ---
@@ -1217,16 +1219,18 @@ def _build_silence_trim_segments(duration: float, silence_periods: list,
         # Don't cut if overlaps with meaningful caption
         if _is_protected(s_start, s_end):
             continue
-        # V2.27: 0.3秒以上の無音は全て完全削除対象（0.2s未満は自然な間として残す）
-        if silence_len < 0.3:
+        # V2.40: 0.8秒以上の無音のみ削除対象（0.8s未満は自然な間・息継ぎとして保持）
+        # 以前は0.3sだったが、自然な会話のポーズ(0.3-0.7s)まで切ってしまい
+        # 剪辑点が多すぎて画面が不流暢になっていた
+        if silence_len < 0.8:
             continue
         # Check max cut limit
         if total_cut_time >= max_cut_time:
             break
 
-        # V2.27: 完全削除 — 前後に極小マージン(0.05s)だけ残して全区間カット
-        # これにより「無効留白」が一切残らず、前後の有効素材が直接拼接される
-        margin = 0.05  # 音声の自然な繋がりのための極小マージン
+        # V2.40: 前後に0.15sのマージンを残して自然な繋がりを確保
+        # 以前は0.05sだったが、切点が急すぎて卡顿感が出ていた
+        margin = 0.15  # 音声の自然な繋がりのためのマージン（V2.40: 0.05→0.15に拡大）
         cut_start = s_start + margin
         cut_end = s_end - margin
 
@@ -1272,7 +1276,9 @@ def _build_silence_trim_segments(duration: float, silence_periods: list,
             if total_cut_time >= max_cut_time:
                 break
             seg_len = seg_end - seg_start
-            if seg_len < 0.3:
+            # V2.40: 1.5秒未満の短いフィラー区間はカットしない（以前は0.3s）
+            # 短いカットが多すぎると画面がカクカクするので、まとまった不要区間のみ削除
+            if seg_len < 1.5:
                 continue
             # Don't cut first/last 0.2s
             if seg_start < 0.2 or seg_end > duration - 0.2:
@@ -1455,8 +1461,9 @@ def _build_silence_trim_segments(duration: float, silence_periods: list,
         merged_keep = [keep_segments[0]]
         for i in range(1, len(keep_segments)):
             gap = keep_segments[i][0] - merged_keep[-1][1]
-            # V2.36: ギャップが0.4秒未満ならマージ（自然な間を保持、息苦しいペースを防止）
-            if gap < 0.4:
+            # V2.40: ギャップが1.0秒未満ならマージ（近接する切点を統合して流暢さを確保）
+            # 以前は0.4sだったが、短い間隔の連続カットが残り画面がカクカクしていた
+            if gap < 1.0:
                 merged_keep[-1] = (merged_keep[-1][0], keep_segments[i][1])
             else:
                 merged_keep.append(keep_segments[i])
@@ -2493,7 +2500,7 @@ async def _pre_splice_segments(
     # V2.30: Concat with crossfade between segments to smooth cut points
     # xfade filter adds a short crossfade (0.1s) at each cut point to mask jump cuts
     spliced_path = os.path.join(tmp_dir, "spliced_nosil.mp4")
-    XFADE_DURATION = 0.1  # 0.1秒の短いcrossfade（自然な過渡、不自然にならない）
+    XFADE_DURATION = 0.25  # V2.40: 0.25秒のcrossfade（0.1s→0.25sに拡大、切点をより滑らかに）
     
     if len(segment_paths) == 2:
         # 2セグメント: 単純なxfade
@@ -2820,10 +2827,11 @@ def _build_advanced_ffmpeg_command(video_path: str, ass_path: str, output_path: 
             logger.info(f"[ai-clip] V2.28: Frame-boundary quantization applied to {len(keep_segments)} segments "
                         f"(fps={video_fps}, frame_dur={frame_dur:.4f}s)")
 
-    # V13: keep_segments > 20 の場合、隣接セグメントをマージして20以下にする
-    if len(keep_segments) > 20:
+    # V2.40: keep_segments > 10 の場合、隣接セグメントをマージして10以下にする
+    # 以前は20だったが、切点が多すぎて画面が不流暢だった
+    if len(keep_segments) > 10:
         # 最も短いギャップからマージしてセグメント数を削減
-        while len(keep_segments) > 20:
+        while len(keep_segments) > 10:
             # 隣接セグメント間のギャップを計算し、最小ギャップをマージ
             min_gap = float('inf')
             min_gap_idx = 0
@@ -2835,8 +2843,8 @@ def _build_advanced_ffmpeg_command(video_path: str, ass_path: str, output_path: 
             # マージ: i番目とi+1番目を結合（間のギャップも含む）
             merged = (keep_segments[min_gap_idx][0], keep_segments[min_gap_idx + 1][1])
             keep_segments = keep_segments[:min_gap_idx] + [merged] + keep_segments[min_gap_idx + 2:]
-        logger.info(f"[ai-clip] Merged keep_segments to {len(keep_segments)} (was >20)")
-    use_silence_trim = len(keep_segments) > 1 and len(keep_segments) <= 20
+        logger.info(f"[ai-clip] Merged keep_segments to {len(keep_segments)} (was >10)")
+    use_silence_trim = len(keep_segments) > 1 and len(keep_segments) <= 10
     af_chain = None
     if use_silence_trim:
         # V2.22: 帧回溯/坏帧残留問題の根本修正
@@ -5963,7 +5971,7 @@ async def _process_single_clip_v2(job_id: str, clip: dict, req: GenerateRequest,
         if req.enable_silence_cut:
             await _update_job(job_id, progress_pct=18, current_step=f"クリップ {idx+1}/{total}: 無音区間検出中...")
             silence_periods = _detect_silence_periods(
-                video_path, noise_db=req.silence_threshold_db, min_duration=0.5  # V2.36: 0.5s以上の無音のみ検出（自然な息継ぎを保持）
+                video_path, noise_db=req.silence_threshold_db, min_duration=0.8  # V2.40: 0.8s以上の無音のみ検出（0.5s→0.8s、自然な息継ぎ・ポーズを保持）
             )
             await _update_job(job_id, progress_pct=20, current_step=f"クリップ {idx+1}/{total}: 無音{len(silence_periods)}区間検出")
 
@@ -9962,7 +9970,7 @@ class GenerateByProductRequest(BaseModel):
     # 卖点字幕位置（视频上方）
     highlight_position_y: float = Field(12.0, ge=0, le=50, description="卖点字幕Y位置（%）- 视频上方")
     # 气口剪切参数（V3.0: ≥1秒才剪切，比V2更保守）
-    min_silence_duration: float = Field(1.0, ge=0.5, le=3.0, description="最小気口長（秒）- これ以上の停顿をカット")
+    min_silence_duration: float = Field(1.5, ge=0.5, le=3.0, description="V2.40: 最小気口長（秒）- これ以上の停顿をカット（1.0→1.5に変更、流暢さ優先）")
     # 卖点字幕显示时间
     highlight_display_duration: float = Field(4.0, ge=2.0, le=8.0, description="各卖点字幕の表示時間（秒）")
 
