@@ -485,6 +485,11 @@ export default function AiVideoGeneratorPage() {
       setError("ライバーを選択してください");
       return;
     }
+    // Validate: Digital Twin v3 requires a real HeyGen Digital Twin avatar
+    if ((useDigitalTwinV3 || motionPrompt.trim()) && (selectedAvatarId === "custom_person" || selectedAvatarId.startsWith("myperson:") || selectedAvatarId.startsWith("aitherhub:"))) {
+      setError("Digital Twin v3を使用するには、Digital Twinを選択してください。人物分析タブからDigital Twinを選択できます。");
+      return;
+    }
 
     setIsGenerating(true);
     setError(null);
@@ -1531,6 +1536,115 @@ export default function AiVideoGeneratorPage() {
                   )}
                 </div>
               )}
+            </div>
+
+            {/* ═══ Digital Twin 選択・作成 ═══ */}
+            <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
+              <h2 className="text-lg font-semibold mb-2 flex items-center gap-2">
+                <Sparkles className="w-5 h-5 text-purple-400" />
+                Digital Twin 選択
+              </h2>
+              <p className="text-sm text-gray-400 mb-4">
+                Digital Twin v3を使用すると、自然言語で体の動き・ジェスチャーを指示できます。
+                下のリストから既存のDigital Twinを選択するか、新規作成してください。
+              </p>
+
+              {/* Digital Twin List */}
+              {loadingAvatars ? (
+                <div className="flex items-center gap-2 py-4">
+                  <Loader2 className="w-4 h-4 animate-spin text-purple-400" />
+                  <span className="text-gray-400 text-sm">読み込み中...</span>
+                </div>
+              ) : avatars.filter(a => a.source !== 'aitherhub').length > 0 ? (
+                <div className="grid grid-cols-3 sm:grid-cols-4 gap-3 mb-4">
+                  {avatars.filter(a => a.source !== 'aitherhub').map((avatar) => (
+                    <button
+                      key={avatar.avatar_id}
+                      onClick={() => {
+                        setSelectedAvatarId(avatar.avatar_id);
+                        setPersonImageUrl("");
+                        setUseDigitalTwinV3(true);
+                      }}
+                      className={`relative rounded-lg overflow-hidden border-2 transition-all ${
+                        selectedAvatarId === avatar.avatar_id
+                          ? "border-purple-500 ring-2 ring-purple-500/30 scale-[1.02]"
+                          : "border-gray-700 hover:border-gray-600 hover:scale-[1.01]"
+                      }`}
+                    >
+                      {avatar.preview_image_url ? (
+                        <img src={avatar.preview_image_url} alt={avatar.name} className="w-full aspect-square object-cover" />
+                      ) : (
+                        <div className="w-full aspect-square bg-gray-800 flex items-center justify-center">
+                          <User className="w-6 h-6 text-gray-600" />
+                        </div>
+                      )}
+                      <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-1.5">
+                        <p className="text-[10px] font-medium truncate">{avatar.name}</p>
+                      </div>
+                      {selectedAvatarId === avatar.avatar_id && (
+                        <div className="absolute top-1.5 right-1.5 w-4 h-4 bg-purple-500 rounded-full flex items-center justify-center">
+                          <CheckCircle className="w-2.5 h-2.5" />
+                        </div>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-sm text-gray-500 py-4 text-center">
+                  利用可能なDigital Twinがありません
+                </div>
+              )}
+
+              {/* Selected Digital Twin Info */}
+              {selectedAvatarId && avatars.find(a => a.avatar_id === selectedAvatarId && a.source !== 'aitherhub') && (
+                <div className="mt-3 bg-purple-500/10 border border-purple-500/30 rounded-lg p-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <CheckCircle className="w-4 h-4 text-purple-400" />
+                      <span className="text-sm text-purple-300">
+                        「{avatars.find(a => a.avatar_id === selectedAvatarId)?.name}」が選択されました（v3モード自動ON）
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => setActiveTab("generate")}
+                      className="text-xs bg-purple-600 hover:bg-purple-500 text-white px-3 py-1 rounded-md transition-colors"
+                    >
+                      動画生成へ →
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Digital Twin Creation Guide */}
+              <div className="mt-4 pt-4 border-t border-gray-700">
+                <h3 className="text-sm font-medium text-gray-300 mb-2 flex items-center gap-2">
+                  <UserPlus className="w-4 h-4 text-purple-400" />
+                  新しいDigital Twinを作成
+                </h3>
+                <div className="bg-gray-800 rounded-lg p-4 space-y-3">
+                  <p className="text-xs text-gray-400">Digital Twinを作成するには、以下の条件を満たすトレーニング動画が必要です：</p>
+                  <ul className="text-xs text-gray-400 space-y-1.5 list-disc list-inside">
+                    <li>長さ: 2〜5分</li>
+                    <li>正面向き、顔がはっきり見えること</li>
+                    <li>良好な照明環境</li>
+                    <li>解像度: 1080p以上</li>
+                    <li>フォーマット: MP4</li>
+                    <li>自然に話している様子（ジェスチャー含む）</li>
+                  </ul>
+                  <div className="flex items-center gap-2 pt-2">
+                    <a
+                      href="https://www.heygen.com/digital-twin"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs bg-purple-600 hover:bg-purple-500 text-white px-3 py-1.5 rounded-md transition-colors flex items-center gap-1"
+                    >
+                      <ExternalLink className="w-3 h-3" />
+                      HeyGenで作成
+                    </a>
+                    <span className="text-[10px] text-gray-500">作成後、ページを更新するとリストに表示されます</span>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         )}
